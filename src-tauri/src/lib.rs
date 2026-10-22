@@ -8,7 +8,8 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       files::read_text_file,
       files::write_text_file,
-      files::read_binary_file
+      files::read_binary_file,
+      make_app::make_app
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {
