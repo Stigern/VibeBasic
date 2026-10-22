@@ -21,6 +21,24 @@ async function fatalError(backend: Backend, text: string, host: Pick<TauriFormHo
   await backend.quitApp();
 }
 
+/** Cmd+Q state: a quit asked for before the session exists is applied as soon as it does. */
+const quit: { session: RunSession | null; backend: Backend | null; pending: boolean; fallback: ReturnType<typeof setTimeout> | null } =
+  { session: null, backend: null, pending: false, fallback: null };
+
+/** Cmd+Q: ends the program cleanly (onEnded then quits); a timer quits anyway if the program never reports back. */
+export function requestQuit(): void {
+  const { session, backend } = quit;
+  if (!session || !backend) { quit.pending = true; return; }
+  if (session.ended) { void backend.quitApp(); return; }
+  session.end();
+  if (!session.ended) quit.fallback ??= setTimeout(() => { void backend.quitApp(); }, 1500);
+}
+
+function sessionEnded(): void {
+  if (quit.fallback) clearTimeout(quit.fallback);
+  quit.fallback = null;
+}
+
 export async function startRuntime(project: Project, backend: Backend, host: TauriFormHost = new TauriFormHost()): Promise<void> {
   const appPath = await backend.getAppDir().catch(() => '');
   let session: RunSession;
@@ -28,7 +46,7 @@ export async function startRuntime(project: Project, backend: Backend, host: Tau
     session = new RunSession(project, host, {
       debugPrint: () => {},
       onBreak: async () => 'end',
-      onEnded: () => { void host.dispose().finally(() => backend.quitApp()); },
+      onEnded: () => { sessionEnded(); void host.dispose().finally(() => backend.quitApp()); },
       readFile: p => backend.readBinaryFile(p),
       appPath,
     }, 'app');
@@ -36,11 +54,9 @@ export async function startRuntime(project: Project, backend: Backend, host: Tau
     await fatalError(backend, `Compile error:\n\n${e instanceof Error ? e.message : String(e)}`, host);
     return;
   }
-  // Cmd+Q: end the program cleanly; onEnded then quits. Safety net in case the program never reports back.
-  backend.onQuitRequested(() => {
-    session.end();
-    setTimeout(() => { void backend.quitApp(); }, 1500);
-  });
+  quit.session = session;
+  quit.backend = backend;
+  if (quit.pending) { quit.pending = false; requestQuit(); }
   try {
     await session.start();
   } catch (e) {

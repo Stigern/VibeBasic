@@ -21,8 +21,11 @@ pub fn has_embedded<R: Runtime>(app: &AppHandle<R>) -> bool {
 
 /// The embedded project's text, or None when this is the plain IDE.
 #[tauri::command]
-pub fn get_embedded_project<R: Runtime>(app: AppHandle<R>) -> Option<String> {
-  std::fs::read_to_string(embedded_path(&app)?).ok()
+pub fn get_embedded_project<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>, String> {
+  match embedded_path(&app) {
+    None => Ok(None),
+    Some(p) => std::fs::read_to_string(&p).map(Some).map_err(|e| format!("{}: {}", p.display(), e)),
+  }
 }
 
 #[tauri::command]
@@ -54,7 +57,22 @@ pub fn runtime_menu<R: Runtime>(app: &AppHandle<R>, app_name: &str) -> tauri::Re
   let quit = MenuItem::with_id(app, "vb-quit", format!("Quit {app_name}"), true, Some("CmdOrCtrl+Q"))?;
   let sep = PredefinedMenuItem::separator(app)?;
   let sub = Submenu::with_items(app, app_name, true, &[&about, &sep, &quit])?;
-  Menu::with_items(app, &[&sub])
+  // Standard Edit menu so Cmd+Z/X/C/V/A work in TextBoxes.
+  let edit = Submenu::with_items(
+    app,
+    "Edit",
+    true,
+    &[
+      &PredefinedMenuItem::undo(app, None)?,
+      &PredefinedMenuItem::redo(app, None)?,
+      &PredefinedMenuItem::separator(app)?,
+      &PredefinedMenuItem::cut(app, None)?,
+      &PredefinedMenuItem::copy(app, None)?,
+      &PredefinedMenuItem::paste(app, None)?,
+      &PredefinedMenuItem::select_all(app, None)?,
+    ],
+  )?;
+  Menu::with_items(app, &[&sub, &edit])
 }
 
 /// Installs the runtime menu when the embedded project exists. Returns whether it did.

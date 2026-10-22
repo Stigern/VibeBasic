@@ -40,13 +40,25 @@ export interface TauriGlue {
   emitTo(label: string, event: string, payload: unknown): Promise<void>;
 }
 
+/** A window may own a dialog only when it exists and is visible; a hidden owner (the runtime-mode main window) could keep the dialog from ever showing. */
+export async function resolveParent(
+  o: WindowCreateOptions,
+  lookup: (label: string) => Promise<{ isVisible(): Promise<boolean> } | null>,
+): Promise<WindowCreateOptions> {
+  if (!o.parent) return o;
+  let visible = false;
+  try {
+    const w = await lookup(o.parent);
+    visible = w !== null && (await w.isVisible());
+  } catch { /* treat as not visible */ }
+  return visible ? o : { ...o, parent: undefined, alwaysOnTop: true };   // no usable owner: at least stay above the program's other windows
+}
+
 export const tauriGlue: TauriGlue = {
   async createWindow(label, o) {
     const stale = await WebviewWindow.getByLabel(label);
     if (stale) await stale.destroy().catch(() => {});
-    if (o.parent && !(await WebviewWindow.getByLabel(o.parent))) {
-      o = { ...o, parent: undefined, alwaysOnTop: true };   // no owner window: at least stay above the program's other windows
-    }
+    o = await resolveParent(o, l => WebviewWindow.getByLabel(l));
     const w = new WebviewWindow(label, o);
     await new Promise<void>((resolve, reject) => {
       void w.once('tauri://created', () => resolve());

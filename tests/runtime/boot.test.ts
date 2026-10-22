@@ -1,19 +1,20 @@
 // @vitest-environment jsdom
 import { expect, test, vi } from 'vitest';
 import type { Backend } from '../../src/backend/backend';
+import { resolveParent, type WindowCreateOptions } from '../../src/run/tauriFormHost';
 import { boot } from '../../src/boot';
 import { newForm, newProject } from '../../src/model/controls';
 import type { Project } from '../../src/model/types';
 import { serializeProject } from '../../src/model/serialize';
 import type { TauriFormHost } from '../../src/run/tauriFormHost';
-import { startRuntime } from '../../src/runtime/runtimeMain';
+import { requestQuit, startRuntime } from '../../src/runtime/runtimeMain';
 
-function fakeBackend(embedded: string | null) {
+function fakeBackend(embedded: string | null | Error) {
   const log: string[] = [];
   let quitHandler: () => void = () => {};
   const b = {
     kind: 'browser',
-    getEmbeddedProject: async () => embedded,
+    getEmbeddedProject: async () => { if (embedded instanceof Error) throw embedded; return embedded; },
     quitApp: async () => { log.push('quit'); },
     getAppDir: async () => '/Apps',
     showMainWindow: async () => { log.push('show'); },
@@ -75,4 +76,33 @@ test('syntax error shows a compile error and quits', async () => {
   await startRuntime(p, b, host);
   expect(host.messageBox.mock.calls[0][0].prompt).toMatch(/^Compile error:\n\n/);
   expect(log).toEqual(['quit']);
+});
+
+test('unreadable embedded project shows error and quits, never the IDE', async () => {
+  const { b, log } = fakeBackend(new Error('x.vbb: Permission denied'));
+  const deps = { startIde: vi.fn(), startRuntime: vi.fn(async () => {}), showError: vi.fn(async (t: string) => { log.push('error:' + t); }) };
+  await boot(b, deps);
+  expect(deps.startIde).not.toHaveBeenCalled();
+  expect(log).toEqual(['error:x.vbb: Permission denied', 'quit']);
+});
+
+test('Cmd+Q before the session exists is applied once it does', async () => {
+  const { b, log, fireQuit } = fakeBackend(null);
+  const quitDeps = { startIde: vi.fn(), startRuntime: async (p: Project, bb: Backend) => { await startRuntime(p, bb, fakeHost()); }, showError: vi.fn(async () => {}), onQuit: requestQuit };
+  (b as unknown as { getEmbeddedProject: () => Promise<string> }).getEmbeddedProject = async () => { fireQuit(); return serializeProject(Object.assign(newProject(), { forms: [] })); };
+  await boot(b, quitDeps);
+  await tick();
+  expect(log.filter(l => l === 'quit').length).toBeGreaterThanOrEqual(1);
+});
+
+test('dialog parent only when the owner window is visible', async () => {
+  const o = { parent: 'main', alwaysOnTop: false } as WindowCreateOptions;
+  const win = (v: boolean) => async () => ({ isVisible: async () => v });
+  expect((await resolveParent(o, win(true))).parent).toBe('main');
+  const hidden = await resolveParent(o, win(false));
+  expect(hidden.parent).toBeUndefined();
+  expect(hidden.alwaysOnTop).toBe(true);
+  expect((await resolveParent(o, async () => null)).parent).toBeUndefined();
+  expect((await resolveParent(o, async () => { throw new Error('x'); })).alwaysOnTop).toBe(true);
+  expect(await resolveParent({ alwaysOnTop: false } as WindowCreateOptions, win(false))).toEqual({ alwaysOnTop: false });
 });
