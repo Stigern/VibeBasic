@@ -1,3 +1,4 @@
+import { loadedComponents } from './components';
 import { CONTROL_TYPES } from './controls';
 import type { Project } from './types';
 
@@ -68,5 +69,8 @@ export function parseProject(text: string): Project {
     throw new ProjectFormatError(NOT_A_PROJECT);
   }
   const { format: _format, version: _version, ...rest } = raw;
-  return rest as unknown as Project;
+  const project = rest as unknown as Project;
+  // Old projects (no `components`) keep the components that existed before; a used component is always checked.
+  project.components = loadedComponents(raw.components, project);
+  return project;
 }

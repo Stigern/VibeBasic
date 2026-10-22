@@ -61,7 +61,8 @@ test('startIde builds shell: toolbox, toolbar, designer window, immediate hidden
   const title = vi.spyOn(be, 'setWindowTitle');
   const ide = startIde(be, root);
   expect(title).toHaveBeenCalledWith(`Project1 - VibeBasic ${__APP_VERSION__} [design]`);
-  expect(root.querySelectorAll('.tbx98-btn').length).toBe(29);
+  // a new project has no components checked: Pointer and the 18 intrinsic controls only, as in VB6
+  expect(root.querySelectorAll('.tbx98-btn').length).toBe(19);
   expect(root.querySelectorAll('.tb98-tool').length).toBe(14);
   expect(root.querySelector('.ide98-mdi .vb-form')).not.toBeNull();
   expect(root.querySelector('.ide98-mdi .mdi98 > .title-bar .title-bar-text')!.textContent).toBe('Project1 - Form1 (Form)');

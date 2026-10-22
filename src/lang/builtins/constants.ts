@@ -89,3 +89,6 @@ group({
 
 // StatusBar / TabStrip
 group({ sbrNormal: 0, sbrSimple: 1, sbrText: 0, sbrLeft: 0, sbrCenter: 1, sbrRight: 2 });
+
+// SSTab
+group({ ssStyleTabbedDialog: 0, ssStylePropertyPage: 1 });

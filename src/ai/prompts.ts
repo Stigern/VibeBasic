@@ -21,7 +21,7 @@ Answer with ONLY one JSON object, no prose and no code fences, in this format:
  "code":"Private Sub cmdOK_Click()\\n    MsgBox \\"Hello \\" & Text1.Text\\nEnd Sub"}
 Rules:
 1. Controls that already exist are changed with "set" (by name), never with "add". A control array member is named like "Command1(2)".
-2. "container" is the name of a Frame to put the new control in, or null for the form.
+2. "container" is the name of a Frame, PictureBox or SSTab to put the new control in, or null for the form.
 3. Event code goes in the "code" field as complete procedures (Private Sub ... End Sub). Omit "code" if no code is needed. Use only existing or newly added control names. Dialect: no classes, Declare, file I/O, or Print/Line/Circle/PSet on forms.
 4. Colors are VB6 Long values (for example 255 is red, 16711680 is blue). Use only properties of the control type listed below.
 Available control types, properties, events and methods:

@@ -12,6 +12,7 @@ import { vbColorToCss } from '../model/colors';
 import { CONTROL_TYPES } from '../model/controls';
 import { joinFields, splitFields } from '../model/fieldLines';
 import { isDocked } from '../model/geometry';
+import { flagOn, ssTabLayout } from '../model/ssTab';
 import { twipsToPx } from '../model/twips';
 import { decodeRuns, encodeRuns, formatAt, readRuns, replaceRange, selectionOffsets, setSelectionOffsets, writeRuns, type Run, type RtfFormat, type RtfPatch } from './richText';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../model/types';
@@ -28,6 +29,8 @@ export interface ControlView {
   inputEl?: HTMLElement;
   /** Container for child controls (Frame, PictureBox). */
   childHost?: HTMLElement;
+  /** Containers with several hosts (SSTab: one page per tab) pick the host of each child; wins over childHost. */
+  childHostFor?(child: ControlDef): HTMLElement;
   /** Applies changed properties (design-time and run-time ones, e.g. Caption, Value, ListIndex). Never mutates the ControlDef. */
   update(changed: Record<string, PropValue>): void;
 }
@@ -101,6 +104,7 @@ interface Ctx {
   pic(n: string): string | null;
   setInput(e: HTMLElement | undefined): void;
   setHost(e: HTMLElement | undefined): void;
+  setHostFor(f: (child: ControlDef) => HTMLElement): void;
   applySize(): void;
   /** Dispatches a bubbling event on the current inputEl. */
   fire(type: string, detail?: unknown): void;
@@ -1233,6 +1237,75 @@ function flexGrid(c: Ctx): Renderer {
   };
 }
 
+/** SSTab: tab headers (laid out by ssTabLayout) over a raised body, and one page per tab that holds the tab's children; only
+ *  the page of `Tab` shows. A click on an enabled header (run mode) selects it and dispatches `vbsstabclick` ({ index, previous }). */
+function ssTab(c: Ctx): Renderer {
+  let root: HTMLElement, strip: HTMLElement, body: HTMLElement;
+  const pages = new Map<number, HTMLElement>();
+  const page = (i: number): HTMLElement => {
+    let pg = pages.get(i);
+    if (!pg) {
+      pg = h('div', { class: 'sst-page', dataset: { tab: String(i) } });
+      pg.style.display = i === c.num('Tab') ? '' : 'none';
+      pages.set(i, pg);
+      root.appendChild(pg);
+    }
+    return pg;
+  };
+  function paint() {
+    const all: Record<string, PropValue> = { ...DEFAULTS.SSTab, Width: CONTROL_TYPES.SSTab.defaultWidth };
+    for (const [k, v] of Object.entries(c.props)) if (v !== undefined) all[k] = v;
+    const lay = ssTabLayout(all);
+    const caps = c.list('TabCaption'), cur = c.num('Tab');
+    strip.replaceChildren(...lay.tabs.map(t => {
+      const el = h('div', { class: 'sst-tab', dataset: { index: String(t.index) } }, h('span', {}, ...mnemonicNodes(caps[t.index] ?? '')));
+      Object.assign(el.style, { left: `${twipsToPx(t.left)}px`, top: `${twipsToPx(t.top)}px`, width: `${twipsToPx(t.width)}px`, height: `${twipsToPx(t.height)}px` });
+      el.classList.toggle('selected', t.index === cur);
+      el.classList.toggle('sst-disabled', !flagOn(all.TabEnabled, t.index));
+      return el;
+    }));
+    body.style.top = `${twipsToPx(lay.bodyTop)}px`;
+    for (const [i, pg] of pages) pg.style.display = i === cur ? '' : 'none';
+  }
+  const select = (i: number) => {
+    const previous = c.num('Tab');
+    c.props.Tab = i;
+    c.props.Caption = c.list('TabCaption')[i] ?? '';
+    paint();
+    c.fire('vbsstabclick', { index: i, previous });
+  };
+  return {
+    build() {
+      strip = h('div', { class: 'sst-tabs' });
+      body = h('div', { class: 'sst-body' });
+      root = h('div', { class: 'vb-sst', tabindex: '0' }, body, strip);
+      pages.clear();
+      c.el.replaceChildren(root);
+      c.setInput(root);
+      c.setHostFor(child => page(Math.max(0, Math.floor(child.tab ?? 0))));
+      if (c.mode !== 'run') return;
+      root.addEventListener('mousedown', e => {
+        const t = (e.target as Element).closest<HTMLElement>('.sst-tab');
+        if (!t || !strip.contains(t) || e.button !== 0 || root.getAttribute('aria-disabled') === 'true' || t.classList.contains('sst-disabled')) return;
+        const i = Number(t.dataset.index);
+        if (i !== c.num('Tab')) select(i);
+      });
+      root.addEventListener('keydown', e => {
+        if (e.target !== root) return;
+        const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+        if (!d) return;
+        e.preventDefault();
+        const n = c.num('Tabs');
+        for (let i = c.num('Tab') + d; i >= 0 && i < n; i += d) {
+          if (flagOn(c.props.TabEnabled, i) && flagOn(c.props.TabVisible, i)) { select(i); break; }
+        }
+      });
+    },
+    patch(k) { if (has(k, 'Tab', 'Tabs', 'TabCaption', 'TabsPerRow', 'Style', 'TabHeight', 'TabEnabled', 'TabVisible', 'Width', 'Caption')) paint(); },
+    bg: () => null,
+  };
+}
+
 const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   CommandButton: commandButton,
   Label: label,
@@ -1262,6 +1335,7 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   MSFlexGrid: flexGrid,
   CommonDialog: commonDialog,
   RichTextBox: richTextBox,
+  SSTab: ssTab,
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1285,6 +1359,7 @@ export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetRe
     pic: n => { const v = get(n); return isRef(v) ? assets(v) : null; },
     setInput: e => { view.inputEl = e; },
     setHost: e => { view.childHost = e; },
+    setHostFor: f => { view.childHostFor = f; },
     fire: (type, detail) => {
       view.inputEl?.dispatchEvent(detail === undefined ? new Event(type, { bubbles: true }) : new CustomEvent(type, { bubbles: true, detail }));
     },
@@ -1504,7 +1579,7 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
       p = defs.get(p)!.parentId;
     }
     const pv = def.parentId ? views.get(def.parentId) : undefined;
-    return pv?.childHost ?? clientEl;
+    return pv?.childHostFor?.(def) ?? pv?.childHost ?? clientEl;
   }
 
   function place(id: string): void {

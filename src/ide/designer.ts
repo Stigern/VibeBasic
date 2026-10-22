@@ -5,7 +5,9 @@ import { formMetrics, renderFormSurface, type FormSurface } from '../controls/re
 import {
   addControlsCmd, compositeCmd, deleteControlsCmd, moveResizeCmd, renameCmd, reparentCmd, setPropertyCmd, zOrderCmd, type Command,
 } from '../model/commands';
+import { addComponentsCmd } from '../model/components';
 import { CONTROL_TYPES, newControl, nextDefaultName, newId } from '../model/controls';
+import { ssTabAt, ssTabLayout } from '../model/ssTab';
 import { controlPos, isLine, setControlPos } from '../model/geometry';
 import { pxToTwips, twipsToPx } from '../model/twips';
 import type { ControlDef, ControlType, FormDef, PropValue } from '../model/types';
@@ -14,7 +16,7 @@ import { h } from '../ui98/dom';
 import { createMdiWindow, type MdiWindow } from '../ui98/mdiWindow';
 import { clipboardHasControls, getClipboard, setClipboard } from './clipboard';
 import {
-  absoluteRect, alignRects, computeMove, snap, computeResize, containerAt, controlsInRect, hasSize, hitTest, sizeOf,
+  absoluteRect, alignRects, computeMove, snap, computeResize, containerAt, controlsInRect, hasSize, hitTest, shownInDesign, sizeOf,
   type AlignHow, type Handle, type Rect, type SnapOpts,
 } from './designerLogic';
 import type { IdeState } from './ideState';
@@ -40,6 +42,12 @@ const isEditable = (t: EventTarget | null): boolean => {
   return !!e && (e.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(e.tagName ?? ''));
 };
 const relRect = (c: ControlDef): Rect => ({ ...controlPos(c), ...sizeOf(c) });
+
+/** The SSTab tab a control placed in `parentId` goes on (its current tab), or undefined when the parent is not an SSTab. */
+export function tabFor(form: FormDef, parentId: string | null): number | undefined {
+  const p = parentId ? form.controls.find(c => c.id === parentId) : undefined;
+  return p?.type === 'SSTab' ? Number(p.props.Tab) || 0 : undefined;
+}
 
 /** Selected ids that still exist, minus those whose ancestor is also selected (the ancestor carries them). */
 function topLevelOf(form: FormDef, ids: string[]): string[] {
@@ -98,7 +106,8 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
   const snapshot = (c: ControlDef) => JSON.stringify(c.props);
   let lastForm = JSON.stringify(form0.props);
   const last = new Map(form0.controls.map(c => [c.id, { json: snapshot(c), props: structuredClone(c.props) }]));
-  let lastStruct = form0.controls.map(c => `${c.id}:${c.parentId}`).join('|');
+  const structOf = (cs: ControlDef[]) => cs.map(c => `${c.id}:${c.parentId}:${c.tab ?? ''}`).join('|');
+  let lastStruct = structOf(form0.controls);
   const dflt = (type: ControlType, k: string): PropValue =>
     CONTROL_TYPES[type].props.find(p => p.name === k)?.default ?? null;
   const diff = (type: ControlType, a: Record<string, PropValue>, b: Record<string, PropValue>): Record<string, PropValue> => {
@@ -121,7 +130,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
       else if (prev.json !== snapshot(c)) { const d = diff(c.type, prev.props, c.props); if (Object.keys(d).length) surface.update(c.id, d); }
       last.set(c.id, { json: snapshot(c), props: structuredClone(c.props) });
     });
-    const struct = form.controls.map(c => `${c.id}:${c.parentId}`).join('|');
+    const struct = structOf(form.controls);
     if (struct !== lastStruct) { surface.reorder(structuredClone(form.controls)); lastStruct = struct; }
     const fj = JSON.stringify(form.props);
     if (fj !== lastForm) {
@@ -182,7 +191,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     const primary = ids[ids.length - 1];
     for (const id of ids) {
       const c = form.controls.find(x => x.id === id);
-      if (!c) continue;
+      if (!c || !shownInDesign(form, id)) continue;   // on another SSTab tab
       const r = absoluteRect(form, id);
       if (isLine(c)) {   // a Line has two end point handles instead of a box and eight resize handles
         const right = Number(c.props.X2) >= Number(c.props.X1), down = Number(c.props.Y2) >= Number(c.props.Y1);
@@ -266,6 +275,8 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
         const parentId = containerAt(form, p0.x, p0.y, []);
         const po = parentId ? absoluteRect(form, parentId) : { left: 0, top: 0 };
         const def = newControl(form, tool, { left: r.left - po.left, top: r.top - po.top, width: r.width, height: r.height }, parentId);
+        const tab = tabFor(form, parentId);
+        if (tab !== undefined) def.tab = tab;   // onto the SSTab's current tab
         if (tool === 'Line' && moved) {   // the line runs from where the drag began to where it ended
           const q = toTwips(ev);
           const pt = (v: number, g: number) => (so.snap ? Math.round(v / g) * g : v);
@@ -303,7 +314,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
       if (unchanged) return;
       ide.stack.execute(sameParent
         ? moveResizeCmd(formId, orig.map((o, i) => ({ id: o.id, ...rects[i] })))
-        : reparentCmd(formId, orig.map((o, i) => ({ id: o.id, parentId, left: rects[i].left, top: rects[i].top }))));
+        : reparentCmd(formId, orig.map((o, i) => ({ id: o.id, parentId, left: rects[i].left, top: rects[i].top, tab: tabFor(form, parentId) }))));
     });
   }
 
@@ -408,6 +419,11 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     if (ide.currentTool !== 'Pointer') { startDraw(e, ide.currentTool as Exclude<ControlType, 'Form'>, form); return; }
     const hit = hitTest(form, p.x, p.y);
     if (!hit) { startBand(e, form); return; }
+    const hitDef = form.controls.find(c => c.id === hit);
+    if (hitDef?.type === 'SSTab') {   // a click on another tab's header shows that tab (the Tab property)
+      const a = absoluteRect(form, hit), t = ssTabAt(hitDef.props, p.x - a.left, p.y - a.top);
+      if (t !== null && t !== Number(hitDef.props.Tab)) ide.stack.execute(setPropertyCmd(formId, hit, 'Tab', t));
+    }
     const ids = selectedIds();
     const parentOf = (id: string) => form.controls.find(c => c.id === id)?.parentId ?? null;
     if (e.ctrlKey || e.shiftKey || e.metaKey) {
@@ -455,14 +471,21 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     }
   });
 
+  /** Double-click in the Toolbox: centred on the current tab of the one selected SSTab, else on the form. */
   const placeCentered = (tool: ControlType) => {
     const form = getForm();
     if (!form || tool === 'Form') return;
     const td = CONTROL_TYPES[tool], m = formMetrics(form.props), so = snapOpts(ide);
+    const sel = selectedIds(), host = sel.length === 1 ? form.controls.find(c => c.id === sel[0]) : undefined;
+    const parent = host?.type === 'SSTab' ? host : undefined;
+    const area = parent ? sizeOf(parent) : { width: pxToTwips(m.clientWidth), height: pxToTwips(m.clientHeight) };
     const snapv = (v: number, g: number) => (so.snap ? Math.round(v / g) * g : v);
-    const left = snapv((pxToTwips(m.clientWidth) - td.defaultWidth) / 2, so.grid);
-    const top = snapv((pxToTwips(m.clientHeight) - td.defaultHeight) / 2, so.gridY ?? so.grid);
-    const def = newControl(form, tool, { left, top }, null);
+    const bodyTop = parent?.type === 'SSTab' ? ssTabLayout(parent.props).bodyTop : 0;
+    const left = snapv((area.width - td.defaultWidth) / 2, so.grid);
+    const top = snapv(bodyTop + (area.height - bodyTop - td.defaultHeight) / 2, so.gridY ?? so.grid);
+    const def = newControl(form, tool, { left, top }, parent?.id ?? null);
+    const tab = tabFor(form, parent?.id ?? null);
+    if (tab !== undefined) def.tab = tab;
     ide.stack.execute(addControlsCmd(formId, [def]));
     select([def.id]);
     ide.setTool('Pointer');
@@ -498,11 +521,16 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
 // ---------------------------------------------------------------------------------------------------------------
 // Paste
 
-/** Pastes copies of `defs` into the form: new ids, top-level controls (those whose parent is not in `defs`) with their
- *  group's top-left corner at (0,0). A name that already exists asks whether to create a control array. */
-export async function pasteControls(ide: IdeState, formId: string, defs: ControlDef[]): Promise<void> {
+/** Pastes copies of `defs` into the form, or into the container `parentId` (an SSTab: onto its current tab): new ids,
+ *  top-level controls (those whose parent is not in `defs`) with their group's top-left corner at (0,0) (in an SSTab just
+ *  under its tabs). A name that already exists asks whether to create a control array. Components the controls need are checked. */
+export async function pasteControls(ide: IdeState, formId: string, defs: ControlDef[], parentId: string | null = null): Promise<void> {
   const form = formOf(ide, formId);
   if (!form || !defs.length) return;
+  const container = parentId ? form.controls.find(c => c.id === parentId) : undefined;
+  if (parentId && !container) parentId = null;
+  const tab = tabFor(form, parentId);
+  const offsetTop = container?.type === 'SSTab' ? ssTabLayout(container.props).bodyTop : 0;
   const idMap = new Map(defs.map(d => [d.id, newId()]));
   const top = defs.filter(d => !d.parentId || !idMap.has(d.parentId));
   const minL = Math.min(...top.map(d => controlPos(d).left)), minT = Math.min(...top.map(d => controlPos(d).top));
@@ -519,8 +547,12 @@ export async function pasteControls(ide: IdeState, formId: string, defs: Control
   for (const d of defs) {
     const nd: ControlDef = structuredClone(d);
     nd.id = idMap.get(d.id)!;
-    nd.parentId = d.parentId && idMap.has(d.parentId) ? idMap.get(d.parentId)! : null;
-    if (top.includes(d)) { const q = controlPos(d); setControlPos(nd, q.left - minL, q.top - minT); }
+    nd.parentId = d.parentId && idMap.has(d.parentId) ? idMap.get(d.parentId)! : parentId;
+    if (top.includes(d)) {
+      const q = controlPos(d);
+      setControlPos(nd, q.left - minL, q.top - minT + offsetTop);
+      if (tab !== undefined) nd.tab = tab; else delete nd.tab;
+    }
     const same = work.filter(w => w.name.toLowerCase() === d.name.toLowerCase());
     const fresh_ = () => { nd.name = nextDefaultName({ ...form, controls: work }, d.type); nd.index = null; };
     if (same.length) {
@@ -544,7 +576,9 @@ export async function pasteControls(ide: IdeState, formId: string, defs: Control
     fresh.push(nd);
   }
   const add = addControlsCmd(formId, fresh);
-  ide.stack.execute(renames.length ? compositeCmd('Paste', [...renames, add]) : add);
+  const comps = addComponentsCmd(ide.project, fresh.map(d => d.type));   // controls copied from a project with other components
+  const pre = [...(comps ? [comps] : []), ...renames];
+  ide.stack.execute(pre.length ? compositeCmd('Paste', [...pre, add]) : add);
   ide.setSelection({ formId, ids: top.map(d => idMap.get(d.id)!) });
 }
 
@@ -588,13 +622,16 @@ export function registerDesignerActions(ide: IdeState, actions: IdeActions, refr
   actions.delete = withIds(1, del);
   actions.paste = () => {
     const c = ctx();
-    if (c && clipboardHasControls()) void pasteControls(ide, c.form.id, getClipboard());
+    if (!c || !clipboardHasControls()) return;
+    // with one SSTab selected: onto its current tab; otherwise onto the form
+    const sel = c.ids.length === 1 ? c.form.controls.find(x => x.id === c.ids[0]) : undefined;
+    void pasteControls(ide, c.form.id, getClipboard(), sel?.type === 'SSTab' ? sel.id : null);
   };
   actions.selectAll = () => {
     const c = ctx();
     if (!c) return;
     const parent = c.ids.length ? c.form.controls.find(x => x.id === c.ids[0])?.parentId ?? null : null;
-    ide.setSelection({ formId: c.form.id, ids: c.form.controls.filter(x => x.parentId === parent).map(x => x.id) });
+    ide.setSelection({ formId: c.form.id, ids: c.form.controls.filter(x => x.parentId === parent && shownInDesign(c.form, x.id)).map(x => x.id) });
   };
   const absOf = (form: FormDef, ids: string[]) => ids.map(id => absoluteRect(form, id));
   const align = (how: AlignHow) => withIds(2, (form, ids) => {

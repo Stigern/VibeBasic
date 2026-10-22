@@ -8,6 +8,7 @@ import { CONTROL_TYPES, getPropDef, type PropDef } from '../../model/controls';
 import { decodeRuns, encodeRuns, formatAt, formatRange, replaceRange, runsText, type RtfPatch, type Run } from '../../controls/richText';
 import type { DirListing, Volume } from '../../backend/backend';
 import { joinFields } from '../../model/fieldLines';
+import { flagOn, syncSSTab } from '../../model/ssTab';
 import { baseName, type FileDialogRequest } from '../commonDialog';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../../model/types';
 import type { PatchQueue } from '../patchQueue';
@@ -109,6 +110,7 @@ export class ControlObject implements VBObject {
       this.props.Path = normalizePath(toStr(this.props.Path as string) || this.ctx.files?.defaultPath || '/');
       this.reload();
     } else if (def.type === 'DriveListBox') this.loadVolumes();
+    if (def.type === 'SSTab') syncSSTab(this.props, 'Tabs');
     if (def.type === 'StatusBar') {
       this.collections.set('panels', makePanels(this.lines('Panels'), (k, _i, at) => this.collectionChanged(k, at)));
     } else if (def.type === 'TabStrip') {
@@ -385,6 +387,7 @@ export class ControlObject implements VBObject {
       if (v === undefined) throw badIndex();
       return v;
     }
+    if (this.def.type === 'SSTab') { const v = this.ssTabGet(pd, args); if (v !== undefined) return v; }
     if (pd.kind === 'list') return this.getListItem(args);
     if (pd.name === 'Selected') return this.selected(args);
     if (args.length) throw new VBRuntimeError(450);
@@ -416,6 +419,7 @@ export class ControlObject implements VBObject {
       this.setFileName(toStr(this.plain(value)));
       return;
     }
+    if (this.def.type === 'SSTab' && this.ssTabSet(pd, args, value)) return;
     if (this.grid && this.gridSet(name.toLowerCase(), args, value)) return;
     if (this.grid && (pd.name === 'Row' || pd.name === 'Col')) {
       const n = num(this.plain(value));
@@ -492,6 +496,9 @@ export class ControlObject implements VBObject {
         return t.substr(s, n);
       }
       case 'Name': return this.def.name;
+      case 'Caption':
+        if (this.def.type === 'SSTab') return (this.props.TabCaption as string[])[Number(this.props.Tab)] ?? '';
+        break;
       case 'FileName':
         if (this.def.type === 'FileListBox') { const i = this.props.ListIndex as number; return i >= 0 ? this.list()[i] ?? '' : ''; }
         break;
@@ -635,6 +642,54 @@ export class ControlObject implements VBObject {
     this.queue.set(this.formKey, this.def.id, props);
     // a RichTextBox applies each change at the selection as it is now: no merging of SelStart = 3 and SelBold = True into one patch
     if (this.def.type === 'RichTextBox') this.queue.flush();
+  }
+
+  // -- SSTab ------------------------------------------------------------------------------------------------
+
+  /** TabCaption(i) / TabEnabled(i) / TabVisible(i): i is 0-based, below Tabs. */
+  private ssTabIndex(args: VBValue[]): number {
+    if (args.length !== 1) throw new VBRuntimeError(450);
+    const i = num(args[0]);
+    if (i < 0 || i >= Number(this.props.Tabs)) throw new VBRuntimeError(380);
+    return i;
+  }
+
+  private ssTabGet(pd: PropDef, args: VBValue[]): VBValue | undefined {
+    if (pd.name === 'TabCaption') return this.lines('TabCaption')[this.ssTabIndex(args)] ?? '';
+    if (pd.name === 'TabEnabled' || pd.name === 'TabVisible') return flagOn(this.props[pd.name], this.ssTabIndex(args));
+    return undefined;
+  }
+
+  /** The SSTab properties with side effects; false for the others. Setting Tab raises Click(PreviousTab) (formInstance). */
+  private ssTabSet(pd: PropDef, args: VBValue[], value: VBValue): boolean {
+    const name = pd.name;
+    if (name === 'TabCaption' || name === 'TabEnabled' || name === 'TabVisible') {
+      const i = this.ssTabIndex(args), l = this.lines(name);
+      if (name === 'TabCaption') l[i] = toStr(this.plain(value));
+      else { while (l.length <= i) l.push('1'); l[i] = toBool(this.plain(value)) ? '1' : '0'; }
+      this.props[name] = l;
+      if (name === 'TabCaption') syncSSTab(this.props, 'Tabs');
+      this.send({ [name]: l, Caption: this.props.Caption });
+      return true;
+    }
+    if (args.length) return false;
+    if (name === 'Tab') {
+      const n = num(this.plain(value));
+      if (n < 0 || n >= Number(this.props.Tabs)) throw new VBRuntimeError(380);
+      this.write(pd, n);
+      this.props.Caption = this.lines('TabCaption')[n] ?? '';
+      return true;
+    }
+    if (name === 'Caption' || name === 'Tabs') {
+      const old = this.props.Tab;
+      this.props[name] = this.convert(pd, value);
+      syncSSTab(this.props, name);
+      const p = this.props;
+      this.send({ Tabs: p.Tabs, TabCaption: p.TabCaption, Tab: p.Tab, Caption: p.Caption });
+      if (p.Tab !== old) this.ctx.propChanged?.(this, 'Tab', old);
+      return true;
+    }
+    return false;
   }
 
   // -- CommonDialog -----------------------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 // only through these. Commands look up forms/controls by id every time they run, and capture what undo needs
 // (old values, array positions, deleted subtrees) at do-time, so they work as long as the stack is used in order.
 
+import { CONTROL_TYPES } from './controls';
 import { setControlPos } from './geometry';
 import type { Asset, ControlDef, FormDef, ModuleDef, Project, PropValue } from './types';
 
@@ -154,10 +155,11 @@ export function moveResizeCmd(formId: string, rects: Rect[]): Command {
 
 const POS_KEYS = ['Left', 'Top', 'X1', 'Y1', 'X2', 'Y2'] as const;
 
-/** Moves controls into another container (or the form: `parentId` null). Left/Top are relative to the new parent. */
-export function reparentCmd(formId: string, items: { id: string; parentId: string | null; left: number; top: number }[]): Command {
+/** Moves controls into another container (or the form: `parentId` null). Left/Top are relative to the new parent; `tab` is the
+ *  SSTab tab for a move into an SSTab (left out: the control has no tab). */
+export function reparentCmd(formId: string, items: { id: string; parentId: string | null; left: number; top: number; tab?: number }[]): Command {
   const changes = items.map(i => ({ ...i }));
-  let old: { id: string; parentId: string | null; props: Record<string, PropValue | undefined> }[] = [];
+  let old: { id: string; parentId: string | null; tab: number | undefined; props: Record<string, PropValue | undefined> }[] = [];
   return {
     label: changes.length === 1 ? 'Move control' : `Move ${changes.length} controls`,
     do(p) {
@@ -168,39 +170,54 @@ export function reparentCmd(formId: string, items: { id: string; parentId: strin
         controlOf(f, ch.parentId);
         if (withDescendants(f, [ch.id]).has(ch.parentId)) throw new Error('A control cannot be placed inside itself');
       }
-      old = targets.map(c => ({ id: c.id, parentId: c.parentId, props: Object.fromEntries(POS_KEYS.map(k => [k, c.props[k]])) }));
-      changes.forEach((ch, i) => { targets[i].parentId = ch.parentId; setControlPos(targets[i], ch.left, ch.top); });
+      old = targets.map(c => ({ id: c.id, parentId: c.parentId, tab: c.tab, props: Object.fromEntries(POS_KEYS.map(k => [k, c.props[k]])) }));
+      changes.forEach((ch, i) => {
+        targets[i].parentId = ch.parentId;
+        if (ch.tab === undefined) delete targets[i].tab; else targets[i].tab = ch.tab;
+        setControlPos(targets[i], ch.left, ch.top);
+      });
     },
     undo(p) {
       const f = formOf(p, formId);
       const targets = old.map(o => controlOf(f, o.id));
       for (let i = old.length - 1; i >= 0; i--) {
         targets[i].parentId = old[i].parentId;
+        if (old[i].tab === undefined) delete targets[i].tab; else targets[i].tab = old[i].tab;
         for (const k of POS_KEYS) { const v = old[i].props[k]; if (v === undefined) delete targets[i].props[k]; else targets[i].props[k] = v; }
       }
     },
   };
 }
 
+/** Sets one property. A control type with linked properties (ControlTypeDef.onPropSet, e.g. SSTab Caption / Tab / TabCaption)
+ *  updates them too; undo then restores all of its properties. */
 export function setPropertyCmd(formId: string, targetId: string | 'form', name: string, value: PropValue): Command {
   const newValue = clone(value);
   let had = false;
   let oldValue: PropValue = null;
-  const propsOf = (p: Project): Record<string, PropValue> => {
+  let snapshot: Record<string, PropValue> | null = null;
+  const target = (p: Project): { props: Record<string, PropValue>; hook?: (props: Record<string, PropValue>, name: string) => void } => {
     const f = formOf(p, formId);
-    return targetId === 'form' ? f.props : controlOf(f, targetId).props;
+    if (targetId === 'form') return { props: f.props };
+    const c = controlOf(f, targetId);
+    return { props: c.props, hook: CONTROL_TYPES[c.type]?.onPropSet };
   };
   return {
     label: `Change ${name}`,
     do(p) {
-      const props = propsOf(p);
+      const { props, hook } = target(p);
       had = name in props;
       oldValue = clone(props[name] ?? null);
+      snapshot = hook ? structuredClone(props) : null;
       props[name] = clone(newValue);
+      hook?.(props, name);
     },
     undo(p) {
-      const props = propsOf(p);
-      if (had) props[name] = clone(oldValue); else delete props[name];
+      const { props } = target(p);
+      if (snapshot) {
+        for (const k of Object.keys(props)) delete props[k];
+        Object.assign(props, structuredClone(snapshot));
+      } else if (had) props[name] = clone(oldValue); else delete props[name];
     },
   };
 }

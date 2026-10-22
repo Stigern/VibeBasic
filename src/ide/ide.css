@@ -57,6 +57,18 @@
 .dlgform98-row > input.dlgform98-num { flex: 0 0 70px; }
 .dlgform98-check { display: flex; align-items: center; gap: 6px; }
 
+/* Project > Components */
+.cmp98 { display: flex; flex-direction: column; gap: 8px; width: min(440px, calc(100vw - 60px)); }
+.cmp98-top { display: flex; gap: 8px; }
+.cmp98-list { flex: 1; height: 220px; overflow: auto; background: #fff; box-shadow: var(--w98-sunken); padding: 2px; outline: none; }
+.cmp98-row { display: flex; align-items: center; height: 16px; padding: 0 2px; white-space: nowrap; }
+.cmp98-row > label { padding: 0 2px; }
+.cmp98-row.selected > label { background: #000080; color: #fff; }
+.cmp98-list:focus .cmp98-row.selected > label { outline: 1px dotted #ff0; }
+.cmp98-side { display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; width: 130px; }
+.cmp98-info { margin: 0; min-height: 34px; }
+.cmp98-loc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 /* Run mode: form windows float above the MDI area */
 .ide98-runlayer { position: absolute; inset: 0; z-index: 1000; pointer-events: none; overflow: hidden; }
 .ide98-runlayer > * { pointer-events: auto; }

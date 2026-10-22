@@ -292,6 +292,7 @@ export class FormInstance implements VBObject {
         break;
       case 'MSFlexGrid': if ((prop === 'Row' || prop === 'Col') && changed) ev = 'RowColChange'; break;
       case 'TabStrip': if (prop === 'SelectedTab' && changed) ev = 'Click'; break;
+      case 'SSTab': if (prop === 'Tab' && changed) { void this.fireControl(c, 'Click', [new VBRef(old as number)]); return; } break;
       case 'CheckBox': if (prop === 'Value' && changed) ev = 'Click'; break;
       case 'Label': if (prop === 'Caption' && changed) ev = 'Change'; break;
       case 'OptionButton':

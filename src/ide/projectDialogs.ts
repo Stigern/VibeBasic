@@ -1,6 +1,7 @@
-// Project Properties dialog and the shared tabbed-dialog runner (also used by Options).
+// Project Properties and Project > Components dialogs, and the shared tabbed-dialog runner (also used by Options).
 import { getBackend } from '../backend/backend';
 import { addAssetCmd, compositeCmd, removeAssetCmd, setProjectFieldCmd, setProjectIconCmd, type Command } from '../model/commands';
+import { availableComponents, componentDef, componentInUse, componentLocation, normalizeComponents, setComponentsCmd } from '../model/components';
 import { newId } from '../model/controls';
 import type { Asset, Project } from '../model/types';
 import { bytesToBase64 } from './propertyEditors';
@@ -122,4 +123,91 @@ export async function showProjectProperties(ide: IdeState, doc: Document = docum
     const cmds = tabs.flatMap(t => t.commands?.() ?? []);
     if (cmds.length) ide.stack.execute(compositeCmd('Project Properties', cmds));
   });
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Project > Components (Ctrl+T)
+
+/** VB6's message when a component that a form uses is unchecked. */
+export const COMPONENT_IN_USE = "Can't remove control or reference; in use";
+
+/** What Apply / OK does with the checked boxes: a component in use stays checked (`refused`). */
+export function applyComponentChoice(p: Project, wanted: readonly string[]): { components: string[]; refused: string[] } {
+  const want = new Set(wanted.map(w => w.toUpperCase()));
+  const refused = p.components.filter(c => !want.has(c.toUpperCase()) && componentInUse(p, c));
+  return { components: normalizeComponents(wanted, refused), refused };
+}
+
+/** The Controls tab lists the components (checkbox and name, alphabetical); the frame at the bottom names the selected one
+ *  and its file. OK and Apply change the project's components at once (the Toolbox follows); a component a form uses
+ *  cannot be unchecked. */
+export async function showComponents(ide: IdeState, doc: Document = document): Promise<void> {
+  const all = availableComponents().sort((a, b) => a.name.localeCompare(b.name));
+  const checked = new Set(ide.project.components.map(c => c.toUpperCase()));
+  let current = all[0]?.file ?? '';
+  const list = h('div', { class: 'cmp98-list', role: 'listbox', tabindex: '0', 'data-autofocus': '' });
+  const nameEl = h('legend', {}), locEl = h('div', { class: 'cmp98-loc' });
+  // 98.css draws a checkbox as `input + label[for]`
+  const only = h('input', { type: 'checkbox', id: 'cmp98-only' }) as HTMLInputElement;
+  const showInfo = () => {
+    const c = componentDef(current);
+    nameEl.textContent = c?.name ?? '';
+    locEl.textContent = c ? `Location: ${componentLocation(c)}` : '';
+  };
+  const render = () => {
+    const rows = all.filter(c => !only.checked || checked.has(c.file)).map(c => {
+      const id = `cmp98-${c.file}`;
+      const box = h('input', { type: 'checkbox', id, checked: checked.has(c.file), 'data-file': c.file }) as HTMLInputElement;
+      box.addEventListener('change', () => { if (box.checked) checked.add(c.file); else checked.delete(c.file); });
+      const row = h('div', { class: c.file === current ? 'cmp98-row selected' : 'cmp98-row', 'data-file': c.file }, box, h('label', { for: id }, c.name));
+      row.addEventListener('mousedown', () => {
+        current = c.file;
+        for (const r of list.querySelectorAll('.cmp98-row')) r.classList.toggle('selected', r === row);
+        showInfo();
+      });
+      return row;
+    });
+    list.replaceChildren(...rows);
+  };
+  only.addEventListener('change', render);
+  list.addEventListener('keydown', e => {
+    const i = all.findIndex(c => c.file === current);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const next = all[Math.max(0, Math.min(all.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))];
+      if (next) { current = next.file; render(); showInfo(); }
+    } else if (e.key === ' ' && current) {
+      e.preventDefault();
+      if (checked.has(current)) checked.delete(current); else checked.add(current);
+      render();
+    }
+  });
+  render();
+  showInfo();
+  const browse = h('button', { type: 'button', disabled: true }, 'Browse...');
+  const side = h('div', { class: 'cmp98-side' }, browse, h('div', {}, only, h('label', { for: 'cmp98-only' }, 'Selected Items Only')));
+  const body = h('div', { class: 'cmp98' },
+    h('div', { class: 'cmp98-top' }, list, side),
+    h('fieldset', { class: 'cmp98-info' }, nameEl, locEl));
+  const tabs = createTabs([{ label: 'Controls', content: body }]);
+  /** Applies the boxes; false when a component in use had to stay checked. */
+  const apply = async (): Promise<boolean> => {
+    const r = applyComponentChoice(ide.project, [...checked]);
+    const now = normalizeComponents(ide.project.components);
+    if (JSON.stringify(r.components) !== JSON.stringify(now)) ide.stack.execute(setComponentsCmd(r.components));
+    if (!r.refused.length) return true;
+    for (const f of r.refused) checked.add(f.toUpperCase());
+    render();
+    await messageBox98(doc, { prompt: COMPONENT_IN_USE, title: 'Components', buttons: 48 });
+    return false;
+  };
+  for (;;) {
+    const v = await showDialog98(doc, {
+      title: 'Components', content: tabs.el,
+      buttons: [{ label: 'OK', value: 'ok', default: true }, { label: 'Cancel', value: 'cancel', cancel: true }, { label: 'Apply', value: 'apply' }],
+    });
+    if (v !== 'ok' && v !== 'apply') return;
+    const ok = await apply();
+    if (v === 'ok' && ok) return;
+  }
 }

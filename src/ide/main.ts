@@ -14,7 +14,7 @@ import { openDesigner, registerDesignerActions } from './designer';
 import { createPropertiesWindow, type PropertiesWindow } from './properties';
 import { attachToolboxWindow, createToolbox, type ToolboxLayout } from './toolbox';
 import { createProjectExplorer, registerProjectActions, type ProjectExplorer } from './projectExplorer';
-import { showProjectProperties } from './projectDialogs';
+import { showComponents, showProjectProperties } from './projectDialogs';
 import { showOptions } from './optionsDialog';
 import { makeAppFlow } from '../build/makeApp';
 import { FileController } from './fileController';
@@ -52,6 +52,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   const env = { mdiHost: layout.mdiHost, actions };
   registerProjectActions(state, actions, env);
   actions.projectProperties = () => { if (state.mode === 'design') void showProjectProperties(state, doc); };
+  actions.components = () => { if (state.mode === 'design') void showComponents(state, doc); };
   actions.options = () => { void showOptions(state, backend, doc); };
   actions.askAi = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc); };
   const fc = new FileController(state, backend, doc);
@@ -97,7 +98,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     tb('projectExplorer', 'Project Explorer', 'viewProjectExplorer'), tb('properties', 'Properties Window', 'viewProperties'),
     tb('toolbox', 'Toolbox', 'viewToolbox'),
   ]);
-  createToolbox(layout.toolboxHost, state);
+  createToolbox(layout.toolboxHost, state, () => actions.components?.());
   const tbxPane = layout.panes.toolbox.el;
   const toolboxWin = attachToolboxWindow({
     pane: tbxPane, bar: tbxPane.querySelector(':scope > .title-bar')!, grid: layout.toolboxHost.querySelector('.tbx98-grid')!,

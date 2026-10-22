@@ -1,6 +1,7 @@
 // Form mode: the model answers with JSON ops (add / set / delete / form) and optional event code.
 // parseFormOps is tolerant (fences, thinking, trailing commas, comments, type aliases); nothing is applied on failure.
 import { setCodeCmd, addControlsCmd, compositeCmd, deleteControlsCmd, setPropertyCmd, type Command } from '../model/commands';
+import { addComponentsCmd } from '../model/components';
 import { CONTROL_TYPES, getPropDef, newControl, nextDefaultName, validateName } from '../model/controls';
 import type { ControlDef, ControlType, FormDef, Project, PropValue } from '../model/types';
 import { parsePropertyInput } from '../ide/propertyEditors';
@@ -10,7 +11,8 @@ import { stripThinking } from './clean';
 export { setCodeCmd };
 
 export type FormOp =
-  | { op: 'add'; type: Exclude<ControlType, 'Form'>; name: string; index: number | null; container: string | null; props: Record<string, PropValue> }
+  | { op: 'add'; type: Exclude<ControlType, 'Form'>; name: string; index: number | null; container: string | null; props: Record<string, PropValue>;
+      /** SSTab container: the 0-based tab (default: its current tab). */ tab?: number }
   | { op: 'set'; name: string; index: number | null; props: Record<string, PropValue> }
   | { op: 'delete'; name: string; index: number | null }
   | { op: 'form'; props: Record<string, PropValue> };
@@ -69,7 +71,7 @@ function parseJsonLoose(reply: string): unknown {
 const OP_ALIASES: Record<string, string> = {
   remove: 'delete', update: 'set', modify: 'set', change: 'set', move: 'set', edit: 'set', create: 'add', insert: 'add',
 };
-const OP_KEYS = new Set(['op', 'type', 'name', 'container', 'index', 'props']);
+const OP_KEYS = new Set(['op', 'type', 'name', 'container', 'index', 'props', 'tab']);
 /** The op's props; without a `props` object, loose top-level keys (e.g. {"op":"set","name":"X","Caption":"y"}) count. */
 function propsOf(raw: Record<string, unknown>): Record<string, unknown> {
   if (isObj(raw.props)) return raw.props;
@@ -169,12 +171,13 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
       let container: string | null = null;
       if (typeof raw.container === 'string' && raw.container.trim()) {
         const parent = find(splitName(raw.container).name, splitName(raw.container).index)[0];
-        if (parent && (parent.type === 'Frame' || parent.type === 'PictureBox')) container = label(parent.name, parent.index);
+        if (parent && CONTROL_TYPES[parent.type].isContainer) container = label(parent.name, parent.index);
         else warnings.push(`Ignored unknown container ${raw.container} for ${name}.`);
       }
       const parent = container ? find(splitName(container).name, splitName(container).index)[0] : undefined;
       work.controls.push({ id: `w${work.controls.length}`, type, name, index, parentId: parent?.id ?? null, props: {} });
-      ops.push({ op: 'add', type, name, index, container, props });
+      const tab = parent?.type === 'SSTab' && typeof raw.tab === 'number' && raw.tab >= 0 ? Math.floor(raw.tab) : undefined;
+      ops.push({ op: 'add', type, name, index, container, props, ...(tab !== undefined ? { tab } : {}) });
     } else if (kind === 'set' || kind === 'delete') {
       const s = splitName(typeof raw.name === 'string' ? raw.name : '');
       if (s.index === null && typeof raw.index === 'number' && raw.index >= 0) s.index = Math.floor(raw.index);
@@ -248,6 +251,7 @@ function buildCommands(form: FormDef, p: Ok): Command[] {
     } else {
       const parent = o.container ? find(splitContainer(o.container).name, splitContainer(o.container).index)[0] : undefined;
       const def: ControlDef = newControl(work, o.type, { left: 240, top: 240 }, parent?.id ?? null);
+      if (parent?.type === 'SSTab') def.tab = o.tab ?? (Number(parent.props.Tab) || 0);
       const generated = def.name;
       def.name = o.name; def.index = o.index;
       // newControl names the caption/text after the generated default name; follow the real name instead
@@ -266,13 +270,15 @@ const splitContainer = splitName;
 export function formOpsToCommand(proj: Project, formId: string, parsed: Ok, title: string): Command {
   const form = proj.forms.find(f => f.id === formId);
   if (!form) throw new Error(`Form not found: ${formId}`);
-  return compositeCmd(title, buildCommands(form, parsed));
+  // a control whose component is not checked yet checks it, in the same undo step
+  const comps = addComponentsCmd(proj, parsed.ops.flatMap(o => (o.op === 'add' ? [o.type] : [])));
+  return compositeCmd(title, [...(comps ? [comps] : []), ...buildCommands(form, parsed)]);
 }
 
 /** A modified copy of the form for the preview. */
 export function applyFormOpsToClone(form: FormDef, parsed: Ok): FormDef {
   const clone = structuredClone(form);
   const cmd = compositeCmd('preview', buildCommands(clone, parsed));
-  cmd.do({ name: '', title: '', startupForm: '', forms: [clone], modules: [], assets: {}, iconAsset: null });
+  cmd.do({ name: '', title: '', startupForm: '', forms: [clone], modules: [], assets: {}, iconAsset: null, components: [] });
   return clone;
 }

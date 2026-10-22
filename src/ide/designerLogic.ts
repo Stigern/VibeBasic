@@ -3,6 +3,7 @@
 // and children of a container are above the container.
 import { CONTROL_TYPES } from '../model/controls';
 import { controlPos, dockedRect, isDocked, isLine } from '../model/geometry';
+import { onCurrentTab } from '../model/ssTab';
 import type { ControlDef, FormDef } from '../model/types';
 
 export type Handle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
@@ -80,9 +81,20 @@ const inside = (r: Rect, x: number, y: number): boolean => x >= r.left && y >= r
 const intersects = (a: Rect, b: Rect): boolean =>
   a.left < b.left + b.width && b.left < a.left + a.width && a.top < b.top + b.height && b.top < a.top + a.height;
 
+/** The direct children of `parentId` that are shown: an SSTab's children on its other tabs are left out. */
 function childrenOf(form: FormDef, parentId: string | null): ControlDef[] {
-  const ids = new Set(form.controls.map(c => c.id));
-  return form.controls.filter(c => (c.parentId !== null && ids.has(c.parentId) ? c.parentId : null) === parentId);
+  const map = byId(form);
+  return form.controls.filter(c => (c.parentId !== null && map.has(c.parentId) ? c.parentId : null) === parentId
+    && onCurrentTab(c, c.parentId ? map.get(c.parentId) : undefined));
+}
+
+/** False when the control or one of its ancestors sits on an SSTab tab that is not the current one. */
+export function shownInDesign(form: FormDef, id: string): boolean {
+  const map = byId(form);
+  for (let c = map.get(id), n = 0; c && n < 64; c = c.parentId ? map.get(c.parentId) : undefined, n++) {
+    if (!onCurrentTab(c, c.parentId ? map.get(c.parentId) : undefined)) return false;
+  }
+  return true;
 }
 
 /** The topmost control at (x, y) (form client coordinates), descending into containers. */

@@ -198,6 +198,12 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl || !usable(tg.id)) return;
     emit(tg.id, 'Click', [], { SelectedTab: Number(e.detail.index) });
   });
+  // SSTab: a click on another tab shows it, then Click(PreviousTab)
+  on<CustomEvent>('vbsstabclick', e => {
+    const tg = targetOf(e.target);
+    if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl || !usable(tg.id)) return;
+    emit(tg.id, 'Click', [Number(e.detail.previous)], { Tab: Number(e.detail.index) });
+  });
   // TreeView / ListView / MSFlexGrid: the renderer reports clicks by 1-based collection index (the run session maps them to objects)
   const custom = (type: string, fn: (id: string, d: Record<string, number | boolean | string>) => void) => on<CustomEvent>(type, e => {
     const tg = targetOf(e.target);

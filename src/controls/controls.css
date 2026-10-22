@@ -237,6 +237,21 @@
 .vb-TabStrip:focus-within .ts-tab.selected span { outline: 1px dotted #000; outline-offset: 1px; }
 .ts-tab u { border-bottom: 1px solid currentColor; }
 
+/* ---------- SSTab (3D tabs like the Properties window's) ---------- */
+.vb-sst { position: absolute; left: 0; top: 0; right: 0; bottom: 0; outline: none; }
+.sst-body { position: absolute; left: 0; right: 0; bottom: 0; box-sizing: border-box; background: #c0c0c0; box-shadow: var(--w98-window); }
+.sst-tabs { position: absolute; left: 0; top: 0; right: 0; }
+.sst-tab { position: absolute; box-sizing: border-box; background: #c0c0c0; display: flex; align-items: center; justify-content: center;
+  white-space: pre; overflow: hidden; padding: 2px 4px 0; margin-top: 2px;
+  box-shadow: inset -1px 0 #0a0a0a, inset 1px 1px #dfdfdf, inset -2px 0 #808080, inset 2px 2px #fff; border-radius: 2px 2px 0 0; }
+.sst-tab.selected { margin-top: 0; padding-top: 0; z-index: 2; box-shadow: inset -1px 0 #0a0a0a, inset 1px 1px #dfdfdf, inset -2px 0 #808080, inset 2px 2px #fff; }
+.sst-tab.selected::after { content: ''; position: absolute; left: 2px; right: 2px; bottom: -2px; height: 3px; background: #c0c0c0; }
+.sst-tab.sst-disabled span { color: #808080; text-shadow: 1px 1px #fff; }
+.vb-SSTab:focus-within .sst-tab.selected span { outline: 1px dotted #000; outline-offset: 1px; }
+.sst-tab u { border-bottom: 1px solid currentColor; }
+.sst-page { position: absolute; left: 0; top: 0; right: 0; bottom: 0; overflow: hidden; pointer-events: none; z-index: 3; }
+.sst-page > * { pointer-events: auto; }
+
 /* ---------- TreeView, ListView, MSFlexGrid ---------- */
 .vb-TreeView, .vb-ListView, .vb-MSFlexGrid { background: #fff; box-shadow: var(--w98-sunken); }
 .vb-tv, .vb-lv, .vb-fg { position: absolute; left: 2px; top: 2px; right: 2px; bottom: 2px; overflow: auto; outline: none; box-sizing: border-box; }

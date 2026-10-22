@@ -1,5 +1,8 @@
-import { CONTROL_TYPES, TOOLBOX_ORDER } from '../model/controls';
+import { toolboxTools } from '../model/components';
+import { CONTROL_TYPES } from '../model/controls';
+import type { ControlType } from '../model/types';
 import { h } from '../ui98/dom';
+import { popupMenu } from '../ui98/popup';
 import { placeControlCentered } from './designer';
 import type { IdeState } from './ideState';
 import { TOOLBOX_ICONS } from './icons/toolboxIcons';
@@ -144,22 +147,40 @@ export function attachToolboxWindow(o: ToolboxWindowOptions): ToolboxWindow {
   return win;
 }
 
-/** Tool buttons in a grid that reflows to the toolbox width (2..6 columns) and scrolls when too tall. Selecting a tool sets ide.currentTool (Pointer resets). */
-export function createToolbox(host: HTMLElement, ide: IdeState): { refresh(): void; buttons: Map<string, HTMLElement> } {
+/** Tool buttons in a grid that reflows to the toolbox width (2..6 columns) and scrolls when too tall. Selecting a tool sets ide.currentTool (Pointer resets).
+ *  The buttons are the intrinsic controls plus those of the project's checked components; they follow Project > Components.
+ *  A right-click offers "Components..." (`onComponents`). */
+export function createToolbox(host: HTMLElement, ide: IdeState, onComponents?: () => void): { refresh(): void; buttons: Map<string, HTMLElement> } {
   const buttons = new Map<string, HTMLElement>();
   const grid = h('div', { class: 'tbx98-grid' });
-  for (const tool of TOOLBOX_ORDER) {
+  const make = (tool: ControlType | 'Pointer'): HTMLElement => {
     const title = tool === 'Pointer' ? 'Pointer' : CONTROL_TYPES[tool].toolboxTooltip;
     const btn = h('div', { class: 'tbx98-btn', role: 'button', title, 'data-tool': tool });
     btn.innerHTML = TOOLBOX_ICONS[tool];
     btn.addEventListener('click', () => { if (ide.mode === 'design') ide.setTool(tool); });
     btn.addEventListener('dblclick', () => { if (ide.mode === 'design') placeControlCentered(ide, tool); });
-    grid.appendChild(btn);
-    buttons.set(tool, btn);
-  }
+    return btn;
+  };
+  let shown = '';
+  const rebuild = () => {
+    const tools = toolboxTools(ide.project.components ?? []);
+    const key = tools.join(',');
+    if (key === shown) return;
+    shown = key;
+    for (const t of [...buttons.keys()]) if (!tools.includes(t as ControlType | 'Pointer')) buttons.delete(t);
+    grid.replaceChildren(...tools.map(t => { let b = buttons.get(t); if (!b) buttons.set(t, b = make(t)); return b; }));
+    if (!tools.includes(ide.currentTool)) ide.setTool('Pointer');
+  };
+  rebuild();
   host.appendChild(grid);
+  grid.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    if (ide.mode !== 'design' || !onComponents) return;
+    popupMenu(grid.ownerDocument, e.clientX, e.clientY, [{ label: 'Components...', action: onComponents }]);
+  });
   const refresh = () => { for (const [t, b] of buttons) b.classList.toggle('checked', t === ide.currentTool); };
   ide.on('tool', refresh);
+  ide.on('project', () => { rebuild(); refresh(); });
   // Inert while a program runs or is in break mode
   const lock = () => { grid.classList.toggle('tbx98-locked', ide.mode !== 'design'); if (ide.mode !== 'design') ide.setTool('Pointer'); };
   ide.on('mode', lock);

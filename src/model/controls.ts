@@ -3,6 +3,7 @@
 // run session and AI context.
 
 import { KEYWORDS } from '../lang/tokens';
+import { syncSSTab } from './ssTab';
 import type { ControlDef, ControlType, FontValue, FormDef, PropValue, Project } from './types';
 
 export type PropKind = 'string' | 'text' | 'int' | 'bool' | 'color' | 'enum' | 'font' | 'picture' | 'list';
@@ -12,7 +13,11 @@ export interface EventDef { name: string; params: string }          // e.g. { na
 export interface MethodDef { name: string; params: string }
 export interface ControlTypeDef { type: ControlType; namePrefix: string; defaultWidth: number; defaultHeight: number;
   props: PropDef[]; events: EventDef[]; methods: MethodDef[]; defaultEvent: string; defaultMember: string | null;
-  isContainer: boolean; invisibleAtRuntime: boolean; toolboxTooltip: string }
+  isContainer: boolean; invisibleAtRuntime: boolean; toolboxTooltip: string;
+  /** The component (OCX file name, see components.ts) the control belongs to; absent for the intrinsic controls. */
+  component?: string;
+  /** Called after a property was set (designer and AI) to keep linked properties in step (SSTab Caption / TabCaption). */
+  onPropSet?(props: Record<string, PropValue>, name: string): void }
 
 // ---------------------------------------------------------------------------------------------------------------
 // Property builders
@@ -259,7 +264,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
   }),
 
   ProgressBar: def({
-    type: 'ProgressBar', namePrefix: 'ProgressBar', defaultWidth: 1935, defaultHeight: 255, toolboxTooltip: 'ProgressBar',
+    type: 'ProgressBar', component: 'MSCOMCTL.OCX', namePrefix: 'ProgressBar', defaultWidth: 1935, defaultHeight: 255, toolboxTooltip: 'ProgressBar',
     defaultEvent: 'Click', defaultMember: 'Value',
     props: [
       ...common(), int('Min', 0), int('Max', 100), int('Value', 0),
@@ -295,7 +300,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
   }),
 
   Slider: def({
-    type: 'Slider', namePrefix: 'Slider', defaultWidth: 2055, defaultHeight: 495, toolboxTooltip: 'Slider',
+    type: 'Slider', component: 'MSCOMCTL.OCX', namePrefix: 'Slider', defaultWidth: 2055, defaultHeight: 495, toolboxTooltip: 'Slider',
     defaultEvent: 'Change', defaultMember: 'Value',
     props: [
       ...common(), int('Min', 0, { min: -32768, max: 32767 }), int('Max', 10, { min: -32768, max: 32767 }), int('Value', 0),
@@ -308,7 +313,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
   }),
 
   UpDown: def({
-    type: 'UpDown', namePrefix: 'UpDown', defaultWidth: 255, defaultHeight: 495, toolboxTooltip: 'UpDown',
+    type: 'UpDown', component: 'MSCOMCT2.OCX', namePrefix: 'UpDown', defaultWidth: 255, defaultHeight: 495, toolboxTooltip: 'UpDown',
     defaultEvent: 'Change', defaultMember: 'Value',
     props: [
       ...common(), int('Min', 0, { min: -32768, max: 32767 }), int('Max', 10, { min: -32768, max: 32767 }), int('Value', 0),
@@ -320,7 +325,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
 
   // Panels / Tabs are one line per item, 'field|field|…' (see fieldLines.ts); at run time they seed the collections.
   StatusBar: def({
-    type: 'StatusBar', namePrefix: 'StatusBar', defaultWidth: 4800, defaultHeight: 315, toolboxTooltip: 'StatusBar',
+    type: 'StatusBar', component: 'MSCOMCTL.OCX', namePrefix: 'StatusBar', defaultWidth: 4800, defaultHeight: 315, toolboxTooltip: 'StatusBar',
     defaultEvent: 'PanelClick', defaultMember: null,
     props: [
       int('Left', 0), int('Top', 0), int('Width', 0), int('Height', 0), bool('Visible', true), bool('Enabled', true),
@@ -332,7 +337,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
   }),
 
   TabStrip: def({
-    type: 'TabStrip', namePrefix: 'TabStrip', defaultWidth: 3600, defaultHeight: 2400, toolboxTooltip: 'TabStrip',
+    type: 'TabStrip', component: 'MSCOMCTL.OCX', namePrefix: 'TabStrip', defaultWidth: 3600, defaultHeight: 2400, toolboxTooltip: 'TabStrip',
     defaultEvent: 'Click', defaultMember: null,
     props: [
       ...common(), font(),
@@ -345,7 +350,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
 
   // Nodes / ListItems are run-time only; ColumnHeaders are lines 'Text|Key|Width|Alignment'. SelectedNode / SelectedIndex are window state.
   TreeView: def({
-    type: 'TreeView', namePrefix: 'TreeView', defaultWidth: 2400, defaultHeight: 2400, toolboxTooltip: 'TreeView',
+    type: 'TreeView', component: 'MSCOMCTL.OCX', namePrefix: 'TreeView', defaultWidth: 2400, defaultHeight: 2400, toolboxTooltip: 'TreeView',
     defaultEvent: 'NodeClick', defaultMember: null,
     props: [
       ...common(), font(),
@@ -359,7 +364,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
   }),
 
   ListView: def({
-    type: 'ListView', namePrefix: 'ListView', defaultWidth: 3600, defaultHeight: 2400, toolboxTooltip: 'ListView',
+    type: 'ListView', component: 'MSCOMCTL.OCX', namePrefix: 'ListView', defaultWidth: 3600, defaultHeight: 2400, toolboxTooltip: 'ListView',
     defaultEvent: 'ItemClick', defaultMember: null,
     props: [
       ...common(), font(),
@@ -377,7 +382,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
 
   // The cells live in the run-time mirror (TextMatrix), not in the properties.
   MSFlexGrid: def({
-    type: 'MSFlexGrid', namePrefix: 'MSFlexGrid', defaultWidth: 3600, defaultHeight: 2400, toolboxTooltip: 'MSFlexGrid',
+    type: 'MSFlexGrid', component: 'MSFLXGRD.OCX', namePrefix: 'MSFlexGrid', defaultWidth: 3600, defaultHeight: 2400, toolboxTooltip: 'MSFlexGrid',
     defaultEvent: 'Click', defaultMember: null,
     props: [
       ...common(), font(),
@@ -392,7 +397,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
   // Invisible at run time, like Timer (Left and Top only). ShowOpen / ShowSave / ShowColor / ShowFont are run by the run session;
   // ShowPrinter and ShowHelp are not supported (438). FileTitle is run-time only.
   CommonDialog: def({
-    type: 'CommonDialog', namePrefix: 'CommonDialog', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true, toolboxTooltip: 'CommonDialog',
+    type: 'CommonDialog', component: 'COMDLG32.OCX', namePrefix: 'CommonDialog', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true, toolboxTooltip: 'CommonDialog',
     defaultEvent: '', defaultMember: null,
     props: [
       int('Left', 0), int('Top', 0), str('Tag'),
@@ -410,7 +415,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
 
   // Text is plain text; the formatting of the selection is run-time only (SelBold ...). The window reports SelStart, SelLength and the Sel* format.
   RichTextBox: def({
-    type: 'RichTextBox', namePrefix: 'RichTextBox', defaultWidth: 2415, defaultHeight: 975, toolboxTooltip: 'RichTextBox',
+    type: 'RichTextBox', component: 'RICHTX32.OCX', namePrefix: 'RichTextBox', defaultWidth: 2415, defaultHeight: 975, toolboxTooltip: 'RichTextBox',
     defaultEvent: 'Change', defaultMember: 'Text',
     props: [
       ...common(), txt('Text'), bool('Locked', false), bool('MultiLine', true, { runtime: 'ro' }),
@@ -458,13 +463,30 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
     events: [evClick(), evDbl(), ev('PathChange'), ev('PatternChange'), ev('Scroll'), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
+
+  // A container: every child sits on one tab (ControlDef.tab) and only the current tab's children show. TabCaption holds all the
+  // captions, Caption is the current tab's (see ssTab.ts). TabEnabled / TabVisible are run-time lists, '0' = False.
+  SSTab: def({
+    type: 'SSTab', component: 'TABCTL32.OCX', namePrefix: 'SSTab', defaultWidth: 4335, defaultHeight: 2895, isContainer: true, toolboxTooltip: 'SSTab',
+    defaultEvent: 'Click', defaultMember: null,
+    props: [
+      ...common(), font(),
+      int('Tabs', 3, { min: 1, max: 999 }), int('Tab', 0, { min: 0 }), int('TabsPerRow', 3, { min: 1, max: 999 }),
+      en('Style', 0, ['ssStyleTabbedDialog', 'ssStylePropertyPage']), int('TabHeight', 520, { min: 0 }),
+      str('Caption', 'Tab 0'), p('TabCaption', 'list', ['Tab 0', 'Tab 1', 'Tab 2']),
+      rt('TabEnabled', 'list', []), rt('TabVisible', 'list', []),
+    ],
+    events: [ev('Click', 'PreviousTab As Integer'), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
+    onPropSet: syncSSTab,
+  }),
 };
 
-/** VB6 toolbox order. */
+/** VB6 toolbox order: every control type. The Toolbox shows the intrinsic ones, then the checked components' ones
+ *  (components.ts toolboxTools), each in this order. */
 export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
   'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip',
-  'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox',
+  'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab',
 ];
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -519,7 +541,7 @@ export function newControl(form: FormDef, type: Exclude<ControlType, 'Form'>,
     props.Width = rect.width ?? td.defaultWidth;
     props.Height = rect.height ?? td.defaultHeight;
   }
-  if ('Caption' in props) props.Caption = name;
+  if ('Caption' in props && type !== 'SSTab') props.Caption = name;   // an SSTab's Caption is its first tab's
   if (type === 'TextBox' || type === 'ComboBox') props.Text = name;
   if ('TabIndex' in props) props.TabIndex = form.controls.filter(c => 'TabIndex' in c.props).length;
   return { id: newId(), type, name, index: null, parentId, props };
@@ -541,6 +563,6 @@ export function newProject(): Project {
   return {
     name: 'Project1', title: '', startupForm: 'Form1',
     forms: [newForm('Form1')],
-    modules: [], assets: {}, iconAsset: null,
+    modules: [], assets: {}, iconAsset: null, components: [],
   };
 }
