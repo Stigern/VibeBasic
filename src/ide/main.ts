@@ -15,6 +15,7 @@ import { createToolbox } from './toolbox';
 import { createProjectExplorer, registerProjectActions, type ProjectExplorer } from './projectExplorer';
 import { showProjectProperties } from './projectDialogs';
 import { showOptions } from './optionsDialog';
+import { FileController } from './fileController';
 
 export interface Ide { state: IdeState; layout: IdeLayout; actions: IdeActions; menus: ReturnType<typeof buildMenus>; refresh(): void }
 
@@ -45,6 +46,14 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   registerProjectActions(state, actions, env);
   actions.projectProperties = () => { void showProjectProperties(state, doc); };
   actions.options = () => { void showOptions(state, backend, doc); };
+  const fc = new FileController(state, backend, doc);
+  fc.onProjectReplaced = () => openDesigner(state, state.project.forms.find(f => f.name === state.project.startupForm)?.id ?? state.project.forms[0].id, env);
+  actions.newProject = () => { void fc.newProject(); };
+  actions.openProject = () => { void fc.open(); };
+  actions.saveProject = () => { void fc.save(); };
+  actions.saveProjectAs = () => { void fc.saveAs(); };
+  actions.exit = () => { void fc.exit(); };
+  backend.onCloseRequested(() => fc.confirmDiscard());
   const menubar = createMenubar(layout.menubarHost, menus);
 
   const tb = (icon: string, title: string, name: string, pred?: () => boolean): ToolbarItem => ({
@@ -65,9 +74,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   bindShortcuts(menus, window);
 
   refresh = () => { menubar.refresh(); toolbar.refresh(); };
-  const updateTitle = () => {
-    void backend.setWindowTitle(`${state.project.name} - VibeBasic [${state.mode}]`);
-  };
+  const updateTitle = () => fc.updateTitle();
   state.on('project', () => { refresh(); updateTitle(); });
   state.on('mode', () => { refresh(); updateTitle(); });
   state.on('selection', () => refresh());

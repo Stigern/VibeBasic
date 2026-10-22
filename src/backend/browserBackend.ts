@@ -60,6 +60,10 @@ export class BrowserBackend implements Backend {
     document.title = title;
   }
 
+  async closeMainWindow(): Promise<void> {
+    window.close(); // best effort: browsers only close windows opened by script
+  }
+
   onCloseRequested(_handler: () => Promise<boolean>): void {
     // Best effort: beforeunload cannot await an async handler, so the browser's own
     // confirmation prompt stands in for the IDE's "Save changes?" dialog (development only).

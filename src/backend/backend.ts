@@ -19,6 +19,8 @@ export interface Backend {
   setWindowTitle(title: string): Promise<void>;
   /** The handler returns false to cancel closing. */
   onCloseRequested(handler: () => Promise<boolean>): void;
+  /** Closes the main window without asking again (the caller already confirmed). */
+  closeMainWindow(): Promise<void>;
 }
 
 let cached: Backend | undefined;

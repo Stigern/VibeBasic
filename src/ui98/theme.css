@@ -155,3 +155,4 @@ input[type=text], textarea { cursor: text; }
 .tabs98-tab.selected { margin-top: 0; margin-left: -2px; margin-right: -1px; padding: 5px 11px 6px; position: relative; z-index: 8; }
 .tabs98-tab:focus { outline: 1px dotted #000; outline-offset: -4px; }
 .tabs98-panel { position: relative; z-index: 2; padding: 8px; background: var(--w98-face); box-shadow: var(--w98-window); }
+.dlg98-filelist { box-sizing: border-box; width: 260px; height: 80px; margin-top: 8px; background: #fff; box-shadow: var(--w98-sunken); padding: 2px; overflow: auto; }

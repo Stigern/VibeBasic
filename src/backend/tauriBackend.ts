@@ -61,6 +61,10 @@ export class TauriBackend implements Backend {
     await getCurrentWindow().setTitle(title);
   }
 
+  async closeMainWindow(): Promise<void> {
+    await getCurrentWindow().destroy();
+  }
+
   onCloseRequested(handler: () => Promise<boolean>): void {
     void getCurrentWindow().onCloseRequested(async (e) => {
       if (!(await handler())) e.preventDefault();
