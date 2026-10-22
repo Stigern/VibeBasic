@@ -24,8 +24,8 @@ export interface DialogTab {
 export type DialogTabBuilder = (ide: IdeState, doc?: Document) => DialogTab;
 
 /** Shows `tabs` with OK / Cancel. Resolves true when OK was pressed and all tabs were valid and applied. */
-export async function runTabbedDialog(doc: Document, title: string, tabs: DialogTab[], onOk?: () => void): Promise<boolean> {
-  const t = createTabs(tabs.map(x => ({ label: x.label, content: x.content })));
+export async function runTabbedDialog(doc: Document, title: string, tabs: DialogTab[], onOk?: () => void, selected = 0): Promise<boolean> {
+  const t = createTabs(tabs.map(x => ({ label: x.label, content: x.content })), { selected });
   for (;;) {
     const v = await showDialog98(doc, {
       title, content: t.el,

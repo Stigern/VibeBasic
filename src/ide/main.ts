@@ -8,7 +8,8 @@ import { TOOLBAR_ICONS } from './icons/toolbarIcons';
 import { IdeState, OPTION_EXPLICIT, type IdeOptions } from './ideState';
 import { buildLayout, type IdeLayout } from './layout';
 import { buildMenus, type IdeActions } from './menus';
-import { openCodeWindow, registerCodeActions } from './codeWindow';
+import { askAi } from '../ai/askDialog';
+import { getCodeWindow, openCodeWindow, registerCodeActions } from './codeWindow';
 import { openDesigner, registerDesignerActions } from './designer';
 import { createPropertiesWindow, type PropertiesWindow } from './properties';
 import { createToolbox } from './toolbox';
@@ -55,6 +56,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   registerProjectActions(state, actions, env);
   actions.projectProperties = () => { if (state.mode === 'design') void showProjectProperties(state, doc); };
   actions.options = () => { void showOptions(state, backend, doc); };
+  actions.askAi = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc); };
   const fc = new FileController(state, backend, doc);
   fc.onProjectReplaced = () => {
     const id = state.project.forms.find(f => f.name === state.project.startupForm)?.id ?? state.project.forms[0]?.id;

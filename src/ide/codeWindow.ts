@@ -15,6 +15,7 @@ import type { ControlType, FormDef } from '../model/types';
 import { compileErrorBox } from '../ui98/dialogs';
 import { createCombo, type Combo } from '../ui98/combo';
 import { h } from '../ui98/dom';
+import { popupMenu } from '../ui98/popup';
 import { createMdiWindow, type MdiWindow } from '../ui98/mdiWindow';
 import { openDesigner } from './designer';
 import type { IdeState } from './ideState';
@@ -140,6 +141,11 @@ export function fixMemberCase(line: string, formName: string, controls: { name: 
     if (canon && canon.length === m.text.length) for (let k = 0; k < canon.length; k++) chars[m.col - 1 + k] = canon[k];
   }
   return chars.join('');
+}
+
+/** The open code window of a form/module, or null. */
+export function getCodeWindow(ide: IdeState, itemId: string): CodeWindow | null {
+  return windows.get(ide)?.get(itemId) ?? null;
 }
 
 export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): CodeWindow {
@@ -296,6 +302,11 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   win.body.append(h('div', { class: 'cw-root' }, h('div', { class: 'cw-bar' }, objCombo.el, procCombo.el), editorEl));
   view = new EditorView({ state, parent: editorEl, dispatch: (tr, v) => { v.update([tr]); onTransaction(tr, v); } });
   syncCombos();
+  editorEl.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    if (ide.mode !== 'design' || !envs.get(ide)?.actions?.askAi) return;
+    popupMenu(editorEl.ownerDocument, e.clientX, e.clientY, [{ label: 'Ask AI...', action: () => envs.get(ide)?.actions?.askAi?.() }]);
+  });
 
   // ---- window / model sync -----------------------------------------------------------------------------------------
   const setActive = () => ide.setActiveView({ kind: 'code', itemId });

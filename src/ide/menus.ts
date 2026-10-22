@@ -104,7 +104,7 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
       mk('Restart', 'restart', 'Shift+F5', () => idle() && (state?.mode ?? 'design') !== 'design'),
     ] },
     { label: 'Tools', items: [
-      mk('Ask AI...', 'askAi', 'Ctrl+I'),
+      mk('Ask AI...', 'askAi', 'Ctrl+I', design),
       sep(),
       mk('Options...', 'options'),
     ] },

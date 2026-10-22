@@ -12,7 +12,7 @@ const check = (label: string, on: boolean): { el: HTMLElement; input: HTMLInputE
 };
 const positiveInt = (s: string): boolean => /^\d+$/.test(s.trim()) && Number(s) > 0;
 
-export async function showOptions(ide: IdeState, backend: Pick<Backend, 'saveSettings'> = getBackend(), doc: Document = document): Promise<void> {
+export async function showOptions(ide: IdeState, backend: Pick<Backend, 'saveSettings'> = getBackend(), doc: Document = document, initialTab?: string): Promise<void> {
   const o = ide.options;
   const syntax = check('Auto Syntax Check', o.autoSyntaxCheck);
   const reqDecl = check('Require Variable Declaration', o.requireVariableDeclaration);
@@ -34,5 +34,5 @@ export async function showOptions(ide: IdeState, backend: Pick<Backend, 'saveSet
       showGrid: grid.input.checked, gridWidth: Number(w.value), gridHeight: Number(hh.value), alignToGrid: align.input.checked,
     });
     void backend.saveSettings('ide', ide.options);
-  });
+  }, Math.max(0, tabs.findIndex(t => t.label === initialTab)));
 }
