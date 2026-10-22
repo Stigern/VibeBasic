@@ -1,0 +1,70 @@
+{
+  "format": "vibebasic-project",
+  "version": 1,
+  "name": "Progress",
+  "title": "Progress",
+  "startupForm": "Form1",
+  "forms": [
+    {
+      "id": "f1",
+      "name": "Form1",
+      "props": {
+        "Caption": "Progress",
+        "Width": 4800,
+        "Height": 3600
+      },
+      "controls": [
+        {
+          "id": "c1",
+          "type": "ProgressBar",
+          "name": "ProgressBar1",
+          "index": null,
+          "parentId": null,
+          "props": {
+            "Left": 240,
+            "Top": 240,
+            "Width": 4000,
+            "Height": 300,
+            "Min": 0,
+            "Max": 100,
+            "Value": 0
+          }
+        },
+        {
+          "id": "c2",
+          "type": "CommandButton",
+          "name": "Command1",
+          "index": null,
+          "parentId": null,
+          "props": {
+            "Left": 240,
+            "Top": 720,
+            "Width": 1500,
+            "Height": 495,
+            "Caption": "Start",
+            "TabIndex": 0
+          }
+        },
+        {
+          "id": "c3",
+          "type": "Label",
+          "name": "Label1",
+          "index": null,
+          "parentId": null,
+          "props": {
+            "Left": 240,
+            "Top": 1440,
+            "Width": 3000,
+            "Height": 375,
+            "Caption": "",
+            "TabIndex": 1
+          }
+        }
+      ],
+      "code": "Private Sub Command1_Click()\n    Dim i As Integer\n    For i = 1 To 100\n        ProgressBar1.Value = i\n        DoEvents\n    Next\n    Label1.Caption = \"Ferdig\"\nEnd Sub\n"
+    }
+  ],
+  "modules": [],
+  "assets": {},
+  "iconAsset": null
+}

@@ -1,6 +1,7 @@
 // Renders one form of the running program and maps DOM events to FromWindow messages (and ToWindow patches to the DOM).
 // Shared by the inline host (tests, browser) and the real Tauri form windows (form.html).
 //
+// A picture whose asset key is a data URL (LoadPicture at run time) is shown from that URL.
 // If `root.dataset.vbWindow` is set, root fills a native window: size changes of root resize the form and send `resized`.
 
 import { renderFormSurface, type ControlView } from '../controls/render';
@@ -36,7 +37,7 @@ function isTextField(el: EventTarget | null): el is HTMLInputElement | HTMLTextA
 }
 
 export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: FromWindow) => void): { receive(m: ToWindow): void; dispose(): void } {
-  const surface = renderFormSurface(s.form, 'run', ref => s.assets[ref.asset] ?? null);
+  const surface = renderFormSurface(s.form, 'run', ref => s.assets[ref.asset] ?? (ref.asset.startsWith('data:') ? ref.asset : null));
   surface.el.tabIndex = -1;   // so keys reach the form's listeners when no control has focus
   surface.el.style.outline = 'none';
   root.appendChild(surface.el);

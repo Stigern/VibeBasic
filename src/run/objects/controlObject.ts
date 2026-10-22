@@ -7,27 +7,21 @@ import { Empty, Nothing, coerce, isObject, toBool, toStr, type VBValue } from '.
 import { CONTROL_TYPES, getPropDef, type PropDef } from '../../model/controls';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../../model/types';
 import type { PatchQueue } from '../patchQueue';
+import { PictureObject, type HasPictureRef } from './appObjects';
 
 export interface RunContext {
   resolveAsset(ref: PictureRef): string | null;
   loadPicture(path: string): Promise<VBValue>;
   /** A Timer's Enabled or Interval changed. */
   timerChanged(ctrl: ControlObject): void;
+  /** A property was set by code (after the patch is queued); `old` is the value before. VB6 raises events for some (Text1.Text → Change). */
+  propChanged?(ctrl: ControlObject, prop: string, old: PropValue): void;
 }
 
 /** Any picture value (what LoadPicture returns, or what `Picture` reads) carries its asset reference. */
-export interface HasPictureRef { pictureRef: PictureRef }
+export type { HasPictureRef };
 const hasPictureRef = (v: unknown): v is HasPictureRef =>
   typeof v === 'object' && v !== null && 'pictureRef' in v;
-
-class PictureHandle implements VBObject, HasPictureRef {
-  readonly vbTypeName = 'Picture';
-  constructor(readonly pictureRef: PictureRef) {}
-  hasMember(): boolean { return false; }
-  getMember(): VBValue { throw new VBRuntimeError(438); }
-  setMember(): void { throw new VBRuntimeError(438); }
-  callMethod(): VBValue { throw new VBRuntimeError(438); }
-}
 
 const FONT_PROPS: Record<string, keyof FontValue> = { name: 'name', size: 'size', bold: 'bold', italic: 'italic', underline: 'underline' };
 
@@ -105,7 +99,7 @@ export class ControlObject implements VBObject {
     if (args.length) throw new VBRuntimeError(450);
     const v = this.read(pd);
     if (pd.kind === 'font') return new FontObject(() => this.props.Font as FontValue, f => this.write(this.propDef('Font'), f));
-    if (pd.kind === 'picture') return v ? new PictureHandle(v as PictureRef) : Nothing;
+    if (pd.kind === 'picture') return v ? new PictureObject(v as PictureRef) : Nothing;
     return v as VBValue;
   }
 
@@ -240,6 +234,7 @@ export class ControlObject implements VBObject {
   private write(pd: PropDef, v: PropValue): void {
     const patch: Record<string, PropValue> = {};
     const name = pd.name;
+    const old = this.props[name === 'SelText' ? 'Text' : name];
     if (name === 'SelText') {
       const t = String(this.props.Text ?? ''), s = Number(this.props.SelStart), n = Number(this.props.SelLength);
       const ins = String(v);
@@ -259,6 +254,7 @@ export class ControlObject implements VBObject {
     }
     this.send(patch);
     if (this.def.type === 'Timer' && (name === 'Enabled' || name === 'Interval')) this.ctx.timerChanged(this);
+    this.ctx.propChanged?.(this, name === 'SelText' ? 'Text' : name, old);
   }
 
   private send(props: Record<string, PropValue>): void {

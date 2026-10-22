@@ -1,0 +1,204 @@
+{
+  "format": "vibebasic-project",
+  "version": 1,
+  "name": "Calc",
+  "title": "Kalkulator",
+  "startupForm": "Form1",
+  "forms": [
+    {
+      "id": "f1",
+      "name": "Form1",
+      "props": {
+        "Caption": "Kalkulator",
+        "Width": 3500,
+        "Height": 4200
+      },
+      "controls": [
+        {
+          "id": "c100",
+          "type": "TextBox",
+          "name": "Text1",
+          "index": null,
+          "parentId": null,
+          "props": {
+            "Left": 240,
+            "Top": 240,
+            "Width": 2775,
+            "Height": 375,
+            "Text": "",
+            "TabIndex": 0
+          }
+        },
+        {
+          "id": "c1",
+          "type": "CommandButton",
+          "name": "Command1",
+          "index": 0,
+          "parentId": null,
+          "props": {
+            "Left": 240,
+            "Top": 2640,
+            "Width": 855,
+            "Height": 495,
+            "Caption": "0",
+            "TabIndex": 1
+          }
+        },
+        {
+          "id": "c2",
+          "type": "CommandButton",
+          "name": "Command1",
+          "index": 1,
+          "parentId": null,
+          "props": {
+            "Left": 240,
+            "Top": 2040,
+            "Width": 855,
+            "Height": 495,
+            "Caption": "1",
+            "TabIndex": 2
+          }
+        },
+        {
+          "id": "c3",
+          "type": "CommandButton",
+          "name": "Command1",
+          "index": 2,
+          "parentId": null,
+          "props": {
+            "Left": 1200,
+            "Top": 2040,
+            "Width": 855,
+            "Height": 495,
+            "Caption": "2",
+            "TabIndex": 3
+          }
+        },
+        {
+          "id": "c4",
+          "type": "CommandButton",
+          "name": "Command1",
+          "index": 3,
+          "parentId": null,
+          "props": {
+            "Left": 2160,
+            "Top": 2040,
+            "Width": 855,
+            "Height": 495,
+            "Caption": "3",
+            "TabIndex": 4
+          }
+        },
+        {
+          "id": "c5",
+          "type": "CommandButton",
+          "name": "Command1",
+          "index": 4,
+          "parentId": null,
+          "props": {
+            "Left": 240,
+            "Top": 1440,
+            "Width": 855,
+            "Height": 495,
+            "Caption": "4",
+            "TabIndex": 5
+          }
+        },
+        {
+          "id": "c6",
+          "type": "CommandButton",
+          "name": "Command1",
+          "index": 5,
+          "parentId": null,
+          "props": {
+            "Left": 1200,
+            "Top": 1440,
+            "Width": 855,
+            "Height": 495,
+            "Caption": "5",
+            "TabIndex": 6
+          }
+        },
+        {
+          "id": "c7",
+          "type": "CommandButton",
+          "name": "Command1",
+          "index": 6,
+          "parentId": null,
+          "props": {
+            "Left": 2160,
+            "Top": 1440,
+            "Width": 855,
+            "Height": 495,
+            "Caption": "6",
+            "TabIndex": 7
+          }
+        },
+        {
+          "id": "c8",
+          "type": "CommandButton",
+          "name": "Command1",
+          "index": 7,
+          "parentId": null,
+          "props": {
+            "Left": 240,
+            "Top": 840,
+            "Width": 855,
+            "Height": 495,
+            "Caption": "7",
+            "TabIndex": 8
+          }
+        },
+        {
+          "id": "c9",
+          "type": "CommandButton",
+          "name": "Command1",
+          "index": 8,
+          "parentId": null,
+          "props": {
+            "Left": 1200,
+            "Top": 840,
+            "Width": 855,
+            "Height": 495,
+            "Caption": "8",
+            "TabIndex": 9
+          }
+        },
+        {
+          "id": "c10",
+          "type": "CommandButton",
+          "name": "Command1",
+          "index": 9,
+          "parentId": null,
+          "props": {
+            "Left": 2160,
+            "Top": 840,
+            "Width": 855,
+            "Height": 495,
+            "Caption": "9",
+            "TabIndex": 10
+          }
+        },
+        {
+          "id": "c50",
+          "type": "CommandButton",
+          "name": "cmdClear",
+          "index": null,
+          "parentId": null,
+          "props": {
+            "Left": 1200,
+            "Top": 2640,
+            "Width": 1815,
+            "Height": 495,
+            "Caption": "C",
+            "TabIndex": 11
+          }
+        }
+      ],
+      "code": "Private Sub Command1_Click(Index As Integer)\n    Text1.Text = Text1.Text & Index\nEnd Sub\n\nPrivate Sub cmdClear_Click()\n    Text1.Text = \"\"\nEnd Sub\n"
+    }
+  ],
+  "modules": [],
+  "assets": {},
+  "iconAsset": null
+}
