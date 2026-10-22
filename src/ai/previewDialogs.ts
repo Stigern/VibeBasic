@@ -9,9 +9,34 @@ const KIND_LABEL = { replaced: 'Replace', added: 'Add', body: 'Replace body of',
 const metricsLine = (metrics?: string): HTMLElement[] => metrics ? [h('div', { class: 'ai-metrics', style: 'color:#808080;margin-bottom:4px' }, metrics)] : [];
 const CELL = 'margin:0;padding:0 3px;white-space:pre;font:13px "Courier New",monospace;min-height:15px;';
 
-/** Before/After view of a code change. Resolves true on OK, false on Cancel. */
+/** What the user chose in a preview: OK, Cancel, or Change... with the wish typed in. */
+export type PreviewResult = 'ok' | 'cancel' | { change: string };
+
+/** "What should be changed?" box. Resolves the trimmed text, or null on Cancel / empty text. */
+async function askChange(doc: Document): Promise<string | null> {
+  const box = h('input', { type: 'text', class: 'ai-change', style: 'width:360px', 'data-autofocus': '' });
+  const content = h('div', {}, h('div', { style: 'margin-bottom:4px' }, 'What should be changed?'), box);
+  const v = await showDialog98(doc, {
+    title: 'AI Suggestion', content,
+    buttons: [{ label: 'OK', value: 'ok', default: true }, { label: 'Cancel', value: 'cancel', cancel: true }],
+  });
+  const text = box.value.trim();
+  return v === 'ok' && text ? text : null;
+}
+
+/** Shows the dialog again until it ends in something other than a cancelled Change... box. */
+async function previewLoop(doc: Document, show: () => Promise<string>): Promise<PreviewResult> {
+  for (;;) {
+    const v = await show();
+    if (v !== 'change') return v === 'ok' ? 'ok' : 'cancel';
+    const change = await askChange(doc);
+    if (change !== null) return { change };
+  }
+}
+
+/** Before/After view of a code change. `canChange` false hides Change... (informational views). */
 export async function showCodePreview(doc: Document, before: string, after: string,
-  changes: { name: string; kind: 'replaced' | 'added' | 'body' | 'declarations' }[], warnings: string[] = [], metrics?: string): Promise<boolean> {
+  changes: { name: string; kind: 'replaced' | 'added' | 'body' | 'declarations' }[], warnings: string[] = [], metrics?: string, canChange = true): Promise<PreviewResult> {
   const left = h('div', { class: 'ai-before', style: 'min-width:0' });
   const right = h('div', { class: 'ai-after', style: 'min-width:0' });
   const cell = (text: string, bg: string, cls = '') => h('div', { class: cls, style: `${CELL}background:${bg}` }, text);
@@ -28,11 +53,11 @@ export async function showCodePreview(doc: Document, before: string, after: stri
   const content = h('div', {}, ...metricsLine(metrics), h('div', { style: 'display:flex;gap:8px' }, col('Before', left), col('After', right)),
     h('div', { style: 'margin-top:8px' }, 'Changes:'), list,
     ...warnings.map(t => h('div', { class: 'ai-warning', style: 'color:#808080;margin-top:4px' }, t)));
-  const v = await showDialog98(doc, {
+  return previewLoop(doc, () => showDialog98(doc, {
     title: 'AI Suggestion', content,
-    buttons: [{ label: 'OK', value: 'ok', default: true }, { label: 'Cancel', value: 'cancel', cancel: true }],
-  });
-  return v === 'ok';
+    buttons: [{ label: 'OK', value: 'ok', default: true }, { label: 'Cancel', value: 'cancel', cancel: true },
+      ...(canChange ? [{ label: 'Change...', value: 'change' }] : [])],
+  }));
 }
 
 type CodeChange = Parameters<typeof showCodePreview>[3][number];
@@ -42,7 +67,7 @@ type CodeChange = Parameters<typeof showCodePreview>[3][number];
  * With `code`, the "Code..." button shows the proposed code change (informational; its OK/Cancel just close it).
  */
 export async function showFormPreview(doc: Document, after: FormDef, lines: string[], warnings: string[],
-  assets: Record<string, Asset> = {}, code?: { before: string; after: string; changes: CodeChange[] }, metrics?: string): Promise<boolean> {
+  assets: Record<string, Asset> = {}, code?: { before: string; after: string; changes: CodeChange[] }, metrics?: string): Promise<PreviewResult> {
   const surface = renderFormSurface(after, 'design', ref => {
     const a = assets[ref.asset];
     return a ? `data:${a.mime};base64,${a.dataBase64}` : null;
@@ -57,13 +82,15 @@ export async function showFormPreview(doc: Document, after: FormDef, lines: stri
     ...(lines.length ? lines : ['(no changes)']).map(t => h('div', { class: 'ai-op' }, t)),
     ...warnings.map(t => h('div', { class: 'ai-warning', style: 'color:#808080;margin-top:4px' }, t)));
   const content = h('div', {}, ...metricsLine(metrics), h('div', { style: 'display:flex;gap:8px;align-items:flex-start' }, left, frame));
-  for (;;) {
-    const v = await showDialog98(doc, {
-      title: 'AI Suggestion', content,
-      buttons: [{ label: 'OK', value: 'ok', default: true }, { label: 'Cancel', value: 'cancel', cancel: true },
-        { label: 'Code...', value: 'code', disabled: !code }],
-    });
-    if (v !== 'code' || !code) return v === 'ok';
-    await showCodePreview(doc, code.before, code.after, code.changes);
-  }
+  return previewLoop(doc, async () => {
+    for (;;) {
+      const v = await showDialog98(doc, {
+        title: 'AI Suggestion', content,
+        buttons: [{ label: 'OK', value: 'ok', default: true }, { label: 'Cancel', value: 'cancel', cancel: true },
+          { label: 'Code...', value: 'code', disabled: !code }, { label: 'Change...', value: 'change' }],
+      });
+      if (v !== 'code' || !code) return v;
+      await showCodePreview(doc, code.before, code.after, code.changes, [], undefined, false);
+    }
+  });
 }

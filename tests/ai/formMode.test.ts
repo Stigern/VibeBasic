@@ -94,10 +94,10 @@ test('form preview dialog OK / Cancel', async () => {
   expect(document.querySelector('.ai-ops')!.textContent).toContain('Add Label Label1');
   expect(document.querySelector('.ai-warning')!.textContent).toBe('careful');
   click('OK');
-  expect(await pr).toBe(true);
+  expect(await pr).toBe('ok');
   pr = showFormPreview(document, form, [], []);
   click('Cancel');
-  expect(await pr).toBe(false);
+  expect(await pr).toBe('cancel');
 });
 test('undo keeps hand edits made after the AI change', () => {
   const { p, stack } = setup();

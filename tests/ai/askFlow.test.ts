@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, expect, test, vi } from 'vitest';
-import { askAi } from '../../src/ai/askDialog';
+import { askAi, trimConversation } from '../../src/ai/askDialog';
 import { registerAiOptionsTab } from '../../src/ai/optionsTab';
 import type { Backend } from '../../src/backend/backend';
 import { IdeState } from '../../src/ide/ideState';
@@ -193,4 +193,75 @@ test('form preview Code... is disabled without code', async () => {
   expect(btn('Code...')!.disabled).toBe(true);
   click('Cancel');
   await p;
+});
+
+// ---- Change... (continue the conversation) ----
+const CODE_A = '```vb\nPrivate Sub Command1_Click()\n    MsgBox "A"\nEnd Sub\n```';
+const CODE_B = '```vb\nPrivate Sub Command1_Click()\n    MsgBox "B"\nEnd Sub\n```';
+async function change(wish: string) {
+  await vi.waitFor(() => expect(btn('Change...')).toBeTruthy());
+  click('Change...');
+  await vi.waitFor(() => expect(document.querySelector('.ai-change')).toBeTruthy());
+  expect(text()).toContain('What should be changed?');
+  (document.querySelector('.ai-change') as HTMLInputElement).value = wish;
+  click('OK');
+}
+
+test('Change... sends the same prefix plus the wish; OK applies the second proposal', async () => {
+  const w = codeWin('Private Sub Command1_Click()\nEnd Sub');
+  const replies = [CODE_A, CODE_B];
+  const b = fakeBackend('m', async () => replies.shift()!);
+  const p = askAi(ide('code'), b, { codeWindowFor: () => w as any });
+  await enterPrompt('say hi');
+  await change('say B instead');
+  await vi.waitFor(() => expect(document.querySelector('.ai-after')?.textContent).toContain('MsgBox "B"'));
+  click('OK');
+  await p;
+  const [first, second] = b.aiChat.mock.calls.map(c => c[3] as { role: string; content: string }[]);
+  expect(second.slice(0, first.length)).toEqual(first);
+  expect(second.slice(first.length).map(m => m.role)).toEqual(['assistant', 'user']);
+  expect(second[second.length - 1].content).toContain('say B instead');
+  expect(second[second.length - 1].content).not.toContain('Private Sub');
+  expect(w.applyChange).toHaveBeenCalledTimes(1);
+  expect(w.src).toContain('MsgBox "B"');
+});
+
+test('a Change... answer that is not understood returns to the first proposal', async () => {
+  const w = codeWin('Private Sub Command1_Click()\nEnd Sub');
+  const replies = [CODE_A, 'Sorry, no.'];
+  const b = fakeBackend('m', async () => replies.shift()!);
+  const p = askAi(ide('code'), b, { codeWindowFor: () => w as any });
+  await enterPrompt('say hi');
+  await change('x');
+  await vi.waitFor(() => expect(btn('Details...')).toBeTruthy());
+  click('OK');
+  await vi.waitFor(() => expect(document.querySelector('.ai-after')?.textContent).toContain('MsgBox "A"'));
+  click('OK');
+  await p;
+  expect(w.src).toContain('MsgBox "A"');
+});
+
+test('Cancel in the Change... box returns to the same preview', async () => {
+  const w = codeWin('Private Sub Command1_Click()\nEnd Sub');
+  const b = fakeBackend('m', async () => CODE_A);
+  const p = askAi(ide('code'), b, { codeWindowFor: () => w as any });
+  await enterPrompt('say hi');
+  await vi.waitFor(() => expect(btn('Change...')).toBeTruthy());
+  click('Change...');
+  await vi.waitFor(() => expect(document.querySelector('.ai-change')).toBeTruthy());
+  click('Cancel');
+  await vi.waitFor(() => expect(document.querySelector('.ai-after')?.textContent).toContain('MsgBox "A"'));
+  expect(b.aiChat).toHaveBeenCalledTimes(1);
+  click('OK');
+  await p;
+  expect(w.src).toContain('MsgBox "A"');
+});
+
+test('trimConversation drops the oldest pairs but keeps system, first question and the last two messages', () => {
+  const m = (role: 'system' | 'user' | 'assistant', content: string) => ({ role, content });
+  const big = 'x'.repeat(13000);
+  const msgs = [m('system', 's'), m('user', 'q'), m('assistant', big), m('user', 'c1'), m('assistant', big), m('user', 'c2'), m('assistant', big), m('user', 'c3')];
+  const out = trimConversation(msgs, 24000);
+  expect(out.map(x => x.content.slice(0, 2))).toEqual(['s', 'q', 'xx', 'c3']);
+  expect(trimConversation(msgs, 100000)).toEqual(msgs);
 });

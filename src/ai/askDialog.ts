@@ -11,8 +11,8 @@ import { createAiAnimation } from './aiAnimation';
 import { applyCodeProposal, extractCode } from './codeMode';
 import { buildCodeRequest, buildFormRequest } from './context';
 import { NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
-import { showCodePreview, showFormPreview } from './previewDialogs';
-import { loadAiSettings } from './settings';
+import { type PreviewResult, showCodePreview, showFormPreview } from './previewDialogs';
+import { type AiSettings, loadAiSettings } from './settings';
 import type { AiChatOptions, AiUsage } from './sse';
 import { StreamLog } from './streamLog';
 import type { ChatMessage } from './types';
@@ -127,98 +127,156 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   const prompt = await promptDialog(doc, `Ask AI - ${item.name} (${codeMode ? 'Code' : 'Form'})`);
   if (prompt === null) return;
 
+  const first = (() => { try { return codeMode ? buildCodeRequest(project, itemId, codeWin!.getCursorLine(), prompt) : buildFormRequest(project, itemId, prompt); } catch { return null; } })();
+  if (!first) { await warn(doc, 'Could not build the request.'); return; }
+  const session: AiSession = { ide, backend, settings, doc };
+  if (codeMode) await runCodeConversation(session, { first, itemId, codeWin: codeWin! });
+  else await runFormConversation(session, { first, itemId });
+}
+
+export interface AiSession { ide: IdeState; backend: Backend; settings: AiSettings; doc: Document }
+
+/** The conversation is trimmed above about this many characters (24 000 is roughly 8 000 tokens). */
+export const MAX_CONVERSATION_CHARS = 24000;
+
+/**
+ * Drops the oldest (assistant answer, change request) pairs until the conversation fits.
+ * Always keeps the system message, the first question, the latest answer and the newest request.
+ */
+export function trimConversation(messages: ChatMessage[], max = MAX_CONVERSATION_CHARS): ChatMessage[] {
+  const out = [...messages];
+  const size = () => out.reduce((n, m) => n + m.content.length, 0);
+  while (size() > max && out.length >= 6) out.splice(2, 2);
+  return out;
+}
+
+const changeRequest = (wish: string): ChatMessage => ({ role: 'user', content: `Change your last answer: ${wish}\nAnswer with the complete result again, in exactly the same format.` });
+
+/** One answer, understood (or `result` null), the conversation up to and including it, and the measurement line. */
+type Round<A> = { kind: 'done'; result: A | null; reply: string; metrics: string; messages: ChatMessage[] } | { kind: 'error'; message: string } | { kind: 'cancel' };
+type Understood<A> = { result: A | null; jsonReason: string | null };
+
+/**
+ * The shared flow: send `first`, check the answer (one retry at most), show the preview, and on Change... send the conversation
+ * so far plus the wish. The conversation only grows at the end, so the server's prefix cache keeps working.
+ */
+async function converse<A extends { notes: string[]; problems: string[] }>(
+  s: AiSession, first: ChatMessage[], analyse: (text: string) => Understood<A>,
+  preview: (a: A, reply: string, metrics: string) => Promise<PreviewResult>, apply: (a: A) => void | Promise<void>,
+): Promise<void> {
+  const { ide, backend, settings, doc } = s;
+  const project = ide.project;
   const effort = settings.thinking === 'server' ? undefined : settings.thinking;
-  const send = (build: () => ChatMessage[]) => (o: AiChatOptions): Promise<string> => {
-    try { return backend.aiChat(settings.baseUrl, settings.apiKey, settings.model, build(), effort, o); }
+  const log = new StreamLog();
+  const send = (messages: ChatMessage[]) => (o: AiChatOptions): Promise<string> => {
+    try { return backend.aiChat(settings.baseUrl, settings.apiKey, settings.model, messages, effort, o); }
     catch (e) { return Promise.reject(e); }
   };
-  const log = new StreamLog();
-  const form = project.forms.find(f => f.id === itemId) ?? null;
-  const moduleName = item.name;
 
-  // One answer, understood: fixed event names, the problems left in it, and what the preview needs.
-  type Analysis =
-    | { kind: 'code'; applied: NonNullable<ReturnType<typeof applyCodeProposal>>; notes: string[]; problems: string[] }
-    | { kind: 'form'; parsed: Extract<ReturnType<typeof parseFormOps>, { ok: true }>; notes: string[]; problems: string[] };
-  const fixer = (notes: string[]) => (code: string): string => {
-    if (!form) return code;
-    const r = autoFixEventNames(code, form.name);
-    notes.push(...r.notes);
-    return r.code;
-  };
-  // Why the last form-mode answer was not usable JSON (null when it was, or in code mode).
-  let jsonReason: string | null = null;
-  const analyse = (text: string): Analysis | null => {
-    const notes: string[] = [];
-    jsonReason = null;
-    if (codeMode) {
-      const raw = extractCode(text);
-      if (raw === null) return null;
-      const code = fixer(notes)(raw);
-      const before = codeWin!.getSource();
-      const proc = listProcedures(before).find(p => codeWin!.getCursorLine() >= p.line && codeWin!.getCursorLine() <= p.endLine)?.name ?? null;
-      const applied = applyCodeProposal(before, code, proc);
-      if (!applied) return null;
-      return { kind: 'code', applied, notes, problems: validateCode(code, { moduleName, form, project }) };
+  const round = async (messages: ChatMessage[]): Promise<Round<A>> => {
+    const res = await waitForReply(doc, settings.model, send(messages), log);
+    if (res.kind !== 'reply') return res;
+    if (ide.project !== project) return { kind: 'cancel' };   // a different project was opened meanwhile
+    let reply = res.text, metrics = res.metrics;
+    let convo: ChatMessage[] = [...messages, { role: 'assistant', content: reply }];
+    let got = analyse(reply);
+    // One retry at most: for the problems the checks found, or (form mode) for an answer that was not usable JSON.
+    const complaint = got.result?.problems.length
+      ? `Your answer has these problems:\n${got.result.problems.map(p => `- ${p}`).join('\n')}\nFix them and answer again in exactly the same format.`
+      : !got.result && got.jsonReason !== null ? `Your answer was not valid JSON (${got.jsonReason}). Answer again with ONLY the JSON object.` : null;
+    if (complaint) {
+      // Keep the first answer if the second is no better understood.
+      const followUp: ChatMessage[] = [...convo, { role: 'user', content: complaint }];
+      log.separator();
+      const again = await waitForReply(doc, settings.model, send(followUp), log, 'Checking and fixing...');
+      if (again.kind === 'cancel' || ide.project !== project) return { kind: 'cancel' };
+      if (again.kind === 'reply') {
+        const second = analyse(again.text);
+        if (second.result) { got = second; reply = again.text; metrics = again.metrics; convo = [...followUp, { role: 'assistant', content: again.text }]; }
+        else if (!got.result) reply = again.text;   // neither was understood: Details shows the latest
+      }
     }
-    if (!form) return null;
-    const parsed = parseFormOps(text, form, fixer(notes));
-    if (!parsed.ok) { jsonReason = parsed.reason; return null; }
-    const extra = parsed.ops.filter((o): o is Extract<typeof o, { op: 'add' }> => o.op === 'add').map(o => ({ name: o.name, type: o.type }));
-    const problems = parsed.codeText === undefined ? [] : validateCode(parsed.codeText, { moduleName, form, extraControls: extra, project });
-    return { kind: 'form', parsed, notes, problems };
+    return { kind: 'done', result: got.result, reply, metrics, messages: convo };
   };
 
-  const messages = (() => { try { return codeMode ? buildCodeRequest(project, itemId, codeWin!.getCursorLine(), prompt) : buildFormRequest(project, itemId, prompt); } catch { return null; } })();
-  const res = await waitForReply(doc, settings.model, send(() => { if (!messages) throw new Error('Could not build the request.'); return messages; }), log);
-  if (res.kind === 'cancel') return;
-  if (res.kind === 'error') { await warn(doc, res.message); return; }
-  if (ide.project !== project) return;   // a different project was opened meanwhile
-
-  let reply = res.text;
-  let metrics = res.metrics;
-  let result = analyse(reply);
-  // One retry at most: for the problems the checks found, or (form mode) for an answer that was not usable JSON.
-  const complaint = result?.problems.length
-    ? `Your answer has these problems:\n${result.problems.map(p => `- ${p}`).join('\n')}\nFix them and answer again in exactly the same format.`
-    : !result && jsonReason !== null ? `Your answer was not valid JSON (${jsonReason}). Answer again with ONLY the JSON object.` : null;
-  if (complaint && messages) {
-    // Keep the first answer if the second is no better understood.
-    const followUp: ChatMessage[] = [...messages, { role: 'assistant', content: reply }, { role: 'user', content: complaint }];
-    log.separator();
-    const again = await waitForReply(doc, settings.model, send(() => followUp), log, 'Checking and fixing...');
-    if (again.kind === 'cancel') return;
+  let cur = await round(first);
+  if (cur.kind === 'cancel') return;
+  if (cur.kind === 'error') { await warn(doc, cur.message); return; }
+  if (!cur.result) { await showNotUnderstood(doc, cur.reply); return; }
+  for (;;) {
+    let out: PreviewResult;
+    try { out = await preview(cur.result!, cur.reply, cur.metrics); }
+    catch (e) { await showNotUnderstood(doc, `${cur.reply}\n\nError: ${e instanceof Error ? e.message : String(e)}`); return; }
+    if (out === 'cancel') return;
+    if (out === 'ok') { await apply(cur.result!); return; }
+    // Change...: a new answer to the whole conversation. If it is not understood, the last proposal stays.
+    const next = await round(trimConversation([...cur.messages, changeRequest(out.change)]));
     if (ide.project !== project) return;
-    if (again.kind === 'reply') {
-      const second = analyse(again.text);
-      if (second) { result = second; reply = again.text; metrics = again.metrics; }
-      else if (!result) reply = again.text;   // neither was understood: Details shows the latest
-    }
+    if (next.kind === 'error') await warn(doc, next.message);
+    else if (next.kind === 'done' && !next.result) await showNotUnderstood(doc, next.reply);
+    else if (next.kind === 'done') cur = next;
   }
-  if (!result) { await showNotUnderstood(doc, reply); return; }
-  const warnings = [...result.notes, ...result.problems];
+}
 
-  if (result.kind === 'code') {
-    const win = codeWin!;
+/** Code mode: `first` is the finished request; the proposal is checked against `codeWin` and applied there on OK. */
+export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[]; itemId: string; codeWin: CodeWindow }): Promise<void> {
+  const { ide, doc } = s;
+  const project = ide.project;
+  const win = o.codeWin;
+  const item = project.forms.find(f => f.id === o.itemId) ?? project.modules.find(m => m.id === o.itemId);
+  if (!item) return;
+  const form = project.forms.find(f => f.id === o.itemId) ?? null;
+  const moduleName = item.name;
+  type A = { applied: NonNullable<ReturnType<typeof applyCodeProposal>>; notes: string[]; problems: string[] };
+  const analyse = (text: string): Understood<A> => {
+    const notes: string[] = [];
+    const none = { result: null, jsonReason: null };
+    const raw = extractCode(text);
+    if (raw === null) return none;
+    const code = fixEventNames(form, raw, notes);
     const before = win.getSource();
-    const { applied } = result;
-    if (!await showCodePreview(doc, before.replace(/\r\n?/g, '\n'), applied.source, applied.changes, warnings, metrics)) return;
-    win.applyChange(0, win.getSource().length, applied.source);
-    return;
-  }
+    const proc = listProcedures(before).find(p => win.getCursorLine() >= p.line && win.getCursorLine() <= p.endLine)?.name ?? null;
+    const applied = applyCodeProposal(before, code, proc);
+    if (!applied) return none;
+    return { result: { applied, notes, problems: validateCode(code, { moduleName, form, project }) }, jsonReason: null };
+  };
+  await converse<A>(s, o.first, analyse,
+    (a, _reply, metrics) => showCodePreview(doc, win.getSource().replace(/\r\n?/g, '\n'), a.applied.source, a.applied.changes, [...a.notes, ...a.problems], metrics),
+    a => win.applyChange(0, win.getSource().length, a.applied.source));
+}
 
-  const { parsed } = result;
+/** Form mode: `first` is the finished request; the proposal is applied to the form as one undo step on OK. */
+export async function runFormConversation(s: AiSession, o: { first: ChatMessage[]; itemId: string }): Promise<void> {
+  const { ide, doc } = s;
+  const project = ide.project;
+  const form = project.forms.find(f => f.id === o.itemId);
   if (!form) return;
-  let ok: boolean;
-  try {
-    const code = parsed.code === null ? undefined
-      : { before: form.code.replace(/\r\n?/g, '\n'), after: parsed.code, changes: parsed.codeChanges ?? [] };
-    ok = await showFormPreview(doc, applyFormOpsToClone(form, parsed), describeOps(parsed), [...parsed.warnings, ...warnings], project.assets, code, metrics);
-  } catch (e) {
-    await showNotUnderstood(doc, `${reply}\n\nError: ${e instanceof Error ? e.message : String(e)}`);
-    return;
-  }
-  if (!ok) return;
-  try { ide.stack.execute(formOpsToCommand(ide.project, itemId, parsed, 'AI changes')); }
-  catch (e) { await warn(doc, e instanceof Error ? e.message : String(e)); }
+  type A = { parsed: Extract<ReturnType<typeof parseFormOps>, { ok: true }>; notes: string[]; problems: string[] };
+  const analyse = (text: string): Understood<A> => {
+    const notes: string[] = [];
+    const parsed = parseFormOps(text, form, code => fixEventNames(form, code, notes));
+    if (!parsed.ok) return { result: null, jsonReason: parsed.reason };
+    const extra = parsed.ops.filter((o): o is Extract<typeof o, { op: 'add' }> => o.op === 'add').map(o => ({ name: o.name, type: o.type }));
+    const problems = parsed.codeText === undefined ? [] : validateCode(parsed.codeText, { moduleName: form.name, form, extraControls: extra, project });
+    return { result: { parsed, notes, problems }, jsonReason: null };
+  };
+  await converse<A>(s, o.first, analyse,
+    (a, _reply, metrics) => {
+      const { parsed } = a;
+      const code = parsed.code === null ? undefined
+        : { before: form.code.replace(/\r\n?/g, '\n'), after: parsed.code, changes: parsed.codeChanges ?? [] };
+      return showFormPreview(doc, applyFormOpsToClone(form, parsed), describeOps(parsed), [...parsed.warnings, ...a.notes, ...a.problems], project.assets, code, metrics);
+    },
+    async a => {
+      try { ide.stack.execute(formOpsToCommand(ide.project, o.itemId, a.parsed, 'AI changes')); }
+      catch (e) { await warn(doc, e instanceof Error ? e.message : String(e)); }
+    });
+}
+
+/** Fixes wrong event-procedure names in AI code (Form1_Load etc.) and records what it did in `notes`. */
+function fixEventNames(form: { name: string } | null, code: string, notes: string[]): string {
+  if (!form) return code;
+  const r = autoFixEventNames(code, form.name);
+  notes.push(...r.notes);
+  return r.code;
 }

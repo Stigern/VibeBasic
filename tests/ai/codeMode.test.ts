@@ -45,10 +45,10 @@ test('preview dialog resolves on OK and Cancel', async () => {
   expect(document.querySelector('.ai-after .add')!.textContent).toBe('c');
   expect(document.querySelector('.ai-before .del')!.textContent).toBe('b');
   click('OK');
-  expect(await p1).toBe(true);
+  expect(await p1).toBe('ok');
   const p2 = showCodePreview(document, 'a', 'a', []);
   click('Cancel');
-  expect(await p2).toBe(false);
+  expect(await p2).toBe('cancel');
 });
 
 test('header before the first procedure: declarations and attached comments only; comment above the procedure stays with it', () => {
