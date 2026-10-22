@@ -5,13 +5,16 @@ import { bindShortcuts, createMenubar } from '../ui98/menubar';
 import { createToolbar, type ToolbarItem } from '../ui98/toolbar';
 import { messageBox98, vbOK } from '../ui98/dialogs';
 import { TOOLBAR_ICONS } from './icons/toolbarIcons';
-import { IdeState } from './ideState';
+import { IdeState, type IdeOptions } from './ideState';
 import { buildLayout, type IdeLayout } from './layout';
 import { buildMenus, type IdeActions } from './menus';
 import { registerCodeActions } from './codeWindow';
 import { openDesigner, registerDesignerActions } from './designer';
 import { createPropertiesWindow, type PropertiesWindow } from './properties';
 import { createToolbox } from './toolbox';
+import { createProjectExplorer, registerProjectActions, type ProjectExplorer } from './projectExplorer';
+import { showProjectProperties } from './projectDialogs';
+import { showOptions } from './optionsDialog';
 
 export interface Ide { state: IdeState; layout: IdeLayout; actions: IdeActions; menus: ReturnType<typeof buildMenus>; refresh(): void }
 
@@ -24,11 +27,12 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   const doc = root.ownerDocument;
 
   let propsWin: PropertiesWindow | undefined;
+  let explorer: ProjectExplorer | undefined;
   const actions: IdeActions = {
     undo: () => state.stack.undo(),
     redo: () => state.stack.redo(),
     viewImmediate: () => layout.setPaneVisible('immediate', !layout.isPaneVisible('immediate')),
-    viewProjectExplorer: () => layout.setPaneVisible('project', true),
+    viewProjectExplorer: () => { layout.setPaneVisible('project', true); explorer?.focus(); },
     viewProperties: () => { layout.setPaneVisible('properties', true); propsWin?.focus(); },
     viewToolbox: () => layout.setPaneVisible('toolbox', true),
     about: () => { void messageBox98(doc, { prompt: ABOUT_TEXT, title: 'About VibeBasic', buttons: vbOK }); },
@@ -37,6 +41,10 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   let refresh = () => {};
   registerDesignerActions(state, actions, () => refresh());
   registerCodeActions(state, actions, { mdiHost: layout.mdiHost, actions });
+  const env = { mdiHost: layout.mdiHost, actions };
+  registerProjectActions(state, actions, env);
+  actions.projectProperties = () => { void showProjectProperties(state, doc); };
+  actions.options = () => { void showOptions(state, backend, doc); };
   const menubar = createMenubar(layout.menubarHost, menus);
 
   const tb = (icon: string, title: string, name: string, pred?: () => boolean): ToolbarItem => ({
@@ -52,6 +60,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     tb('toolbox', 'Toolbox', 'viewToolbox'),
   ]);
   createToolbox(layout.toolboxHost, state);
+  explorer = createProjectExplorer(layout.projectHost, state, env);
   propsWin = createPropertiesWindow(layout.propertiesHost, state, { backend });
   bindShortcuts(menus, window);
 
@@ -64,6 +73,8 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   state.on('selection', () => refresh());
   state.on('activeView', () => refresh());
   updateTitle();
+  // Saved IDE options (async; the defaults apply until they arrive)
+  void backend.loadSettings<Partial<IdeOptions>>('ide').then(o => { if (o) state.setOptions(o); }).catch(() => {});
 
   openDesigner(state, state.project.forms[0].id, { mdiHost: layout.mdiHost, actions });
   return { state, layout, actions, menus, refresh };

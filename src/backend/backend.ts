@@ -13,6 +13,9 @@ export interface Backend {
   readTextFile(path: string): Promise<string>;
   writeTextFile(path: string, text: string): Promise<void>;
   readBinaryFile(path: string): Promise<Uint8Array>;
+  /** Small JSON settings (IDE options ...) kept in localStorage under `vibebasic.settings:<key>`. Null when absent. */
+  loadSettings<T>(key: string): Promise<T | null>;
+  saveSettings(key: string, v: unknown): Promise<void>;
   setWindowTitle(title: string): Promise<void>;
   /** The handler returns false to cancel closing. */
   onCloseRequested(handler: () => Promise<boolean>): void;

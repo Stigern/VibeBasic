@@ -23,13 +23,9 @@ export type IdeActionName = (typeof ACTION_NAMES)[number];
 export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
   const projectName = () => state?.project.name ?? 'Project1';
   const activeItemName = (): string => {
-    const v = state?.activeView;
-    if (state && v?.kind === 'designer') return state.project.forms.find(f => f.id === v.formId)?.name ?? 'Form1';
-    if (state && v?.kind === 'code') {
-      const m = state.project.modules.find(x => x.id === v.itemId) ?? state.project.forms.find(x => x.id === v.itemId);
-      if (m) return m.name;
-    }
-    return state?.project.forms[0]?.name ?? 'Form1';
+    const id = state?.currentItemId();
+    const item = state && id ? [...state.project.forms, ...state.project.modules].find(x => x.id === id) : undefined;
+    return item?.name ?? 'Form1';
   };
   const mk = (label: string | (() => string), name: IdeActionName, shortcut?: string, pred?: () => boolean, extra: Partial<MenuItem> = {}): MenuItem => ({
     get label() { return typeof label === 'function' ? label() : label; },

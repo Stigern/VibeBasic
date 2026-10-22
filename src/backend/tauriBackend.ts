@@ -46,6 +46,17 @@ export class TauriBackend implements Backend {
     return r instanceof Uint8Array ? r : new Uint8Array(r);
   }
 
+  async loadSettings<T>(key: string): Promise<T | null> {
+    try {
+      const raw = localStorage.getItem('vibebasic.settings:' + key);
+      return raw === null ? null : (JSON.parse(raw) as T);
+    } catch { return null; }
+  }
+
+  async saveSettings(key: string, v: unknown): Promise<void> {
+    try { localStorage.setItem('vibebasic.settings:' + key, JSON.stringify(v)); } catch { /* storage unavailable */ }
+  }
+
   async setWindowTitle(title: string): Promise<void> {
     await getCurrentWindow().setTitle(title);
   }

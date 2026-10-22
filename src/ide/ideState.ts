@@ -26,6 +26,8 @@ export class IdeState {
   mode: 'design' | 'run' | 'break' = 'design';
   options: IdeOptions = { ...DEFAULT_OPTIONS };
   controlsLocked = false;
+  /** Form/module selected in the Project Explorer (target of Project > Remove). */
+  explorerItemId: string | null = null;
   private listeners: Record<string, (() => void)[]> = {};
 
   constructor(project: Project = newProject()) {
@@ -48,10 +50,19 @@ export class IdeState {
     this.filePath = filePath;
     this.stack = this.makeStack();
     this.selection = null;
+    this.explorerItemId = null;
     this.activeView = { kind: 'none' };
     this.emit('project');
     this.emit('selection');
     this.emit('activeView');
+  }
+  /** Explorer selection if it still exists, else the item of the active view, else the first form. */
+  currentItemId(): string | null {
+    const exists = (id: string | null) => !!id && (this.project.forms.some(f => f.id === id) || this.project.modules.some(m => m.id === id));
+    if (exists(this.explorerItemId)) return this.explorerItemId;
+    const v = this.activeView;
+    const id = v.kind === 'designer' ? v.formId : v.kind === 'code' ? v.itemId : null;
+    return exists(id) ? id : this.project.forms[0]?.id ?? null;
   }
   setSelection(sel: { formId: string; ids: string[] } | null): void { this.selection = sel; this.emit('selection'); }
   setActiveView(v: ActiveView): void { this.activeView = v; this.emit('activeView'); }

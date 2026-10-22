@@ -338,3 +338,13 @@ export function removeItemCmd(id: string, newStartupForm?: string): Command {
     },
   };
 }
+
+/** Project Properties fields. `startupForm` is a form name. */
+export function setProjectFieldCmd(field: 'name' | 'title' | 'startupForm', value: string): Command {
+  let old = '';
+  return {
+    label: `Change project ${field}`,
+    do(p) { old = p[field]; p[field] = value; },
+    undo(p) { p[field] = old; },
+  };
+}

@@ -331,12 +331,17 @@ export function validateName(name: string): boolean {
   return /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(name) && !KEYWORDS.has(name.toLowerCase());
 }
 
-export function newProject(): Project {
+/** A blank form with default properties; Caption = name (VB6). */
+export function newForm(name: string, code = ''): FormDef {
   const props = defaultProps('Form');
-  props.Caption = 'Form1';
+  props.Caption = name;
+  return { id: newId(), name, props, controls: [], code };
+}
+
+export function newProject(): Project {
   return {
     name: 'Project1', title: '', startupForm: 'Form1',
-    forms: [{ id: newId(), name: 'Form1', props, controls: [], code: '' }],
+    forms: [newForm('Form1')],
     modules: [], assets: {}, iconAsset: null,
   };
 }

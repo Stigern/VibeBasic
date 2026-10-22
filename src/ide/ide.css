@@ -46,3 +46,19 @@
 .pw98-fontlist { min-width: 140px; }
 .pw98-fontsize { width: 50px; }
 .pw98-fontsample { border: 1px solid #808080; padding: 8px; min-width: 90px; background: #fff; }
+
+/* Project Explorer */
+.pe98 { display: flex; flex-direction: column; height: 100%; }
+.pe98-buttons { flex: none; display: flex; gap: 2px; padding: 2px; }
+.pe98-btn { min-width: 0; padding: 2px 4px; font-size: 11px; }
+.pe98-tree { flex: 1; min-height: 0; overflow: auto; background: #fff; box-shadow: var(--w98-sunken); margin: 0 2px 2px; font-size: 11px; outline: none; }
+.pe98-row { padding: 1px 4px; white-space: nowrap; cursor: default; user-select: none; -webkit-user-select: none; }
+.pe98-row.selected { background: #000080; color: #fff; }
+
+/* Project Properties / Options dialog forms */
+.dlgform98 { display: flex; flex-direction: column; gap: 8px; min-width: 300px; }
+.dlgform98-row { display: flex; align-items: center; gap: 8px; }
+.dlgform98-row > span { flex: 0 0 120px; }
+.dlgform98-row > input, .dlgform98-row > .cb98 { flex: 1; min-width: 0; }
+.dlgform98-row > input.dlgform98-num { flex: 0 0 70px; }
+.dlgform98-check { display: flex; align-items: center; gap: 6px; }
