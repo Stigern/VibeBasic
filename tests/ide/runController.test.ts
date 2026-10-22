@@ -230,3 +230,24 @@ test('a failing session start shows a critical message box', async () => {
   expect(String(msgBox.mock.calls[0][1].prompt)).toContain('no window');
   expect(ide.mode).toBe('design');
 });
+
+test('F8 in design starts and breaks in Form_Load; stepping stays armed for the next event; F9 breaks a click', async () => {
+  setup(['Private Sub Form_Load()', '  a = 1', 'End Sub', 'Private Sub Command1_Click()', '  b = 2', '  c = 3', 'End Sub'].join('\n'));
+  rc.step('into');
+  await until(() => ide.mode === 'break');
+  expect(ide.mode).toBe('break');
+  const w = wins.get(ide.project.forms[0].id)!;
+  expect(w.win.el.querySelector('.cm-line.cm-vb-break')!.textContent).toBe('  a = 1');
+  rc.step('over');   // last statement of Form_Load: runs, then the program waits for events with the step armed
+  await until(() => ide.mode === 'run');
+  expect(ide.mode).toBe('run');
+  clickButton();
+  await until(() => ide.mode === 'break');
+  expect(w.win.el.querySelector('.cm-line.cm-vb-break')!.textContent).toBe('  b = 2');
+  await rc.start(false);   // F5: continue, stepping ends
+  await until(() => ide.mode === 'run');
+  w.toggleBreakpoint(6);   // F9 while running reaches the program
+  clickButton();
+  await until(() => ide.mode === 'break');
+  expect(w.win.el.querySelector('.cm-line.cm-vb-break')!.textContent).toBe('  c = 3');
+});

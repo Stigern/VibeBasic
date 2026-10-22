@@ -94,6 +94,11 @@ export class RunSession implements Host, FormSession {
   end(): void { this.program.end(); }
   pause(): void { this.program.requestPause(); }
 
+  // Debugging (IDE only: a made app never breaks on a breakpoint or a step)
+  setBreakpoints(moduleName: string, lines: number[]): void { if (this.mode === 'ide') this.program.setBreakpoints(moduleName, lines); }
+  step(mode: 'into' | 'over' | 'out'): void { if (this.mode === 'ide') this.program.step(mode); }
+  runToLine(moduleName: string, line: number): void { if (this.mode === 'ide') this.program.runToLine(moduleName, line); }
+
   async immediate(text: string): Promise<string> {
     const r = await this.program.immediate(text);
     this.queue.flush();

@@ -132,12 +132,21 @@ export function* execBlock(f: Frame, body: Stmt[], start = 0): Gen<Completion> {
  */
 function atBoundary(f: Frame, line: number): boolean {
   const rt = f.run.rt;
-  f.line = line;
-  return ++rt.stmtCount >= rt.sliceSize || rt.stopping || rt.pauseRequested;
+  if (f.line !== line) {
+    f.line = line;
+    // a breakpoint is checked only when the line changes (not on every pass of a one-line loop)
+    const bp = f.module.breakpoints;
+    if (bp !== null && bp.has(line) && !f.run.immediate) rt.pauseRequested = true;
+  }
+  // stepping (Step Into/Over/Out): one comparison of the call depth
+  return ++rt.stmtCount >= rt.sliceSize || rt.stopping || rt.pauseRequested || rt.callDepth <= rt.stepDepth;
 }
 
-/** The slow part of a boundary, when `atBoundary` returned true. */
-function* boundary(f: Frame): Gen<void> {
+/**
+ * The slow part of a boundary, when `atBoundary` returned true. `stoppable`
+ * is false for statements a step never stops at (Dim, Const, labels).
+ */
+function* boundary(f: Frame, stoppable = true): Gen<void> {
   const rt = f.run.rt;
   if (rt.stopping) throw END;
   if (rt.stmtCount >= rt.sliceSize && rt.sliceDue()) {
@@ -153,12 +162,15 @@ function* boundary(f: Frame): Gen<void> {
     if (rt.stopping) throw END;
   }
   // Immediate commands never break (the program may already be in break mode)
-  if (rt.pauseRequested && !f.run.immediate) yield* pauseHere(f);
+  if (f.run.immediate) return;
+  if (rt.pauseRequested || (stoppable && rt.callDepth <= rt.stepDepth)) yield* pauseHere(f);
 }
+
+const notStoppable = (s: Stmt) => s.kind === 'dim' || s.kind === 'const' || s.kind === 'label';
 
 /** Runs one statement: boundary checks, then the statement with error handling (and retry). */
 export function* execStmt(f: Frame, s: Stmt): Gen<Completion> {
-  if (atBoundary(f, s.line)) yield* boundary(f);
+  if (atBoundary(f, s.line)) yield* boundary(f, !notStoppable(s));
   for (;;) {
     try {
       return yield* execInner(f, s);
@@ -320,6 +332,7 @@ export function* enterBreak(f: Frame, reason: 'error' | 'pause', error?: VBRunti
   const rt = f.run.rt;
   if (f.run.immediate) return;
   rt.pauseRequested = false; // this break answers a pending pause request too
+  rt.stopDebugging(); // a step or Run To Cursor ends at any break
   rt.state = 'break';
   rt.breakFrame = f;
   rt.eventsSuspended++;
@@ -422,6 +435,7 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBVal
     f.locals.set(lc(proc.name), f.returnVar);
   }
   run.frames.push(f);
+  rt.callDepth++;
   try {
     yield* declareLocals(f);
     const c = yield* execBlock(f, proc.body);
@@ -430,6 +444,7 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBVal
     // VB6 clears Err when a procedure with an active error handler returns
     if (f.onError !== 'none' || f.inHandler) rt.err.clear();
   } finally {
+    rt.callDepth--;
     run.frames.pop();
   }
   return f.returnVar ? f.returnVar.value : Empty;

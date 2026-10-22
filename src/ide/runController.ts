@@ -11,7 +11,7 @@ import { listProcedures } from '../model/procedures';
 import { RunSession } from '../run/session';
 import type { FormHost } from '../run/formHost';
 import { compileErrorBox, messageBox98 } from '../ui98/dialogs';
-import type { CodeWindow } from './codeWindow';
+import { breakpointsOf, type CodeWindow } from './codeWindow';
 import type { IdeState } from './ideState';
 
 export interface RunOptions {
@@ -30,6 +30,9 @@ export interface ErrorToFix {
   vars: { name: string; value: string }[];
 }
 
+/** How a debug command starts or goes on: a step, or Run To Cursor (a one-shot breakpoint). */
+export type DebugGo = { step: 'into' | 'over' | 'out' } | { runTo: { moduleName: string; line: number } };
+
 export class RunController {
   session: RunSession | null = null;
   private pendingBreak: ((a: 'continue' | 'end') => void) | null = null;
@@ -41,7 +44,9 @@ export class RunController {
   /** The previous run's host teardown: a new run waits for it (Shift+F5), so it cannot destroy the new run's windows. */
   private lastDispose: Promise<void> = Promise.resolve();
 
-  constructor(private ide: IdeState, private hostFactory: () => FormHost, private openCode: (itemId: string) => CodeWindow, private opts: RunOptions = {}) {}
+  constructor(private ide: IdeState, private hostFactory: () => FormHost, private openCode: (itemId: string) => CodeWindow, private opts: RunOptions = {}) {
+    ide.on('breakpoints', () => this.syncBreakpoints());   // F9 in run or break mode reaches the running program
+  }
 
   private get doc(): Document { return this.opts.doc ?? document; }
 
@@ -85,9 +90,13 @@ export class RunController {
     await Promise.race([this.lastDispose, new Promise(r => setTimeout(r, 3000))]);
   }
 
-  /** F5 / Ctrl+F5. In break mode F5 continues. */
-  async start(fullCompile: boolean): Promise<void> {
-    if (this.ide.mode === 'break') { this.pendingBreak?.('continue'); return; }
+  /** F5 / Ctrl+F5. In break mode F5 continues. With `go`, a step or Run To Cursor (Debug menu). */
+  async start(fullCompile: boolean, go?: DebugGo): Promise<void> {
+    if (this.ide.mode === 'break') {
+      if (go && this.session) this.arm(this.session, go);
+      this.pendingBreak?.('continue');
+      return;
+    }
     if (this.ide.mode === 'run' || this.starting || this.ide.busy) return;
     this.starting = true;
     let session: RunSession | null;
@@ -97,6 +106,7 @@ export class RunController {
       this.starting = false;
     }
     if (!session) return;
+    if (go) this.arm(session, go);
     try {
       await session.start();
     } catch (e) {
@@ -138,8 +148,34 @@ export class RunController {
       throw e;
     }
     this.session = session;
+    this.syncBreakpoints();
     this.ide.setMode('run');
     return session;
+  }
+
+  /** F8 / Shift+F8 / Ctrl+Shift+F8: in design mode it starts the program and breaks at the first statement. */
+  step(mode: 'into' | 'over' | 'out'): void {
+    if (this.ide.mode === 'run' || (this.ide.mode === 'design' && mode === 'out')) return;
+    void this.start(false, { step: this.ide.mode === 'design' ? 'into' : mode });
+  }
+
+  /** Ctrl+F8: runs (or starts) until `line` of the module is reached. */
+  runToCursor(moduleName: string, line: number): void {
+    if (this.ide.mode === 'run') return;
+    void this.start(false, { runTo: { moduleName, line } });
+  }
+
+  private arm(s: RunSession, go: DebugGo): void {
+    if ('step' in go) s.step(go.step);
+    else s.runToLine(go.runTo.moduleName, go.runTo.line);
+  }
+
+  /** Passes the IDE's breakpoints to the running program (every module, so removed ones go too). */
+  syncBreakpoints(): void {
+    const s = this.session;
+    if (!s) return;
+    const bps = breakpointsOf(this.ide);
+    for (const it of [...this.ide.project.forms, ...this.ide.project.modules]) s.setBreakpoints(it.name, bps.get(it.id) ?? []);
   }
 
   /** Ctrl+Break / Cmd+. / Ctrl+Pause. */

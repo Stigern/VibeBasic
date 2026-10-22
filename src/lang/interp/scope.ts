@@ -190,6 +190,8 @@ export class ModuleScope {
   readonly types = new Map<string, TypeDecl>();
   readonly ref: ModuleRef;
   initialized = false;
+  /** Lines where the program breaks (breakpoints and a Run To Cursor line); null when there are none. */
+  breakpoints: Set<number> | null = null;
 
   constructor(readonly name: string, readonly kind: 'form' | 'module', readonly ast: ModuleAst) {
     this.key = lc(name);

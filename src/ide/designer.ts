@@ -24,7 +24,7 @@ import type { IdeActions } from './menus';
 import './designer.css';
 
 export interface DesignerEnv { mdiHost: HTMLElement; actions?: IdeActions }
-interface Designer { win: MdiWindow; formId: string; placeCentered(tool: ControlType): void }
+interface Designer { win: MdiWindow; formId: string; placeCentered(tool: ControlType): void; focus(): void }
 
 /** Window frame around the body (borders + title bar) and the margin that keeps the form's own handles visible. */
 const MDI_CHROME_W = 8, MDI_CHROME_H = 30, STAGE_PAD = 6, DRAG_THRESHOLD = 3, VB_YESNO = 4, VB_QUESTION = 32;
@@ -70,6 +70,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
   if (existing) {
     existing.win.activate();
     ide.setActiveView({ kind: 'designer', formId });
+    existing.focus();   // keyboard focus follows the active view (Edit commands check it)
     return existing.win;
   }
   const form0 = formOf(ide, formId);
@@ -511,9 +512,10 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     if (!getForm() && ide.selection?.formId === formId) ide.setSelection(null);
     return true;
   };
-  reg.set(formId, { win, formId, placeCentered });
+  reg.set(formId, { win, formId, placeCentered, focus: () => stage.focus({ preventScroll: true }) });
   win.activate();
   activate();
+  stage.focus({ preventScroll: true });
   drawOverlay();
   return win;
 }

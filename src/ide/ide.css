@@ -73,3 +73,9 @@
 .ide98-runlayer { position: absolute; inset: 0; z-index: 1000; pointer-events: none; overflow: hidden; }
 .ide98-runlayer > * { pointer-events: auto; }
 .imm98 { box-sizing: border-box; width: 100%; height: 100%; display: block; resize: none; border: 0; outline: 0; margin: 0; padding: 2px 4px; background: #fff; color: #000; font: 13px "Courier New", monospace; }
+
+/* toolbar position / size readouts (VB6) */
+.tb98-readouts { margin-left: auto; display: flex; align-items: center; gap: 6px; padding-right: 2px; }
+.tb98-readout { display: inline-flex; align-items: center; gap: 3px; box-sizing: border-box; min-width: 96px; height: 20px; padding: 0 4px 0 2px; background: var(--w98-face); box-shadow: var(--w98-sunken); font-size: 11px; white-space: nowrap; }
+.tb98-readout .tb98-icon { flex: none; }
+.tb98-readout-text { flex: 1; text-align: left; }
