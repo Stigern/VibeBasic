@@ -20,9 +20,14 @@ export class TestHost implements Host {
   objects = new Map<string, VBObject>();
   /** Every `onBreak` call. */
   breaks: BreakInfo[] = [];
-  /** What `onBreak` answers. */
-  breakChoice: 'continue' | 'end' = 'end';
+  /** What `onBreak` answers; 'wait' leaves it pending until `answerBreak` (or forever). */
+  breakChoice: 'continue' | 'end' | 'wait' = 'end';
+  /** When set, answers every `onBreak` instead of `breakChoice` (e.g. to use the Immediate window first). */
+  breakHook?: (info: BreakInfo) => Promise<string> | string;
   endCalls = 0;
+  private breaksTaken = 0;
+  private readonly breakWaiters = new Map<number, (info: BreakInfo) => void>();
+  private pendingBreak?: (answer: 'continue' | 'end') => void;
   /** Text of a Debug.Print line that ended with `;` or `,`. */
   private partial = '';
 
@@ -63,7 +68,24 @@ export class TestHost implements Host {
 
   async onBreak(info: BreakInfo): Promise<'continue' | 'end'> {
     this.breaks.push(info);
+    this.breakWaiters.get(this.breaks.length - 1)?.(info);
+    if (this.breakHook) return (await this.breakHook(info)) as 'continue' | 'end';
+    if (this.breakChoice === 'wait') return new Promise(resolve => { this.pendingBreak = resolve; });
     return this.breakChoice;
+  }
+
+  /** The next `onBreak` call not yet taken by an earlier `nextBreak()` (resolves at once if it already happened). */
+  nextBreak(): Promise<BreakInfo> {
+    const i = this.breaksTaken++;
+    if (i < this.breaks.length) return Promise.resolve(this.breaks[i]);
+    return new Promise(resolve => this.breakWaiters.set(i, resolve));
+  }
+
+  /** Answers an `onBreak` left pending by `breakChoice = 'wait'`. */
+  answerBreak(answer: 'continue' | 'end'): void {
+    const p = this.pendingBreak;
+    this.pendingBreak = undefined;
+    p?.(answer);
   }
 
   onEnd(): void {

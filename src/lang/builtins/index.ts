@@ -11,6 +11,7 @@ import { def } from './util';
 export { BUILTINS, CONSTANTS, def } from './util';
 export type { Builtin, BuiltinCtx } from './util';
 export { formatValue } from './format';
+export { ErrObject } from './err';
 
 function arrayBound(which: 0 | 1) {
   return (args: VBValue[]): VBValue => {
@@ -31,3 +32,4 @@ import './math';
 import './datetime';
 import './misc';
 import './constants';
+import './err';

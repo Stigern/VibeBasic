@@ -39,11 +39,30 @@ export class GotoJump {
   constructor(readonly label: string) {}
 }
 
-export type Completion = undefined | 'exitFor' | 'exitDo' | 'exitProc' | GotoJump;
+/**
+ * A `Resume` statement in an error handler, travelling up to the handler's
+ * root in `runHandler` (which turns it into RETRY, RESUME_NEXT or a GotoJump).
+ */
+export class ResumeJump {
+  constructor(readonly mode: 'resume' | 'next' | 'label', readonly label = '') {}
+}
 
-/** Returned by `handleError` to run the failing statement (or loop step) again. */
+export type Completion = undefined | 'exitFor' | 'exitDo' | 'exitProc' | GotoJump | ResumeJump;
+
+/** Returned by `handleError` to run the failing statement (or loop step) again (Resume, Continue). */
 export const RETRY = Symbol('retry');
-type ErrorOutcome = Completion | typeof RETRY;
+/** Returned by `handleError` to go on after the failing statement (Resume Next, On Error Resume Next). */
+export const RESUME_NEXT = Symbol('resumeNext');
+type ErrorOutcome = Completion | typeof RETRY | typeof RESUME_NEXT;
+
+/**
+ * Thrown by a guarded part of a statement (a loop or If condition) whose error
+ * handler ended in a completion (Exit Sub, Resume label): the statement's
+ * `execStmt` returns that completion.
+ */
+class Unwind {
+  constructor(readonly completion: Completion) {}
+}
 
 const END = new EndSignal();
 
@@ -89,8 +108,8 @@ function procLabels(p: ProcDecl): Set<string> {
   return set;
 }
 
-export function* execBlock(f: Frame, body: Stmt[]): Gen<Completion> {
-  let i = 0;
+export function* execBlock(f: Frame, body: Stmt[], start = 0): Gen<Completion> {
+  let i = start;
   while (i < body.length) {
     const c = yield* execStmt(f, body[i]);
     if (c === undefined) { i++; continue; }
@@ -130,7 +149,8 @@ function* boundary(f: Frame): Gen<void> {
     }
     if (rt.stopping) throw END;
   }
-  if (rt.pauseRequested) yield* pauseHere(f);
+  // Immediate commands never break (the program may already be in break mode)
+  if (rt.pauseRequested && !f.run.immediate) yield* pauseHere(f);
 }
 
 /** Runs one statement: boundary checks, then the statement with error handling (and retry). */
@@ -140,39 +160,107 @@ export function* execStmt(f: Frame, s: Stmt): Gen<Completion> {
     try {
       return yield* execInner(f, s);
     } catch (e) {
+      if (e instanceof Unwind) return e.completion;
       const r = yield* handleError(f, e);
-      if (r !== RETRY) return r;
-      f.line = s.line;
+      if (r === RETRY) { f.line = s.line; continue; }
+      if (r === RESUME_NEXT) return undefined;
+      return r;
     }
   }
 }
 
-/** Evaluates a loop/branch condition belonging to `line`, with the statement's error handling. */
-function* guardedCond(f: Frame, line: number, e: Expr): Gen<boolean> {
+/**
+ * Evaluates a loop/branch condition belonging to `line`, with the statement's
+ * error handling. `onResumeNext` is the value used when the error is resumed
+ * with Resume Next: VB6 goes on with the next statement in the source, so an
+ * If/ElseIf/While/Do While condition counts as True (its body follows) and a
+ * `Loop While/Until` test leaves the loop.
+ */
+function* guardedCond(f: Frame, line: number, e: Expr, onResumeNext: boolean): Gen<boolean> {
   for (;;) {
     f.line = line;
     try {
       return truthy(yield* evalExpr(f, e));
     } catch (err) {
       const r = yield* handleError(f, err);
-      if (r !== RETRY) throw new Error('guardedCond: unsupported error outcome'); // Task 8: Resume Next / GoTo handler
+      if (r === RETRY) continue;
+      if (r === RESUME_NEXT) return onResumeNext;
+      throw new Unwind(r);
     }
   }
 }
 
+/** Errors on their way to a handler in a caller, with the frame they are leaving (its outer statements let them pass). */
+const propagating = new WeakMap<VBRuntimeError, Frame>();
+
+/** A frame whose handler can take an error now: `On Error` is on and its GoTo handler is not already running. */
+function canHandle(fr: Frame): boolean {
+  return fr.onError !== 'none' && !fr.inHandler;
+}
+
 /**
- * A run-time error escaped a statement in frame `f`. Task 5 has no On Error
- * yet: every error is unhandled, goes to `host.onRuntimeError` and ends the
- * program. Task 8 adds handler lookup (this frame, then callers) and break
- * mode, where 'continue' returns RETRY.
+ * A run-time error escaped a statement (or a guarded loop step) in frame `f`.
+ * VB6 rules:
+ * - `f` has an active handler: Resume Next goes on after the statement; a
+ *   GoTo handler runs (`runHandler`) and its Resume decides what happens.
+ * - otherwise, if a caller in the same run has an active handler, the error
+ *   is rethrown (marked, so `f`'s outer statements let it pass) and the
+ *   caller's statement handles it: Resume re-runs the call, Resume Next
+ *   skips it.
+ * - otherwise it is unhandled, reported at the innermost line: 'end' ends
+ *   the program, 'debug' enters break mode and Continue retries (RETRY).
+ * Compile errors are never handled by On Error. In an Immediate command an
+ * unhandled error is rethrown to the command (no report, no break mode).
  */
 export function* handleError(f: Frame, e: unknown): Gen<ErrorOutcome> {
-  if (e instanceof EndSignal) throw e;
+  if (e instanceof EndSignal || e instanceof Unwind) throw e;
   let err: VBRuntimeError;
   if (e instanceof VBRuntimeError) err = e;
   else if (isStackOverflow(e)) err = new VBRuntimeError(28);
   else throw e;
+  if (propagating.get(err) === f) throw err;
+  propagating.delete(err);
+  const rt = f.run.rt;
+  if (rt.stopping) throw END;
+  if (!err.compile) {
+    if (canHandle(f)) return yield* runHandler(f, err);
+    const frames = f.run.frames;
+    for (let i = frames.lastIndexOf(f) - 1; i >= 0; i--) {
+      if (canHandle(frames[i])) {
+        propagating.set(err, f);
+        throw err;
+      }
+    }
+  }
+  if (f.run.immediate) throw err;
   return yield* unhandledError(f, err);
+}
+
+/**
+ * Runs `f`'s active error handler for `err`. On Error Resume Next: go on
+ * after the statement. On Error GoTo label: the code after the label runs
+ * (inside the failing statement's error handling, so the statement's place is
+ * kept); then
+ * - `Resume` gives RETRY (the statement runs again),
+ * - `Resume Next` gives RESUME_NEXT,
+ * - `Resume label` gives a GotoJump to that label,
+ * - Exit Sub/Function or reaching End Sub/Function ends the procedure.
+ */
+function* runHandler(f: Frame, err: VBRuntimeError): Gen<ErrorOutcome> {
+  f.rt.err.setFrom(err);
+  if (f.onError === 'resumeNext') return RESUME_NEXT;
+  const body = f.proc!.body;
+  const at = labelsOf(body).get(f.handlerLabel)!;
+  f.inHandler = true;
+  const c = yield* execBlock(f, body, at + 1);
+  if (c instanceof ResumeJump) {
+    if (c.mode === 'resume') return RETRY;
+    if (c.mode === 'next') return RESUME_NEXT;
+    return new GotoJump(c.label);
+  }
+  // a GoTo from the handler code to a label inside a block
+  if (c instanceof GotoJump) throw compileError('GoTo into a block is not supported');
+  return 'exitProc';
 }
 
 /**
@@ -183,31 +271,52 @@ export function isStackOverflow(e: unknown): boolean {
   return e instanceof RangeError && e.message.indexOf('call stack') >= 0;
 }
 
+/**
+ * An unhandled error at the current statement of `f`: `host.onRuntimeError`.
+ * 'end' ends the program; 'debug' enters break mode, where Continue returns
+ * RETRY (the statement runs again) and End ends the program. Err holds the
+ * error meanwhile (`? Err.Number` in the Immediate window).
+ */
 function* unhandledError(f: Frame, err: VBRuntimeError): Gen<ErrorOutcome> {
   const rt = f.run.rt;
   if (rt.stopping) throw END;
+  rt.err.setFrom(err);
+  let answer: 'end' | 'debug';
   // no event pump while the error is reported (events are dropped, like in break mode)
   rt.eventsSuspended++;
   try {
-    yield rt.host.onRuntimeError(err, f.location());
+    answer = (yield rt.host.onRuntimeError(err, f.location())) as 'end' | 'debug';
   } finally {
     rt.eventsSuspended--;
   }
-  // 'debug' (break mode, Continue = RETRY) is Task 8; for now both answers end the program.
+  if (rt.stopping) throw END;
+  if (answer === 'debug') {
+    yield* enterBreak(f, 'error', err);
+    return RETRY;
+  }
   rt.endProgram();
   throw END;
 }
 
-/** Break mode at the current statement (Stop, requestPause). 'end' ends the program. */
+/**
+ * Break mode at the current statement of `f` (an error with 'debug', Stop,
+ * requestPause): state 'break', `f` is the frame the Immediate window sees,
+ * and events are dropped (no event pump) until `host.onBreak` answers.
+ * 'continue' goes on; 'end' (or End meanwhile) ends the program. Ignored in
+ * an Immediate command (Stop there does nothing).
+ */
 export function* enterBreak(f: Frame, reason: 'error' | 'pause', error?: VBRuntimeError): Gen<void> {
   const rt = f.run.rt;
+  if (f.run.immediate) return;
   rt.state = 'break';
   rt.breakFrame = f;
+  rt.eventsSuspended++;
   let answer: 'continue' | 'end';
   try {
     answer = (yield rt.host.onBreak({ reason, at: f.location(), error })) as 'continue' | 'end';
   } finally {
     rt.breakFrame = undefined;
+    rt.eventsSuspended--;
   }
   if (rt.stopping) throw END;
   if (answer === 'end') {
@@ -293,6 +402,8 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBVal
     const c = yield* execBlock(f, proc.body);
     // a GoTo whose label is inside a block it is not in (e.g. into a loop body)
     if (c instanceof GotoJump) throw compileError('GoTo into a block is not supported');
+    // VB6 clears Err when a procedure with an active error handler returns
+    if (f.onError !== 'none' || f.inHandler) rt.err.clear();
   } finally {
     run.frames.pop();
   }
@@ -393,12 +504,18 @@ function* declareLocals(f: Frame): Gen<void> {
         }
         break;
       } catch (e) {
+        // On Error has not run yet: the error is unhandled (RETRY on Continue) or goes to a caller (rethrown)
         const r = yield* handleError(f, e);
-        if (r !== RETRY) throw new Error('declareLocals: unsupported error outcome'); // Task 8
+        if (r !== RETRY) throw new Error('declareLocals: an error handler is active before the procedure body');
       }
     }
   }
   f.line = proc.line;
+}
+
+/** Every Dim/Static/Const anywhere in a statement list (the Immediate window rejects them). */
+export function hasDeclarations(p: ProcDecl): boolean {
+  return localDecls(p).length > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -430,7 +547,7 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
     }
     case 'if': {
       for (const b of s.branches) {
-        if (yield* guardedCond(f, b.line, b.cond)) return yield* execBlock(f, b.body);
+        if (yield* guardedCond(f, b.line, b.cond, true)) return yield* execBlock(f, b.body);
       }
       return s.elseBody ? yield* execBlock(f, s.elseBody) : undefined;
     }
@@ -441,22 +558,26 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
       const t = s.test;
       for (let first = true; ; first = false) {
         if (!first && atBoundary(f, s.line)) yield* boundary(f);
-        if (t && !t.atEnd && (yield* guardedCond(f, s.line, t.expr)) !== (t.mode === 'while')) return;
+        if (t && !t.atEnd && (yield* guardedCond(f, s.line, t.expr, t.mode === 'while')) !== (t.mode === 'while')) return;
         const c = yield* execBlock(f, s.body);
         if (c === 'exitDo') return;
         if (c !== undefined) return c;
-        if (t && t.atEnd && (yield* guardedCond(f, s.line, t.expr)) !== (t.mode === 'while')) return;
+        if (t && t.atEnd && (yield* guardedCond(f, s.line, t.expr, t.mode !== 'while')) !== (t.mode === 'while')) return;
       }
     }
     case 'while': {
-      while (yield* guardedCond(f, s.line, s.cond)) {
+      while (yield* guardedCond(f, s.line, s.cond, true)) {
         const c = yield* execBlock(f, s.body);
         if (c !== undefined) return c;
         if (atBoundary(f, s.line)) yield* boundary(f);
       }
       return;
     }
-    case 'exit': return s.what === 'for' ? 'exitFor' : s.what === 'do' ? 'exitDo' : 'exitProc';
+    case 'exit':
+      if (s.what === 'for') return 'exitFor';
+      if (s.what === 'do') return 'exitDo';
+      rt.err.clear(); // Exit Sub/Function clears Err (VB6)
+      return 'exitProc';
     case 'dim': case 'const': return; // declared at procedure entry (declareLocals)
     case 'redim': {
       for (const d of s.decls) {
@@ -520,8 +641,29 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
       else yield* afterHostCall(f);
       return;
     }
-    case 'onError': case 'resume':
-      throw compileError(`${s.kind === 'onError' ? 'On Error' : 'Resume'} is not supported yet`); // Task 8
+    case 'onError': {
+      if (s.mode === 'goto') {
+        const label = lc(s.label!);
+        if (!f.proc || !procLabels(f.proc).has(label)) throw compileError('Label not defined');
+        // the handler runs from a label in the procedure's own body (not inside a block)
+        if (!labelsOf(f.proc.body).has(label)) throw compileError('GoTo into a block is not supported');
+        f.handlerLabel = label;
+      }
+      f.onError = s.mode === 'goto0' ? 'none' : s.mode;
+      rt.err.clear();
+      return;
+    }
+    case 'resume': {
+      let label = '';
+      if (s.mode === 'label') {
+        label = lc(s.label!);
+        if (!f.proc || !procLabels(f.proc).has(label)) throw compileError('Label not defined');
+      }
+      if (!f.inHandler) throw new VBRuntimeError(20);
+      f.inHandler = false;
+      rt.err.clear();
+      return new ResumeJump(s.mode, label);
+    }
   }
 }
 
@@ -597,7 +739,10 @@ function* execSelect(f: Frame, s: SelectStmt): Gen<Completion> {
         break;
       } catch (e) {
         const r = yield* handleError(f, e);
-        if (r !== RETRY) throw new Error('execSelect: unsupported error outcome'); // Task 8
+        if (r === RETRY) continue;
+        // Resume Next: VB6 goes on with the next statement in the source, the Case body
+        if (r === RESUME_NEXT) { hit = true; break; }
+        return r;
       }
     }
     if (hit) return yield* execBlock(f, c.body);
@@ -630,7 +775,9 @@ function* execFor(f: Frame, s: ForStmt): Gen<Completion> {
         break;
       } catch (e) {
         const r = yield* handleError(f, e);
-        if (r !== RETRY) throw new Error('execFor: unsupported error outcome'); // Task 8
+        if (r === RETRY) continue;
+        // Resume Next after the increment (the Next line): the statement after the loop
+        return r === RESUME_NEXT ? undefined : r;
       }
     }
   }
@@ -648,7 +795,9 @@ function* execForEach(f: Frame, s: ForEachStmt): Gen<Completion> {
         break;
       } catch (e) {
         const r = yield* handleError(f, e);
-        if (r !== RETRY) throw new Error('execForEach: unsupported error outcome'); // Task 8
+        if (r === RETRY) continue;
+        if (r === RESUME_NEXT) break; // the body follows, with the variable unchanged
+        return r;
       }
     }
     const c = yield* execBlock(f, s.body);

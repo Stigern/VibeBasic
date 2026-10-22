@@ -53,6 +53,8 @@ export function vbErrorText(n: number): string {
 export class VBRuntimeError extends Error {
   readonly description: string;
   compile = false;
+  /** `Err.Source`: set by `Err.Raise`; otherwise the app title is used. */
+  source?: string;
   constructor(public number: number, description?: string) {
     const d = description ?? vbErrorText(number);
     super(d);

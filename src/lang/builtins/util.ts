@@ -2,6 +2,7 @@
 // the registration function used by strings.ts, convert.ts, math.ts, ...
 
 import type { Host } from '../host';
+import type { ErrObject } from './err';
 import { VBRuntimeError } from '../errors';
 import { NullT, bankers, toNumber, type VBValue } from '../values';
 
@@ -13,7 +14,8 @@ export interface BuiltinCtx {
   appTitle?: string;
   /** Rnd generator state of this program (created on first use if absent). */
   rnd?: RndState;
-  // Task 8 adds the `Err` object here.
+  /** The program's `Err` object (created on first use if absent). */
+  err?: ErrObject;
 }
 
 /** VB's fixed Rnd sequence: every fresh program (without Randomize) starts the same. */

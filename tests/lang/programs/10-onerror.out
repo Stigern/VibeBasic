@@ -1,0 +1,20 @@
+A 11 Division by zero
+B 0 
+C 6 Overflow Project1
+after goto 0 
+R 3 
+tries 1 
+Dn/a 2.5 
+E 1000 Egen Project1
+F 5 Invalid procedure call or argument
+G 1 MyObj Custom
+L2 start
+H 9 Subscript out of range
+I 0 
+K 1001 
+J 1002 second
+L-5,-10,10,5,
+N 2001 
+N 2002 
+M 3 
+[Error 11 at Module1:20] Division by zero

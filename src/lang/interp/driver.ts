@@ -66,13 +66,17 @@ export async function runGenerator<T>(root: Gen<T>, scope?: ExecScope): Promise<
       restore?.();
       restore = undefined;
       scope?.beforeAwait?.();
+      // The end of the program (End, Program.end) cancels the wait: EndSignal is thrown in.
+      const abort = scope?.abort;
       try {
-        input = { ok: true, value: await y };
+        input = { ok: true, value: await (abort ? Promise.race([y, abort]) : y) };
       } catch (e) {
         input = { ok: false, error: e };
       }
       // Event handlers that started while we waited run to completion first.
-      for (let nested = scope?.afterAwait?.(); nested; nested = scope?.afterAwait?.()) await nested;
+      for (let nested = scope?.afterAwait?.(); nested; nested = scope?.afterAwait?.()) {
+        await (abort ? Promise.race([nested, abort]).catch(() => {}) : nested);
+      }
       restore = scope?.activate();
     }
   } finally {
@@ -94,6 +98,12 @@ export interface ExecScope {
    * undefined to resume now. Called again after each wait.
    */
   afterAwait?(): Promise<void> | undefined;
+  /**
+   * Rejects with an EndSignal when the program ends. Every await is raced
+   * against it, so a host promise that never settles (a dialog, onBreak)
+   * cannot keep a run alive after End.
+   */
+  readonly abort?: Promise<never>;
 }
 
 /**

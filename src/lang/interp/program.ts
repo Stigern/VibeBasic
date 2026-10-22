@@ -2,7 +2,7 @@
 
 import type { ProcDecl, TypeDecl, VBTypeName } from '../ast';
 import { VBRuntimeError } from '../errors';
-import type { BuiltinCtx } from '../builtins';
+import { ErrObject, type BuiltinCtx } from '../builtins';
 import type { CodeLocation, Host } from '../host';
 import { generalDateText } from '../builtins/format';
 import { newRndState } from '../builtins/util';
@@ -10,7 +10,8 @@ import { parseModule } from '../parser';
 import { VBArray, VBRecord, VBRef, defaultValue, setDateTextFormatter, toNumber, type DateTextFormatter, type VBValue } from '../values';
 import { EndSignal, SubCall, runGenerator, type ExecScope, type Gen } from './driver';
 import { constExpr } from './eval';
-import { declareVariable, evalBounds, handleError, invokeProc, isStackOverflow, type BoundArg } from './exec';
+import { RETRY, declareVariable, evalBounds, handleError, invokeProc, isStackOverflow, type BoundArg } from './exec';
+import { runImmediate } from './immediate';
 
 /**
  * Event handlers nested in each other (an event fired while another handler
@@ -48,7 +49,7 @@ export class Runtime {
   activeRuns = 0;
   /** The runs behind `activeRuns`, each with its call stack (for End and break mode). */
   readonly runs = new Set<Run>();
-  /** The frame that is stopped in break mode (Immediate evaluates there; Task 8). */
+  /** The frame that is stopped in break mode (the Immediate window evaluates there). */
   breakFrame?: Frame;
   /** Runs currently waiting in a time slice (`nextTick`); events arriving meanwhile are queued. */
   slicing = 0;
@@ -58,10 +59,18 @@ export class Runtime {
   /** Waits for nested runs (`nestedRuns`) that the end of the program must release; each removes itself when done. */
   readonly endWaiters = new Set<() => void>();
   /**
-   * > 0 while an unhandled error is being reported (and, in Task 8, while
-   * onBreak is pending): no event pump, new events are dropped.
+   * > 0 while an unhandled error is being reported or onBreak is pending:
+   * no event pump (queued events stay queued), new events are dropped.
    */
   eventsSuspended = 0;
+  /** VB's `Err` object (also `builtinCtx.err`). */
+  readonly err: ErrObject;
+  /**
+   * Rejects with an EndSignal when the program ends. The driver races every
+   * await against it, so End cancels waits on host promises that never settle.
+   */
+  readonly aborted: Promise<never>;
+  private abortRuns!: (e: EndSignal) => void;
   /** Set when an event was refused for nesting too deep; the running statement raises error 28. */
   overflow = false;
   readonly sliceSize: number;
@@ -83,13 +92,18 @@ export class Runtime {
   constructor(sources: SourceModule[], readonly host: Host, opts: ProgramOptions = {}) {
     this.sliceSize = Math.max(1, opts.sliceSize ?? 10000);
     this.locale = opts.locale ?? Intl.DateTimeFormat().resolvedOptions().locale;
-    this.builtinCtx = { host, locale: this.locale, appTitle: opts.appTitle ?? 'Project1', rnd: newRndState() };
+    const appTitle = opts.appTitle ?? 'Project1';
+    this.err = new ErrObject(appTitle);
+    this.builtinCtx = { host, locale: this.locale, appTitle, rnd: newRndState(), err: this.err };
     this.dateText = v => generalDateText(v.serial, this.locale);
+    this.aborted = new Promise<never>((_resolve, reject) => { this.abortRuns = reject; });
+    this.aborted.catch(() => {}); // only ever observed through Promise.race
     this.scope = {
       activate: () => {
         const prev = setDateTextFormatter(this.dateText);
         return () => { setDateTextFormatter(prev); };
       },
+      abort: this.aborted,
     };
     this.declRun = new Run(this);
     for (const src of sources) {
@@ -226,16 +240,59 @@ export class Runtime {
 
   // ---- lifecycle ----
 
-  /** Ends the program once: state 'ended', running code stops, host.onEnd(). */
+  /**
+   * Ends the program once (End, Program.end, an unhandled error answered
+   * 'end'): state 'ended'; every run stops — code at its next statement
+   * boundary, waits (host promises, onBreak, onRuntimeError, nested runs)
+   * at once through `aborted`; queued events are released without running;
+   * host.onEnd() is called.
+   */
   endProgram(): void {
     if (this.state === 'ended') return;
     this.state = 'ended';
     this.stopping = true;
     this.pauseRequested = false;
+    this.breakFrame = undefined;
     const waiters = [...this.endWaiters];
     this.endWaiters.clear();
     for (const w of waiters) w();
+    this.abortRuns(new EndSignal());
+    this.drainEvents(); // each queued runEvent sees 'ended' and resolves
     this.host.onEnd();
+  }
+
+  /**
+   * Break mode with no code running (requestPause while idle): host.onBreak
+   * with an empty location; state 'break' until it answers ('end' ends the
+   * program, 'continue' or a rejected onBreak goes back to 'idle').
+   */
+  pauseIdle(): void {
+    this.pauseRequested = false;
+    this.state = 'break';
+    this.eventsSuspended++;
+    const info = { reason: 'pause' as const, at: { moduleName: '', procName: '', line: 0 } };
+    let asked: Promise<'continue' | 'end'>;
+    try {
+      asked = Promise.resolve(this.host.onBreak(info));
+    } catch (e) {
+      asked = Promise.reject(e);
+    }
+    void this.untilEnd(asked)
+      .catch(() => 'continue' as const)
+      .then(answer => {
+        this.eventsSuspended--;
+        if (this.state !== 'break') return; // ended meanwhile
+        if (answer === 'end') this.endProgram();
+        else this.state = 'idle';
+      });
+  }
+
+  /** `p`, or undefined as soon as the program ends (for awaits outside the driver). */
+  untilEnd<T>(p: Promise<T>): Promise<T | undefined> {
+    return Promise.race([p, this.aborted]).catch(e => {
+      if (e instanceof EndSignal) return undefined;
+      throw e;
+    });
   }
 
   // ---- event runs (re-entrancy) ----
@@ -260,7 +317,11 @@ export class Runtime {
     return () => {
       this.runs.delete(run);
       this.activeRuns--;
-      if (this.activeRuns === 0 && this.state === 'running') this.state = 'idle';
+      if (this.activeRuns === 0 && this.state === 'running') {
+        this.state = 'idle';
+        // a pause requested while the last handler was waiting (no boundary reached): break now, idle
+        if (this.pauseRequested) this.pauseIdle();
+      }
       if (this.slicing === 0) this.drainEvents();
       finish();
     };
@@ -305,12 +366,14 @@ export class Runtime {
     for (const start of queued) start();
   }
 
-  /** The driver scope of an event run: locale, event pump before awaits, nested runs after. */
+  /** The driver scope of an event run: locale, event pump before awaits, nested runs after, End. */
   runScope(run: Run): ExecScope {
     return {
       activate: this.scope.activate,
-      beforeAwait: () => { if (this.slicing === 0) this.drainEvents(); },
+      // no pump in a time slice, while an error is reported or in break mode
+      beforeAwait: () => { if (this.slicing === 0 && this.eventsSuspended === 0) this.drainEvents(); },
       afterAwait: () => this.nestedRuns(run),
+      abort: this.aborted,
     };
   }
 
@@ -325,11 +388,14 @@ export class Runtime {
         for (const d of m.ast.variables) {
           f.line = d.line;
           let v: Variable;
-          try {
-            v = yield* declareVariable(f, d);
-          } catch (e) {
-            yield* handleError(f, e); // reports and ends (no handlers at module level)
-            throw e;
+          for (;;) {
+            try {
+              v = yield* declareVariable(f, d);
+              break;
+            } catch (e) {
+              // no handlers at module level: reported (Continue retries) or ends the program
+              if ((yield* handleError(f, e)) !== RETRY) throw e;
+            }
           }
           m.vars.set(lc(d.name), v);
           if (d.scope === 'public' && m.kind === 'module' && !this.globals.vars.has(lc(d.name))) {
@@ -410,9 +476,11 @@ export class Program {
         // raised outside any statement, e.g. binding the handler's arguments
         if (!rt.stopping) {
           const at: CodeLocation = { moduleName: ref.module.name, procName: ref.proc.name, line: ref.proc.line };
+          rt.err.setFrom(err);
           rt.eventsSuspended++;
           try {
-            await rt.host.onRuntimeError(err, at);
+            // nothing to break into (no statement ran): 'debug' ends the program too
+            await rt.untilEnd(rt.host.onRuntimeError(err, at));
           } finally {
             rt.eventsSuspended--;
           }
@@ -426,15 +494,33 @@ export class Program {
     }
   }
 
-  /** Immediate window (Task 8). */
-  async immediate(_text: string): Promise<string> {
-    throw new Error('Program.immediate is not implemented yet');
+  /**
+   * The Immediate window. `? expr` / `Print expr` (Debug.Print items, `;` and
+   * `,` allowed) returns the text Debug.Print would print; anything else runs
+   * as one or more statements (`a = 1: Foo a`) and returns `''`.
+   *
+   * In break mode the command runs in the stopped frame: its locals, the
+   * function result, its module's variables and the globals are visible and
+   * can be changed. Otherwise it runs in a global context: Public variables,
+   * procedures, constants and modules, but no locals and no Private module
+   * variables (unknown names are new, empty Immediate variables).
+   *
+   * A run-time error returns `Run-time error '<n>': <text>`; declarations
+   * (Dim/Static/Const), syntax errors and compile errors return
+   * `Compile error: <text>`. Errors never reach host.onRuntimeError or break
+   * mode (procedures called from here still use their own On Error
+   * handlers), and Stop does nothing. `End` ends the program and returns `''`.
+   */
+  immediate(text: string): Promise<string> {
+    return runImmediate(this.rt, text);
   }
 
   /**
-   * Break at the next statement boundary (host.onBreak with reason 'pause').
-   * With no code running, onBreak is called right away with an empty location.
-   * (Minimal; Task 8 completes break mode.)
+   * Break mode at the next statement boundary: host.onBreak with reason
+   * 'pause' at the innermost running statement; 'continue' goes on, 'end'
+   * ends the program. With no code running, onBreak is called at once with
+   * an empty location (`procName: ''`); the state is 'break' until it answers
+   * (a rejected onBreak counts as 'continue').
    */
   requestPause(): void {
     const rt = this.rt;
@@ -443,14 +529,15 @@ export class Program {
       rt.pauseRequested = true;
       return;
     }
-    rt.state = 'break';
-    void rt.host.onBreak({ reason: 'pause', at: { moduleName: '', procName: '', line: 0 } }).then(answer => {
-      if (answer === 'end') rt.endProgram();
-      else if (rt.state === 'break') rt.state = 'idle';
-    });
+    rt.pauseIdle();
   }
 
-  /** Ends the program: running code stops at its next statement, host.onEnd() is called once. */
+  /**
+   * Ends the program (the IDE's End button): running code stops, every wait
+   * (host promises, nested events, a pending onBreak) is cancelled, queued
+   * events are dropped, every runEvent promise resolves, state is 'ended' and
+   * host.onEnd() is called once.
+   */
   end(): void {
     this.rt.endProgram();
   }

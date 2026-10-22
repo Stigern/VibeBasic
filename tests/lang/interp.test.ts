@@ -88,12 +88,14 @@ describe('driver', () => {
     expect(host.endCalls).toBe(1);
   });
 
-  test('debug answer to an error is treated as end for now', async () => {
+  test('debug answer to an error enters break mode; End there ends the program', async () => {
     const host = new TestHost();
     host.errorChoice = 'debug';
+    host.breakChoice = 'end';
     const { prog } = program(lines('Sub Main()', '  Debug.Print 1 / 0', '  Debug.Print "after"', 'End Sub'), host);
     await prog.runEvent('Module1', 'Main');
     expect(host.lines()).toEqual(['[Error 11 at Module1:2] Division by zero']);
+    expect(host.breaks.map(b => [b.reason, b.at.line, b.error?.number])).toEqual([['error', 2, 11]]);
     expect(prog.state).toBe('ended');
   });
 
@@ -395,9 +397,9 @@ describe('statements', () => {
       .toEqual(['a             b', 'x             y']);
   });
 
-  test('On Error is not available yet (Task 8)', async () => {
-    const out = await run(lines('Sub Main()', '  On Error Resume Next', 'End Sub'));
-    expect(out[0]).toMatch(/^\[Error 0 at Module1:2\] Compile error: /);
+  test('On Error statements run (details in errors.test.ts)', async () => {
+    const out = await run(lines('Sub Main()', '  On Error Resume Next', '  Debug.Print 1 / 0', '  Debug.Print Err.Number', 'End Sub'));
+    expect(out).toEqual([' 11 ']);
   });
 });
 

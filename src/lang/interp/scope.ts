@@ -232,6 +232,12 @@ export class Frame {
   readonly withStack: VBValue[] = [];
   /** A Function's result variable (also in `locals` under the function name). */
   returnVar?: Variable;
+  /** The frame's `On Error` setting: none (`GoTo 0`), `Resume Next`, or `GoTo handlerLabel`. */
+  onError: 'none' | 'resumeNext' | 'goto' = 'none';
+  /** Lower-case label of `On Error GoTo label`. */
+  handlerLabel = '';
+  /** True while the `GoTo` handler runs (until Resume or the procedure ends); a new error then goes to the caller. */
+  inHandler = false;
 
   constructor(
     readonly run: Run,
@@ -255,6 +261,8 @@ export class Run {
   seq = 0;
   /** Resolves when the run has finished (set for event runs). */
   done?: Promise<void>;
+  /** An Immediate-window command: errors are returned as text, never reported or turned into break mode. */
+  immediate = false;
   constructor(readonly rt: Runtime) {}
 
   get top(): Frame | undefined { return this.frames[this.frames.length - 1]; }
