@@ -25,6 +25,7 @@ export class RunController {
   private pendingBreak: ((a: 'continue' | 'end') => void) | null = null;
   private breakWin: CodeWindow | null = null;
   private errorWins: CodeWindow[] = [];
+  private starting = false;
 
   constructor(private ide: IdeState, private hostFactory: () => FormHost, private openCode: (itemId: string) => CodeWindow, private opts: RunOptions = {}) {}
 
@@ -56,7 +57,25 @@ export class RunController {
   /** F5 / Ctrl+F5. In break mode F5 continues. */
   async start(fullCompile: boolean): Promise<void> {
     if (this.ide.mode === 'break') { this.pendingBreak?.('continue'); return; }
-    if (this.ide.mode === 'run') return;
+    if (this.ide.mode === 'run' || this.starting) return;
+    this.starting = true;
+    let session: RunSession | null;
+    try {
+      session = await this.prepare(fullCompile);
+    } finally {
+      this.starting = false;
+    }
+    if (!session) return;
+    try {
+      await session.start();
+    } catch (e) {
+      console.error(e);
+      session.end();
+    }
+  }
+
+  /** Compile checks and session creation; null when the program did not start. */
+  private async prepare(fullCompile: boolean): Promise<RunSession | null> {
     for (const w of this.errorWins.splice(0)) try { w.markErrorLines([]); } catch { /* window closed */ }
     const p = this.ide.project;
     const modules = [
@@ -66,7 +85,7 @@ export class RunController {
     if (fullCompile) {
       for (const m of modules) {
         const errs = findSyntaxErrors(m.source, m.name);
-        if (errs.length) { await this.showCompileError(errs[0]); return; }
+        if (errs.length) { await this.showCompileError(errs[0]); return null; }
       }
     }
     const host = this.hostFactory();
@@ -81,17 +100,12 @@ export class RunController {
       }, 'ide');
     } catch (e) {
       this.disposeHost(host);
-      if (e instanceof VBSyntaxError) { await this.showCompileError(e); return; }
+      if (e instanceof VBSyntaxError) { await this.showCompileError(e); return null; }
       throw e;
     }
     this.session = session;
     this.ide.setMode('run');
-    try {
-      await session.start();
-    } catch (e) {
-      console.error(e);
-      session.end();
-    }
+    return session;
   }
 
   /** Ctrl+Break / Cmd+. / Ctrl+Pause. */
@@ -137,7 +151,9 @@ export class RunController {
   }
 
   private disposeHost(host: FormHost): void {
-    void (host as { dispose?: () => unknown }).dispose?.();
+    try {
+      void Promise.resolve((host as { dispose?: () => unknown }).dispose?.()).catch(() => {});
+    } catch { /* a failing dispose must not break the state machine */ }
   }
 
   private ended(s: RunSession): void {

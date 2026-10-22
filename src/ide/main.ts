@@ -38,8 +38,8 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   let propsWin: PropertiesWindow | undefined;
   let explorer: ProjectExplorer | undefined;
   const actions: IdeActions = {
-    undo: () => state.stack.undo(),
-    redo: () => state.stack.redo(),
+    undo: () => { if (state.mode === 'design') state.stack.undo(); },
+    redo: () => { if (state.mode === 'design') state.stack.redo(); },
     viewImmediate: () => { immediate.show(); immediate.focus(); },
     viewProjectExplorer: () => { layout.setPaneVisible('project', true); explorer?.focus(); },
     viewProperties: () => { layout.setPaneVisible('properties', true); propsWin?.focus(); },
@@ -52,15 +52,15 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   registerCodeActions(state, actions, { mdiHost: layout.mdiHost, actions });
   const env = { mdiHost: layout.mdiHost, actions };
   registerProjectActions(state, actions, env);
-  actions.projectProperties = () => { void showProjectProperties(state, doc); };
+  actions.projectProperties = () => { if (state.mode === 'design') void showProjectProperties(state, doc); };
   actions.options = () => { void showOptions(state, backend, doc); };
   const fc = new FileController(state, backend, doc);
   fc.onProjectReplaced = () => {
     const id = state.project.forms.find(f => f.name === state.project.startupForm)?.id ?? state.project.forms[0]?.id;
     if (id) openDesigner(state, id, env);
   };
-  actions.newProject = () => { void fc.newProject(); };
-  actions.openProject = () => { void fc.open(); };
+  actions.newProject = () => { if (state.mode === 'design') void fc.newProject(); };
+  actions.openProject = () => { if (state.mode === 'design') void fc.open(); };
   actions.saveProject = () => { void fc.save(); };
   actions.saveProjectAs = () => { void fc.saveAs(); };
   actions.exit = () => { void fc.exit(); };
@@ -70,7 +70,8 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     if (backend.kind === 'tauri') return new TauriFormHost();
     const layer = h('div', { class: 'ide98-runlayer' });
     layout.mdiHost.appendChild(layer);
-    return Object.assign(new InlineFormHost(layer), { dispose: () => { layer.remove(); } });
+    const host = new InlineFormHost(layer);
+    return Object.assign(host, { dispose: () => { InlineFormHost.prototype.dispose.call(host); layer.remove(); } });
   };
   const rc = new RunController(state, hostFactory, id => openCodeWindow(state, id, env), {
     immediate, doc, readFile: p => backend.readBinaryFile(p),
@@ -88,9 +89,9 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   });
   const sep: ToolbarItem = { separator: true };
   const toolbar = createToolbar(layout.toolbarHost, [
-    tb('new', 'New Project', 'newProject'), tb('open', 'Open Project', 'openProject'), tb('save', 'Save Project', 'saveProject'), sep,
+    tb('new', 'New Project', 'newProject', () => state.mode === 'design'), tb('open', 'Open Project', 'openProject', () => state.mode === 'design'), tb('save', 'Save Project', 'saveProject'), sep,
     tb('cut', 'Cut', 'cut'), tb('copy', 'Copy', 'copy'), tb('paste', 'Paste', 'paste'), sep,
-    tb('undo', 'Undo', 'undo', () => state.activeView.kind === 'code' || state.stack.canUndo), tb('redo', 'Redo', 'redo', () => state.activeView.kind === 'code' || state.stack.canRedo), sep,
+    tb('undo', 'Undo', 'undo', () => state.mode === 'design' && (state.activeView.kind === 'code' || state.stack.canUndo)), tb('redo', 'Redo', 'redo', () => state.mode === 'design' && (state.activeView.kind === 'code' || state.stack.canRedo)), sep,
     tb('start', 'Start', 'start', () => state.mode !== 'run'), tb('break', 'Break', 'break', () => state.mode === 'run'), tb('end', 'End', 'end', () => state.mode !== 'design'), sep,
     tb('projectExplorer', 'Project Explorer', 'viewProjectExplorer'), tb('properties', 'Properties Window', 'viewProperties'),
     tb('toolbox', 'Toolbox', 'viewToolbox'),

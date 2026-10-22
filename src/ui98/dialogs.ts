@@ -45,6 +45,8 @@ export function showDialog98(doc: Document, o: DialogOptions): Promise<string> {
     };
 
     const buttonEls = new Map<DialogButton, HTMLButtonElement>();
+    // `dlg98-abort`: the owner of the dialog is gone (the run session ended); closes it as if cancelled.
+    const abort = () => finish((cancelBtn ?? o.buttons.find(b => !b.disabled))?.value ?? '');
     for (const b of o.buttons) {
       buttonEls.set(b, h('button', {
         type: 'button',
@@ -62,6 +64,7 @@ export function showDialog98(doc: Document, o: DialogOptions): Promise<string> {
     const body = h('div', { class: o.buttonsSide ? 'window-body dlg98-body side' : 'window-body dlg98-body' }, o.content, buttonRow);
     const win = h('div', { class: 'window dlg98', role: 'dialog', 'aria-modal': 'true' }, title.bar, body);
     const overlay = h('div', { class: 'dlg98-overlay' }, win);
+    overlay.addEventListener('dlg98-abort', abort);
     // Swallow pointer events outside the dialog so the document below cannot be used.
     overlay.addEventListener('mousedown', e => { if (e.target === overlay) e.preventDefault(); });
 

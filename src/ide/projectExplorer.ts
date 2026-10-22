@@ -27,6 +27,7 @@ function nextFreeName(ide: IdeState, prefix: 'Form' | 'Module'): string {
 }
 
 export function addForm(ide: IdeState, env?: DesignerEnv): void {
+  if (ide.mode !== 'design') return;
   const form = newForm(nextFreeName(ide, 'Form'), ide.options.requireVariableDeclaration ? OPTION_EXPLICIT : '');
   ide.stack.execute(addFormCmd(form));
   ide.explorerItemId = form.id;
@@ -35,6 +36,7 @@ export function addForm(ide: IdeState, env?: DesignerEnv): void {
 }
 
 export function addModule(ide: IdeState, env?: DesignerEnv): void {
+  if (ide.mode !== 'design') return;
   const m = { id: newId(), name: nextFreeName(ide, 'Module'), code: ide.options.requireVariableDeclaration ? OPTION_EXPLICIT : '' };
   ide.stack.execute(addModuleCmd(m));
   ide.explorerItemId = m.id;
@@ -45,6 +47,7 @@ export function addModule(ide: IdeState, env?: DesignerEnv): void {
 /** Removes a form or module (undoable). The last form cannot be removed; removing the startup form makes the
  *  first remaining form the startup form. Open windows for the item close themselves on the 'project' event. */
 export function removeItem(ide: IdeState, id: string): void {
+  if (ide.mode !== 'design') return;
   const p = ide.project;
   const form = p.forms.find(f => f.id === id);
   if (!form && !p.modules.some(m => m.id === id)) return;

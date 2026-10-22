@@ -141,3 +141,50 @@ test('read-only during run, title follows mode', async () => {
   expect(be.titles.at(-1)).toBe('Project1 - VibeBasic [design]');
   expect(view.state.readOnly).toBe(false);
 });
+
+test('a program that ends by itself returns to design', async () => {
+  setup('Private Sub Form_Load()\n    Unload Me\nEnd Sub\n');
+  await rc.start(false);
+  await until(() => ide.mode === 'design');
+  expect(ide.mode).toBe('design');
+  expect(rc.session).toBeNull();
+  expect(container.querySelector('.vb-form')).toBeNull();
+});
+
+test('End while a MsgBox is open closes the dialog; End in break leaves no break line', async () => {
+  setup('Private Sub Command1_Click()\n    MsgBox "hi"\nEnd Sub\n');
+  await rc.start(false);
+  clickButton();
+  await until(() => !!document.querySelector('.dlg98-overlay'));
+  expect(document.querySelector('.dlg98-overlay')).not.toBeNull();
+  rc.end();
+  expect(ide.mode).toBe('design');
+  expect(document.querySelector('.dlg98-overlay')).toBeNull();
+});
+
+test('project changes are blocked while running; a second start during the compile box does not stack', async () => {
+  setup('', 'Sub Main()\n    x = \nEnd Sub\n');
+  let release!: () => void;
+  box.mockImplementationOnce(() => new Promise<void>(r => { release = r; }));
+  const first = rc.start(true);
+  await tick();
+  void rc.start(true);
+  await tick();
+  expect(box).toHaveBeenCalledTimes(1);
+  release();
+  await first;
+
+  document.body.innerHTML = '';
+  const be = fakeBackend();
+  const root = document.body.appendChild(document.createElement('div'));
+  const app = startIde(be, root);
+  const forms = app.state.project.forms.length;
+  app.actions.addForm?.();
+  expect(app.state.project.forms.length).toBe(forms + 1);   // design: works
+  await app.run.start(false);
+  app.actions.addForm?.(); app.actions.addModule?.(); app.actions.undo?.();
+  expect(app.state.project.forms.length).toBe(forms + 1);
+  expect(app.state.project.modules.length).toBe(0);
+  expect(app.state.stack.canUndo).toBe(true);   // undo did not run
+  app.run.end();
+});

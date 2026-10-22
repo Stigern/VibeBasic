@@ -37,11 +37,12 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
   const sep = (): MenuItem => ({ label: '-', separator: true });
   const sub = (label: string, items: MenuItem[]): MenuItem => ({ label, submenu: items });
   const never = () => false;
+  const design = () => (state?.mode ?? 'design') === 'design';
 
   return [
     { label: 'File', items: [
-      mk('New Project', 'newProject', 'Ctrl+N'),
-      mk('Open Project...', 'openProject', 'Ctrl+O'),
+      mk('New Project', 'newProject', 'Ctrl+N', design),
+      mk('Open Project...', 'openProject', 'Ctrl+O', design),
       sep(),
       mk('Save Project', 'saveProject', 'Ctrl+S'),
       mk('Save Project As...', 'saveProjectAs'),
@@ -51,8 +52,8 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
       mk('Exit', 'exit'),
     ] },
     { label: 'Edit', items: [
-      mk('Undo', 'undo', 'Ctrl+Z', () => state?.activeView.kind === 'code' || (state?.stack.canUndo ?? true)),
-      mk('Redo', 'redo', 'Ctrl+Y', () => state?.activeView.kind === 'code' || (state?.stack.canRedo ?? true)),
+      mk('Undo', 'undo', 'Ctrl+Z', () => design() && (state?.activeView.kind === 'code' || (state?.stack.canUndo ?? true))),
+      mk('Redo', 'redo', 'Ctrl+Y', () => design() && (state?.activeView.kind === 'code' || (state?.stack.canRedo ?? true))),
       sep(),
       mk('Cut', 'cut', 'Ctrl+X'),
       mk('Copy', 'copy', 'Ctrl+C'),
@@ -73,12 +74,12 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
       mk('Toolbox', 'viewToolbox'),
     ] },
     { label: 'Project', items: [
-      mk('Add Form', 'addForm'),
-      mk('Add Module', 'addModule'),
+      mk('Add Form', 'addForm', undefined, design),
+      mk('Add Module', 'addModule', undefined, design),
       sep(),
-      mk(() => `Remove ${activeItemName()}`, 'removeItem'),
+      mk(() => `Remove ${activeItemName()}`, 'removeItem', undefined, design),
       sep(),
-      mk(() => `${projectName()} Properties...`, 'projectProperties'),
+      mk(() => `${projectName()} Properties...`, 'projectProperties', undefined, design),
     ] },
     { label: 'Format', items: [
       sub('Align', [

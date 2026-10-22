@@ -13,6 +13,7 @@ export class InlineFormHost implements FormHost {
   private z = 1;
   private cascade = 0;
   private openDialogs = 0;
+  private dialogs = new Set<Element>();
   private windows = new Set<{ sessionBlocked: boolean; apply(): void }>();
 
   constructor(private container: HTMLElement) {}
@@ -56,8 +57,11 @@ export class InlineFormHost implements FormHost {
   /** Blocks every form window while a dialog is open; the dialog itself holds keyboard focus. */
   private async withDialog<T>(show: () => Promise<T>): Promise<T> {
     if (this.openDialogs++ === 0) for (const w of this.windows) w.apply();
+    const before = new Set(this.doc.querySelectorAll('.dlg98-overlay'));
     try {
-      return await show();
+      const p = show();
+      for (const o of this.doc.querySelectorAll('.dlg98-overlay')) if (!before.has(o)) this.dialogs.add(o);
+      return await p;
     } finally {
       if (--this.openDialogs === 0) for (const w of this.windows) w.apply();
     }
@@ -69,6 +73,12 @@ export class InlineFormHost implements FormHost {
 
   inputBox(o: { prompt: string; title: string; defaultText: string }): Promise<string> {
     return this.withDialog(() => runDialog(this.doc, { kind: 'input', ...o })) as Promise<string>;
+  }
+
+  /** Closes dialogs this host opened that are still on screen (End during a MsgBox / error dialog). */
+  dispose(): void {
+    for (const o of this.dialogs) o.dispatchEvent(new Event('dlg98-abort'));
+    this.dialogs.clear();
   }
 
   runtimeErrorBox(o: RuntimeErrorInfo): Promise<'end' | 'debug'> {
