@@ -111,15 +111,19 @@ export function createColorPopup(onPick: (n: number) => void, close: () => void)
 export const FONT_NAMES = ['MS Sans Serif', 'Arial', 'Courier New', 'Times New Roman', 'Tahoma', 'Verdana', 'Georgia',
   'Comic Sans MS', 'Helvetica', 'Geneva', 'Monaco'];
 
+let chkSeq = 0;
+
 /** Resolves with the chosen font, or null when cancelled. */
 export async function showFontDialog(doc: Document, cur: FontValue): Promise<FontValue | null> {
   const names = FONT_NAMES.includes(cur.name) ? FONT_NAMES : [cur.name, ...FONT_NAMES];
   const fontList = h('select', { size: '7', class: 'pw98-fontlist', 'data-autofocus': '' },
     ...names.map(n => h('option', { value: n, selected: n === cur.name }, n)));
   const size = h('input', { type: 'number', min: '1', max: '999', step: '1', class: 'pw98-fontsize', value: String(cur.size) });
+  // 98.css draws a checkbox only as `input + label[for]`
   const chk = (label: string, on: boolean) => {
-    const box = h('input', { type: 'checkbox', checked: on });
-    return { box, el: h('label', { class: 'pw98-fontchk' }, box, label) };
+    const id = `pw98-font-${label.toLowerCase()}-${++chkSeq}`;
+    const box = h('input', { type: 'checkbox', checked: on, id });
+    return { box, el: h('div', { class: 'pw98-fontchk' }, box, h('label', { for: id }, label)) };
   };
   const bold = chk('Bold', cur.bold), italic = chk('Italic', cur.italic), underline = chk('Underline', cur.underline);
   const sample = h('div', { class: 'pw98-fontsample' }, 'AaBbYyZz');
