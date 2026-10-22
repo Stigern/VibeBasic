@@ -98,6 +98,6 @@ export class FileController {
   }
 
   updateTitle(): void {
-    void this.backend.setWindowTitle(`${this.ide.project.name} - VibeBasic [${this.ide.mode}]`);
+    void this.backend.setWindowTitle(`${this.ide.project.name} - VibeBasic ${__APP_VERSION__} [${this.ide.mode}]`);
   }
 }

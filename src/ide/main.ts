@@ -3,7 +3,7 @@ import type { Backend } from '../backend/backend';
 import { newProject } from '../model/controls';
 import { bindShortcuts, createMenubar } from '../ui98/menubar';
 import { createToolbar, type ToolbarItem } from '../ui98/toolbar';
-import { messageBox98, vbOK } from '../ui98/dialogs';
+import { showAbout } from './aboutDialog';
 import { TOOLBAR_ICONS } from './icons/toolbarIcons';
 import { IdeState, OPTION_EXPLICIT, type IdeOptions } from './ideState';
 import { buildLayout, type IdeLayout } from './layout';
@@ -27,9 +27,6 @@ import { h } from '../ui98/dom';
 
 export interface Ide { state: IdeState; layout: IdeLayout; actions: IdeActions; menus: ReturnType<typeof buildMenus>; run: RunController; refresh(): void }
 
-export const ABOUT_TEXT = 'VibeBasic\nA Visual Basic 6 style programming environment for macOS.\n\n'
-  + "Pixel font 'MS Sans Serif' by lou (FontStruct), CC BY-SA 3.0\nWin98 look based on 98.css (MIT).";
-
 export function startIde(backend: Backend, root: HTMLElement = document.getElementById('app') ?? document.body): Ide {
   const state = new IdeState(newProject());
   const layout = buildLayout(root);
@@ -46,7 +43,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     viewProjectExplorer: () => { layout.setPaneVisible('project', true); explorer?.focus(); },
     viewProperties: () => { layout.setPaneVisible('properties', true); propsWin?.focus(); },
     viewToolbox: () => layout.setPaneVisible('toolbox', true),
-    about: () => { void messageBox98(doc, { prompt: ABOUT_TEXT, title: 'About VibeBasic', buttons: vbOK }); },
+    about: () => { void showAbout(doc); },
   };
   const menus = buildMenus(actions, state);
   let refresh = () => {};

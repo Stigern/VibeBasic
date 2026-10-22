@@ -137,12 +137,12 @@ test('read-only during run, title follows mode', async () => {
   expect(view.state.readOnly).toBe(false);
   await app.run.start(false);
   expect(app.state.mode).toBe('run');
-  expect(be.titles.at(-1)).toBe('Project1 - VibeBasic [run]');
+  expect(be.titles.at(-1)).toBe(`Project1 - VibeBasic ${__APP_VERSION__} [run]`);
   expect(root.querySelector('.pw98-editor')?.hasAttribute('disabled')).toBe(true);
   expect(view.state.readOnly).toBe(true);
   expect(root.querySelector('.tbx98-grid')?.classList.contains('tbx98-locked')).toBe(true);
   app.run.end();
-  expect(be.titles.at(-1)).toBe('Project1 - VibeBasic [design]');
+  expect(be.titles.at(-1)).toBe(`Project1 - VibeBasic ${__APP_VERSION__} [design]`);
   expect(view.state.readOnly).toBe(false);
 });
 

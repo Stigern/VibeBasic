@@ -156,3 +156,9 @@ input[type=text], textarea { cursor: text; }
 .tabs98-tab:focus { outline: 1px dotted #000; outline-offset: -4px; }
 .tabs98-panel { position: relative; z-index: 2; padding: 8px; background: var(--w98-face); box-shadow: var(--w98-window); }
 .dlg98-filelist { box-sizing: border-box; width: 260px; height: 80px; margin-top: 8px; background: #fff; box-shadow: var(--w98-sunken); padding: 2px; overflow: auto; }
+.about98 { width: 360px; }
+.about98-title { font-weight: bold; font-size: 16px; margin-bottom: 4px; }
+.about98-text { white-space: pre-wrap; line-height: 13px; margin: 6px 0; user-select: text; -webkit-user-select: text; }
+.about98-log { box-sizing: border-box; width: 360px; height: 200px; margin-top: 4px; background: #fff; box-shadow: var(--w98-sunken); padding: 4px; overflow: auto; line-height: 13px; user-select: text; -webkit-user-select: text; cursor: text; }
+.about98-log .l { white-space: pre-wrap; min-height: 13px; }
+.about98-log .l.b { font-weight: bold; margin-top: 4px; }

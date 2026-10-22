@@ -60,7 +60,7 @@ test('startIde builds shell: toolbox, toolbar, designer window, immediate hidden
   const be = new BrowserBackend();
   const title = vi.spyOn(be, 'setWindowTitle');
   const ide = startIde(be, root);
-  expect(title).toHaveBeenCalledWith('Project1 - VibeBasic [design]');
+  expect(title).toHaveBeenCalledWith(`Project1 - VibeBasic ${__APP_VERSION__} [design]`);
   expect(root.querySelectorAll('.tbx98-btn').length).toBe(24);
   expect(root.querySelectorAll('.tb98-tool').length).toBe(14);
   expect(root.querySelector('.ide98-mdi .vb-form')).not.toBeNull();
