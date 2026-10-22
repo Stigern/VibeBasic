@@ -1,6 +1,7 @@
 // The nine VB6 menus. Items call named IdeActions; an item without a registered action is disabled, so later
 // tasks only have to add `ide.actions.<name> = ...` for their feature to light up its menu item.
 import type { MenuDef, MenuItem } from '../ui98/menubar';
+import { clipboardHasControls } from './clipboard';
 import type { IdeState } from './ideState';
 
 export type IdeAction = (...args: any[]) => void;
@@ -19,6 +20,35 @@ export const ACTION_NAMES = [
   'askAi', 'options', 'about',
 ] as const;
 export type IdeActionName = (typeof ACTION_NAMES)[number];
+
+export type EditCommand = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll';
+
+/**
+ * Enabled state of the Edit commands (menu and toolbar). Cut / Copy / Delete need a selection (selected controls in the
+ * designer, selected text in code); Paste needs controls on the designer clipboard, or is always on in code (the system
+ * clipboard cannot be read cheaply). Without an IdeState everything is enabled.
+ */
+export function editEnabled(state: IdeState | undefined, cmd: EditCommand): boolean {
+  if (!state) return true;
+  const v = state.activeView;
+  const editable = state.mode === 'design';
+  if (v.kind === 'code') {
+    switch (cmd) {
+      case 'copy': return state.codeHasSelection;
+      case 'cut': case 'delete': return editable && state.codeHasSelection;
+      case 'paste': return editable;
+      case 'selectAll': return true;
+    }
+  }
+  if (v.kind === 'designer' && editable) {
+    switch (cmd) {
+      case 'cut': case 'copy': case 'delete': return state.selection?.formId === v.formId && state.selection.ids.length > 0;
+      case 'paste': return clipboardHasControls();
+      case 'selectAll': return true;
+    }
+  }
+  return false;
+}
 
 export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
   const projectName = () => state?.project.name ?? 'Project1';
@@ -56,14 +86,14 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
       mk('Undo', 'undo', 'Ctrl+Z', () => design() && (state?.activeView.kind === 'code' || (state?.stack.canUndo ?? true))),
       mk('Redo', 'redo', 'Ctrl+Y', () => design() && (state?.activeView.kind === 'code' || (state?.stack.canRedo ?? true))),
       sep(),
-      mk('Cut', 'cut', 'Ctrl+X'),
-      mk('Copy', 'copy', 'Ctrl+C'),
-      mk('Paste', 'paste', 'Ctrl+V'),
-      mk('Delete', 'delete', 'Del'),
+      mk('Cut', 'cut', 'Ctrl+X', () => editEnabled(state, 'cut')),
+      mk('Copy', 'copy', 'Ctrl+C', () => editEnabled(state, 'copy')),
+      mk('Paste', 'paste', 'Ctrl+V', () => editEnabled(state, 'paste')),
+      mk('Delete', 'delete', 'Del', () => editEnabled(state, 'delete')),
       sep(),
-      mk('Select All', 'selectAll', 'Ctrl+A'),
+      mk('Select All', 'selectAll', 'Ctrl+A', () => editEnabled(state, 'selectAll')),
       sep(),
-      mk('Find...', 'find', 'Ctrl+F'),
+      mk('Find...', 'find', 'Ctrl+F', () => state?.activeView.kind === 'code' || !state),
     ] },
     { label: 'View', items: [
       mk('Code', 'viewCode', 'F7'),

@@ -3,7 +3,7 @@
 // marks it red and shows the compile error box. Edits write form.code / module.code and mark the project dirty.
 import { Annotation, Compartment, EditorState, StateEffect, StateField, type Extension, type Transaction } from '@codemirror/state';
 import { Decoration, EditorView, GutterMarker, gutter, keymap, type DecorationSet } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap, insertNewlineKeepIndent, insertTab, indentLess, undo, redo } from '@codemirror/commands';
+import { defaultKeymap, history, historyKeymap, insertNewlineKeepIndent, insertTab, indentLess, undo, redo, deleteCharForward } from '@codemirror/commands';
 import { acceptCompletion, autocompletion } from '@codemirror/autocomplete';
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search';
 import { tokenize } from '../lang/lexer';
@@ -148,12 +148,54 @@ export function getCodeWindow(ide: IdeState, itemId: string): CodeWindow | null 
   return windows.get(ide)?.get(itemId) ?? null;
 }
 
+// ---- clipboard / edit commands on an EditorView (context menu, Edit menu and toolbar) --------------------------------
+const clip = (): Clipboard | undefined => (globalThis.navigator as Navigator | undefined)?.clipboard;
+const selectedText = (v: EditorView): string => { const r = v.state.selection.main; return v.state.sliceDoc(r.from, r.to); };
+
+export async function editCopy(v: EditorView): Promise<void> {
+  const t = selectedText(v);
+  if (!t) { v.focus(); return; }
+  const c = clip();
+  let done = false;
+  if (c?.writeText) { try { await c.writeText(t); done = true; } catch { /* fall back */ } }
+  v.focus();
+  if (!done) v.dom.ownerDocument.execCommand?.('copy');
+}
+export async function editCut(v: EditorView): Promise<void> {
+  if (v.state.readOnly || !selectedText(v)) { v.focus(); return; }
+  await editCopy(v);
+  v.dispatch(v.state.replaceSelection(''));
+  v.focus();
+}
+export async function editPaste(v: EditorView): Promise<void> {
+  if (v.state.readOnly) { v.focus(); return; }
+  const c = clip();
+  if (c?.readText) {
+    try { const t = await c.readText(); v.dispatch(v.state.replaceSelection(norm(t))); v.focus(); return; } catch { /* fall back */ }
+  }
+  v.focus();
+  v.dom.ownerDocument.execCommand?.('paste');
+}
+export function editDelete(v: EditorView): void {
+  if (!v.state.readOnly) deleteCharForward(v);
+  v.focus();
+}
+export function editSelectAll(v: EditorView): void {
+  v.dispatch({ selection: { anchor: 0, head: v.state.doc.length } });
+  v.focus();
+}
+
 export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): CodeWindow {
   if (env) envs.set(ide, env);
   let reg = windows.get(ide);
   if (!reg) windows.set(ide, reg = new Map());
   const existing = reg.get(itemId);
-  if (existing) { existing.win.activate(); ide.setActiveView({ kind: 'code', itemId }); return existing; }
+  if (existing) {
+    existing.win.activate();
+    ide.setActiveView({ kind: 'code', itemId });
+    (existing as CodeWindow & { view: EditorView }).view.focus();
+    return existing;
+  }
   const item0 = itemOf(ide, itemId);
   if (!item0) throw new Error(`Code item not found: ${itemId}`);
   const host = (envs.get(ide) ?? (() => { const e = { mdiHost: document.body.appendChild(h('div')) }; envs.set(ide, e); return e; })()).mdiHost;
@@ -266,12 +308,18 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     if (err) void compileErrorBox(v.dom.ownerDocument, err.message).then(() => v.focus());
   }
 
+  /** Tells the IDE (menu / toolbar enabled state) whether this window's editor has a selection. */
+  const syncSelection = (v: EditorView) => {
+    const a = ide.activeView;
+    if (a.kind === 'code' && a.itemId === itemId) ide.setCodeSelection(!v.state.selection.main.empty);
+  };
   function onTransaction(tr: Transaction, v: EditorView): void {
     if (tr.docChanged && !tr.annotation(EXTERNAL)) {
       const it = item();
       if (it) { it.code = src(); ide.stack.markDirtyExternal(); }
     }
     if (!tr.docChanged && !tr.selection && !tr.annotation(EXTERNAL)) return;
+    syncSelection(v);
     const head = v.state.selection.main.head;
     const was = tr.annotation(INTERNAL) || tr.annotation(EXTERNAL) ? null : tr.changes.mapPos(prevHead, -1);
     const before = was === null ? null : v.state.doc.lineAt(Math.min(was, v.state.doc.length)).number;
@@ -305,31 +353,8 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   view = new EditorView({ state, parent: editorEl, dispatch: (tr, v) => { v.update([tr]); onTransaction(tr, v); } });
   syncCombos();
   // Right-click: Cut / Copy / Paste / Select All (+ Ask AI... in design mode); Copy and Select All only in run/break mode.
-  const selected = () => { const r = view.state.selection.main; return view.state.sliceDoc(r.from, r.to); };
-  const clip = (): Clipboard | undefined => (globalThis.navigator as Navigator | undefined)?.clipboard;
-  const copy = async (): Promise<void> => {
-    const t = selected();
-    if (!t) return;
-    const c = clip();
-    if (c?.writeText) { try { await c.writeText(t); return; } catch { /* fall back */ } }
-    view.focus();
-    editorEl.ownerDocument.execCommand?.('copy');
-  };
-  const cut = async (): Promise<void> => {
-    if (!selected()) return;
-    await copy();
-    view.dispatch(view.state.replaceSelection(''));
-    view.focus();
-  };
-  const paste = async (): Promise<void> => {
-    const c = clip();
-    if (c?.readText) {
-      try { const t = await c.readText(); view.dispatch(view.state.replaceSelection(norm(t))); view.focus(); return; } catch { /* fall back */ }
-    }
-    view.focus();
-    editorEl.ownerDocument.execCommand?.('paste');
-  };
-  const selectAll = () => { view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } }); view.focus(); };
+  const copy = () => editCopy(view), cut = () => editCut(view), paste = () => editPaste(view);
+  const selectAll = () => editSelectAll(view);
   editorEl.addEventListener('contextmenu', e => {
     e.preventDefault();
     const askAi = envs.get(ide)?.actions?.askAi;
@@ -342,7 +367,7 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   });
 
   // ---- window / model sync -----------------------------------------------------------------------------------------
-  const setActive = () => ide.setActiveView({ kind: 'code', itemId });
+  const setActive = () => { ide.setActiveView({ kind: 'code', itemId }); if (view) syncSelection(view); };
   win.el.addEventListener('focusin', setActive);
   win.el.addEventListener('mousedown', setActive);
   const onProject = () => {
@@ -350,7 +375,7 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     if (!it) { win.close(); return; }
     win.setTitle(title());
     const code = norm(it.code), cur = src();
-    if (code !== cur && !view.hasFocus) {
+    if (code !== cur) {
       let s = 0;
       while (s < code.length && s < cur.length && code[s] === cur[s]) s++;
       let e = 0;
@@ -415,6 +440,7 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   (api as CodeWindow & { view: EditorView }).view = view;
   reg.set(itemId, api);
   setActive();
+  view.focus();
   return api;
 }
 
@@ -446,6 +472,14 @@ export function registerCodeActions(ide: IdeState, actions: IdeActions, env: Cod
   for (const [name, cmd] of [['undo', undo], ['redo', redo]] as const) {
     const prev = actions[name];
     actions[name] = (...a: unknown[]) => { const v = viewOf(); if (v) cmd(v); else prev?.(...a); };
+  }
+  // Edit commands: one dispatcher per action; the active code window's editor wins, else the designer's handler
+  const edits: [string, (v: EditorView) => unknown][] = [
+    ['cut', editCut], ['copy', editCopy], ['paste', editPaste], ['delete', editDelete], ['selectAll', editSelectAll],
+  ];
+  for (const [name, fn] of edits) {
+    const prev = actions[name];
+    actions[name] = (...a: unknown[]) => { const v = viewOf(); if (v) void fn(v); else prev?.(...a); };
   }
   actions.find = () => {
     const v = viewOf();

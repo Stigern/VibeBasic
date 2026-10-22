@@ -5,7 +5,7 @@ import { newProject } from '../model/controls';
 import type { ControlType, Project } from '../model/types';
 
 export type ActiveView = { kind: 'designer'; formId: string } | { kind: 'code'; itemId: string } | { kind: 'none' };
-export type IdeEvent = 'project' | 'selection' | 'activeView' | 'mode' | 'options' | 'tool' | 'closeWindows';
+export type IdeEvent = 'project' | 'selection' | 'activeView' | 'mode' | 'options' | 'tool' | 'closeWindows' | 'codeSelection';
 export interface IdeOptions {
   autoSyntaxCheck: boolean; requireVariableDeclaration: boolean;
   showGrid: boolean; gridWidth: number; gridHeight: number; alignToGrid: boolean;
@@ -23,6 +23,8 @@ export class IdeState {
   /** Empty `ids` means the form itself. */
   selection: { formId: string; ids: string[] } | null = null;
   activeView: ActiveView = { kind: 'none' };
+  /** True while the active code window has a non-empty text selection (Edit > Cut / Copy / Delete). */
+  codeHasSelection = false;
   currentTool: ControlType | 'Pointer' = 'Pointer';
   /** Plan 03 sets run / break. */
   mode: 'design' | 'run' | 'break' = 'design';
@@ -71,6 +73,7 @@ export class IdeState {
   }
   setSelection(sel: { formId: string; ids: string[] } | null): void { this.selection = sel; this.emit('selection'); }
   setActiveView(v: ActiveView): void { this.activeView = v; this.emit('activeView'); }
+  setCodeSelection(has: boolean): void { if (this.codeHasSelection === has) return; this.codeHasSelection = has; this.emit('codeSelection'); }
   setMode(m: 'design' | 'run' | 'break'): void { this.mode = m; this.emit('mode'); }
   setBusy(b: boolean): void { this.busy = b; this.emit('mode'); }
   /** Selecting a tool; `Pointer` resets. */

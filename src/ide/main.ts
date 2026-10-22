@@ -2,9 +2,9 @@
 import type { Backend } from '../backend/backend';
 import { newProject } from '../model/controls';
 import { bindShortcuts, createMenubar } from '../ui98/menubar';
-import { createToolbar, type ToolbarItem } from '../ui98/toolbar';
+import { createToolbar } from '../ui98/toolbar';
+import { buildToolbarItems, createReadouts } from './toolbarItems';
 import { showAbout } from './aboutDialog';
-import { TOOLBAR_ICONS } from './icons/toolbarIcons';
 import { IdeState, OPTION_EXPLICIT, type IdeOptions } from './ideState';
 import { buildLayout, type IdeLayout } from './layout';
 import { buildMenus, type IdeActions } from './menus';
@@ -85,18 +85,8 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   actions.restart = () => { void rc.restart(); };
   const menubar = createMenubar(layout.menubarHost, menus);
 
-  const tb = (icon: string, title: string, name: string, pred?: () => boolean): ToolbarItem => ({
-    icon: TOOLBAR_ICONS[icon], title, action: () => actions[name]?.(), enabled: () => !!actions[name] && (pred ? pred() : true),
-  });
-  const sep: ToolbarItem = { separator: true };
-  const toolbar = createToolbar(layout.toolbarHost, [
-    tb('new', 'New Project', 'newProject', () => state.mode === 'design'), tb('open', 'Open Project', 'openProject', () => state.mode === 'design'), tb('save', 'Save Project', 'saveProject'), sep,
-    tb('cut', 'Cut', 'cut'), tb('copy', 'Copy', 'copy'), tb('paste', 'Paste', 'paste'), sep,
-    tb('undo', 'Undo', 'undo', () => state.mode === 'design' && (state.activeView.kind === 'code' || state.stack.canUndo)), tb('redo', 'Redo', 'redo', () => state.mode === 'design' && (state.activeView.kind === 'code' || state.stack.canRedo)), sep,
-    tb('start', 'Start', 'start', () => !state.busy && state.mode !== 'run'), tb('break', 'Break', 'break', () => state.mode === 'run'), tb('end', 'End', 'end', () => state.mode !== 'design'), sep,
-    tb('projectExplorer', 'Project Explorer', 'viewProjectExplorer'), tb('properties', 'Properties Window', 'viewProperties'),
-    tb('toolbox', 'Toolbox', 'viewToolbox'),
-  ]);
+  const toolbar = createToolbar(layout.toolbarHost, buildToolbarItems(actions, state));
+  const readouts = createReadouts(layout.toolbarHost, state);
   createToolbox(layout.toolboxHost, state);
   const tbxPane = layout.panes.toolbox.el;
   const toolboxWin = attachToolboxWindow({
@@ -108,12 +98,13 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   propsWin = createPropertiesWindow(layout.propertiesHost, state, { backend });
   bindShortcuts(menus, window);
 
-  refresh = () => { menubar.refresh(); toolbar.refresh(); };
+  refresh = () => { menubar.refresh(); toolbar.refresh(); readouts.refresh(); };
   const updateTitle = () => fc.updateTitle();
   state.on('project', () => { refresh(); updateTitle(); });
   state.on('mode', () => { refresh(); updateTitle(); });
   state.on('selection', () => refresh());
   state.on('activeView', () => refresh());
+  state.on('codeSelection', () => refresh());   // only fires when selected / not selected flips, so no throttle is needed
   updateTitle();
   // Saved IDE options (async; the defaults apply until they arrive)
   void backend.loadSettings<Partial<IdeOptions>>('ide').then(o => {

@@ -62,7 +62,7 @@ test('startIde builds shell: toolbox, toolbar, designer window, immediate hidden
   const ide = startIde(be, root);
   expect(title).toHaveBeenCalledWith(`Project1 - VibeBasic ${__APP_VERSION__} [design]`);
   expect(root.querySelectorAll('.tbx98-btn').length).toBe(24);
-  expect(root.querySelectorAll('.tb98-tool').length).toBe(14);
+  expect(root.querySelectorAll('.tb98-tool').length).toBe(18);
   expect(root.querySelector('.ide98-mdi .vb-form')).not.toBeNull();
   expect(root.querySelector('.ide98-mdi .mdi98 > .title-bar .title-bar-text')!.textContent).toBe('Project1 - Form1 (Form)');
   expect(ide.layout.isPaneVisible('immediate')).toBe(false);
