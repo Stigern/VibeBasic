@@ -67,15 +67,18 @@ describe('combo', () => {
     document.body.appendChild(c.el);
     expect(c.getValue()).toBe('B');
     expect(c.el.querySelector('input')!.value).toBe('B');
-    expect(c.el.querySelector('.cb98-list')).toBeNull();
+    expect(c.list).toBeNull();
     (c.el.querySelector('.cb98-arrow') as HTMLElement).click();
-    const rows = [...c.el.querySelectorAll<HTMLElement>('.cb98-item')];
+    expect(c.list!.closest('.popup98-layer')!.parentElement).toBe(document.body);   // body-level layer, not inside the combo
+    expect(c.el.contains(c.list)).toBe(false);
+    const rows = [...c.list!.querySelectorAll<HTMLElement>('.cb98-item')];
     expect(rows.map(r => r.textContent)).toEqual(['A', 'B', 'C']);
     expect(rows[1].classList.contains('selected')).toBe(true);
     rows[2].dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     expect(onChange).toHaveBeenCalledWith('C');
     expect(c.getValue()).toBe('C');
-    expect(c.el.querySelector('.cb98-list')).toBeNull();
+    expect(c.list).toBeNull();
+    expect(document.querySelector('.cb98-list')).toBeNull();
   });
   test('setItems/setValue; non-editable input is readonly', () => {
     const c = createCombo({ items: ['A'] });
@@ -91,7 +94,7 @@ describe('combo', () => {
     const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
     input.dispatchEvent(ev);
     expect(ev.defaultPrevented).toBe(true);
-    expect(c.el.querySelector('.cb98-list')).toBeNull();
+    expect(c.list).toBeNull();
     const ev2 = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
     input.dispatchEvent(ev2);
     expect(ev2.defaultPrevented).toBe(false);
