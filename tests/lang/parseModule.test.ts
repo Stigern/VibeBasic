@@ -111,7 +111,12 @@ describe('module structure', () => {
     expect(err('Function F()\nx = 1')).toBe('Expected: End Function');
     expect(err('Sub A()\nEnd Function')).toBe('Expected: End Sub');
   });
-  test('Sub inside Sub', () => expect(berr('Sub B()')).toBe('Invalid inside procedure'));
+  test('missing End Sub before the next procedure', () => {
+    expect(err('Sub A()\nx = 1\nSub B()\nEnd Sub')).toBe('Expected: End Sub');
+    expect(err('Function F()\nx = 1\nPrivate Sub B()\nEnd Sub')).toBe('Expected: End Function');
+    expect(err('Sub A()\nx = 1\nPublic Function B()\nEnd Function')).toBe('Expected: End Sub');
+    expect(berr('Type T')).toBe('Invalid inside procedure');
+  });
   test('missing identifier / paren', () => {
     expect(err('Sub (x)\nEnd Sub')).toBe('Expected: identifier');
     expect(err('Sub A(x\nEnd Sub')).toBe('Expected: )');
@@ -387,13 +392,18 @@ describe('syntax errors', () => {
     expect(berr('For i = 1 To 2\nIf x Then\nNext i\nEnd If')).toBe('Block If without End If');
   });
   test('error positions', () => {
-    try { parseModule('Sub A()\nx = 1 2\nEnd Sub', 'M'); } catch (e) {
-      expect(e).toBeInstanceOf(VBSyntaxError);
-      expect([(e as VBSyntaxError).line, (e as VBSyntaxError).col]).toEqual([2, 7]);
-    }
-    try { parseModule('Sub A()\nIf x Then\nEnd Sub', 'M'); } catch (e) {
-      expect((e as VBSyntaxError).line).toBe(2);
-    }
+    const at = (src: string) => {
+      try { parseModule(src, 'M'); } catch (e) { return [(e as VBSyntaxError).line, (e as VBSyntaxError).col]; }
+      throw new Error('expected a syntax error');
+    };
+    expect(at('Sub A()\nx = 1 2\nEnd Sub')).toEqual([2, 7]);
+    expect(at('Sub A()\nIf x Then\nEnd Sub')[0]).toBe(2);
+    expect(at('Sub A()\nx = 1\nSub B()\nEnd Sub')[0]).toBe(3);
+  });
+  test('Next with more names than open loops', () => {
+    expect(berr('For j = 1 To 2\nNext j, i')).toBe('Next without For');
+    expect(berr('Next j, i')).toBe('Next without For');
+    expect(berr('For i = 1 To 2\nFor j = 1 To 2\nNext j, i, k')).toBe('Next without For');
   });
   test('missing Then', () => expect(berr('If x\nEnd If')).toBe('Expected: Then'));
   test('missing To', () => expect(berr('For i = 1\nNext')).toBe('Expected: To'));
@@ -485,4 +495,25 @@ describe('findSyntaxErrors', () => {
     expect(e).toBeInstanceOf(VBSyntaxError); expect(e.col).toBe(7);
   });
   test('missing End Sub at eof', () => expect(lines('Sub A()\nx = 1')).toEqual([[2, 'Expected: End Sub']]));
+  test('missing End Sub before the next procedure reports once', () => {
+    expect(lines('Sub A()\nx = 1\nSub B()\nEnd Sub')).toEqual([[3, 'Expected: End Sub']]);
+  });
+  test('Next with more names than open loops terminates', () => {
+    expect(lines('Sub A()\nFor j=1 To 2\nNext j, i\nEnd Sub')).toEqual([[3, 'Next without For']]);
+    expect(lines('Sub A()\nNext j, i\nEnd Sub')).toEqual([[2, 'Next without For']]);
+    expect(lines('Sub A()\nFor i = 1 To 2\nFor j = 1 To 2\nNext j, i, k\nEnd Sub')).toEqual([[2, 'For without Next'], [4, 'Next without For']]);
+  });
+  test.each([
+    'Sub A()\nNext i, j, k\nNext',
+    'Sub A()\nFor i = 1 To 2\nIf x Then\nNext i, j\nEnd If\nEnd Sub',
+    'Sub A()\nDo\nFor i = 1 To 2\nLoop\nNext i, j\nEnd Sub',
+    'Sub A()\nWith x\nSelect Case y\nEnd With\nEnd Sub',
+    'Sub A()\nIf x Then\nElse\nElse\nEnd If\nEnd Sub',
+    'Sub A()\nFor Each a In b\nNext a, b, c\nFor i = 1 To 2: Next i, j\nEnd Sub',
+    'Sub A(\nEnd Sub\nSub B()\nSub C()',
+    'Type T\nX As\nEnum E\nA = \nEnd Enum',
+    'End Sub\nEnd If\nNext\nLoop\nWend',
+  ])('terminates on malformed input %#', src => {
+    expect(() => findSyntaxErrors(src, 'M')).not.toThrow();
+  });
 });

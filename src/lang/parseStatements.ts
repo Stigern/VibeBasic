@@ -161,7 +161,7 @@ export class StatementParser extends Parser {
 
   /** The closer keyword at the cursor (a statement start), or null. */
   private closerAt(): Closer | null {
-    if (this.nextQueue.length > 0) return 'next';
+    if (this.nextQueue.length > 0 && (this.lineMode || this.forDepth > 0)) return 'next';
     const t = this.peek();
     if (t.kind !== 'keyword') return null;
     const w = lower(t);
@@ -183,13 +183,16 @@ export class StatementParser extends Parser {
   // ---- blocks and statements ----
 
   private inProc = false;
+  private procKind: 'sub' | 'function' = 'sub';
+  /** Number of `For` loops whose body is being parsed; queued `Next j, i` names are only drained while one is open. */
+  private forDepth = 0;
 
   /** Parses statements until a closer or eof; the closer is not consumed. */
   private block(): { body: Stmt[]; closer: Closer | null } {
     const body: Stmt[] = [];
     for (;;) {
       // `Next j, i`: the remaining names close the enclosing loops, before any line break is skipped
-      if (this.nextQueue.length > 0) return { body, closer: 'next' };
+      if (this.nextQueue.length > 0 && this.forDepth > 0) return { body, closer: 'next' };
       this.skipSeparators();
       if (this.peek().kind === 'eof') return { body, closer: null };
       const closer = this.closerAt();
@@ -301,6 +304,10 @@ export class StatementParser extends Parser {
         return this.fail('Invalid inside procedure');
       case 'private': case 'public': case 'sub': case 'function': case 'type': case 'enum':
         if (this.lineMode) { this.moduleItem(null); return { kind: 'end', line: t.line }; }
+        // a procedure header inside a procedure: the open one is missing its End
+        if (w === 'sub' || w === 'function' || ((w === 'private' || w === 'public') && (this.isKeyword('sub', 1) || this.isKeyword('function', 1)))) {
+          return this.fail(this.procKind === 'sub' ? 'Expected: End Sub' : 'Expected: End Function');
+        }
         return this.fail('Invalid inside procedure');
       case 'me': case 'date': case 'string': case 'error': case 'empty': case 'null':
         return this.assignOrCall();
@@ -675,7 +682,10 @@ export class StatementParser extends Parser {
   }
 
   private forBody(s: Stmt & { body: Stmt[] }, forTok: Token, varName: string): void {
-    const { body, closer } = this.block();
+    this.forDepth++;
+    let result: { body: Stmt[]; closer: Closer | null };
+    try { result = this.block(); } finally { this.forDepth--; }
+    const { body, closer } = result;
     s.body = body;
     if (closer === 'next') this.consumeNext(varName);
     else this.unclosedBlock('For without Next', forTok);
@@ -697,6 +707,8 @@ export class StatementParser extends Parser {
       }
       name = names.shift();
       this.nextQueue = names;
+      // more names than open loops (`Next j, i` with one For): the extra ones close nothing
+      if (!this.lineMode && names.length > this.forDepth) { this.nextQueue = []; this.fail('Next without For', tok); }
     }
     if (varName !== undefined && name !== undefined && stripSuffix(name) !== stripSuffix(varName)) {
       this.nextQueue = [];
@@ -982,6 +994,8 @@ export class StatementParser extends Parser {
 
     const savedInProc = this.inProc;
     this.inProc = true;
+    this.procKind = kind;
+    this.forDepth = 0;
     this.nextQueue = [];
     const endCloser: Closer = kind === 'sub' ? 'end sub' : 'end function';
     const endName = kind === 'sub' ? 'End Sub' : 'End Function';
