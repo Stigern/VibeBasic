@@ -5,8 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VibeBasic Form</title>
     <link rel="stylesheet" href="/src/ui98/theme.css" />
+    <style>
+      html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #c0c0c0; }
+      #form { width: 100vw; height: 100vh; overflow: hidden; }
+      /* dialog windows: the Win98 dialog fills the window from the top left, the window is sized to it */
+      body.vb-dialog-window .dlg98-overlay { display: block; }
+      body.vb-dialog-window .dlg98 { width: max-content; max-width: none; margin: 0; box-shadow: var(--w98-window); }
+    </style>
   </head>
   <body>
     <div id="form"></div>
+    <script type="module" src="/src/run/formWindowMain.ts"></script>
   </body>
 </html>

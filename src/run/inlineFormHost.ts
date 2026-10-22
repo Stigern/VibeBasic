@@ -2,9 +2,9 @@
 // (browser, tests). Dialogs are the plan 02 Win98 dialogs in the same document.
 
 import { formMetrics } from '../controls/render';
-import { inputBox98, messageBox98, messageContent, showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
-import { runtimeErrorContent } from './errorDialog';
+import { runDialog } from './dialogSpec';
+import type { RuntimeErrorInfo } from './errorDialog';
 import type { FormHost, FormWindow } from './formHost';
 import { mountFormWindow } from './formWindow';
 import type { FormSnapshot, FromWindow } from './protocol';
@@ -64,21 +64,14 @@ export class InlineFormHost implements FormHost {
   }
 
   messageBox(o: { prompt: string; title: string; buttons: number }): Promise<number> {
-    return this.withDialog(() => messageBox98(this.doc, o));
+    return this.withDialog(() => runDialog(this.doc, { kind: 'msgbox', ...o })) as Promise<number>;
   }
 
   inputBox(o: { prompt: string; title: string; defaultText: string }): Promise<string> {
-    return this.withDialog(() => inputBox98(this.doc, o));
+    return this.withDialog(() => runDialog(this.doc, { kind: 'input', ...o })) as Promise<string>;
   }
 
-  async runtimeErrorBox(o: { number: number; description: string; compile: boolean; mode: 'ide' | 'app'; title: string }): Promise<'end' | 'debug'> {
-    const c = runtimeErrorContent(o);
-    const defIdx = o.mode === 'ide' && !o.compile ? c.buttons.findIndex(b => b.value === 'debug') : 0;
-    const v = await this.withDialog(() => showDialog98(this.doc, {
-      title: c.title,
-      content: messageContent(c.text, o.compile ? 'exclamation' : undefined),
-      buttons: c.buttons.map((b, i) => ({ label: b.label, value: b.value, disabled: b.disabled, default: i === defIdx })),
-    }));
-    return v === 'debug' ? 'debug' : 'end';
+  runtimeErrorBox(o: RuntimeErrorInfo): Promise<'end' | 'debug'> {
+    return this.withDialog(() => runDialog(this.doc, { kind: 'error', info: o })) as Promise<'end' | 'debug'>;
   }
 }
