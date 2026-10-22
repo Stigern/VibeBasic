@@ -6,6 +6,7 @@ import type { Backend } from '../backend/backend';
 import { addAssetCmd, removeAssetCmd, setPropertyCmd, type Command } from '../model/commands';
 import type { PropDef } from '../model/controls';
 import { newId } from '../model/controls';
+import { assetUsedElsewhere } from '../model/assetRefs';
 import { listImageLine, parseListImage } from '../model/imageList';
 import type { Asset, ControlType, FormDef, Project, PropValue } from '../model/types';
 import { createCombo } from '../ui98/combo';
@@ -141,11 +142,13 @@ async function editListImages(env: CustomEditorEnv): Promise<void> {
   if (JSON.stringify(lines) === JSON.stringify(oldLines)) return;
   const kept = new Set(items.map(i => i.asset));
   const extra: Command[] = items.filter(i => i.pending).map(i => addAssetCmd(i.asset, i.pending!));
-  // a removed picture's asset goes too, unless something else (a pasted copy of this ImageList) still names it
-  const json = JSON.stringify(project.forms);
+  // a removed picture's asset goes too, unless something else (a pasted copy of this ImageList, a Picture property) still names it
+  const dropped = new Set<string>();
   for (const l of oldLines) {
     const a = parseListImage(l).asset;
-    if (a && !kept.has(a) && a in project.assets && json.split(JSON.stringify(a)).length - 1 <= 1) extra.push(removeAssetCmd(a));
+    if (!a || kept.has(a) || dropped.has(a) || !(a in project.assets)) continue;
+    const own = oldLines.filter(o => parseListImage(o).asset === a).length;   // this ImageList's own lines, about to go
+    if (!assetUsedElsewhere(project, a, own)) { dropped.add(a); extra.push(removeAssetCmd(a)); }
   }
   env.apply(lines, extra);
 }

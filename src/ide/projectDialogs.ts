@@ -1,5 +1,6 @@
 // Project Properties and Project > Components dialogs, and the shared tabbed-dialog runner (also used by Options).
 import { getBackend } from '../backend/backend';
+import { assetUsedElsewhere } from '../model/assetRefs';
 import { addAssetCmd, compositeCmd, removeAssetCmd, setProjectFieldCmd, setProjectIconCmd, type Command } from '../model/commands';
 import { availableComponents, componentDef, componentInUse, componentLocation, normalizeComponents, setComponentsCmd } from '../model/components';
 import { newId } from '../model/controls';
@@ -46,11 +47,6 @@ export const field = (label: string, control: HTMLElement): HTMLElement => h('la
 
 /** Extra tabs for Project Properties. Plan 04 pushes a builder for the "Make" tab here. */
 export const projectPropertiesTabs: DialogTabBuilder[] = [];
-
-/** True when a form or module still refers to the asset (the project icon is not counted). */
-function assetUsedElsewhere(p: Project, id: string): boolean {
-  return JSON.stringify([p.forms, p.modules]).includes(`"asset":${JSON.stringify(id)}`);
-}
 
 /** Make tab: the icon of made apps. Stored in project.assets / project.iconAsset, one undo step. */
 function makeTab(ide: IdeState, doc: Document = document): DialogTab {

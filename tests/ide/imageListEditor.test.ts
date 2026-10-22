@@ -80,3 +80,25 @@ test('renaming an ImageList updates the controls that use it, in the same undo s
   ide.stack.undo();
   expect(props()).toEqual([['imlA', undefined, undefined, undefined], ['Toolbar1', 'imlA', undefined, undefined], ['ListView1', undefined, 'IMLA', 'other']]);
 });
+
+test('removing a picture keeps its asset while a pasted copy of the ImageList still uses it', async () => {
+  const il1 = add('ImageList', 'ImageList1');
+  const il2 = add('ImageList', 'ImageList2');
+  ide.project.assets['asset-shared'] = { mime: 'image/png', dataBase64: 'AQID' };
+  ide.project.assets['asset-own'] = { mime: 'image/png', dataBase64: 'BAUG' };
+  const live = (id: string) => form().controls.find(c => c.id === id)!;
+  live(il1.id).props.ListImages = ['a|asset-shared|', 'b|asset-own|'];
+  live(il2.id).props.ListImages = ['a|asset-shared|'];
+  ide.setSelection({ formId: form().id, ids: [il1.id] });
+  rowEl('ListImages').click();
+  (rowEl('ListImages').querySelector('button') as HTMLElement).click();
+  const dlg = () => document.querySelector('.dlg98') as HTMLElement;
+  const btn = (label: string) => [...dlg().querySelectorAll('button')].find(b => b.textContent === label) as HTMLElement;
+  btn('Remove Picture').click();   // the first one: shared with ImageList2
+  btn('Remove Picture').click();   // the second one: only ImageList1's
+  expect(dlg().querySelectorAll('.il98-item').length).toBe(0);
+  btn('OK').click(); await flush();
+  expect(live(il1.id).props.ListImages).toEqual([]);
+  expect(ide.project.assets['asset-shared']).toBeDefined();
+  expect(ide.project.assets['asset-own']).toBeUndefined();
+});

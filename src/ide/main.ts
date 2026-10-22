@@ -62,9 +62,11 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   };
   actions.newProject = () => { if (state.mode === 'design') void fc.newProject(); };
   actions.openProject = () => { if (state.mode === 'design') void fc.open(); };
-  actions.saveProject = () => { void fc.save(); };
-  actions.saveProjectAs = () => { void fc.saveAs(); };
-  actions.makeApp = () => { if (state.mode === 'design') void makeAppFlow(state, backend); };
+  // a value typed in the Properties window but not yet entered goes into the project first (false: it was invalid)
+  const committed = (): boolean => propsWin?.commitPendingEdit() ?? true;
+  actions.saveProject = () => { if (committed()) void fc.save(); };
+  actions.saveProjectAs = () => { if (committed()) void fc.saveAs(); };
+  actions.makeApp = () => { if (state.mode === 'design' && committed()) void makeAppFlow(state, backend); };
   actions.exit = () => { void fc.exit(); };
   backend.onCloseRequested(() => fc.confirmDiscard());
   // Form windows: real Tauri windows in the app, a floating layer over the MDI area in the browser
@@ -83,13 +85,13 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   });
   run.rc = rc;
   actions.askAiAboutError = () => { const fix = rc.errorToFix(); if (fix) askAboutError(fix); };
-  actions.start = () => { void rc.start(false); };
-  actions.startFullCompile = () => { void rc.start(true); };
+  actions.start = () => { if (committed()) void rc.start(false); };
+  actions.startFullCompile = () => { if (committed()) void rc.start(true); };
   actions.break = () => rc.breakNow();
   actions.end = () => rc.end();
   actions.restart = () => { void rc.restart(); };
-  actions.stepInto = () => rc.step('into');
-  actions.stepOver = () => rc.step('over');
+  actions.stepInto = () => { if (committed()) rc.step('into'); };   // in design mode these start the program
+  actions.stepOver = () => { if (committed()) rc.step('over'); };
   actions.stepOut = () => rc.step('out');
   actions.runToCursor = () => {
     const v = state.activeView;

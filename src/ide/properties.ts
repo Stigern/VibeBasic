@@ -26,7 +26,13 @@ let rememberedTab = (() => { try { return localStorage.getItem(TAB_KEY) === '1' 
 
 interface Target { id: string | 'form'; type: ControlType; name: string; index: number | null; props: Record<string, PropValue> }
 
-export interface PropertiesWindow { refresh(): void; focus(): void }
+export interface PropertiesWindow {
+  refresh(): void;
+  focus(): void;
+  /** Commits a value typed in the active row but not yet entered (VB6 does so before Run, Save and Make). False when the text is
+   *  invalid (a message box says so, and the caller should not go on). */
+  commitPendingEdit(): boolean;
+}
 
 /** "Form1 Form" → <b>Form1</b> Form, as in VB6's object box. */
 function formatObject(label: string): Node {
@@ -283,10 +289,13 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
 
   // ---- render --------------------------------------------------------------------------------------------------
   function refresh(): void {
+    // a value still being typed is committed first (selection, project or view changes); Escape has already restored the old text
+    const pending = flushEdit;
+    flushEdit = null;
+    pending?.();
     const hadFocus = wantFocus || root.contains(doc.activeElement);
     wantFocus = false;
     epoch++;
-    flushEdit = null;
     openActive = null;
     for (const c of closers.splice(0)) c();
     const form = currentForm();
@@ -448,6 +457,7 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
   refresh();
   return {
     refresh,
+    commitPendingEdit: () => (flushEdit ? flushEdit() : true),
     focus() {
       const el = root.querySelector<HTMLElement>('.pw98-row.selected .pw98-editor, .pw98-row.selected .cb98-input, .pw98-row.selected')
         ?? root.querySelector<HTMLElement>('.pw98-row');
