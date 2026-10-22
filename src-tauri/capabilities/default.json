@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions",
+  "description": "The IDE / app main window: the core and dialog permissions and every app command (see src/app_commands.rs)",
   "windows": [
     "main"
   ],
@@ -15,6 +15,33 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "core:window:allow-create",
-    "core:webview:allow-create-webview-window"
+    "core:webview:allow-create-webview-window",
+    "allow-ai-list-models",
+    "allow-ai-chat",
+    "allow-ai-cancel",
+    "allow-read-text-file",
+    "allow-write-text-file",
+    "allow-read-binary-file",
+    "allow-list-volumes",
+    "allow-list-dir",
+    "allow-inet-request",
+    "allow-inet-cancel",
+    "allow-sock-connect",
+    "allow-sock-listen",
+    "allow-sock-accept",
+    "allow-sock-bind",
+    "allow-sock-send",
+    "allow-sock-close",
+    "allow-net-reset",
+    "allow-net-local-ip",
+    "allow-media-open",
+    "allow-media-read",
+    "allow-media-close",
+    "allow-make-app",
+    "allow-can-make-app",
+    "allow-get-embedded-project",
+    "allow-quit-app",
+    "allow-get-app-dir",
+    "allow-get-app-name"
   ]
 }
