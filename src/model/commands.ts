@@ -28,17 +28,19 @@ export class CommandStack {
     this.onChange();
   }
   undo(): boolean {
-    const c = this.done.pop();
+    const c = this.done[this.done.length - 1];
     if (!c) return false;
-    c.undo(this.getProject());
+    c.undo(this.getProject()); // if this throws, the stacks stay as they were
+    this.done.pop();
     this.undone.push(c);
     this.onChange();
     return true;
   }
   redo(): boolean {
-    const c = this.undone.pop();
+    const c = this.undone[this.undone.length - 1];
     if (!c) return false;
-    c.do(this.getProject());
+    c.do(this.getProject()); // if this throws, the stacks stay as they were
+    this.undone.pop();
     this.done.push(c);
     this.onChange();
     return true;
@@ -92,7 +94,8 @@ export function addControlsCmd(formId: string, defs: ControlDef[]): Command {
   };
 }
 
-export function deleteControlsCmd(formId: string, ids: string[]): Command {
+export function deleteControlsCmd(formId: string, idList: string[]): Command {
+  const ids = [...idList];
   let removed: { index: number; def: ControlDef }[] = [];
   return {
     label: ids.length === 1 ? 'Delete control' : `Delete ${ids.length} controls`,
@@ -113,27 +116,30 @@ export function deleteControlsCmd(formId: string, ids: string[]): Command {
 type Rect = { id: string; left: number; top: number; width: number; height: number };
 const RECT_KEYS = ['Left', 'Top', 'Width', 'Height'] as const;
 
-export function moveResizeCmd(formId: string, changes: Rect[]): Command {
+export function moveResizeCmd(formId: string, rects: Rect[]): Command {
+  const changes = rects.map(c => ({ ...c }));
   let old: { id: string; props: Record<string, PropValue | undefined> }[] = [];
   return {
     label: changes.length === 1 ? 'Move/resize control' : `Move/resize ${changes.length} controls`,
     do(p) {
       const f = formOf(p, formId);
+      const targets = changes.map(ch => controlOf(f, ch.id)); // validate everything before mutating anything
       old = [];
-      for (const ch of changes) {
-        const c = controlOf(f, ch.id);
+      changes.forEach((ch, i) => {
+        const c = targets[i];
         const prev: Record<string, PropValue | undefined> = {};
         for (const k of RECT_KEYS) prev[k] = c.props[k];
         old.push({ id: c.id, props: prev });
         c.props.Left = ch.left;
         c.props.Top = ch.top;
         if ('Width' in c.props) { c.props.Width = ch.width; c.props.Height = ch.height; } // Timer etc. have no size
-      }
+      });
     },
     undo(p) {
       const f = formOf(p, formId);
-      for (const o of old) {
-        const c = controlOf(f, o.id);
+      const targets = old.map(o => controlOf(f, o.id));
+      for (let i = old.length - 1; i >= 0; i--) { // reverse: a duplicated id must end at its first old value
+        const c = targets[i], o = old[i];
         for (const k of RECT_KEYS) {
           if (o.props[k] === undefined) delete c.props[k]; else c.props[k] = o.props[k] as PropValue;
         }
@@ -193,7 +199,8 @@ export function renameCmd(formId: string, targetId: string | 'form', newName: st
   };
 }
 
-export function zOrderCmd(formId: string, ids: string[], where: 'front' | 'back'): Command {
+export function zOrderCmd(formId: string, idList: string[], where: 'front' | 'back'): Command {
+  const ids = [...idList];
   let oldOrder: string[] = [];
   return {
     label: where === 'front' ? 'Bring to Front' : 'Send to Back',
@@ -213,12 +220,30 @@ export function zOrderCmd(formId: string, ids: string[], where: 'front' | 'back'
   };
 }
 
-/** Several commands as one undo step; undone in reverse order. */
-export function compositeCmd(label: string, cmds: Command[]): Command {
+/** Several commands as one undo step; undone in reverse order. If a step fails midway, the steps already
+ *  applied are rolled back before the error is rethrown, so the project is left as it was. */
+export function compositeCmd(label: string, cmdList: Command[]): Command {
+  const cmds = [...cmdList];
   return {
     label,
-    do(p) { for (const c of cmds) c.do(p); },
-    undo(p) { for (let i = cmds.length - 1; i >= 0; i--) cmds[i].undo(p); },
+    do(p) {
+      let n = 0;
+      try {
+        for (; n < cmds.length; n++) cmds[n].do(p);
+      } catch (e) {
+        for (let i = n - 1; i >= 0; i--) cmds[i].undo(p);
+        throw e;
+      }
+    },
+    undo(p) {
+      let n = cmds.length - 1;
+      try {
+        for (; n >= 0; n--) cmds[n].undo(p);
+      } catch (e) {
+        for (let i = n + 1; i < cmds.length; i++) cmds[i].do(p);
+        throw e;
+      }
+    },
   };
 }
 
@@ -226,34 +251,43 @@ export function compositeCmd(label: string, cmds: Command[]): Command {
 // Project items
 
 export function addFormCmd(form: FormDef): Command {
+  const pristine = structuredClone(form);
   return {
-    label: `Add ${form.name}`,
-    do(p) { p.forms.push(form); },
-    undo(p) { p.forms = p.forms.filter(f => f.id !== form.id); },
+    label: `Add ${pristine.name}`,
+    do(p) { p.forms.push(structuredClone(pristine)); },
+    undo(p) { p.forms = p.forms.filter(f => f.id !== pristine.id); },
   };
 }
 
 export function addModuleCmd(m: ModuleDef): Command {
+  const pristine = structuredClone(m);
   return {
-    label: `Add ${m.name}`,
-    do(p) { p.modules.push(m); },
-    undo(p) { p.modules = p.modules.filter(x => x.id !== m.id); },
+    label: `Add ${pristine.name}`,
+    do(p) { p.modules.push(structuredClone(pristine)); },
+    undo(p) { p.modules = p.modules.filter(x => x.id !== pristine.id); },
   };
 }
 
-/** Removes a form or module by id. The caller picks a new startup form when removing the startup form;
- *  undo restores the startup form as it was before. */
-export function removeItemCmd(id: string): Command {
+/** Removes a form or module by id. Removing the startup form requires `newStartupForm` (a form name); the command
+ *  sets it and undo puts the old startup form back, so the project never has a dangling startup form. */
+export function removeItemCmd(id: string, newStartupForm?: string): Command {
   let kind: 'form' | 'module' = 'form';
   let index = 0;
   let item: FormDef | ModuleDef | null = null;
-  let oldStartup = '';
+  let oldStartup: string | null = null; // set only when this command changed startupForm
   return {
     label: 'Remove item',
     do(p) {
-      oldStartup = p.startupForm;
+      oldStartup = null;
       const fi = p.forms.findIndex(f => f.id === id);
-      if (fi >= 0) { kind = 'form'; index = fi; item = p.forms[fi]; p.forms.splice(fi, 1); return; }
+      if (fi >= 0) {
+        const isStartup = p.forms[fi].name === p.startupForm;
+        if (isStartup && newStartupForm === undefined) throw new Error('A new startup form is required when removing the startup form');
+        kind = 'form'; index = fi; item = p.forms[fi];
+        p.forms.splice(fi, 1);
+        if (isStartup) { oldStartup = p.startupForm; p.startupForm = newStartupForm as string; }
+        return;
+      }
       const mi = p.modules.findIndex(m => m.id === id);
       if (mi >= 0) { kind = 'module'; index = mi; item = p.modules[mi]; p.modules.splice(mi, 1); return; }
       throw new Error(`Item not found: ${id}`);
@@ -262,7 +296,7 @@ export function removeItemCmd(id: string): Command {
       if (!item) return;
       if (kind === 'form') p.forms.splice(index, 0, item as FormDef);
       else p.modules.splice(index, 0, item as ModuleDef);
-      p.startupForm = oldStartup;
+      if (oldStartup !== null) p.startupForm = oldStartup;
     },
   };
 }

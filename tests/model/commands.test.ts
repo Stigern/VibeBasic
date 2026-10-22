@@ -159,13 +159,12 @@ test('composite undoes as one step', () => {
 });
 
 test('composite undoes in reverse order', () => {
-  const { project, stack } = setup();
+  const { project } = setup();
   const log: string[] = [];
   const mkc = (n: string): Command => ({ label: n, do: () => log.push('do ' + n), undo: () => log.push('undo ' + n) });
   const c = compositeCmd('x', [mkc('a'), mkc('b'), mkc('c')]);
   c.do(project); c.undo(project);
   expect(log).toEqual(['do a', 'do b', 'do c', 'undo c', 'undo b', 'undo a']);
-  void stack;
 });
 
 test('execute clears redo', () => {
@@ -271,37 +270,55 @@ test('addForm / addModule / undo / redo', () => {
   expect(project.modules).toHaveLength(1);
 });
 
-test('removeItem form restores index and startupForm on undo', () => {
+test('removeItem startup form with replacement: undo restores, redo re-applies', () => {
   const { project, form, stack } = setup();
   const f2: FormDef = { id: newId(), name: 'Form2', props: {}, controls: [], code: 'x' };
   const f3: FormDef = { id: newId(), name: 'Form3', props: {}, controls: [], code: '' };
   project.forms.push(f2, f3);
-  stack.execute(removeItemCmd(form.id)); // the startup form
+  stack.execute(removeItemCmd(form.id, 'Form2'));
   expect(project.forms.map(f => f.name)).toEqual(['Form2', 'Form3']);
-  // the command is dumb about startupForm; caller picks the new one
-  project.startupForm = 'Form2';
+  expect(project.startupForm).toBe('Form2');
   stack.undo();
   expect(project.forms.map(f => f.id)).toEqual([form.id, f2.id, f3.id]);
   expect(project.startupForm).toBe(form.name);
   stack.redo();
   expect(project.forms).toHaveLength(2);
-  stack.undo();
-  stack.execute(removeItemCmd(f2.id));
-  expect(project.forms.map(f => f.id)).toEqual([form.id, f3.id]);
+  expect(project.startupForm).toBe('Form2');
+});
+
+test('removeItem startup form without replacement throws and changes nothing', () => {
+  const { project, form, stack } = setup();
+  project.forms.push({ id: newId(), name: 'Form2', props: {}, controls: [], code: '' });
+  expect(() => stack.execute(removeItemCmd(form.id))).toThrow();
+  expect(project.forms).toHaveLength(2);
   expect(project.startupForm).toBe(form.name);
+  expect(stack.canUndo).toBe(false);
+});
+
+test('removeItem non-startup form leaves startupForm alone, undo does not overwrite later change', () => {
+  const { project, form, stack } = setup();
+  const f2: FormDef = { id: newId(), name: 'Form2', props: {}, controls: [], code: '' };
+  project.forms.push(f2);
+  stack.execute(removeItemCmd(f2.id));
+  expect(project.startupForm).toBe(form.name);
+  project.startupForm = 'Other'; // changed meanwhile
   stack.undo();
+  expect(project.startupForm).toBe('Other');
   expect(project.forms[1]).toBe(f2);
 });
 
-test('removeItem module', () => {
-  const { project, stack } = setup();
+test('removeItem module does not touch startupForm', () => {
+  const { project, form, stack } = setup();
   const m1 = { id: newId(), name: 'M1', code: 'a' };
   const m2 = { id: newId(), name: 'M2', code: 'b' };
   project.modules.push(m1, m2);
   stack.execute(removeItemCmd(m1.id));
   expect(project.modules).toEqual([m2]);
+  expect(project.startupForm).toBe(form.name);
+  project.startupForm = 'Changed';
   stack.undo();
   expect(project.modules).toEqual([m1, m2]);
+  expect(project.startupForm).toBe('Changed');
 });
 
 test('commands still work after unrelated commands ran in between (in stack order)', () => {
@@ -311,4 +328,136 @@ test('commands still work after unrelated commands ran in between (in stack orde
   stack.execute(setPropertyCmd(form.id, b.id, 'Caption', 'z'));
   stack.undo(); stack.undo();
   expect(names(form)).toEqual([a.name, b.name]);
+});
+
+test('full interleaving: do A, do B, undo B, undo A, redo, redo', () => {
+  const { form, stack } = setup();
+  const [a, b] = seed(form, 'Label', 'CommandButton');
+  const orig = JSON.parse(JSON.stringify(form.controls));
+  stack.execute(deleteControlsCmd(form.id, [a.id]));
+  stack.execute(compositeCmd('B', [
+    setPropertyCmd(form.id, b.id, 'Caption', 'z'),
+    moveResizeCmd(form.id, [{ id: b.id, left: 7, top: 8, width: 9, height: 10 }]),
+  ]));
+  const afterB = JSON.parse(JSON.stringify(form.controls));
+  expect(form.controls.map(c => c.id)).toEqual([b.id]);
+  stack.undo();
+  expect(form.controls.map(c => c.id)).toEqual([b.id]);
+  expect(form.controls[0].props.Caption).toBe(orig[1].props.Caption);
+  expect(form.controls[0].props.Left).toBe(100);
+  stack.undo();
+  expect(form.controls).toEqual(orig);
+  stack.redo();
+  expect(form.controls.map(c => c.id)).toEqual([b.id]);
+  stack.redo();
+  expect(form.controls).toEqual(afterB);
+});
+
+test('dirty: save at depth 2, undo twice, redo back is clean', () => {
+  const { form, stack } = setup();
+  const [a] = seed(form, 'Label');
+  stack.execute(setPropertyCmd(form.id, a.id, 'Caption', '1'));
+  stack.execute(setPropertyCmd(form.id, a.id, 'Caption', '2'));
+  stack.markSaved();
+  stack.undo(); expect(stack.isDirty).toBe(true);
+  stack.undo(); expect(stack.isDirty).toBe(true);
+  stack.redo(); expect(stack.isDirty).toBe(true);
+  stack.redo(); expect(stack.isDirty).toBe(false);
+});
+
+test('composite with a failing last command leaves project and stack unchanged', () => {
+  const { form, stack } = setup();
+  const [a] = seed(form, 'Label');
+  const before = JSON.parse(JSON.stringify(form.controls));
+  const c = newControl(form, 'Label', { left: 0, top: 0 }, null);
+  const cmd = compositeCmd('bad', [
+    addControlsCmd(form.id, [c]),
+    setPropertyCmd(form.id, a.id, 'Caption', 'changed'),
+    deleteControlsCmd(form.id, [a.id]),
+    setPropertyCmd(form.id, 'no-such-id', 'Caption', 'x'),
+  ]);
+  expect(() => stack.execute(cmd)).toThrow();
+  expect(form.controls).toEqual(before);
+  expect(stack.canUndo).toBe(false);
+  expect(stack.isDirty).toBe(false);
+});
+
+test('composite undo failing midway re-applies already undone steps', () => {
+  const { project } = setup();
+  const log: string[] = [];
+  const ok = (n: string): Command => ({ label: n, do: () => log.push('do ' + n), undo: () => log.push('undo ' + n) });
+  const bad: Command = { label: 'bad', do: () => log.push('do bad'), undo: () => { throw new Error('boom'); } };
+  const c = compositeCmd('x', [ok('a'), bad, ok('c')]);
+  c.do(project);
+  log.length = 0;
+  expect(() => c.undo(project)).toThrow('boom');
+  expect(log).toEqual(['undo c', 'do c']);
+});
+
+test('moveResize with one bad id moves nothing', () => {
+  const { form, stack } = setup();
+  const [a] = seed(form, 'CommandButton', 'Label');
+  const before = JSON.parse(JSON.stringify(form.controls));
+  expect(() => stack.execute(moveResizeCmd(form.id, [
+    { id: a.id, left: 1, top: 2, width: 3, height: 4 },
+    { id: 'nope', left: 5, top: 6, width: 7, height: 8 },
+  ]))).toThrow();
+  expect(form.controls).toEqual(before);
+  expect(stack.canUndo).toBe(false);
+});
+
+test('moveResize with a duplicated id undoes to the original', () => {
+  const { form, stack } = setup();
+  const [a] = seed(form, 'CommandButton');
+  const before = JSON.parse(JSON.stringify(form.controls));
+  stack.execute(moveResizeCmd(form.id, [
+    { id: a.id, left: 1, top: 1, width: 1, height: 1 },
+    { id: a.id, left: 2, top: 2, width: 2, height: 2 },
+  ]));
+  expect(a.props.Left).toBe(2);
+  stack.undo();
+  expect(form.controls).toEqual(before);
+});
+
+test('undo/redo that throws leaves stacks unchanged', () => {
+  const { stack } = setup();
+  let failUndo = true, failRedo = false;
+  const cmd: Command = {
+    label: 'flaky',
+    do: () => { if (failRedo) throw new Error('redo boom'); },
+    undo: () => { if (failUndo) throw new Error('undo boom'); },
+  };
+  stack.execute(cmd);
+  expect(() => stack.undo()).toThrow('undo boom');
+  expect(stack.canUndo).toBe(true);
+  expect(stack.canRedo).toBe(false);
+  failUndo = false;
+  expect(stack.undo()).toBe(true);
+  failRedo = true;
+  expect(() => stack.redo()).toThrow('redo boom');
+  expect(stack.canRedo).toBe(true);
+  expect(stack.canUndo).toBe(false);
+});
+
+test('inputs are copied at construction', () => {
+  const { project, form, stack } = setup();
+  const [a, b] = seed(form, 'Label', 'Label');
+  const ids = [a.id];
+  const rects = [{ id: a.id, left: 1, top: 1, width: 1, height: 1 }];
+  const cmds: Command[] = [];
+  const del = deleteControlsCmd(form.id, ids);
+  const mv = moveResizeCmd(form.id, rects);
+  const comp = compositeCmd('c', cmds);
+  ids.push(b.id); rects[0].left = 999; cmds.push(setPropertyCmd(form.id, a.id, 'Caption', 'x'));
+  mv.do(project);
+  expect(a.props.Left).toBe(1);
+  mv.undo(project);
+  del.do(project);
+  expect(form.controls.map(c => c.id)).toEqual([b.id]);
+  comp.do(project); // empty composite
+  const f: FormDef = { id: newId(), name: 'Form2', props: {}, controls: [], code: '' };
+  const add = addFormCmd(f);
+  f.name = 'Changed';
+  stack.execute(add);
+  expect(project.forms[1].name).toBe('Form2');
 });
