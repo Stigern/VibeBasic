@@ -3,7 +3,7 @@
 import { VBRuntimeError } from '../errors';
 import { plain } from '../interp/operators';
 import { Null, bankers, isDate, toNumber, type VBValue } from '../values';
-import { def, intArg, isNullV } from './util';
+import { def, intArg, isNullV, newRndState, type BuiltinCtx, type RndState } from './util';
 
 const finite = (n: number): number => {
   if (!Number.isFinite(n)) throw new VBRuntimeError(6);
@@ -74,37 +74,36 @@ radix('oct', 8);
 
 // ---- Rnd / Randomize ----
 
-/** mulberry32 state; fixed start so a program without Randomize repeats, as in VB. */
-let state = 0x2545f491;
-let last = 0.7055475; // VB's documented first value
-let first = true;
-
-function nextRandom(): number {
-  state = (state + 0x6d2b79f5) | 0;
-  let t = state;
+/** mulberry32; the state lives in `ctx.rnd` (per Program), starting from a fixed seed as in VB. */
+function nextRandom(r: RndState): number {
+  r.state = (r.state + 0x6d2b79f5) | 0;
+  let t = r.state;
   t = Math.imul(t ^ (t >>> 15), t | 1);
   t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 
-function seedFrom(n: number): void {
+function seedFrom(r: RndState, n: number): void {
   // Mix the bits of the double so that nearby seeds give unrelated sequences.
   const buf = new DataView(new ArrayBuffer(8));
   buf.setFloat64(0, n);
-  state = (buf.getInt32(0) ^ Math.imul(buf.getInt32(4), 0x9e3779b1)) | 0;
-  first = false;
+  r.state = (buf.getInt32(0) ^ Math.imul(buf.getInt32(4), 0x9e3779b1)) | 0;
+  r.first = false;
 }
 
-def('rnd', 0, 1, a => {
+const rndOf = (ctx: BuiltinCtx): RndState => (ctx.rnd ??= newRndState());
+
+def('rnd', 0, 1, (a, ctx) => {
+  const r = rndOf(ctx);
   const x = a[0] === undefined ? 1 : toNumber(a[0]);
-  if (x === 0) return last;
-  if (x < 0) seedFrom(x);
-  else if (first) { first = false; return last; }
-  last = nextRandom();
-  return last;
+  if (x === 0) return r.last;
+  if (x < 0) seedFrom(r, x);
+  else if (r.first) { r.first = false; return r.last; }
+  r.last = nextRandom(r);
+  return r.last;
 });
 
-def('randomize', 0, 1, a => {
-  seedFrom(a[0] === undefined ? Date.now() : toNumber(a[0]));
+def('randomize', 0, 1, (a, ctx) => {
+  seedFrom(rndOf(ctx), a[0] === undefined ? Date.now() : toNumber(a[0]));
   return 0 as VBValue;
 });

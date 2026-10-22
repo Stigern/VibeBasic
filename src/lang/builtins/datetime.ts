@@ -99,7 +99,7 @@ function addMonths(serial: number, months: number): VBDate {
 def('dateadd', 3, 3, a => {
   const iv = interval(a[0]);
   if (isNullV(plain(a[2]))) return Null;
-  const n = Math.trunc(Number(coerce(plain(a[1]), 'Double')));
+  const n = intArg(plain(a[1])); // VB rounds the number argument
   const s = serialOf(a[2]);
   switch (iv) {
     case 'yyyy': return addMonths(s, n * 12);

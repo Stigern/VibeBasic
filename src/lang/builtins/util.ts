@@ -11,8 +11,14 @@ export interface BuiltinCtx {
   locale: string;
   /** Default MsgBox/InputBox title (ProgramOptions.appTitle, default 'Project1'). */
   appTitle?: string;
+  /** Rnd generator state of this program (created on first use if absent). */
+  rnd?: RndState;
   // Task 8 adds the `Err` object here.
 }
+
+/** VB's fixed Rnd sequence: every fresh program (without Randomize) starts the same. */
+export interface RndState { state: number; last: number; first: boolean }
+export const newRndState = (): RndState => ({ state: 0x2545f491, last: 0.7055475, first: true });
 
 /**
  * A built-in function. The interpreter checks `minArgs`/`maxArgs` (error 450)

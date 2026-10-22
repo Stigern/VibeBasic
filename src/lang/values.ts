@@ -337,13 +337,19 @@ export function dateParts(serial: number): { y: number; m: number; d: number; h:
 
 /**
  * How `toStr` (CStr, `&`, Print) turns a date into text. The default is a
- * locale-free ISO-like text; `Program` installs the locale-based General Date
- * formatter (builtins/format.ts) with `setDateTextFormatter`. Global, so the
- * most recently created Program's locale wins.
+ * locale-free ISO-like text. A running Program makes its own locale-based
+ * formatter current only while its code executes (see `Runtime.activate` and
+ * `runGenerator`), so several Programs with different locales do not leak
+ * into each other.
  */
-let dateToText: (v: VBDate) => string = v => dateToPlaceholder(v);
-export function setDateTextFormatter(fn: ((v: VBDate) => string) | undefined): void {
-  dateToText = fn ?? (v => dateToPlaceholder(v));
+export type DateTextFormatter = (v: VBDate) => string;
+const defaultDateText: DateTextFormatter = v => dateToPlaceholder(v);
+let dateToText: DateTextFormatter = defaultDateText;
+/** Installs `fn` (undefined = default) as the current formatter and returns the previous one, for restoring. */
+export function setDateTextFormatter(fn: DateTextFormatter | undefined): DateTextFormatter {
+  const prev = dateToText;
+  dateToText = fn ?? defaultDateText;
+  return prev;
 }
 
 /** Locale-free text for a date (the default for `toStr`). */

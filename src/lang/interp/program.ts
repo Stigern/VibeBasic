@@ -5,9 +5,10 @@ import { VBRuntimeError } from '../errors';
 import type { BuiltinCtx } from '../builtins';
 import type { CodeLocation, Host } from '../host';
 import { generalDateText } from '../builtins/format';
+import { newRndState } from '../builtins/util';
 import { parseModule } from '../parser';
-import { VBArray, VBRecord, VBRef, defaultValue, setDateTextFormatter, toNumber, type VBValue } from '../values';
-import { EndSignal, SubCall, runGenerator, type Gen } from './driver';
+import { VBArray, VBRecord, VBRef, defaultValue, setDateTextFormatter, toNumber, type DateTextFormatter, type VBValue } from '../values';
+import { EndSignal, SubCall, runGenerator, type ExecScope, type Gen } from './driver';
 import { constExpr } from './eval';
 import { declareVariable, evalBounds, handleError, invokeProc, type BoundArg } from './exec';
 import {
@@ -44,6 +45,9 @@ export class Runtime {
   readonly sliceSize: number;
   readonly locale: string;
   readonly builtinCtx: BuiltinCtx;
+  /** Makes this program's locale (date text) current while its code runs; pass to `runGenerator`. */
+  readonly scope: ExecScope;
+  private readonly dateText: DateTextFormatter;
   readonly modules = new Map<string, ModuleScope>();
   readonly moduleList: ModuleScope[] = [];
   readonly globals = new GlobalScope();
@@ -57,8 +61,14 @@ export class Runtime {
   constructor(sources: SourceModule[], readonly host: Host, opts: ProgramOptions = {}) {
     this.sliceSize = Math.max(1, opts.sliceSize ?? 10000);
     this.locale = opts.locale ?? Intl.DateTimeFormat().resolvedOptions().locale;
-    this.builtinCtx = { host, locale: this.locale, appTitle: opts.appTitle ?? 'Project1' };
-    setDateTextFormatter(v => generalDateText(v.serial, this.locale));
+    this.builtinCtx = { host, locale: this.locale, appTitle: opts.appTitle ?? 'Project1', rnd: newRndState() };
+    this.dateText = v => generalDateText(v.serial, this.locale);
+    this.scope = {
+      activate: () => {
+        const prev = setDateTextFormatter(this.dateText);
+        return () => { setDateTextFormatter(prev); };
+      },
+    };
     this.declRun = new Run(this);
     for (const src of sources) {
       const m = new ModuleScope(src.name, src.kind, parseModule(src.source, src.name));
@@ -275,7 +285,7 @@ export class Program {
     rt.runs.add(run);
     rt.state = 'running';
     try {
-      await runGenerator(rt.entry(run, ref, args));
+      await runGenerator(rt.entry(run, ref, args), rt.scope);
     } catch (e) {
       if (e instanceof VBRuntimeError) {
         // raised outside any statement, e.g. binding the handler's arguments

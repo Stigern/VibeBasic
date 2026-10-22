@@ -55,6 +55,10 @@ test('InStr / InStrRev', () => {
   expect(call('InStrRev', 'abcabc', 'b')).toBe(5);
   expect(call('InStrRev', 'abcabc', 'b', 4)).toBe(2);
   expect(call('InStrRev', 'abc', 'x')).toBe(0);
+  expect(call('InStrRev', 'abc', 'abc', 2)).toBe(0); // start before the match could end
+  expect(call('InStrRev', 'abc', 'abc', 3)).toBe(1);
+  expect(call('InStrRev', 'abcabc', 'bc', 2)).toBe(0);
+  expect(call('InStrRev', 'abcabc', 'bc', 3)).toBe(2);
 });
 
 test('Replace', () => {
@@ -315,6 +319,11 @@ test('DateAdd', () => {
   expect(call('DateAdd', 'n', 90, dateFrom(2026, 10, 22, 0, 0, 0))).toEqual(dateFrom(2026, 10, 22, 1, 30, 0));
   expect(call('DateAdd', 'm', 1, dateFrom(2026, 1, 15, 8, 30, 0))).toEqual(dateFrom(2026, 2, 15, 8, 30, 0));
   expect(() => call('DateAdd', 'x', 1, D)).toThrow(err(5));
+  // the number argument is rounded (banker's), not truncated
+  expect(call('DateAdd', 'd', 1.6, dateFrom(2026, 10, 22))).toEqual(dateFrom(2026, 10, 24));
+  expect(call('DateAdd', 'd', 1.5, dateFrom(2026, 10, 22))).toEqual(dateFrom(2026, 10, 24));
+  expect(call('DateAdd', 'd', 2.5, dateFrom(2026, 10, 22))).toEqual(dateFrom(2026, 10, 24));
+  expect(call('DateAdd', 'm', -1.6, dateFrom(2026, 3, 15))).toEqual(dateFrom(2026, 1, 15));
 });
 
 test('DateDiff / DatePart', () => {
@@ -574,6 +583,14 @@ test('constants', () => {
 test('every built-in tolerates its own arg-count bounds', () => {
   for (const [name, b] of BUILTINS) {
     if (b.minArgs > 0) expect(() => b.fn([], testCtx), name).toThrow(err(450));
+  }
+});
+
+test('Format repeated with a cached Intl formatter stays correct', () => {
+  for (let i = 0; i < 3; i++) {
+    expect(formatValue(D, 'Short Date', 'en-US')).toBe('10/22/2026');
+    expect(formatValue(D, 'Short Date', 'nb-NO')).toBe('22.10.2026');
+    expect(formatValue(D, 'Short Date', 'not a locale!')).toBe('10/22/2026'); // falls back to en-US
   }
 });
 

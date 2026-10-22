@@ -34,38 +34,55 @@ type Resume = { ok: true; value: unknown } | { ok: false; error: unknown };
  * on an explicit stack. Resolves with the root's return value; rejects with
  * whatever the root throws.
  */
-export async function runGenerator<T>(root: Gen<T>): Promise<T> {
+export async function runGenerator<T>(root: Gen<T>, scope?: ExecScope): Promise<T> {
   const stack: Gen<unknown>[] = [root];
   let input: Resume = { ok: true, value: undefined };
-  while (stack.length > 0) {
-    const g = stack[stack.length - 1];
-    let r: IteratorResult<Yielded, unknown>;
-    try {
-      r = input.ok ? g.next(input.value) : g.throw(input.error);
-    } catch (e) {
-      stack.pop();
-      input = { ok: false, error: e };
-      continue;
+  // `scope` is current only while generator code runs, never across an await.
+  // It must also be restored synchronously when the loop ends (not a microtask
+  // later), or another run that resumes in between would save a stale state.
+  let restore: (() => void) | undefined = scope?.activate();
+  try {
+    while (stack.length > 0) {
+      const g = stack[stack.length - 1];
+      let r: IteratorResult<Yielded, unknown>;
+      try {
+        r = input.ok ? g.next(input.value) : g.throw(input.error);
+      } catch (e) {
+        stack.pop();
+        input = { ok: false, error: e };
+        continue;
+      }
+      if (r.done) {
+        stack.pop();
+        input = { ok: true, value: r.value };
+        continue;
+      }
+      const y: Yielded = r.value;
+      if (y instanceof SubCall) {
+        stack.push(y.gen);
+        input = { ok: true, value: undefined };
+        continue;
+      }
+      restore?.();
+      restore = undefined;
+      try {
+        input = { ok: true, value: await y };
+      } catch (e) {
+        input = { ok: false, error: e };
+      }
+      restore = scope?.activate();
     }
-    if (r.done) {
-      stack.pop();
-      input = { ok: true, value: r.value };
-      continue;
-    }
-    const y: Yielded = r.value;
-    if (y instanceof SubCall) {
-      stack.push(y.gen);
-      input = { ok: true, value: undefined };
-      continue;
-    }
-    try {
-      input = { ok: true, value: await y };
-    } catch (e) {
-      input = { ok: false, error: e };
-    }
+  } finally {
+    restore?.();
   }
   if (!input.ok) throw input.error;
   return input.value as T;
+}
+
+/** Per-program state that must be current while its code runs (e.g. the date-text locale). */
+export interface ExecScope {
+  /** Makes the scope current and returns a function that restores the previous state. */
+  activate(): () => void;
 }
 
 /**

@@ -136,6 +136,7 @@ def('instrrev', 2, 4, a => {
   if (start > hay.length) return 0;
   if (hay === '') return 0;
   if (needle === '') return start;
+  if (start < needle.length) return 0;
   return hay.lastIndexOf(needle, start - needle.length) + 1;
 });
 

@@ -110,3 +110,71 @@ test('LoadPicture goes to the host', async () => {
   expect(paths).toEqual(['a.bmp']);
   expect(host.lines()).toEqual(['handle']);
 });
+
+// ---- review fixes: no process-global state between Programs ----
+import { dateFrom, toStr } from '../../src/lang/values';
+
+const DATE_SRC = `Sub Main()
+Debug.Print DateSerial(2026, 10, 22) + TimeSerial(13, 5, 0)
+DoEvents
+Debug.Print CStr(DateSerial(2026, 10, 22)) & "|" & DateSerial(2026, 10, 22)
+End Sub
+`;
+const newProg = (src: string, host: TestHost, locale?: string) =>
+  new Program([{ name: 'Module1', kind: 'module', source: src }], host, locale ? { locale } : {});
+
+test('date locale belongs to its Program, not to the last one constructed', async () => {
+  const h1 = new TestHost();
+  const h2 = new TestHost();
+  const p1 = newProg(DATE_SRC, h1, 'en-US');
+  newProg(DATE_SRC, h2, 'nb-NO'); // constructed later, never run
+  await p1.runEvent('Module1', 'Main');
+  expect(h1.lines()).toEqual(['10/22/2026 1:05:00 PM', '10/22/2026|10/22/2026']);
+});
+
+test('interleaved runs of two Programs keep their own locale', async () => {
+  const h1 = new TestHost();
+  const h2 = new TestHost();
+  const p1 = newProg(DATE_SRC, h1, 'en-US');
+  const p2 = newProg(DATE_SRC, h2, 'nb-NO');
+  // DoEvents is awaited, so the two runs interleave
+  await Promise.all([p1.runEvent('Module1', 'Main'), p2.runEvent('Module1', 'Main')]);
+  expect(h1.lines()).toEqual(['10/22/2026 1:05:00 PM', '10/22/2026|10/22/2026']);
+  expect(h2.lines()).toEqual(['22.10.2026 13:05:00', '22.10.2026|22.10.2026']);
+});
+
+test('the date formatter is restored after a run (outside code uses the default)', async () => {
+  const h = new TestHost();
+  await newProg(DATE_SRC, h, 'nb-NO').runEvent('Module1', 'Main');
+  expect(toStr(dateFrom(2026, 10, 22))).toBe('2026-10-22');
+});
+
+test('Rnd sequence is per Program: fresh Programs repeat VB\'s fixed sequence', async () => {
+  const src = `Sub Main()\nDebug.Print Rnd; Rnd; Rnd\nEnd Sub\n`;
+  const outs: string[][] = [];
+  for (let i = 0; i < 2; i++) {
+    const h = new TestHost();
+    await newProg(src, h, 'en-US').runEvent('Module1', 'Main');
+    outs.push(h.lines());
+  }
+  expect(outs[0]).toEqual(outs[1]);
+  expect(outs[0][0].startsWith(' .705547')).toBe(true); // VB's first value 0.7055475
+  // a second run in the same Program continues the sequence
+  const h = new TestHost();
+  const p = newProg(src, h, 'en-US');
+  await p.runEvent('Module1', 'Main');
+  await p.runEvent('Module1', 'Main');
+  expect(h.lines()[1]).not.toBe(h.lines()[0]);
+});
+
+test('Randomize in one Program does not disturb another', async () => {
+  const src = `Sub Main()\nDebug.Print Rnd\nEnd Sub\n`;
+  const rand = `Sub Main()\nRandomize 42\nDebug.Print Rnd\nEnd Sub\n`;
+  const a = new TestHost();
+  const pa = newProg(src, a);
+  await newProg(rand, new TestHost()).runEvent('Module1', 'Main');
+  await pa.runEvent('Module1', 'Main');
+  const b = new TestHost();
+  await newProg(src, b).runEvent('Module1', 'Main');
+  expect(a.lines()).toEqual(b.lines());
+});

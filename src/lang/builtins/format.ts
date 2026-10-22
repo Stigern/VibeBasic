@@ -31,10 +31,16 @@ function utcDate(p: Parts): Date {
   return d;
 }
 
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
 function intl(locale: string, opts: Intl.DateTimeFormatOptions, p: Parts): string {
-  let f: Intl.DateTimeFormat;
-  try { f = new Intl.DateTimeFormat(locale, { ...opts, timeZone: 'UTC' }); }
-  catch { f = new Intl.DateTimeFormat('en-US', { ...opts, timeZone: 'UTC' }); }
+  const key = locale + '|' + JSON.stringify(opts);
+  let f = formatters.get(key);
+  if (!f) {
+    try { f = new Intl.DateTimeFormat(locale, { ...opts, timeZone: 'UTC' }); }
+    catch { f = new Intl.DateTimeFormat('en-US', { ...opts, timeZone: 'UTC' }); }
+    formatters.set(key, f);
+  }
   return clean(f.format(utcDate(p)));
 }
 
