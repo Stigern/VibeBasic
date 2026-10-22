@@ -4,6 +4,7 @@
 import { Annotation, EditorState, StateEffect, StateField, type Extension, type Transaction } from '@codemirror/state';
 import { Decoration, EditorView, GutterMarker, gutter, keymap, type DecorationSet } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, insertNewlineKeepIndent, insertTab, indentLess, undo, redo } from '@codemirror/commands';
+import { acceptCompletion, autocompletion } from '@codemirror/autocomplete';
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search';
 import { tokenize } from '../lang/lexer';
 import { checkLineSyntax } from '../lang/parser';
@@ -18,6 +19,7 @@ import { createMdiWindow, type MdiWindow } from '../ui98/mdiWindow';
 import { openDesigner } from './designer';
 import type { IdeState } from './ideState';
 import type { IdeActions } from './menus';
+import { memberCompletion } from './completions';
 import { vbHighlight, vbTheme } from './vbLanguage';
 import './codeWindow.css';
 
@@ -277,9 +279,11 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   const state = EditorState.create({
     doc: norm(item0.code),
     extensions: [
-      history(), search({ top: true }), vbHighlight, vbTheme, errField, breakExt, procEndExt,
+      history(), search({ top: true }),
+      autocompletion({ override: [memberCompletion(() => form() ?? null)], icons: false }),
+      vbHighlight, vbTheme, errField, breakExt, procEndExt,
       keymap.of([
-        { key: 'Enter', run: insertNewlineKeepIndent }, { key: 'Tab', run: insertTab }, { key: 'Shift-Tab', run: indentLess },
+        { key: 'Enter', run: insertNewlineKeepIndent }, { key: 'Tab', run: c => acceptCompletion(c) || insertTab(c) }, { key: 'Shift-Tab', run: indentLess },
         ...searchKeymap, ...historyKeymap, ...defaultKeymap,
       ]),
     ],

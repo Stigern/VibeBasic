@@ -173,3 +173,12 @@ test('fixMemberCase keeps the owner across an index', () => {
   expect(fixMemberCase('Text1(0).text = "a"', 'Form1', cs)).toBe('Text1(0).Text = "a"');
   expect(fixMemberCase('Me.text1(i + 1).text = ""', 'Form1', cs)).toBe('Me.Text1(i + 1).Text = ""');
 });
+
+test('member completion opens after a dot (wiring smoke)', async () => {
+  addCtl('TextBox'); open();
+  set('Text1.Se');
+  const { currentCompletions, startCompletion } = await import('@codemirror/autocomplete');
+  startCompletion(view);
+  await new Promise(r => setTimeout(r, 50));
+  expect(currentCompletions(view.state).map(c => c.label)).toEqual(['SelLength', 'SelStart', 'SelText', 'SetFocus']);
+});
