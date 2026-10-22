@@ -4,12 +4,9 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import type { Backend, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { ChatMessage } from '../ai/types';
+import { dialogFilters } from './dialogFilters';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
 
-/** The plugin takes plain extensions: `*` (all files) is dropped, and so is a filter left with none; without a filter every file is allowed. */
-function dialogFilters(filters: FileFilter[]): FileFilter[] {
-  return filters.map(f => ({ name: f.name, extensions: f.extensions.filter(x => x !== '*' && x !== '') })).filter(f => f.extensions.length > 0);
-}
 
 const PROJECT_FILTER: FileFilter = { name: 'VibeBasic Project', extensions: ['vbb'] };
 

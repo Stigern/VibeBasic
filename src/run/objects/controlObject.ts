@@ -13,7 +13,7 @@ import { clampDate, dayOf, setPart, weekdayOf } from '../../model/dateControls';
 import { joinFields } from '../../model/fieldLines';
 import { clipText, fitText, fromText, maskedText, parseMask, typeChar } from '../../model/mask';
 import { flagOn, syncSSTab } from '../../model/ssTab';
-import { baseName, type FileDialogRequest } from '../commonDialog';
+import { baseName, filterIndexFor, type FileDialogRequest } from '../commonDialog';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../../model/types';
 import type { PatchQueue } from '../patchQueue';
 import { PictureObject, type HasPictureRef } from './appObjects';
@@ -1067,6 +1067,7 @@ export class ControlObject implements VBObject {
     if (path === null) return this.cancelled();
     p.FileName = path;
     p.FileTitle = baseName(path);
+    p.FilterIndex = filterIndexFor(toStr(p.Filter as string), Number(p.FilterIndex), path);
     return Empty;
   }
 
