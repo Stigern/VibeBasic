@@ -19,6 +19,8 @@ export interface FormSession {
   readonly queue: PatchQueue;
   readonly formHost: FormHost;
   readonly mode: 'ide' | 'app';
+  /** The folder of the project (App.Path): where DirListBox and FileListBox start. */
+  readonly appPath: string;
   readonly assets: Record<string, string>;
   readonly ended: boolean;
   resolveAsset(ref: PictureRef): string | null;
@@ -73,6 +75,8 @@ export class FormInstance implements VBObject {
       loadPicture: p => this.s.loadPicture(p),
       timerChanged: c => this.s.syncTimer(this, c),
       propChanged: (c, p, old) => this.propChanged(c, p, old),
+      dialogs: this.s.formHost,
+      files: { listVolumes: () => this.s.formHost.listVolumes(), listDir: p => this.s.formHost.listDir(p), defaultPath: this.s.appPath },
     };
     const formDef = { id: 'form', type: 'Form', name: this.def.name, index: null, parentId: null, props: this.def.props } as unknown as ControlDef;
     const st: FormState = { form: new ControlObject(formDef, this.key, this.s.queue, ctx), byId: new Map(), byName: new Map() };
@@ -275,6 +279,17 @@ export class FormInstance implements VBObject {
         break;
       case 'ListBox': if (prop === 'ListIndex' && changed) ev = 'Click'; break;
       case 'HScrollBar': case 'VScrollBar': if (prop === 'Value' && changed) ev = 'Change'; break;
+      case 'RichTextBox':
+        if (prop === 'Text' && changed) ev = 'Change';
+        else if ((prop === 'SelStart' || prop === 'SelLength') && changed) ev = 'SelChange';
+        break;
+      case 'DriveListBox': if (prop === 'Drive' && changed) ev = 'Change'; break;
+      case 'DirListBox': if (prop === 'Path' && changed) ev = 'Change'; break;
+      case 'FileListBox':
+        if (prop === 'Path' && changed) ev = 'PathChange';
+        else if (prop === 'Pattern' && changed) ev = 'PatternChange';
+        else if (prop === 'ListIndex' && changed) ev = 'Click';
+        break;
       case 'MSFlexGrid': if ((prop === 'Row' || prop === 'Col') && changed) ev = 'RowColChange'; break;
       case 'TabStrip': if (prop === 'SelectedTab' && changed) ev = 'Click'; break;
       case 'CheckBox': if (prop === 'Value' && changed) ev = 'Click'; break;
@@ -393,6 +408,6 @@ export class FormInstance implements VBObject {
       case 'setfocus': case 'zorder': case 'refresh': return Empty;
       case 'show': void this.show(false); return Empty;
     }
-    return this.state().form.callMethod(l, args);
+    return this.state().form.callMethod(l, args) as VBValue;   // the form's own object has no async methods
   }
 }

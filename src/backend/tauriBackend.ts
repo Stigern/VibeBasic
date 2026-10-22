@@ -2,9 +2,14 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import type { Backend, FileFilter } from './backend';
+import type { Backend, DirListing, FileFilter, Volume } from './backend';
 import type { ChatMessage } from '../ai/types';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
+
+/** The plugin takes plain extensions: `*` (all files) is dropped, and so is a filter left with none; without a filter every file is allowed. */
+function dialogFilters(filters: FileFilter[]): FileFilter[] {
+  return filters.map(f => ({ name: f.name, extensions: f.extensions.filter(x => x !== '*' && x !== '') })).filter(f => f.extensions.length > 0);
+}
 
 const PROJECT_FILTER: FileFilter = { name: 'VibeBasic Project', extensions: ['vbb'] };
 
@@ -45,6 +50,24 @@ export class TauriBackend implements Backend {
   async openFileDialog(filters: FileFilter[]): Promise<string | null> {
     const r = await open({ multiple: false, directory: false, filters });
     return typeof r === 'string' ? r : null;
+  }
+
+  async showOpenDialog(filters: FileFilter[], title: string, initDir: string): Promise<string | null> {
+    const r = await open({ multiple: false, directory: false, title: title || undefined, defaultPath: initDir || undefined, filters: dialogFilters(filters) });
+    return typeof r === 'string' ? r : null;
+  }
+
+  async showSaveDialog(filters: FileFilter[], title: string, initDir: string, defaultName = ''): Promise<string | null> {
+    const defaultPath = initDir ? (defaultName ? `${initDir.replace(/\/+$/, '')}/${defaultName}` : initDir) : defaultName || undefined;
+    return (await save({ title: title || undefined, defaultPath, filters: dialogFilters(filters) })) ?? null;
+  }
+
+  listVolumes(): Promise<Volume[]> {
+    return call<Volume[]>('list_volumes', {});
+  }
+
+  listDir(path: string): Promise<DirListing> {
+    return call<DirListing>('list_dir', { path });
   }
 
   readTextFile(path: string): Promise<string> {

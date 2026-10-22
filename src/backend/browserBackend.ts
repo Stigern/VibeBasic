@@ -1,4 +1,4 @@
-import type { Backend, FileFilter } from './backend';
+import type { Backend, DirListing, FileFilter, Volume } from './backend';
 import type { ChatMessage } from '../ai/types';
 import { readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
 
@@ -162,6 +162,34 @@ export class BrowserBackend implements Backend {
   async openFileDialog(filters: FileFilter[]): Promise<string | null> {
     const ext = filters.flatMap((f) => f.extensions).map((x) => '*.' + x).join(', ');
     return this.ask(`Open file (file name${ext ? ', ' + ext : ''}):`, '');
+  }
+
+  async showOpenDialog(filters: FileFilter[], title: string, initDir: string): Promise<string | null> {
+    const ext = filters.flatMap(f => f.extensions).map(x => '*.' + x).join(', ');
+    return this.ask(`${title || 'Open'} (file name${ext ? ', ' + ext : ''}):`, initDir ? `${initDir.replace(/\/+$/, '')}/` : '');
+  }
+
+  async showSaveDialog(_filters: FileFilter[], title: string, initDir: string, defaultName = ''): Promise<string | null> {
+    return this.ask(`${title || 'Save as'} (file name):`, initDir ? `${initDir.replace(/\/+$/, '')}/${defaultName}` : defaultName);
+  }
+
+  async listVolumes(): Promise<Volume[]> {
+    return [{ name: '/', path: '/' }];
+  }
+
+  /** The files "written" in this browser (localStorage) make up the folders. */
+  async listDir(path: string): Promise<DirListing> {
+    const base = path.replace(/\/+$/, '') + '/';
+    const dirs = new Set<string>();
+    const files: { name: string; hidden: boolean }[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k?.startsWith(FS_PREFIX + base)) continue;
+      const rest = k.slice(FS_PREFIX.length + base.length), slash = rest.indexOf('/');
+      if (slash >= 0) dirs.add(rest.slice(0, slash)); else files.push({ name: rest, hidden: rest.startsWith('.') });
+    }
+    const by = (a: string, b: string) => a.toLowerCase().localeCompare(b.toLowerCase());
+    return { dirs: [...dirs].sort(by), files: files.sort((a, b) => by(a.name, b.name)) };
   }
 
   async readTextFile(path: string): Promise<string> {

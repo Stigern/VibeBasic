@@ -13,6 +13,7 @@ import { CONTROL_TYPES } from '../model/controls';
 import { joinFields, splitFields } from '../model/fieldLines';
 import { isDocked } from '../model/geometry';
 import { twipsToPx } from '../model/twips';
+import { decodeRuns, encodeRuns, formatAt, readRuns, replaceRange, selectionOffsets, setSelectionOffsets, writeRuns, type Run, type RtfFormat, type RtfPatch } from './richText';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../model/types';
 import { h, mnemonicNodes } from '../ui98/dom';
 
@@ -343,6 +344,116 @@ function comboBox(c: Ctx): Renderer {
   };
 }
 
+/** DriveListBox: a drop-down of the `Drives` lines ('path|name'); `Drive` is the chosen path. Run mode: a pick dispatches `vbdrive` ({ drive }). */
+function driveListBox(c: Ctx): Renderer {
+  let input: HTMLInputElement, list: HTMLElement, field: HTMLElement;
+  let open = false;
+  const drives = () => c.list('Drives').map(splitFields);
+  const label = (path: string): string => { const n = drives().find(d => d[0] === path)?.[1]; return path === '/' && n && n !== '/' ? `/ [${n}]` : path; };
+  const doc = () => c.el.ownerDocument;
+  const onOutside = (e: Event) => { if (!c.el.contains(e.target as Node)) close(); };
+  function close() { open = false; list.classList.remove('open'); doc().removeEventListener('mousedown', onOutside, true); }
+  function openList() {
+    if (c.mode !== 'run' || open) return;
+    open = true;
+    list.classList.add('open');
+    c.fire('vbdropdown');
+    doc().addEventListener('mousedown', onOutside, true);
+  }
+  function pick(path: string) {
+    close();
+    if (path === c.str('Drive')) return;
+    c.props.Drive = path;
+    input.value = label(path);
+    markSel();
+    c.fire('vbdrive', { drive: path });
+  }
+  const markSel = () => list.querySelectorAll<HTMLElement>('.vb-item').forEach(e => e.classList.toggle('sel', e.dataset.path === c.str('Drive')));
+  return {
+    build() {
+      if (open) close();
+      input = h('input', { type: 'text', class: 'vb-input', spellcheck: false, autocomplete: 'off' });
+      input.readOnly = true;
+      const btn = h('div', { class: 'vb-combo-btn' }, h('span', { class: 'vb-glyph' }));
+      field = h('div', { class: 'vb-combo-field' }, input, btn);
+      list = h('div', { class: 'vb-combo-list' });
+      c.el.replaceChildren(field, list);
+      c.setInput(input);
+      if (c.mode !== 'run') return;
+      const toggle = (e: Event) => { e.preventDefault(); input.focus(); open ? close() : openList(); };
+      btn.addEventListener('mousedown', toggle);
+      input.addEventListener('mousedown', toggle);
+      list.addEventListener('mousedown', e => {
+        const it = (e.target as Element).closest<HTMLElement>('.vb-item');
+        if (!it) return;
+        e.preventDefault();
+        pick(it.dataset.path!);
+      });
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && open) { e.preventDefault(); close(); }
+        else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const all = drives(), i = all.findIndex(d => d[0] === c.str('Drive'));
+          const next = all[Math.min(all.length - 1, Math.max(0, i + (e.key === 'ArrowDown' ? 1 : -1)))];
+          if (next) pick(next[0]);
+        }
+      });
+    },
+    patch(k) {
+      if (has(k, 'Drives')) {
+        list.replaceChildren(...drives().map(d => h('div', { class: 'vb-item', dataset: { path: d[0] } }, label(d[0]))));
+      }
+      if (has(k, 'Drive', 'Drives')) { input.value = label(c.str('Drive')); markSel(); }
+      if (has(k, 'BackColor')) { field.style.backgroundColor = c.color('BackColor'); list.style.backgroundColor = c.color('BackColor'); }
+    },
+    bg: () => null,
+  };
+}
+
+/** DirListBox: the folders above `Path` (each one level further in), the current folder, and the sub-folders from `List` (full paths) below it.
+ *  Run mode: a click dispatches `vbdirclick` ({ index }: the sub-folder number, or -1 current, -2 its parent ...); a double click on a folder
+ *  other than the current one dispatches `vbdiropen` ({ path }). */
+function dirListBox(c: Ctx): Renderer {
+  let root: HTMLElement;
+  let sel = -1;
+  const base = (p: string) => p.slice(p.lastIndexOf('/') + 1);
+  function paint() {
+    const path = c.str('Path') || '/', segs = path.split('/').filter(Boolean);
+    const chain = ['/', ...segs.map((_, i) => '/' + segs.slice(0, i + 1).join('/'))];
+    const row = (p: string, level: number, index: number, name: string, isOpen: boolean) =>
+      h('div', { class: index === sel ? 'dir-row sel' : 'dir-row', dataset: { path: p, index: String(index) }, style: { paddingLeft: `${level * 12 + 2}px` } },
+        h('span', { class: isOpen ? 'dir-ico open' : 'dir-ico' }), h('span', { class: 'dir-text' }, name));
+    const rows = chain.map((p, i) => row(p, i, -(chain.length - i), i === 0 ? '/' : base(p), true));
+    for (const [i, p] of c.list('List').entries()) rows.push(row(p, chain.length, i, base(p), false));
+    root.replaceChildren(...rows);
+  }
+  return {
+    build() {
+      root = h('div', { class: 'vb-dir', tabindex: '0' });
+      c.el.replaceChildren(root);
+      c.setInput(root);
+      if (c.mode !== 'run') return;
+      const rowOf = (e: Event) => { const r = (e.target as Element).closest<HTMLElement>('.dir-row'); return r && root.contains(r) && root.getAttribute('aria-disabled') !== 'true' ? r : null; };
+      root.addEventListener('click', e => {
+        const r = rowOf(e);
+        if (!r) return;
+        sel = Number(r.dataset.index);
+        c.props.ListIndex = sel;
+        paint();
+        c.fire('vbdirclick', { index: sel });
+      });
+      root.addEventListener('dblclick', e => {
+        const r = rowOf(e);
+        if (r && Number(r.dataset.index) !== -1) c.fire('vbdiropen', { path: r.dataset.path! });
+      });
+    },
+    patch(k) {
+      if (has(k, 'ListIndex')) sel = c.num('ListIndex');
+      if (has(k, 'Path', 'List', 'ListIndex')) paint();
+    },
+  };
+}
+
 function pictureBox(c: Ctx): Renderer {
   let host: HTMLElement;
   return {
@@ -385,6 +496,138 @@ function timer(c: Ctx): Renderer {
   return {
     build() { c.el.innerHTML = TIMER_SVG; },
     patch() { /* nothing: the icon is fixed */ },
+  };
+}
+
+const COMMONDIALOG_SVG = '<svg viewBox="0 0 32 32" width="32" height="32" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges">'
+  + '<rect x="4.5" y="5.5" width="23" height="21" fill="#fff" stroke="#000"/><rect x="5" y="6" width="22" height="3" fill="#000080"/>'
+  + '<path d="M7 13h14M7 16h14M7 19h9" stroke="#000"/><rect x="19.500" y="19.500" width="6" height="5" fill="#ffff00" stroke="#000"/></svg>';
+
+/** Invisible at run time; in the designer an icon, like the Timer. */
+function commonDialog(c: Ctx): Renderer {
+  return {
+    build() { c.el.innerHTML = COMMONDIALOG_SVG; },
+    patch() { /* nothing: the icon is fixed */ },
+  };
+}
+
+/** Sel* property -> the format key it holds. */
+const RTF_PROPS: readonly [string, keyof RtfFormat][] = [
+  ['SelBold', 'bold'], ['SelItalic', 'italic'], ['SelUnderline', 'underline'], ['SelColor', 'color'], ['SelFontName', 'fontName'], ['SelFontSize', 'fontSize'],
+];
+
+/**
+ * RichTextBox: an editable div (content: see richText.ts). Text is the plain text. The selection and its format are reported with
+ * `vbselchange` ({ SelStart, SelLength, SelBold ... }) after the user moved or typed. Text with formats arrives as the prop `Runs` (see
+ * encodeRuns; the run session computes SelText and Sel<Format> on its own copy), the selection as SelStart / SelLength, and a format set at an
+ * insertion point as Sel<Format> (it waits for the next typing).
+ */
+function richTextBox(c: Ctx): Renderer {
+  let input: HTMLElement;
+  let cur = { start: 0, length: 0 };
+  let pending: RtfPatch | null = null;
+  let mouse = false;
+  const font = (): FontValue => { const f = c.props.Font; return isFont(f) ? f : DEFAULTS.RichTextBox.Font as FontValue; };
+  const base = (): RtfFormat => {
+    const f = font();
+    return { bold: f.bold, italic: f.italic, underline: f.underline, color: c.num('ForeColor'), fontName: f.name, fontSize: f.size };
+  };
+  const style = (el: HTMLElement, f: RtfPatch): void => {
+    if (f.bold !== undefined) el.style.fontWeight = f.bold ? '700' : '400';
+    if (f.italic !== undefined) el.style.fontStyle = f.italic ? 'italic' : 'normal';
+    if (f.underline !== undefined) el.style.textDecoration = f.underline ? 'underline' : 'none';
+    if (f.color !== undefined) el.style.color = vbColorToCss(f.color);
+    if (f.fontName !== undefined) el.style.fontFamily = fontFamily(f.fontName);
+    if (f.fontSize !== undefined) el.style.fontSize = `${Math.round(f.fontSize * 96 / 72)}px`;
+  };
+  const length = (): number => (input.textContent ?? '').length;
+  const clamp = (n: number): number => Math.min(Math.max(0, Math.round(n) || 0), length());
+  const focused = (): boolean => input.ownerDocument.activeElement === input;
+  const show = (): void => { if (focused()) setSelectionOffsets(input, cur.start, cur.length); };
+  /** The format at the selection: the control's own, what the text says there, and what waits for the next typing. */
+  const effective = (runs: Run[] = readRuns(input)): RtfFormat => ({ ...base(), ...formatAt(runs, cur.start, cur.length), ...(cur.length === 0 ? pending : null) });
+  const write = (runs: Run[]): void => writeRuns(input, runs, style);
+
+  /** The user moved the selection or typed. */
+  function report(): void {
+    const s = selectionOffsets(input);
+    if (!s) return;
+    if (s.start !== cur.start || s.length !== cur.length) pending = null;
+    cur = s;
+    const f = effective();
+    c.fire('vbselchange', { SelStart: s.start, SelLength: s.length, SelBold: f.bold, SelItalic: f.italic, SelUnderline: f.underline,
+      SelColor: f.color, SelFontName: f.fontName, SelFontSize: f.fontSize });
+  }
+  /** Typed text, Enter and paste go through the runs when a format is waiting (and always for Enter and paste: plain text only). */
+  function insert(text: string): void {
+    const s = selectionOffsets(input) ?? cur;
+    cur = s;
+    const runs = readRuns(input);
+    write(replaceRange(runs, s.start, s.length, text, pending ? { ...formatAt(runs, s.start, s.length), ...pending } : null));
+    cur = { start: s.start + text.length, length: 0 };
+    pending = null;
+    setSelectionOffsets(input, cur.start, 0);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  return {
+    build() {
+      input = h('div', { class: 'vb-input vb-rtf', contenteditable: 'true', spellcheck: false, role: 'textbox', 'aria-multiline': 'true' });
+      input.addEventListener('input', report);
+      input.addEventListener('keyup', report);
+      input.addEventListener('mouseup', () => { mouse = false; report(); });
+      input.addEventListener('mousedown', () => { mouse = true; });
+      input.addEventListener('focus', () => { if (!mouse) show(); });   // SelStart set before SetFocus; a click puts the caret where it hit
+      input.addEventListener('beforeinput', e => {
+        const ie = e as InputEvent;
+        let text: string | null = null;
+        if (ie.inputType === 'insertParagraph' || ie.inputType === 'insertLineBreak') text = '\n';
+        else if (ie.inputType === 'insertFromPaste' || ie.inputType === 'insertFromDrop') text = ie.dataTransfer?.getData('text/plain') ?? null;
+        else if (ie.inputType === 'insertText' && pending) text = ie.data;
+        if (text === null) return;
+        ie.preventDefault();
+        insert(text);
+      });
+      c.el.replaceChildren(input);
+      c.setInput(input);
+    },
+    patch(k) {
+      let rewrote = false;
+      if (has(k, 'Runs') && c.str('Runs') !== '' && encodeRuns(readRuns(input)) !== c.str('Runs')) {   // text with formats (set by code, or the echo of the user's own typing)
+        const runs = decodeRuns(c.str('Runs'));
+        if (runs) { write(runs); rewrote = true; }
+      }
+      if (has(k, 'Text') && (input.textContent ?? '') !== c.str('Text')) {
+        input.textContent = c.str('Text');
+        pending = null;
+        rewrote = true;
+      }
+      if (has(k, 'ScrollBars')) {
+        const sb = c.num('ScrollBars');
+        input.style.overflowX = sb === 1 || sb === 3 ? 'scroll' : 'hidden';
+        input.style.overflowY = sb === 2 || sb === 3 ? 'scroll' : 'hidden';
+        input.style.whiteSpace = sb === 1 || sb === 3 ? 'pre' : 'pre-wrap';
+      }
+      if (has(k, 'Locked', 'Enabled')) input.contentEditable = c.mode === 'run' && !c.bool('Locked') && c.bool('Enabled') ? 'true' : 'false';
+      if (k === null) return;
+      if (rewrote) { cur = { start: clamp(cur.start), length: 0 }; cur.length = clamp(cur.start + cur.length) - cur.start; }
+      if (k.has('SelStart') || k.has('SelLength')) {
+        const start = clamp(c.num('SelStart')), len = clamp(start + c.num('SelLength')) - start;
+        if (start !== cur.start || len !== cur.length) { cur = { start, length: len }; pending = null; rewrote = true; }
+      }
+      if (rewrote) show();
+      // a format set at an insertion point waits for the next typing (a format of a selection arrives as Runs)
+      if (cur.length === 0) {
+        const want: Record<string, string | number | boolean> = {};
+        const eff = effective();
+        for (const [prop, key] of RTF_PROPS) {
+          if (!k.has(prop)) continue;
+          const v = key === 'bold' || key === 'italic' || key === 'underline' ? c.bool(prop) : key === 'fontName' ? c.str(prop) : c.num(prop);
+          if (v !== eff[key]) want[key] = v;
+        }
+        if (Object.keys(want).length) pending = { ...pending, ...want as RtfPatch };
+      }
+    },
   };
 }
 
@@ -999,6 +1242,9 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   Frame: frame,
   ListBox: listBox,
   ComboBox: comboBox,
+  DriveListBox: driveListBox,
+  DirListBox: dirListBox,
+  FileListBox: listBox,
   PictureBox: pictureBox,
   Image: image,
   Timer: timer,
@@ -1014,6 +1260,8 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   TreeView: treeView,
   ListView: listView,
   MSFlexGrid: flexGrid,
+  CommonDialog: commonDialog,
+  RichTextBox: richTextBox,
 };
 
 // ---------------------------------------------------------------------------------------------------------------

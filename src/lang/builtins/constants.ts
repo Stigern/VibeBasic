@@ -77,5 +77,15 @@ group({
   flexAlignCenterBottom: 5, flexAlignRightTop: 6, flexAlignRightCenter: 7, flexAlignRightBottom: 8, flexAlignGeneral: 9,
 });
 
+// CommonDialog (Flags are stored but not used) and RichTextBox
+group({
+  cdlCancel: 32755,
+  cdlOFNReadOnly: 0x1, cdlOFNOverwritePrompt: 0x2, cdlOFNHideReadOnly: 0x4, cdlOFNNoChangeDir: 0x8, cdlOFNAllowMultiselect: 0x200,
+  cdlOFNPathMustExist: 0x800, cdlOFNFileMustExist: 0x1000, cdlOFNCreatePrompt: 0x2000, cdlOFNExplorer: 0x80000,
+  cdlCCRGBInit: 0x1, cdlCCFullOpen: 0x2, cdlCCPreventFullOpen: 0x4,
+  cdlCFScreenFonts: 0x1, cdlCFPrinterFonts: 0x2, cdlCFBoth: 0x3, cdlCFEffects: 0x100,
+  rtfNone: 0, rtfHorizontal: 1, rtfVertical: 2, rtfBoth: 3,
+});
+
 // StatusBar / TabStrip
 group({ sbrNormal: 0, sbrSimple: 1, sbrText: 0, sbrLeft: 0, sbrCenter: 1, sbrRight: 2 });

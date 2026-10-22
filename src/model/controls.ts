@@ -389,13 +389,82 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
     events: [evClick(), evDbl(), ev('RowColChange'), ev('SelChange'), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
+  // Invisible at run time, like Timer (Left and Top only). ShowOpen / ShowSave / ShowColor / ShowFont are run by the run session;
+  // ShowPrinter and ShowHelp are not supported (438). FileTitle is run-time only.
+  CommonDialog: def({
+    type: 'CommonDialog', namePrefix: 'CommonDialog', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true, toolboxTooltip: 'CommonDialog',
+    defaultEvent: '', defaultMember: null,
+    props: [
+      int('Left', 0), int('Top', 0), str('Tag'),
+      str('FileName'), rt('FileTitle', 'string', ''), str('Filter'), int('FilterIndex', 1, { min: 0 }),
+      str('DialogTitle'), str('InitDir'), int('Flags', 0),
+      color('Color', 0), str('FontName', 'MS Sans Serif'), int('FontSize', 8, { min: 1, max: 999 }),
+      bool('FontBold', false), bool('FontItalic', false), bool('FontUnderline', false),
+      bool('CancelError', false),
+    ],
+    events: [],
+    methods: [
+      { name: 'ShowOpen', params: '' }, { name: 'ShowSave', params: '' }, { name: 'ShowColor', params: '' }, { name: 'ShowFont', params: '' },
+    ],
+  }),
+
+  // Text is plain text; the formatting of the selection is run-time only (SelBold ...). The window reports SelStart, SelLength and the Sel* format.
+  RichTextBox: def({
+    type: 'RichTextBox', namePrefix: 'RichTextBox', defaultWidth: 2415, defaultHeight: 975, toolboxTooltip: 'RichTextBox',
+    defaultEvent: 'Change', defaultMember: 'Text',
+    props: [
+      ...common(), txt('Text'), bool('Locked', false), bool('MultiLine', true, { runtime: 'ro' }),
+      en('ScrollBars', 0, ['rtfNone', 'rtfHorizontal', 'rtfVertical', 'rtfBoth'], { runtime: 'ro' }),
+      color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
+      rt('SelStart', 'int', 0), rt('SelLength', 'int', 0), rt('SelText', 'string', ''),
+      rt('SelBold', 'bool', false), rt('SelItalic', 'bool', false), rt('SelUnderline', 'bool', false),
+      rt('SelColor', 'color', WIN_TEXT), rt('SelFontName', 'string', 'MS Sans Serif'), rt('SelFontSize', 'int', 8),
+    ],
+    events: [evChange(), ev('SelChange'), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+  // The drives, folders and files come from the backend at run time. Drive is the path of a volume ("/" is the startup disk);
+  // Drives ('path|name' lines), and a folder / file list (the full paths of the sub-folders, the file names) are the window's data.
+  DriveListBox: def({
+    type: 'DriveListBox', namePrefix: 'Drive', defaultWidth: 1215, defaultHeight: 315, toolboxTooltip: 'DriveListBox',
+    defaultEvent: 'Change', defaultMember: 'Drive',
+    props: [
+      ...common(), color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
+      rt('Drive', 'string', '/'), p('Drives', 'list', ['/|/'], { designTime: false, runtime: 'none' }),
+    ],
+    events: [evChange(), ev('DropDown'), ...evFocus(), ...evKeys()],
+  }),
+
+  // List(i): i >= 0 the sub-folders (full paths), -1 the current folder, -2 its parent ...; ListCount counts the sub-folders.
+  DirListBox: def({
+    type: 'DirListBox', namePrefix: 'Dir', defaultWidth: 1215, defaultHeight: 1935, toolboxTooltip: 'DirListBox',
+    defaultEvent: 'Change', defaultMember: 'Path',
+    props: [
+      ...common(), color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
+      rt('Path', 'string', ''), p('List', 'list', [], { designTime: false, runtime: 'ro' }),
+      rt('ListCount', 'int', 0, 'ro'), rt('ListIndex', 'int', -1),
+    ],
+    events: [evChange(), evClick(), ev('Scroll'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  // Pattern: "*.*" or several patterns separated by ";". Archive is the same as Normal (an ordinary file).
+  FileListBox: def({
+    type: 'FileListBox', namePrefix: 'File', defaultWidth: 1215, defaultHeight: 1935, toolboxTooltip: 'FileListBox',
+    defaultEvent: 'Click', defaultMember: 'FileName',
+    props: [
+      ...common(), str('Pattern', '*.*'), bool('Archive', true), bool('Hidden', false), bool('Normal', true),
+      color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
+      rt('Path', 'string', ''), rt('FileName', 'string', ''), p('List', 'list', [], { designTime: false, runtime: 'ro' }),
+      rt('ListCount', 'int', 0, 'ro'), rt('ListIndex', 'int', -1),
+    ],
+    events: [evClick(), evDbl(), ev('PathChange'), ev('PatternChange'), ev('Scroll'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
 };
 
 /** VB6 toolbox order. */
 export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
-  'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip',
-  'TreeView', 'ListView', 'MSFlexGrid',
+  'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip',
+  'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox',
 ];
 
 // ---------------------------------------------------------------------------------------------------------------

@@ -5,12 +5,17 @@ import type { VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
 import { Empty, Nothing, coerce, isObject, toBool, toStr, type VBValue } from '../../lang/values';
 import { CONTROL_TYPES, getPropDef, type PropDef } from '../../model/controls';
+import { decodeRuns, encodeRuns, formatAt, formatRange, replaceRange, runsText, type RtfPatch, type Run } from '../../controls/richText';
+import type { DirListing, Volume } from '../../backend/backend';
+import { joinFields } from '../../model/fieldLines';
+import { baseName, type FileDialogRequest } from '../commonDialog';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../../model/types';
 import type { PatchQueue } from '../patchQueue';
 import { PictureObject, type HasPictureRef } from './appObjects';
 import type { ChangeKind, CollectionObject, ItemObject } from './collectionObject';
 import { makePanels, makeTabs, panelLine, tabLine } from './commonCollections';
 import { DEFAULT_ALIGN, GridData } from './gridData';
+import { dirListItem, filterFiles, findVolume, joinPath, normalizePath, resolvePath, subDirs, type FileContext } from './fileControls';
 import { columnLine, listLine, makeColumns, makeListItems, makeNodes, nodeLines, TreeNode, type NodesCollection, type Picker } from './listCollections';
 
 export interface RunContext {
@@ -20,6 +25,14 @@ export interface RunContext {
   timerChanged(ctrl: ControlObject): void;
   /** A property was set by code (after the patch is queued); `old` is the value before. VB6 raises events for some (Text1.Text → Change). */
   propChanged?(ctrl: ControlObject, prop: string, old: PropValue): void;
+  /** CommonDialog: the dialogs of the form host (file, colour, font). Null result = cancelled. */
+  dialogs?: {
+    fileDialog(o: FileDialogRequest): Promise<string | null>;
+    colorDialog(o: { color: number }): Promise<number | null>;
+    fontDialog(o: { font: FontValue }): Promise<FontValue | null>;
+  };
+  /** DriveListBox, DirListBox, FileListBox: the volumes and folder contents from the backend. */
+  files?: FileContext;
 }
 
 /** Any picture value (what LoadPicture returns, or what `Picture` reads) carries its asset reference. */
@@ -49,6 +62,7 @@ class FontObject implements VBObject {
 }
 
 const isListType = (t: string): boolean => t === 'ListBox' || t === 'ComboBox';
+const isBrowserType = (t: string): boolean => t === 'DirListBox' || t === 'FileListBox';
 const num = (v: VBValue): number => coerce(v, 'Long') as number;
 const badIndex = (): VBRuntimeError => new VBRuntimeError(381, 'Invalid property array index');
 
@@ -62,6 +76,16 @@ export class ControlObject implements VBObject {
   private selItem: ItemObject | null = null;
   /** MSFlexGrid cells. */
   private grid: GridData | null = null;
+  /** RichTextBox: the text with its formats (the window gets it as the prop `Runs`) and the format waiting at the insertion point. */
+  private runs: Run[] = [];
+  private pendingFmt: RtfPatch | null = null;
+  /** DirListBox / FileListBox: the last folder listing, the load in progress (reads of ListCount and List wait for it) and a FileName to select once it is there. */
+  private listing: DirListing | null = null;
+  private loading: Promise<void> | null = null;
+  private loadSeq = 0;
+  private pendingName: string | null = null;
+  /** DriveListBox: the volumes, once known. */
+  private volumes: Volume[] | null = null;
 
   constructor(readonly def: ControlDef, private formKey: string, private queue: PatchQueue, private ctx: RunContext) {
     const td = CONTROL_TYPES[def.type];
@@ -75,6 +99,16 @@ export class ControlObject implements VBObject {
     if (isListType(def.type)) {
       this.props.ListIndex = -1; this.props.NewIndex = -1;
     }
+    if (def.type === 'RichTextBox') {   // the selection starts out with the control's own font and colour
+      const f = this.props.Font as FontValue;
+      this.runs = decodeRuns(String(this.props.Runs ?? '')) ?? (this.props.Text ? [{ text: String(this.props.Text), fmt: {} }] : []);
+      Object.assign(this.props, { SelBold: f.bold, SelItalic: f.italic, SelUnderline: f.underline,
+        SelColor: this.props.ForeColor, SelFontName: f.name, SelFontSize: f.size });
+    }
+    if (isBrowserType(def.type)) {
+      this.props.Path = normalizePath(toStr(this.props.Path as string) || this.ctx.files?.defaultPath || '/');
+      this.reload();
+    } else if (def.type === 'DriveListBox') this.loadVolumes();
     if (def.type === 'StatusBar') {
       this.collections.set('panels', makePanels(this.lines('Panels'), (k, _i, at) => this.collectionChanged(k, at)));
     } else if (def.type === 'TabStrip') {
@@ -94,6 +128,68 @@ export class ControlObject implements VBObject {
       this.props.Col = Math.min(Number(this.props.Col), this.grid.cols - 1);
       this.syncGrid();
     }
+  }
+
+  // -- DriveListBox, DirListBox and FileListBox ----------------------------------------------------------------
+
+  private loadVolumes(): void {
+    this.ctx.files?.listVolumes().then(v => {
+      if (!v.length) return;
+      this.volumes = v;
+      this.props.Drives = v.map(x => joinFields([x.path, x.name]));
+      this.send({ Drives: this.props.Drives });
+    }).catch(() => { /* the default drive "/" stays */ });
+  }
+
+  /** Reads the folder in `Path`; the lists follow when it is there (an unreadable folder is an empty list). */
+  private reload(): void {
+    const files = this.ctx.files;
+    if (!files) return;
+    const seq = ++this.loadSeq, path = String(this.props.Path);
+    const p: Promise<void> = new Promise<DirListing>(r => r(files.listDir(path)))
+      .catch((): DirListing => ({ dirs: [], files: [] }))
+      .then(l => {
+        if (seq !== this.loadSeq) return;
+        this.listing = l;
+        this.send(this.listProps());
+      })
+      .finally(() => { if (this.loading === p) this.loading = null; });
+    this.loading = p;
+  }
+
+  /** Resolves when no folder is being read (a newer read replaces an older one). */
+  private settled(): Promise<void> {
+    const p = this.loading;
+    return p ? p.then(() => this.settled()) : Promise.resolve();
+  }
+
+  /** List and ListIndex from the listing and the current Path / Pattern / Hidden / Normal / Archive; stored here, the caller sends them. */
+  private listProps(): Record<string, PropValue> {
+    const p = this.props, l = this.listing;
+    const list = !l ? [] : this.def.type === 'DirListBox' ? subDirs(String(p.Path), l.dirs)
+      : filterFiles(l.files, { pattern: toStr(p.Pattern as string), hidden: p.Hidden === true, normal: p.Normal === true, archive: p.Archive === true });
+    let index = -1;
+    if (this.pendingName !== null) { const n = this.pendingName.toLowerCase(); index = list.findIndex(x => x.toLowerCase() === n); this.pendingName = null; }
+    p.List = list;
+    p.ListIndex = index;
+    return { List: list, ListIndex: index };
+  }
+
+  /** FileListBox.FileName = "x" selects the file; "folder/x" also changes Path. */
+  private setFileName(name: string): void {
+    const slash = name.lastIndexOf('/');
+    if (slash >= 0) this.write(this.propDef('Path'), name.slice(0, slash) || '/');
+    this.pendingName = slash >= 0 ? name.slice(slash + 1) : name;
+    if (this.loading) return;
+    this.send(this.listProps());
+  }
+
+  /** Drive = "x": the volume it names (or holds); error 68 when there is none. */
+  private driveValue(v: string): string {
+    if (!this.volumes) return v;
+    const vol = findVolume(this.volumes, v);
+    if (!vol) throw new VBRuntimeError(68);
+    return vol.path;
   }
 
   // -- TreeView, ListView and MSFlexGrid: what the window gets ---------------------------------------------------
@@ -234,6 +330,7 @@ export class ControlObject implements VBObject {
 
   /** State reported by the window (user input). Updates the mirror without sending a patch back. */
   applyState(props: Record<string, PropValue>): void {
+    const oldPath = this.props.Path;
     for (const [k, v] of Object.entries(props)) {
       if (k === 'SelectedNode' || k === 'SelectedIndex') this.selItem = this.collections.get(k === 'SelectedNode' ? 'nodes' : 'listitems')?.find(Number(v)) ?? null;
       else if (k === 'Toggled') {   // 'index|0 or 1': a node was expanded / collapsed by a click on the +/- box
@@ -244,6 +341,11 @@ export class ControlObject implements VBObject {
         continue;
       }
       this.props[getPropDef(this.def.type, k)?.name ?? k] = v;
+    }
+    if (isBrowserType(this.def.type) && 'Path' in props && this.props.Path !== oldPath) this.reload();   // a folder opened by a double click
+    if (this.def.type === 'RichTextBox') {   // the user typed, or moved the selection
+      if ('Runs' in props) this.runs = decodeRuns(String(props.Runs ?? '')) ?? (this.props.Text ? [{ text: String(this.props.Text), fmt: {} }] : []);
+      if ('SelStart' in props || 'SelLength' in props) this.pendingFmt = null;
     }
   }
 
@@ -274,6 +376,15 @@ export class ControlObject implements VBObject {
       return this.selItem?.owner ? this.selItem : Nothing;
     }
     if (this.grid) { const v = this.gridGet(l, args); if (v !== undefined) return v; }
+    if (isBrowserType(this.def.type) && this.loading && (pd.name === 'List' || pd.name === 'ListCount')) {
+      return this.settled().then(() => this.getMember(name, args)) as unknown as VBValue;   // the interpreter waits for a Promise
+    }
+    if (this.def.type === 'DirListBox' && pd.name === 'List') {
+      if (args.length !== 1) throw new VBRuntimeError(450);
+      const v = dirListItem(String(this.props.Path), this.list(), num(args[0]));
+      if (v === undefined) throw badIndex();
+      return v;
+    }
     if (pd.kind === 'list') return this.getListItem(args);
     if (pd.name === 'Selected') return this.selected(args);
     if (args.length) throw new VBRuntimeError(450);
@@ -298,6 +409,11 @@ export class ControlObject implements VBObject {
       const tab = this.collections.get('tabs')?.items().find(t => t === value);
       if (!tab) throw new VBRuntimeError(5);
       this.selectTab(tab.index);
+      return;
+    }
+    if (pd.name === 'FileName' && this.def.type === 'FileListBox') {
+      if (args.length) throw new VBRuntimeError(450);
+      this.setFileName(toStr(this.plain(value)));
       return;
     }
     if (this.grid && this.gridSet(name.toLowerCase(), args, value)) return;
@@ -326,7 +442,7 @@ export class ControlObject implements VBObject {
     this.write(pd, this.convert(pd, value));
   }
 
-  callMethod(name: string, args: VBValue[]): VBValue {
+  callMethod(name: string, args: VBValue[]): VBValue | Promise<VBValue> {
     const l = name.toLowerCase();
     if (!CONTROL_TYPES[this.def.type].methods.some(m => m.name.toLowerCase() === l)) throw new VBRuntimeError(438);
     switch (l) {
@@ -335,6 +451,13 @@ export class ControlObject implements VBObject {
       case 'additem': return this.addItem(args);
       case 'removeitem': return this.removeItem(args);
       case 'clear': return this.clear();
+      case 'showopen': case 'showsave': return this.showFile(l === 'showopen');
+      case 'showcolor': return this.showColor();
+      case 'showfont': return this.showFont();
+      case 'refresh':
+        if (!isBrowserType(this.def.type)) return Empty;
+        this.reload();
+        return this.settled().then(() => Empty);
       default: return Empty;   // Refresh, ZOrder: nothing to do in the renderer
     }
   }
@@ -369,6 +492,9 @@ export class ControlObject implements VBObject {
         return t.substr(s, n);
       }
       case 'Name': return this.def.name;
+      case 'FileName':
+        if (this.def.type === 'FileListBox') { const i = this.props.ListIndex as number; return i >= 0 ? this.list()[i] ?? '' : ''; }
+        break;
     }
     return this.props[pd.name];
   }
@@ -434,7 +560,11 @@ export class ControlObject implements VBObject {
     const patch: Record<string, PropValue> = {};
     const name = pd.name;
     const old = this.props[name === 'SelText' ? 'Text' : name];
-    if (name === 'SelText') {
+    if (name === 'Path' && isBrowserType(this.def.type)) v = resolvePath(String(old), String(v));
+    else if (name === 'Drive' && this.def.type === 'DriveListBox') v = this.driveValue(String(v));
+    if (this.def.type === 'RichTextBox' && this.writeRich(pd, v, patch)) {
+      // handled: the text with its formats is kept here, the window gets it as Runs
+    } else if (name === 'SelText') {
       const t = String(this.props.Text ?? ''), s = Number(this.props.SelStart), n = Number(this.props.SelLength);
       const ins = String(v);
       this.props.Text = t.slice(0, s) + ins + t.slice(s + n);
@@ -443,6 +573,10 @@ export class ControlObject implements VBObject {
     } else {
       this.props[name] = v;
       patch[name] = v;
+      if (isBrowserType(this.def.type) && v !== old) {
+        if (name === 'Path') { Object.assign(patch, { List: [], ListIndex: -1 }); Object.assign(this.props, { List: [], ListIndex: -1 }); this.reload(); }
+        else if (this.def.type === 'FileListBox' && (name === 'Pattern' || name === 'Hidden' || name === 'Normal' || name === 'Archive')) Object.assign(patch, this.listProps());
+      }
       if (name === 'ListIndex') {
         const i = v as number;
         if (this.def.type === 'ComboBox') { this.props.Text = i >= 0 ? this.list()[i] : ''; patch.Text = this.props.Text; }
@@ -451,15 +585,102 @@ export class ControlObject implements VBObject {
         this.props.ListIndex = i; patch.ListIndex = i;
       }
     }
+    if (this.def.type === 'RichTextBox' && (name === 'SelStart' || name === 'SelLength' || name === 'SelText' || name === 'Text')) this.refreshSelFormat();
     this.send(patch);
     if (this.grid && (name === 'Rows' || name === 'Cols' || name === 'FixedRows' || name === 'FixedCols')) this.gridResized();
     if (this.def.type === 'Timer' && (name === 'Enabled' || name === 'Interval')) this.ctx.timerChanged(this);
     this.ctx.propChanged?.(this, name === 'SelText' ? 'Text' : name, old);
   }
 
+  /** RichTextBox: SelBold ... describe the selection as it is now. */
+  private refreshSelFormat(): void {
+    const p = this.props, f = p.Font as FontValue;
+    const fmt = { bold: f.bold, italic: f.italic, underline: f.underline, color: p.ForeColor, fontName: f.name, fontSize: f.size,
+      ...formatAt(this.runs, Number(p.SelStart), Number(p.SelLength)), ...(Number(p.SelLength) === 0 ? this.pendingFmt : null) };
+    Object.assign(p, { SelBold: fmt.bold, SelItalic: fmt.italic, SelUnderline: fmt.underline, SelColor: fmt.color, SelFontName: fmt.fontName, SelFontSize: fmt.fontSize });
+  }
+
+  /** RichTextBox: SelText, Text and the Sel<Format> properties work on the runs. False for every other property. */
+  private writeRich(pd: PropDef, v: PropValue, patch: Record<string, PropValue>): boolean {
+    const name = pd.name, p = this.props;
+    const s = Math.min(Number(p.SelStart), runsText(this.runs).length), n = Number(p.SelLength);
+    const FMT: Record<string, keyof RtfPatch> = { SelBold: 'bold', SelItalic: 'italic', SelUnderline: 'underline', SelColor: 'color', SelFontName: 'fontName', SelFontSize: 'fontSize' };
+    if (name === 'SelText') {
+      const ins = String(v);
+      const fmt = this.pendingFmt ? { ...formatAt(this.runs, s, n), ...this.pendingFmt } : null;
+      this.runs = replaceRange(this.runs, s, n, ins, fmt);
+      this.pendingFmt = null;
+      p.SelStart = s + ins.length; p.SelLength = 0;
+      Object.assign(patch, { SelStart: p.SelStart, SelLength: 0 });
+    } else if (name === 'Text') {
+      this.runs = v === '' ? [] : [{ text: String(v), fmt: {} }];
+      this.pendingFmt = null;
+    } else if (FMT[name]) {
+      p[name] = v;
+      patch[name] = v;
+      if (n > 0) this.runs = formatRange(this.runs, s, n, { [FMT[name]]: v } as RtfPatch);
+      else this.pendingFmt = { ...this.pendingFmt, [FMT[name]]: v } as RtfPatch;
+    } else {
+      if (name === 'SelStart' || name === 'SelLength') this.pendingFmt = null;
+      return false;
+    }
+    p.Text = runsText(this.runs);
+    p.Runs = encodeRuns(this.runs);
+    Object.assign(patch, { Text: p.Text, Runs: p.Runs });
+    return true;
+  }
+
   private send(props: Record<string, PropValue>): void {
-    if (this.def.type === 'Timer') return;   // no view
+    if (this.def.type === 'Timer' || this.def.type === 'CommonDialog') return;   // no view
     this.queue.set(this.formKey, this.def.id, props);
+    // a RichTextBox applies each change at the selection as it is now: no merging of SelStart = 3 and SelBold = True into one patch
+    if (this.def.type === 'RichTextBox') this.queue.flush();
+  }
+
+  // -- CommonDialog -----------------------------------------------------------------------------------------
+
+  private dialogs(): NonNullable<RunContext['dialogs']> {
+    if (!this.ctx.dialogs) throw new VBRuntimeError(438);
+    return this.ctx.dialogs;
+  }
+
+  /** Cancel: error 32755 with CancelError = True, otherwise the call just returns and the properties stay. */
+  private cancelled(): VBValue {
+    if (this.props.CancelError === true) throw new VBRuntimeError(32755);
+    return Empty;
+  }
+
+  private async showFile(open: boolean): Promise<VBValue> {
+    const dialogs = this.dialogs();
+    this.queue.flush();
+    const p = this.props;
+    const path = await dialogs.fileDialog({
+      kind: open ? 'open' : 'save', filter: toStr(p.Filter as string), filterIndex: Number(p.FilterIndex),
+      title: toStr(p.DialogTitle as string), initDir: toStr(p.InitDir as string), fileName: toStr(p.FileName as string),
+    });
+    if (path === null) return this.cancelled();
+    p.FileName = path;
+    p.FileTitle = baseName(path);
+    return Empty;
+  }
+
+  private async showColor(): Promise<VBValue> {
+    const dialogs = this.dialogs();
+    this.queue.flush();
+    const c = await dialogs.colorDialog({ color: Number(this.props.Color) });
+    if (c === null) return this.cancelled();
+    this.props.Color = c;
+    return Empty;
+  }
+
+  private async showFont(): Promise<VBValue> {
+    const dialogs = this.dialogs();
+    this.queue.flush();
+    const p = this.props;
+    const f = await dialogs.fontDialog({ font: { name: toStr(p.FontName as string), size: Number(p.FontSize), bold: p.FontBold === true, italic: p.FontItalic === true, underline: p.FontUnderline === true } });
+    if (f === null) return this.cancelled();
+    Object.assign(p, { FontName: f.name, FontSize: f.size, FontBold: f.bold, FontItalic: f.italic, FontUnderline: f.underline });
+    return Empty;
   }
 
   // -- methods ----------------------------------------------------------------------------------------------

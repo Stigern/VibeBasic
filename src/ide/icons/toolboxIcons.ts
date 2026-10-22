@@ -31,5 +31,10 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
   TreeView: svg('<path d="M3 3v10M3 6h3M3 12h3M7 9h3" stroke="#808080" fill="none"/>' + box(1, 2, 4, 3, '#fff') + box(6, 5, 8, 3, '#fff') + box(6, 11, 8, 3, '#000080') + box(8, 8, 6, 3, '#fff')),
   ListView: svg(box(1, 2, 14, 12) + '<path d="M1 5.5h14M6 2v12" stroke="#808080"/><path d="M3 8h2M3 10.5h2M3 13h2M8 8h5M8 10.5h5" stroke="#000"/>'),
   MSFlexGrid: svg(box(1, 2, 14, 12) + '<path d="M1 5.5h14M1 8.5h14M1 11.5h14M5.5 2v12M10.5 2v12" stroke="#808080"/><rect x="2" y="3" width="3" height="2" fill="#c0c0c0"/>'),
+  CommonDialog: svg(box(1, 2, 14, 12, '#c0c0c0') + '<rect x="2" y="3" width="12" height="2" fill="#000080"/><path d="M3 7h6M3 9.5h6M3 12h4" stroke="#000"/><rect x="10" y="9" width="3" height="3" fill="#ffff00" stroke="#000"/>'),
+  DriveListBox: svg(box(1, 3, 14, 5) + '<rect x="11" y="4" width="3" height="3" fill="#c0c0c0"/>' + box(2, 8, 12, 5, '#c0c0c0') + '<path d="M4 10.5h5" stroke="#000"/><rect x="11" y="10" width="2" height="1" fill="#0f0"/>'),
+  DirListBox: svg(box(1, 1, 14, 14) + '<path d="M3 4h4v2H3zM5 7.5h4v2H5zM7 11h4v2H7z" fill="#ff0" stroke="#000"/>'),
+  FileListBox: svg(box(1, 1, 14, 14) + '<path d="M3 3h5v6H3z" fill="#fff" stroke="#000"/><path d="M4 5h3M4 7h3M9 9h5v5H9z" stroke="#000" fill="#fff"/><path d="M10 11h3" stroke="#000"/>'),
+  RichTextBox: svg(box(1, 2, 14, 12) + '<path d="M3 5h4M3 7.5h8M3 10h6M3 12.5h7" stroke="#000"/><path d="M9 4v3M8 7h3" stroke="#c00000" fill="none"/>'),
   Form: svg(box(1, 2, 14, 12, '#c0c0c0') + '<rect x="2" y="3" width="12" height="3" fill="#000080"/>'),
 };

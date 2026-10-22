@@ -77,6 +77,7 @@ export class RunSession implements Host, FormSession {
     this.program = new Program(modules, this, { appTitle: this.title });
   }
 
+  get appPath(): string { return this.cb.appPath; }
   get state(): 'running' | 'break' | 'ended' { return this._state; }
   get ended(): boolean { return this._state === 'ended'; }
 
