@@ -53,6 +53,26 @@ test('test connection fills models and reports', async () => {
   tab.content.querySelector<HTMLElement>('.cb98-arrow')!.click();
   expect(tab.content.querySelector('.cb98-item')!.textContent).toBe('qwen2.5-coder:14b');
 });
+test('test connection selects first model when Model is empty, keeps a chosen one', async () => {
+  const b = fakeBackend(async () => ['a', 'b']);
+  const tab = buildAiTab(b, document);
+  await flush();
+  const p = tab.controls.testConnection();
+  await flush(); okButton().click(); await p;
+  expect(tab.controls.model.getValue()).toBe('a');
+  tab.controls.model.setValue('b');
+  const p2 = tab.controls.testConnection();
+  await flush(); okButton().click(); await p2;
+  expect(tab.controls.model.getValue()).toBe('b');
+});
+test('apply before the load finished still saves the stored values', async () => {
+  const b = fakeBackend();
+  await saveAiSettings(b, { baseUrl: 'http://x/v1', model: 'm1', apiKey: 'k' });
+  const tab = buildAiTab(b, document);
+  tab.apply();
+  await flush();
+  expect(b.store.get('ai')).toEqual({ baseUrl: 'http://x/v1', model: 'm1', apiKey: 'k' });
+});
 test('test connection error shown', async () => {
   const b = fakeBackend(async () => { throw 'Could not connect to http://x/v1'; });
   const tab = buildAiTab(b, document);
