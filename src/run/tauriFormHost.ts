@@ -16,7 +16,8 @@ import type { FormHost, FormWindow } from './formHost';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 import { windowOptionsFor } from './windowOptions';
 
-export interface FromPayload { key: string; m?: FromWindow; result?: number | string }
+/** `cancelled`: a dialog window closed by the OS (Cmd+W) - answered like Cancel. */
+export interface FromPayload { key: string; m?: FromWindow; result?: number | string; cancelled?: boolean }
 
 export interface WindowCreateOptions {
   url: string; title: string; width: number; height: number; x?: number; y?: number; center: boolean;
@@ -122,6 +123,7 @@ export class TauriFormHost implements FormHost {
       closed = true;
       this.entries.delete(s.key);
       this.forms.delete(w);
+      if (this.forms.size === 0) this.cascade = 0;
       this.closers.delete(close);
       await this.destroy(label, handle);
       await this.releaseIfIdle();
@@ -153,8 +155,10 @@ export class TauriFormHost implements FormHost {
     const ch = this.channel(label);
     let done!: (v: number | string) => void;
     const result = new Promise<number | string>(r => { done = r; });
-    this.entries.set(key, { hello: () => ch.open(['vb:dialog', spec]), from: p => { if (p.result !== undefined) done(p.result); } });
-    const cancel = async () => done(cancelled);
+    this.entries.set(key, { hello: () => ch.open(['vb:dialog', spec]), from: p => { if (p.cancelled) done(cancelled); else if (p.result !== undefined) done(p.result); } });
+    let destroying: Promise<void> | null = null;
+    const destroy = () => (destroying ??= this.destroy(label, handle));
+    const cancel = async () => { done(cancelled); await destroy(); };
     this.closers.add(cancel);
     const title = spec.kind === 'error' ? spec.info.title : spec.title;
     const handle = this.glue.createWindow(label, {
@@ -167,7 +171,7 @@ export class TauriFormHost implements FormHost {
     } finally {
       this.closers.delete(cancel);
       this.entries.delete(key);
-      await this.destroy(label, handle);
+      await destroy();
       if (--this.openDialogs === 0) for (const f of this.forms) f.apply();
       await this.releaseIfIdle();
     }

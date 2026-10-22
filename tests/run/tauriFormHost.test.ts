@@ -73,3 +73,27 @@ test('runDialog renders the run-time error dialog and returns the button value',
   debug.click();
   expect(await p).toBe('debug');
 });
+
+test('dispose destroys a pending dialog window before resolving; OS-closed dialog answers Cancel', async () => {
+  const f = fakeGlue();
+  const host = new TauriFormHost(f.glue);
+  const a = host.inputBox({ prompt: 'p', title: 't', defaultText: 'x' });
+  await f.tick();
+  f.fire('vb:from', { key: 'dialog-1', cancelled: true });
+  expect(await a).toBe('');
+  const b = host.messageBox({ prompt: 'p', title: 't', buttons: 1 });
+  await f.tick();
+  await host.dispose();
+  expect(f.log.destroyed).toEqual(['vbdialog-1', 'vbdialog-2']);
+  expect(await b).toBe(2);
+});
+
+test('cascade restarts when no forms are open', async () => {
+  const f = fakeGlue();
+  const host = new TauriFormHost(f.glue);
+  const s = snap('Form1');
+  s.form.props.StartUpPosition = 3;
+  await (await host.openForm(s, { modal: false })).close();
+  await host.openForm(s, { modal: false });
+  expect(f.log.created.map(c => c.o.x)).toEqual([60, 60]);
+});

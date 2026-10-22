@@ -13,7 +13,8 @@ const key = decodeURIComponent(location.hash.slice(1));
 const win = getCurrentWebviewWindow();
 const root = document.getElementById('form')!;
 const send = (p: FromPayload) => emit('vb:from', p).catch(() => {});
-const frame = () => new Promise<void>(r => requestAnimationFrame(() => r()));
+/** One paint, but never stuck: WKWebView may pause rAF in a hidden (visible:false) window. */
+const frame = () => new Promise<void>(r => { requestAnimationFrame(() => r()); setTimeout(r, 50); });
 
 /** Our own Win98 title bars move the (undecorated) window. */
 function markDragRegions(): void {
@@ -23,7 +24,7 @@ function markDragRegions(): void {
 async function startForm(): Promise<void> {
   let mounted: ReturnType<typeof mountFormWindow> | null = null;
   const early: ToWindow[] = [];
-  let wantVisible = true, firstShown = false;
+  let wantVisible = true, firstShown = false, blocked = false;
 
   const show = async () => { await win.show(); await win.setFocus(); };
   const handle = (m: ToWindow) => {
@@ -31,6 +32,7 @@ async function startForm(): Promise<void> {
     if (m.t === 'patch' && m.id === 'form') markDragRegions();   // title bar is rebuilt on chrome changes
     else if (m.t === 'show') { wantVisible = true; if (firstShown) void show(); }
     else if (m.t === 'hide') { wantVisible = false; void win.hide(); }
+    else if (m.t === 'blocked') blocked = m.blocked;
   };
 
   root.addEventListener('click', e => {
@@ -40,6 +42,8 @@ async function startForm(): Promise<void> {
     else if (label === 'Maximize') void win.toggleMaximize();
   });
 
+  // Cmd+W / OS close: the program decides (QueryUnload), the window never closes itself.
+  await win.onCloseRequested(e => { e.preventDefault(); if (mounted && !blocked) void send({ key, m: { t: 'closeRequest' } }); });
   await win.listen<FormSnapshot>('vb:snapshot', async e => {
     if (mounted) return;
     root.dataset.vbWindow = '';
@@ -57,6 +61,7 @@ async function startForm(): Promise<void> {
 async function startDialog(): Promise<void> {
   document.body.classList.add('vb-dialog-window');
   let started = false;
+  await win.onCloseRequested(e => { e.preventDefault(); void send({ key, cancelled: true }); });
   await win.listen<DialogSpec>('vb:dialog', async e => {
     if (started) return;
     started = true;
