@@ -351,12 +351,17 @@ export class StatementParser extends Parser {
     return { kind: 'call', target, args, explicitCall, line: start.line };
   }
 
+  /**
+   * Whether a paren-less argument list starts here (after a call target at
+   * statement level). A sign starts one too: `List1.AddItem -5`,
+   * `Picture1.Move -100, 0` (an assignment `x = y - 1` was recognised before).
+   */
   private canStartArg(): boolean {
     const t = this.peek();
     switch (t.kind) {
       case 'number': case 'string': case 'date': case 'ident': return true;
       case 'keyword': return ARG_START_KEYWORDS.has(lower(t));
-      case 'op': return t.text === '(' || t.text === '.';
+      case 'op': return t.text === '(' || t.text === '.' || t.text === '-' || t.text === '+';
       default: return false;
     }
   }
@@ -1105,9 +1110,14 @@ function evalConst(e: Expr, known: Map<string, number>, bad: () => never): numbe
 
 // ---- public API ----
 
-/** Parses a module; throws the first VBSyntaxError. */
+/** Parses a module; throws the first VBSyntaxError (with `moduleName` set). */
 export function parseModule(source: string, moduleName: string): ModuleAst {
-  return new StatementParser(tokenize(source)).parseModuleAst(moduleName);
+  try {
+    return new StatementParser(tokenize(source)).parseModuleAst(moduleName);
+  } catch (e) {
+    if (e instanceof VBSyntaxError) e.moduleName = moduleName;
+    throw e;
+  }
 }
 
 /** Checks one logical line without requiring blocks to match (VB6 "Auto Syntax Check"). */
@@ -1121,7 +1131,7 @@ export function checkLineSyntax(line: string): VBSyntaxError | null {
   }
 }
 
-/** All syntax errors of a module; after an error parsing resumes on the next line. */
+/** All syntax errors of a module (each with `moduleName` set); after an error parsing resumes on the next line. */
 export function findSyntaxErrors(source: string, moduleName: string): VBSyntaxError[] {
   const errors: VBSyntaxError[] = [];
   let src = source;
@@ -1146,6 +1156,7 @@ export function findSyntaxErrors(source: string, moduleName: string): VBSyntaxEr
     p.parseModuleAst(moduleName);
   }
   const seen = new Set<string>();
+  for (const e of errors) e.moduleName = moduleName;
   return errors
     .sort((a, b) => a.line - b.line || a.col - b.col)
     .filter(e => { const k = `${e.line}:${e.col}:${e.message}`; if (seen.has(k)) return false; seen.add(k); return true; });

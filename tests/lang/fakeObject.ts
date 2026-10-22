@@ -1,6 +1,6 @@
 // A minimal VBObject for interpreter tests: named properties (case-insensitive
 // lookup, stored under the name given in the constructor), child objects
-// (`Form1.Text1`, `Text1.Font`), a control-array `item(i)`, and methods that log
+// (`Form1.Text1`, `Text1.Font`), a control-array `item(i)` and `items()`, and methods that log
 // their calls. Unknown members are error 438, a missing item is error 340.
 
 import type { VBObject } from '../../src/lang/host';
@@ -21,26 +21,29 @@ export class FakeObject implements VBObject {
   readonly defaultMember?: string;
   readonly props: Record<string, VBValue>;
   readonly children: Record<string, FakeObject>;
-  readonly items: Record<number, FakeObject>;
+  /** Control array elements by index (sparse). */
+  readonly elements: Record<number, FakeObject>;
   /** `AddItem:x`, `Unload`, `Load`, `get:Name`, `set:Name=value` … in call order. */
   readonly log: string[] = [];
   /** When true, getMember/setMember are logged too. */
   logAccess = false;
   private readonly methods: Record<string, (args: VBValue[]) => VBValue | Promise<VBValue>>;
   item?: (index: number) => VBObject;
+  items?: () => VBObject[];
 
   constructor(readonly vbTypeName = 'TextBox', opts: FakeOptions = {}) {
     this.defaultMember = 'defaultMember' in opts ? opts.defaultMember : 'Text';
     this.props = opts.props ?? { Text: '', Caption: '' };
     this.children = opts.children ?? {};
-    this.items = opts.items ?? {};
+    this.elements = opts.items ?? {};
     this.methods = opts.methods ?? {};
     if (opts.items) {
       this.item = (i: number) => {
-        const it = this.items[i];
+        const it = this.elements[i];
         if (!it) throw new VBRuntimeError(340);
         return it;
       };
+      this.items = () => Object.keys(this.elements).map(Number).sort((a, b) => a - b).map(i => this.elements[i]);
     }
   }
 

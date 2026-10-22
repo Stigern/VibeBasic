@@ -1,16 +1,19 @@
 // Public API of the interpreter (Program) and its shared state (Runtime).
 
 import type { ProcDecl, TypeDecl, VBTypeName } from '../ast';
-import { VBRuntimeError } from '../errors';
+import { VBRuntimeError, internalError } from '../errors';
 import { ErrObject, type BuiltinCtx } from '../builtins';
 import type { CodeLocation, Host } from '../host';
-import { generalDateText } from '../builtins/format';
+import { generalDateText, localeDateParser } from '../builtins/format';
 import { newRndState } from '../builtins/util';
 import { parseModule } from '../parser';
-import { VBArray, VBRecord, VBRef, defaultValue, setDateTextFormatter, toNumber, type DateTextFormatter, type VBValue } from '../values';
+import {
+  VBArray, VBRecord, VBRef, defaultValue, setDateTextFormatter, setDateTextParser, toNumber, type DateTextFormatter,
+  type DateTextParser, type VBValue,
+} from '../values';
 import { EndSignal, SubCall, runGenerator, type ExecScope, type Gen } from './driver';
 import { constExpr } from './eval';
-import { RETRY, declareVariable, evalBounds, handleError, invokeProc, isStackOverflow, type BoundArg } from './exec';
+import { RETRY, declareVariable, handleError, invokeProc, isStackOverflow, type BoundArg } from './exec';
 import { runImmediate } from './immediate';
 
 /**
@@ -78,9 +81,11 @@ export class Runtime {
   readonly sliceSize: number;
   readonly locale: string;
   readonly builtinCtx: BuiltinCtx;
-  /** Makes this program's locale (date text) current while its code runs; pass to `runGenerator`. */
+  /** Makes this program's locale (date text and parsing) current while its code runs; pass to `runGenerator`. */
   readonly scope: ExecScope;
   private readonly dateText: DateTextFormatter;
+  /** Reads this program's locale date text back (CDate, IsDate); current with `dateText`. */
+  private readonly dateParse: DateTextParser;
   readonly modules = new Map<string, ModuleScope>();
   readonly moduleList: ModuleScope[] = [];
   readonly globals = new GlobalScope();
@@ -98,10 +103,15 @@ export class Runtime {
     this.err = new ErrObject(appTitle);
     this.builtinCtx = { host, locale: this.locale, appTitle, rnd: newRndState(), err: this.err };
     this.dateText = v => generalDateText(v.serial, this.locale);
+    this.dateParse = localeDateParser(this.locale);
     this.scope = {
       activate: () => {
         const prev = setDateTextFormatter(this.dateText);
-        return () => { setDateTextFormatter(prev); };
+        const prevParse = setDateTextParser(this.dateParse);
+        return () => {
+          setDateTextFormatter(prev);
+          setDateTextParser(prevParse);
+        };
       },
       cancellable: p => this.cancellable(p),
     };
@@ -260,7 +270,11 @@ export class Runtime {
     this.abortListeners.clear();
     for (const cancel of cancels) cancel(new EndSignal());
     this.drainEvents(); // each queued runEvent sees 'ended' and resolves
-    this.host.onEnd();
+    try {
+      this.host.onEnd();
+    } catch (e) {
+      console.error('VibeBasic: onEnd failed', e);
+    }
   }
 
   /**
@@ -440,8 +454,8 @@ export class Runtime {
 
 /**
  * A running VibeBasic program. Construct it with the project's modules (a
- * syntax error throws VBSyntaxError), then call `runEvent` for Sub Main or
- * event handlers.
+ * syntax error throws the first VBSyntaxError of the first faulty module, with
+ * its `moduleName`), then call `runEvent` for Sub Main or event handlers.
  */
 export class Program {
   private readonly rt: Runtime;
@@ -461,7 +475,10 @@ export class Program {
    * ByRef parameters share the given VBRefs, so the caller sees changes
    * (KeyAscii = 0). Does nothing if the procedure does not exist, or while
    * the program is in break mode or has ended (the event is dropped).
-   * Unhandled errors go to `host.onRuntimeError`; the promise still resolves.
+   * Unhandled errors go to `host.onRuntimeError`; the promise always
+   * resolves. A plain JS error thrown or rejected by host code (or a built-in)
+   * is VB error 51 `Internal error: <message>` (catchable by On Error, logged
+   * with console.error).
    *
    * Re-entrant: called while another handler waits in a host promise
    * (DoEvents, a dialog, an async method) or from inside a host call
@@ -492,27 +509,34 @@ export class Program {
     try {
       await runGenerator(rt.entry(run, ref, args), rt.runScope(run));
     } catch (e) {
-      const err = isStackOverflow(e) ? new VBRuntimeError(28) : e;
-      if (err instanceof VBRuntimeError) {
-        // raised outside any statement, e.g. binding the handler's arguments
-        if (!rt.stopping) {
-          const at: CodeLocation = { moduleName: ref.module.name, procName: ref.proc.name, line: ref.proc.line };
-          rt.err.setFrom(err);
-          rt.eventsSuspended++;
-          try {
-            // nothing to break into (no statement ran): 'debug' ends the program too
-            await rt.untilEnd(rt.host.onRuntimeError(err, at));
-          } finally {
-            rt.eventsSuspended--;
-          }
-          rt.endProgram();
-        }
-      } else if (!(err instanceof EndSignal)) {
-        throw err;
-      }
+      if (!(e instanceof EndSignal)) await this.entryError(ref, e);
     } finally {
       finish();
     }
+  }
+
+  /**
+   * An error that escaped every statement of an event run: raised outside any
+   * statement (binding the handler's arguments), or a JS error that got past
+   * the statement handling (error 51). Reported to onRuntimeError, then the
+   * program ends; never rejects.
+   */
+  private async entryError(ref: ProcRef, e: unknown): Promise<void> {
+    const rt = this.rt;
+    if (rt.stopping) return;
+    const err = e instanceof VBRuntimeError ? e : isStackOverflow(e) ? new VBRuntimeError(28) : internalError(e);
+    const at: CodeLocation = { moduleName: ref.module.name, procName: ref.proc.name, line: ref.proc.line };
+    rt.err.setFrom(err);
+    rt.eventsSuspended++;
+    try {
+      // nothing to break into (no statement ran): 'debug' ends the program too
+      await rt.untilEnd(Promise.resolve().then(() => rt.host.onRuntimeError(err, at)));
+    } catch (failed) {
+      console.error('VibeBasic: onRuntimeError failed', failed);
+    } finally {
+      rt.eventsSuspended--;
+    }
+    rt.endProgram();
   }
 
   /**

@@ -2,7 +2,7 @@
 // or in a global context. See Program.immediate for the contract.
 
 import type { ProcDecl, Stmt } from '../ast';
-import { VBRuntimeError, VBSyntaxError } from '../errors';
+import { VBRuntimeError, VBSyntaxError, internalError } from '../errors';
 import { parseModule } from '../parser';
 import { PrintLine } from '../printFormat';
 import { EndSignal, runGenerator, type Gen } from './driver';
@@ -111,11 +111,8 @@ export async function runImmediate(rt: Runtime, text: string): Promise<string> {
     return await runGenerator(command(), rt.scope);
   } catch (e) {
     if (e instanceof EndSignal) return '';
-    const err = isStackOverflow(e) ? new VBRuntimeError(28) : e;
-    if (err instanceof VBRuntimeError) {
-      return err.compile ? `Compile error: ${err.description}` : `Run-time error '${err.number}': ${err.description}`;
-    }
-    throw e;
+    const err = e instanceof VBRuntimeError ? e : isStackOverflow(e) ? new VBRuntimeError(28) : internalError(e);
+    return err.compile ? `Compile error: ${err.description}` : `Run-time error '${err.number}': ${err.description}`;
   } finally {
     rt.immediateRuns--;
     // events queued while the command was in a time slice

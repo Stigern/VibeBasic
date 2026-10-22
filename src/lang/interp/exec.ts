@@ -13,17 +13,18 @@
 import type {
   ArrayBound, CaseTest, ConstDecl, Expr, ForEachStmt, ForStmt, MissingArg, ProcDecl, SelectStmt, Stmt, VarDecl, VBTypeName,
 } from '../ast';
-import { VBRuntimeError } from '../errors';
+import { VBRuntimeError, internalError } from '../errors';
 import { PrintLine } from '../printFormat';
-import { Empty, NothingT, NullT, VBArray, VBRef, compare, toNumber, type VBValue } from '../values';
+import { Empty, NothingT, NullT, VBArray, VBRef, compare, isObject, toNumber, type VBValue } from '../values';
 import { EndSignal, nextTick, type Gen } from './driver';
 import { Frame, ProcRef, Run, Variable, lc, storeValue, type Slot } from './scope';
 import {
-  afterHostCall, assign, awaitHost, callBuiltin, callProc, constExpr, evalArgValues, evalExpr, lookup, memberGet, methodArgs,
-  variableOf, withObject,
+  afterHostCall, assign, awaitHost, callBuiltin, callProc, constExpr, evalArgValues, evalExpr, formMethod, lookup, memberGet,
+  methodArgs, variableOf, withObject,
 } from './eval';
-import { compareResult, isObject, plain, truthy } from './operators';
-import { BuiltinRef, EnumRef, ModuleRef } from './scope';
+import { compareResult, plain, truthy } from './operators';
+import { BuiltinRef, EnumRef, MemberRef, ModuleRef } from './scope';
+import type { VBObject } from '../host';
 
 /** VB's limit on nested procedure calls; one more is error 28 (Out of stack space). */
 export const MAX_CALL_DEPTH = 2000;
@@ -211,13 +212,15 @@ function canHandle(fr: Frame): boolean {
  *   the program, 'debug' enters break mode and Continue retries (RETRY).
  * Compile errors are never handled by On Error. In an Immediate command an
  * unhandled error is rethrown to the command (no report, no break mode).
+ * A JS stack overflow is error 28; any other plain JS error (host code, a
+ * built-in, an interpreter bug) is error 51 "Internal error: <message>".
  */
 export function* handleError(f: Frame, e: unknown): Gen<ErrorOutcome> {
   if (e instanceof EndSignal || e instanceof Unwind) throw e;
   let err: VBRuntimeError;
   if (e instanceof VBRuntimeError) err = e;
   else if (isStackOverflow(e)) err = new VBRuntimeError(28);
-  else throw e;
+  else err = internalError(e); // a JS error from host code (sync or a rejected promise), a built-in or the interpreter
   if (propagating.get(err) === f) throw err;
   propagating.delete(err);
   const rt = f.run.rt;
@@ -286,6 +289,11 @@ function* unhandledError(f: Frame, err: VBRuntimeError): Gen<ErrorOutcome> {
   rt.eventsSuspended++;
   try {
     answer = (yield rt.host.onRuntimeError(err, f.location())) as 'end' | 'debug';
+  } catch (e) {
+    if (e instanceof EndSignal) throw e;
+    // a failing onRuntimeError (host bug): the program ends
+    console.error('VibeBasic: onRuntimeError failed', e);
+    answer = 'end';
   } finally {
     rt.eventsSuspended--;
   }
@@ -685,9 +693,13 @@ function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Com
     const key = lc(target.name);
     // Inside Function Foo, a `Foo` statement is a recursive call.
     if (f.returnVar && key === lc(f.proc!.name)) { yield* callProc(f, f.module.procs.get(key)!, args); return; }
-    const b = key === 'me' ? undefined : lookup(f, key, target.name);
+    const b = key === 'me' ? undefined : lookup(f, key, target.name, args.length > 0);
     if (b instanceof ProcRef) { yield* callProc(f, b, args); return; }
     if (b instanceof BuiltinRef) { yield* callBuiltin(f, b, args); return; }
+    // a property of the form used as a statement: a method call, like `Me.name args`
+    if (b instanceof MemberRef) { yield* callObjectMethod(f, b.obj, b.name, args); return; }
+    // in a form: a method of Me (`Hide`, `Move 0, 0`)
+    if (b === undefined && key !== 'me') { yield* formMethod(f, target.name, args); return; }
     if (b === undefined) throw compileError('Sub or Function not defined');
     throw compileError('Expected Sub, Function, or Property');
   }
@@ -708,15 +720,20 @@ function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Com
     if (base instanceof EnumRef) throw new VBRuntimeError(438);
     if (base instanceof NothingT) throw new VBRuntimeError(91);
     if (isObject(base)) {
-      const argv = yield* evalArgValues(f, args);
-      const r = base.callMethod(target.name, methodArgs(argv));
-      if (r instanceof Promise) yield* awaitHost(f, r);
-      else yield* afterHostCall(f);
+      yield* callObjectMethod(f, base, target.name, args);
       return;
     }
     throw new VBRuntimeError(424);
   }
   throw compileError('Expected Sub, Function, or Property');
+}
+
+/** `obj.name args` as a statement: `callMethod` (a Promise result is awaited). */
+function* callObjectMethod(f: Frame, obj: VBObject, name: string, args: (Expr | MissingArg)[]): Gen<void> {
+  const argv = yield* evalArgValues(f, args);
+  const r = obj.callMethod(name, methodArgs(argv));
+  if (r instanceof Promise) yield* awaitHost(f, r);
+  else yield* afterHostCall(f);
 }
 
 function* caseMatches(f: Frame, subject: VBValue, t: CaseTest): Gen<boolean> {
@@ -820,9 +837,20 @@ function* execForEach(f: Frame, s: ForEachStmt): Gen<Completion> {
   return;
 }
 
-/** Elements of a For Each collection, in VB order (first index varies fastest). */
+/**
+ * Elements of a For Each collection: an array in VB order (first index varies
+ * fastest), or an object's `items()` (a control array). An object without
+ * `items` is error 438, Nothing 91, anything else 13.
+ */
 function plainCollection(v: VBValue): VBValue[] {
-  if (!(v instanceof VBArray)) throw new VBRuntimeError(v instanceof NothingT ? 91 : 13); // objects: Task 7
+  if (!(v instanceof VBArray)) {
+    if (v instanceof NothingT) throw new VBRuntimeError(91);
+    if (isObject(v)) {
+      if (!v.items) throw new VBRuntimeError(438);
+      return v.items();
+    }
+    throw new VBRuntimeError(13);
+  }
   if (!v.allocated) throw new VBRuntimeError(9);
   const b = v.bounds;
   if (b.length === 1) return v.values();

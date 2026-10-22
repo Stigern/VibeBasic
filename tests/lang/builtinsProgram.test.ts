@@ -178,3 +178,59 @@ test('Randomize in one Program does not disturb another', async () => {
   await newProg(src, b).runEvent('Module1', 'Main');
   expect(a.lines()).toEqual(b.lines());
 });
+
+describe('locale date text reads back (final review)', () => {
+  const roundTrip = `Dim d As Date, t As Date, s As String
+d = DateSerial(2026, 10, 22)
+s = CStr(d)
+Debug.Print s; " "; IsDate(s); " "; CDate(s) = d
+t = d + TimeSerial(14, 5, 9)
+s = CStr(t)
+Debug.Print s; " "; IsDate(s); " "; CDate(s) = t
+s = CStr(TimeSerial(9, 30, 0))
+Debug.Print s; " "; IsDate(s); " "; CDate(s) = TimeSerial(9, 30, 0)
+d = s
+Debug.Print Hour(d); Minute(d)`;
+
+  test('en-US', async () => {
+    expect(await run(roundTrip, { locale: 'en-US' })).toEqual([
+      '10/22/2026 True True', '10/22/2026 2:05:09 PM True True', '9:30:00 AM True True', ' 9  30 ',
+    ]);
+  });
+
+  test('nb-NO', async () => {
+    expect(await run(roundTrip, { locale: 'nb-NO' })).toEqual([
+      '22.10.2026 True True', '22.10.2026 14:05:09 True True', '9:30:00 True True', ' 9  30 ',
+    ]);
+  });
+
+  test('de-DE', async () => {
+    expect(await run(roundTrip, { locale: 'de-DE' })).toEqual([
+      '22.10.2026 True True', '22.10.2026 14:05:09 True True', '9:30:00 True True', ' 9  30 ',
+    ]);
+  });
+
+  test('locale order, two-digit years by the VB window, short times, invalid dates', async () => {
+    expect(await run(`Debug.Print Format(CDate("1.2.2026"), "yyyy-mm-dd"); " "; Format(CDate("22.10.26"), "yyyy-mm-dd"); " "; Format(CDate("1.1.45"), "yyyy-mm-dd")
+Debug.Print Format(CDate("22.10.2026 7:05"), "yyyy-mm-dd hh:nn:ss"); " "; IsDate("30.2.2026"); IsDate("22.10.2026 25:00"); IsDate("hello")
+Debug.Print Format(CDate("2026-10-22"), "yyyy-mm-dd"); " "; Format(CDate("10/22/2026"), "yyyy-mm-dd")`, { locale: 'nb-NO' }))
+      .toEqual(['2026-02-01 2026-10-22 1945-01-01', '2026-10-22 07:05:00 FalseFalseFalse', '2026-10-22 2026-10-22']);
+    expect(await run(`Debug.Print Format(CDate("1/2/26"), "yyyy-mm-dd"); " "; Format(CDate("1/2/1930 12:00:00 AM"), "yyyy-mm-dd hh:nn"); " "; Format(CDate("1/2/30 12:15 pm"), "yyyy-mm-dd hh:nn")`, { locale: 'en-US' }))
+      .toEqual(['2026-01-02 1930-01-02 00:00 1930-01-02 12:15']);
+  });
+
+  test('date literals stay locale-free', async () => {
+    expect(await run('Debug.Print Format(#1/2/2026#, "yyyy-mm-dd"); " "; Format(#1/2/2026 2:05:09 PM#, "hh:nn:ss")', { locale: 'en-GB' }))
+      .toEqual(['2026-01-02 14:05:09']);
+  });
+
+  test('the parser of one Program does not leak into another', async () => {
+    const host = new TestHost();
+    const src = 'Sub Main()\nDebug.Print IsDate("22.10.2026")\nEnd Sub\n';
+    const us = new Program([{ name: 'Module1', kind: 'module', source: src }], host, { locale: 'en-US' });
+    const no = new Program([{ name: 'Module1', kind: 'module', source: src }], host, { locale: 'nb-NO' });
+    await no.runEvent('Module1', 'Main');
+    await us.runEvent('Module1', 'Main');
+    expect(host.lines()).toEqual(['True', 'False']);
+  });
+});

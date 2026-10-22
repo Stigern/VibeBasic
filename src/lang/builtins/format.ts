@@ -12,7 +12,9 @@
 
 import { VBRuntimeError } from '../errors';
 import { plain } from '../interp/operators';
-import { Null, NullT, coerce, dateParts, toBool, toNumber, toStr, type VBDate, type VBValue } from '../values';
+import {
+  Null, NullT, coerce, dateParts, pivotYear, toBool, toNumber, toStr, validDate, type DateTextParser, type VBDate, type VBValue,
+} from '../values';
 import { def } from './util';
 
 type Parts = ReturnType<typeof dateParts>;
@@ -33,7 +35,7 @@ function utcDate(p: Parts): Date {
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
-function intl(locale: string, opts: Intl.DateTimeFormatOptions, p: Parts): string {
+function formatter(locale: string, opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
   const key = locale + '|' + JSON.stringify(opts);
   let f = formatters.get(key);
   if (!f) {
@@ -41,7 +43,11 @@ function intl(locale: string, opts: Intl.DateTimeFormatOptions, p: Parts): strin
     catch { f = new Intl.DateTimeFormat('en-US', { ...opts, timeZone: 'UTC' }); }
     formatters.set(key, f);
   }
-  return clean(f.format(utcDate(p)));
+  return f;
+}
+
+function intl(locale: string, opts: Intl.DateTimeFormatOptions, p: Parts): string {
+  return clean(formatter(locale, opts).format(utcDate(p)));
 }
 
 /** Locale month name for month 1..12. */
@@ -63,9 +69,11 @@ function dayOfYearOf(p: Parts): number {
   return Math.round(t / 86400000) + 1 + (isLeap(p.y) && p.m > 2 ? 1 : 0);
 }
 
-const shortDateText = (p: Parts, loc: string) => intl(loc, { year: 'numeric', month: 'numeric', day: 'numeric' }, p);
+const SHORT_DATE: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'numeric', day: 'numeric' };
+const LONG_TIME: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit', second: '2-digit' };
+const shortDateText = (p: Parts, loc: string) => intl(loc, SHORT_DATE, p);
 const longDateText = (p: Parts, loc: string) => intl(loc, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }, p);
-const longTimeText = (p: Parts, loc: string) => intl(loc, { hour: 'numeric', minute: '2-digit', second: '2-digit' }, p);
+const longTimeText = (p: Parts, loc: string) => intl(loc, LONG_TIME, p);
 const shortTimeText = (p: Parts) => `${pad(p.h)}:${pad(p.n)}`;
 const h12 = (h: number) => h % 12 || 12;
 const mediumTimeText = (p: Parts) => `${pad(h12(p.h))}:${pad(p.n)} ${p.h < 12 ? 'AM' : 'PM'}`;
@@ -79,6 +87,91 @@ export function generalDateText(serial: number, locale: string): string {
   if (hasDate && hasTime) return `${shortDateText(p, locale)} ${longTimeText(p, locale)}`;
   if (hasDate) return shortDateText(p, locale);
   return longTimeText(p, locale);
+}
+
+// ---------------------------------------------------------------------------
+// Locale date text back to a date (CDate, IsDate)
+// ---------------------------------------------------------------------------
+
+type DateField = 'year' | 'month' | 'day' | 'hour' | 'minute' | 'second' | 'dayPeriod';
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** A literal of a date pattern: surrounding and inner whitespace is optional (`22.10.2026`, `2026. 10. 22.`). */
+const literalRe = (s: string) => s.trim().split(/\s+/).filter(Boolean).map(escapeRe).map(x => `\\s*${x}`).join('') + '\\s*';
+
+/**
+ * Regex source and field order of a locale pattern from `formatToParts`.
+ * Seconds (with the literal before them) and the day period are optional; a
+ * trailing literal is optional too.
+ */
+function patternOf(parts: Intl.DateTimeFormatPart[], fieldRe: Partial<Record<DateField, string>>): { src: string; fields: DateField[] } {
+  const segs: string[] = [];
+  const fields: DateField[] = [];
+  let lastWasLiteral = false;
+  parts.forEach((part, i) => {
+    if (part.type === 'literal') {
+      const re = literalRe(part.value);
+      segs.push(i === parts.length - 1 ? `(?:${re})?` : re);
+      lastWasLiteral = true;
+      return;
+    }
+    const type = part.type as DateField;
+    const re = fieldRe[type];
+    if (re === undefined) return; // e.g. an era: not part of the text we accept
+    fields.push(type);
+    if (type === 'second') segs.push(`(?:${lastWasLiteral ? segs.pop() : ''}${re})?`);
+    else if (type === 'dayPeriod') segs.push(`(?:${re})?`);
+    else segs.push(re);
+    lastWasLiteral = false;
+  });
+  return { src: segs.join(''), fields };
+}
+
+const dateParsers = new Map<string, DateTextParser>();
+
+/**
+ * Parses the text `generalDateText` gives in `locale` back into a date: the
+ * short date (field order and separators from Intl), optionally followed by
+ * the long time, or the long time alone (seconds and AM/PM optional; a
+ * 24-hour time is accepted too). Two-digit years use VB's window (`pivotYear`).
+ */
+export function localeDateParser(locale: string): DateTextParser {
+  let parser = dateParsers.get(locale);
+  if (parser) return parser;
+  const sample = utcDate({ y: 2026, m: 10, d: 22, h: 14, n: 5, s: 9 });
+  const tf = formatter(locale, LONG_TIME);
+  const periodOf = (h: number) => tf.formatToParts(utcDate({ y: 2026, m: 10, d: 22, h, n: 0, s: 0 })).find(p => p.type === 'dayPeriod')?.value;
+  const am = [periodOf(1), 'AM', 'A'].filter((x): x is string => !!x);
+  const pm = [periodOf(13), 'PM', 'P'].filter((x): x is string => !!x);
+  const periodRe = [...am, ...pm].map(x => clean(x).trim().split(/\s+/).map(escapeRe).join('\\s*')).join('|');
+  const date = patternOf(formatter(locale, SHORT_DATE).formatToParts(sample), { year: '(\\d{1,4})', month: '(\\d{1,2})', day: '(\\d{1,2})' });
+  const time = patternOf(tf.formatToParts(sample), { hour: '(\\d{1,2})', minute: '(\\d{1,2})', second: '(\\d{1,2})', dayPeriod: `(${periodRe})` });
+  const dateTime = new RegExp(`^${date.src}(?:\\s+${time.src})?$`, 'i');
+  const timeOnly = new RegExp(`^${time.src}$`, 'i');
+  const lower = (x: string) => clean(x).replace(/\s+/g, '').toLowerCase();
+  const pmKeys = new Set(pm.map(lower));
+  parser = (text: string) => {
+    const s = clean(text).trim();
+    const got: Partial<Record<DateField, string>> = {};
+    let m = dateTime.exec(s);
+    if (m) [...date.fields, ...time.fields].forEach((f, i) => { got[f] = m![i + 1]; });
+    else {
+      m = timeOnly.exec(s);
+      if (!m) return undefined;
+      time.fields.forEach((f, i) => { got[f] = m![i + 1]; });
+    }
+    const num = (f: DateField, dflt: number) => (got[f] === undefined ? dflt : Number(got[f]));
+    let y = num('year', 1899);
+    if (got.year !== undefined && got.year.length <= 2) y = pivotYear(y);
+    let h = num('hour', 0);
+    if (got.dayPeriod !== undefined) {
+      if (h < 1 || h > 12) return undefined;
+      h = (h % 12) + (pmKeys.has(lower(got.dayPeriod)) ? 12 : 0);
+    }
+    return validDate(y, num('month', 12), num('day', 30), h, num('minute', 0), num('second', 0));
+  };
+  dateParsers.set(locale, parser);
+  return parser;
 }
 
 type DateKind = 'general' | 'short date' | 'long date' | 'medium date' | 'short time' | 'long time' | 'medium time';

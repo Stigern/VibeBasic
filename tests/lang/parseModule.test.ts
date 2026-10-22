@@ -517,3 +517,28 @@ describe('findSyntaxErrors', () => {
     expect(() => findSyntaxErrors(src, 'M')).not.toThrow();
   });
 });
+
+describe('final review fixes', () => {
+  const show = (src: string) => (parseModule(`Sub A()\n${src}\nEnd Sub`, 'M').procedures[0].body as Stmt[]).map(s =>
+    s.kind === 'call' ? `call ${exprToString(s.target)}: ${s.args.map(a => (a.kind === 'missing' ? '_' : exprToString(a))).join(' ; ')}`
+      : s.kind === 'assign' ? `${exprToString(s.target)} = ${exprToString(s.value)}` : s.kind);
+
+  test('a paren-less call may start with a negative (or signed) argument', () => {
+    expect(show('List1.AddItem -5\nPicture1.Move -100, 0\nFoo -1\nFoo +x, 2\nx = y - 1\nx = -1'))
+      .toEqual(['call (. List1 AddItem): (neg 5)', 'call (. Picture1 Move): (neg 100) ; 0', 'call Foo: (neg 1)', 'call Foo: x ; 2', 'x = (- y 1)', 'x = (neg 1)']);
+    for (const line of ['List1.AddItem -5', 'Picture1.Move -100, 0', 'Foo -1', 'Foo -1, -2']) expect(checkLineSyntax(line)).toBeNull();
+    expect(findSyntaxErrors('Sub A()\nList1.AddItem -5\nPicture1.Move -100, 0\nEnd Sub', 'M')).toEqual([]);
+  });
+
+  test('syntax errors carry the module name', () => {
+    try {
+      parseModule('Sub A()\nx = \nEnd Sub', 'Form2');
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(VBSyntaxError);
+      expect((e as VBSyntaxError).moduleName).toBe('Form2');
+      expect((e as VBSyntaxError).line).toBe(2);
+    }
+    expect(findSyntaxErrors('Sub A()\nx = \nEnd Sub\nx = "', 'Module3').map(e => [e.moduleName, e.line])).toEqual([['Module3', 2], ['Module3', 4]]);
+  });
+});

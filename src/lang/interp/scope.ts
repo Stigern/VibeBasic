@@ -164,7 +164,15 @@ export class ConstSlot {
   constructor(readonly decl: ConstDecl, readonly module: ModuleScope) {}
 }
 
-export type Binding = Variable | ProcRef | BuiltinRef | ValueRef | EnumRef | ModuleRef | ObjectRef;
+/**
+ * A property of the form itself used without `Me.` in the form's own code
+ * (`Caption = "x"`, `Width`): reads are `getMember`, assignments `setMember`.
+ */
+export class MemberRef {
+  constructor(readonly obj: VBObject, readonly name: string) {}
+}
+
+export type Binding = Variable | ProcRef | BuiltinRef | ValueRef | EnumRef | ModuleRef | ObjectRef | MemberRef;
 
 // ---------------------------------------------------------------------------
 // Scopes

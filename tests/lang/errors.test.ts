@@ -286,3 +286,84 @@ describe('Err object', () => {
     expect(prog.state).toBe('ended');
   });
 });
+
+describe('plain JS errors from host code (final review)', () => {
+  let logged: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => { logged = vi.spyOn(console, 'error').mockImplementation(() => {}); });
+  afterEach(() => { logged.mockRestore(); });
+
+  const boomObject = (): VBObject => ({
+    vbTypeName: 'Thing',
+    hasMember: () => false,
+    getMember: () => { throw new TypeError('getter bug'); },
+    setMember: () => {},
+    callMethod: (name: string) => {
+      if (name === 'Later') return Promise.reject(new Error('async bug'));
+      throw new TypeError('host bug');
+    },
+  });
+
+  test('a sync throw is error 51 and On Error Resume Next catches it', async () => {
+    const host = new TestHost();
+    host.objects.set('thing', boomObject());
+    const out = await run(lines('Sub Main()', '  On Error Resume Next', '  Thing.Boom', '  Debug.Print Err.Number; Err.Description', 'End Sub'), host);
+    expect(out).toEqual([' 51 Internal error: host bug']);
+    expect(logged).toHaveBeenCalledTimes(1);
+  });
+
+  test('an async rejection is error 51, caught by a handler in a caller', async () => {
+    const host = new TestHost();
+    host.objects.set('thing', boomObject());
+    const out = await run(lines('Sub Main()', '  On Error GoTo H', '  Inner', '  Exit Sub', 'H:', '  Debug.Print "caught"; Err.Number; Err.Description', 'End Sub',
+      'Sub Inner()', '  Thing.Later', '  Debug.Print "not here"', 'End Sub'), host);
+    expect(out).toEqual(['caught 51 Internal error: async bug']);
+  });
+
+  test('unhandled: onRuntimeError is called, the program ends and runEvent resolves', async () => {
+    const host = new TestHost();
+    host.msgBox = async () => { throw new Error('dialog closed'); };
+    const { prog } = program(lines('Sub Main()', '  MsgBox "x"', '  Debug.Print "after"', 'End Sub', 'Sub Other()', '  Debug.Print "other"', 'End Sub'), host);
+    await expect(prog.runEvent('Module1', 'Main')).resolves.toBeUndefined();
+    expect(host.lines()).toEqual(['[Error 51 at Module1:2] Internal error: dialog closed']);
+    expect(prog.state).toBe('ended');
+    expect(host.endCalls).toBe(1);
+    await prog.runEvent('Module1', 'Other');
+    expect(host.lines()).toHaveLength(1);
+  });
+
+  test('a host service that throws synchronously inside a built-in (InputBox) is error 51', async () => {
+    const host = new TestHost();
+    host.inputBox = () => { throw new RangeError('no dialog'); };
+    const out = await run(lines('Sub Main()', '  On Error Resume Next', '  s = InputBox("q")', '  Debug.Print Err.Number; Err.Description', 'End Sub'), host);
+    expect(out).toEqual([' 51 Internal error: no dialog']);
+  });
+
+  test('a failing onRuntimeError still ends the program and runEvent resolves', async () => {
+    const host = new TestHost();
+    host.objects.set('thing', boomObject());
+    host.onRuntimeError = () => { throw new Error('report bug'); };
+    const { prog } = program(lines('Sub Main()', '  Thing.Boom', 'End Sub'), host);
+    await expect(prog.runEvent('Module1', 'Main')).resolves.toBeUndefined();
+    expect(prog.state).toBe('ended');
+    expect(host.endCalls).toBe(1);
+  });
+
+  test('debug answer enters break mode at the failing line', async () => {
+    const host = new TestHost();
+    host.objects.set('thing', boomObject());
+    host.errorChoice = 'debug';
+    host.breakChoice = 'end';
+    const { prog } = program(lines('Sub Main()', '  x = Thing.Value', 'End Sub'), host);
+    await prog.runEvent('Module1', 'Main');
+    expect(host.lines()).toEqual(['[Error 51 at Module1:2] Internal error: getter bug']);
+    expect(host.breaks.map(b => [b.reason, b.at.line, b.error?.number])).toEqual([['error', 2, 51]]);
+  });
+
+  test('the Immediate window returns the error text', async () => {
+    const host = new TestHost();
+    host.objects.set('thing', boomObject());
+    const { prog } = program(lines('Sub Main()', 'End Sub'), host);
+    expect(await prog.immediate('? Thing.Value')).toBe("Run-time error '51': Internal error: getter bug");
+    expect(await prog.immediate('? Error(51)')).toBe('Internal error');
+  });
+});

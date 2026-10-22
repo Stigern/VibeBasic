@@ -6,8 +6,7 @@
 // - `;` adds nothing; `,` moves to the next 14-character print zone.
 
 import { VBRuntimeError } from './errors';
-import { EmptyT, NullT, NothingT, VBArray, VBRecord, isDate, toStr, type VBValue } from './values';
-import type { VBObject } from './host';
+import { NullT, isObject, toStr, type VBValue } from './values';
 
 export const PRINT_ZONE = 14;
 
@@ -17,11 +16,6 @@ export function printNumber(n: number): string {
   if (s.startsWith('0.')) s = s.slice(1);
   else if (s.startsWith('-0.')) s = '-' + s.slice(2);
   return n < 0 ? s : ' ' + s;
-}
-
-function isObject(v: VBValue): v is VBObject {
-  return typeof v === 'object' && !(v instanceof EmptyT) && !(v instanceof NullT) && !(v instanceof NothingT)
-    && !(v instanceof VBArray) && !(v instanceof VBRecord) && !isDate(v);
 }
 
 /** Text of one Print item. */

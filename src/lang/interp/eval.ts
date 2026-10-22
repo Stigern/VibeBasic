@@ -6,13 +6,14 @@
 import type { CallOrIndex, Expr, MemberExpr, MissingArg, NameExpr, TypeSuffix, VBTypeName } from '../ast';
 import { VBRuntimeError } from '../errors';
 import { BUILTINS, CONSTANTS } from '../builtins';
-import { Empty, Null, Nothing, NothingT, VBArray, VBRecord, VBRef, coerce, toNumber, type VBValue } from '../values';
-import { SubCall, runSync, type Gen } from './driver';
+import { Empty, Null, Nothing, NothingT, VBArray, VBRecord, VBRef, isObject, parseDate, toNumber, type VBValue } from '../values';
+import { localeDateParser } from '../builtins/format';
+import { EndSignal, SubCall, runSync, type Gen } from './driver';
 import {
-  BuiltinRef, ConstSlot, ElementSlot, EnumRef, FieldSlot, Frame, ModuleRef, ModuleScope, ObjectRef, ProcRef,
+  BuiltinRef, ConstSlot, ElementSlot, EnumRef, FieldSlot, Frame, MemberRef, ModuleRef, ModuleScope, ObjectRef, ProcRef,
   ValueRef, Variable, getField, lc, setField, storeValue, type Binding,
 } from './scope';
-import { binaryOp, isObject, plain, unaryOp } from './operators';
+import { binaryOp, plain, unaryOp } from './operators';
 import { invokeProc, type BoundArg, MISSING } from './exec';
 import type { Runtime } from './program';
 
@@ -72,11 +73,13 @@ export function constExpr(f: Frame, e: Expr): VBValue {
 
 /**
  * Resolves a name, in VB order: local → module (variables, constants,
- * procedures, its own enum members and enum types) → public globals →
- * other modules' public enum members/types and built-in constants →
- * built-in functions → standard module names → host objects.
+ * procedures, its own enum members and enum types) → in a form's procedures,
+ * the form's own names (controls, then properties of `Me`: see `formName`) →
+ * public globals → other modules' public enum members/types and built-in
+ * constants → built-in functions → standard module names → host objects.
+ * `call` is true when the name is used with call arguments (`Left(s, 2)`).
  */
-export function lookup(f: Frame, key: string, name: string): Binding | undefined {
+export function lookup(f: Frame, key: string, name: string, call = false): Binding | undefined {
   const local = f.locals.get(key);
   if (local) return local;
   const m = f.module;
@@ -90,6 +93,11 @@ export function lookup(f: Frame, key: string, name: string): Binding | undefined
   if (mp) return mp;
   const me = m.enumMembers.get(key) ?? m.enums.get(key);
   if (me) return me;
+  const inForm = m.kind === 'form' && f.proc !== null;
+  if (inForm) {
+    const fm = formName(f, key, name, call);
+    if (fm) return fm;
+  }
   const gv = g.vars.get(key);
   if (gv) return gv;
   const gc = g.consts.get(key);
@@ -102,8 +110,47 @@ export function lookup(f: Frame, key: string, name: string): Binding | undefined
   if (b) return b;
   const mod = g.modules.get(key);
   if (mod) return mod;
+  if (inForm) return undefined; // host names were asked for in formName
   const obj = rt.host.resolveName(m.name, name);
   return obj ? new ObjectRef(obj) : undefined;
+}
+
+/**
+ * The form's own names inside its procedures, which VB6 puts before global
+ * names and built-ins: a control or other host name (`Text1`), else a
+ * property of `Me` (`Caption`, `Width`) as a MemberRef. A property whose name
+ * is also a built-in function is not used with call arguments: `Left(s, 2)`
+ * is the built-in, a bare `Left` is the form's property. Only `resolveName`
+ * and `hasMember` are asked here (no member is read).
+ */
+function formName(f: Frame, key: string, name: string, call: boolean): Binding | undefined {
+  const host = f.rt.host;
+  const obj = host.resolveName(f.module.name, name);
+  if (obj) return new ObjectRef(obj);
+  if (call && BUILTINS.has(key)) return undefined;
+  const me = host.resolveName(f.module.name, 'Me');
+  return me && me.hasMember(name) ? new MemberRef(me, name) : undefined;
+}
+
+/**
+ * A call to a name that is not declared (`Hide`, `Move 0, 0`, `x = Point(1, 2)`):
+ * in a form's procedure a method of `Me` (`Me.callMethod`); an object
+ * without that method (error 438) or no form: `Sub or Function not defined`.
+ */
+export function* formMethod(f: Frame, name: string, args: (Expr | MissingArg)[]): Gen<VBValue> {
+  const me = f.module.kind === 'form' && f.proc !== null ? f.rt.host.resolveName(f.module.name, 'Me') : undefined;
+  if (!me) throw compileError('Sub or Function not defined');
+  const argv = yield* evalArgValues(f, args);
+  const notDefined = (e: unknown) => (e instanceof VBRuntimeError && e.number === 438 ? compileError('Sub or Function not defined') : e);
+  let r: VBValue | Promise<VBValue>;
+  try {
+    r = me.callMethod(name, methodArgs(argv));
+  } catch (e) {
+    throw notDefined(e);
+  }
+  if (r instanceof Promise) return yield* awaitHost(f, r.catch(e => { throw notDefined(e); }));
+  yield* afterHostCall(f);
+  return r;
 }
 
 const SUFFIX_TYPES: Record<TypeSuffix, VBTypeName> = { '%': 'Integer', '&': 'Long', '!': 'Single', '#': 'Double', '$': 'String' };
@@ -123,11 +170,11 @@ function meObject(f: Frame): ObjectRef {
   return new ObjectRef(o);
 }
 
-/** Binding of a NameExpr, including `Me`. */
-function bindingOf(f: Frame, e: NameExpr): Binding | undefined {
+/** Binding of a NameExpr, including `Me`; `call`: used with call arguments (see `lookup`). */
+function bindingOf(f: Frame, e: NameExpr, call = false): Binding | undefined {
   const key = lc(e.name);
   if (key === 'me') return meObject(f);
-  return lookup(f, key, e.name);
+  return lookup(f, key, e.name, call);
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +228,7 @@ function evalSync(f: Frame, e: Expr): VBValue | typeof NOT_SYNC {
       if (t.kind !== 'name') return NOT_SYNC;
       const key = lc(t.name);
       if (f.returnVar && key === lc(f.proc!.name)) return NOT_SYNC;
-      const b = f.locals.get(key) ?? lookup(f, key, t.name);
+      const b = f.locals.get(key) ?? lookup(f, key, t.name, true);
       if (!(b instanceof Variable)) return NOT_SYNC;
       const arr = b.value;
       if (!(arr instanceof VBArray)) return NOT_SYNC;
@@ -213,7 +260,12 @@ export function* evalExpr(f: Frame, e: Expr): Gen<VBValue> {
   switch (e.kind) {
     case 'number': case 'string': case 'bool': return e.value;
     case 'nothing': return Nothing;
-    case 'date': return coerce(e.text, 'Date');
+    case 'date': {
+      // a date literal is locale-free: #m/d/yyyy [h:nn:ss AM]# or #yyyy-mm-dd#
+      const d = parseDate(e.text, localeDateParser('en-US'));
+      if (!d) throw new VBRuntimeError(13);
+      return d;
+    }
     case 'name': {
       const key = lc(e.name);
       const local = f.locals.get(key);
@@ -246,6 +298,7 @@ function* bindingValue(f: Frame, b: Binding | undefined, e: NameExpr): Gen<VBVal
   }
   if (b instanceof BuiltinRef) return yield* callBuiltin(f, b, []);
   if (b instanceof ObjectRef) return b.obj;
+  if (b instanceof MemberRef) return yield* memberGet(f, b.obj, b.name, null);
   throw compileError(b instanceof EnumRef ? 'Expected: expression' : 'Expected variable or procedure, not module');
 }
 
@@ -256,12 +309,25 @@ function* bindingValue(f: Frame, b: Binding | undefined, e: NameExpr): Gen<VBVal
  */
 export function* afterHostCall(f: Frame): Gen<void> {
   const rt = f.rt;
+  stopIfEnded(f);
   checkOverflow(rt);
   const p = rt.nestedRuns(f.run);
   if (p) {
     yield p;
+    stopIfEnded(f);
     checkOverflow(rt);
   }
+}
+
+const END = new EndSignal();
+
+/**
+ * The program ended during a host call (an event handler it fired ran End):
+ * the running statement stops at once instead of finishing its evaluation.
+ * Not in an Immediate command, which may still evaluate after the end.
+ */
+function stopIfEnded(f: Frame): void {
+  if (f.rt.stopping && !f.run.immediate) throw END;
 }
 
 /** Error 28 in the running statement when an event was refused for nesting too deep (see Runtime.runEvent). */
@@ -360,7 +426,7 @@ function* evalCall(f: Frame, e: CallOrIndex): Gen<VBValue> {
     const key = lc(t.name);
     // Inside Function Foo, `Foo(...)` is a recursive call, not the return value.
     if (f.returnVar && key === lc(f.proc!.name)) return yield* callProc(f, f.module.procs.get(key)!, e.args);
-    const b = bindingOf(f, t);
+    const b = bindingOf(f, t, true);
     if (b instanceof Variable) return yield* indexValue(f, b.value, e.args);
     if (b instanceof ProcRef) {
       if (b.proc.kind === 'sub') throw compileError('Expected Function or variable');
@@ -369,6 +435,8 @@ function* evalCall(f: Frame, e: CallOrIndex): Gen<VBValue> {
     if (b instanceof BuiltinRef) return yield* callBuiltin(f, b, e.args);
     if (b instanceof ObjectRef) return yield* indexValue(f, b.obj, e.args);
     if (b instanceof ValueRef) return yield* indexValue(f, b.value, e.args);
+    if (b instanceof MemberRef) return yield* memberGet(f, b.obj, b.name, e.args);
+    if (b === undefined) return yield* formMethod(f, t.name, e.args);
     throw compileError('Sub or Function not defined');
   }
   if (t.kind === 'member') {
@@ -466,7 +534,7 @@ function* refOf(f: Frame, e: Expr): Gen<BoundArg | null> {
   if (e.kind === 'call' && e.target.kind === 'name') {
     const key = lc(e.target.name);
     if (f.returnVar && key === lc(f.proc!.name)) return null;
-    const b = bindingOf(f, e.target);
+    const b = bindingOf(f, e.target, true);
     if (b instanceof Variable && b.value instanceof VBArray) {
       const arr = b.value;
       const idx = yield* evalIndices(f, e.args);
@@ -550,6 +618,10 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean):
         yield* afterHostCall(f);
         return;
       }
+      if (b instanceof MemberRef) {
+        yield* memberSet(f, b.obj, b.name, [], value, isSet);
+        return;
+      }
       if (b instanceof ProcRef) throw compileError('Function call on left-hand side of assignment must return Variant or Object');
       throw compileError('Assignment to constant not permitted');
     }
@@ -557,7 +629,12 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean):
       const t = target.target;
       let container: VBValue;
       if (t.kind === 'name') {
-        const b = bindingOf(f, t);
+        const b = bindingOf(f, t, true);
+        if (b instanceof MemberRef) {
+          // `List(2) = "x"` in the form's code
+          yield* memberSet(f, b.obj, b.name, yield* evalArgValues(f, target.args), value, isSet);
+          return;
+        }
         if (b instanceof Variable) container = b.value;
         else if (b instanceof ObjectRef) container = b.obj;
         else if (b === undefined) throw compileError('Sub or Function not defined');

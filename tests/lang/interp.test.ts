@@ -5,7 +5,7 @@
 import { Program, type SourceModule } from '../../src/lang/interp/program';
 import { VBRef, type VBValue } from '../../src/lang/values';
 import type { VBObject } from '../../src/lang/host';
-import { VBRuntimeError } from '../../src/lang/errors';
+import { VBRuntimeError, VBSyntaxError } from '../../src/lang/errors';
 import { TestHost, TEST_OPTIONS } from './testHost';
 
 function program(src: string | SourceModule[], host = new TestHost(), sliceSize?: number) {
@@ -477,4 +477,26 @@ describe('review fixes (round 1)', () => {
     ];
     expect(await run(mods)).toEqual([' 3  1 ', ' 9  7 ']);
   });
+});
+
+test('new Program reports the module of the first syntax error (final review)', () => {
+  let err: unknown;
+  try {
+    new Program([
+      { name: 'Module1', kind: 'module', source: 'Sub Main()\nEnd Sub' },
+      { name: 'Form2', kind: 'form', source: 'Sub Form_Load()\n  x = 1 2\nEnd Sub' },
+    ], new TestHost(), TEST_OPTIONS);
+  } catch (e) {
+    err = e;
+  }
+  expect(err).toBeInstanceOf(VBSyntaxError);
+  expect((err as VBSyntaxError).moduleName).toBe('Form2');
+  expect((err as VBSyntaxError).line).toBe(2);
+});
+
+test('a paren-less call with a negative first argument runs (final review)', async () => {
+  const host = new TestHost();
+  const prog = new Program([{ name: 'Module1', kind: 'module', source: 'Sub Main()\n  Show -1, -2\nEnd Sub\nSub Show(a, b)\n  Debug.Print a; b\nEnd Sub' }], host, TEST_OPTIONS);
+  await prog.runEvent('Module1', 'Main');
+  expect(host.lines()).toEqual(['-1 -2 ']);
 });

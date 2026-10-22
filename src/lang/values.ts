@@ -191,7 +191,8 @@ export function isDate(v: VBValue): v is VBDate {
     && typeof (v as VBDate).serial === 'number';
 }
 
-function isObject(v: VBValue): v is VBObject {
+/** A host object (`VBObject`): any object value that is not Empty, Null, Nothing, an array, a record or a date. */
+export function isObject(v: VBValue): v is VBObject {
   return typeof v === 'object' && !(v instanceof EmptyT) && !(v instanceof NullT) && !(v instanceof NothingT)
     && !(v instanceof VBArray) && !(v instanceof VBRecord) && !isDate(v);
 }
@@ -360,21 +361,52 @@ function dateToPlaceholder(v: VBDate): string {
   return p.h || p.n || p.s ? `${date} ${p2(p.h)}:${p2(p.n)}:${p2(p.s)}` : date;
 }
 
-/** Minimal text-to-date: a number, `yyyy-mm-dd[ hh:nn[:ss]]` or `m/d/yyyy[ hh:nn[:ss]]`. */
-function parseDate(text: string): VBDate | undefined {
+/**
+ * How text becomes a date in the program's locale (CDate, IsDate, assigning
+ * a string to a Date): installed and restored with the date-text formatter
+ * by a running Program (see `setDateTextFormatter`), so the text CStr gives
+ * for a date can be read back. Undefined: only the locale-free forms.
+ */
+export type DateTextParser = (text: string) => VBDate | undefined;
+let textToDate: DateTextParser | undefined;
+/** Installs `fn` as the current locale date parser and returns the previous one, for restoring. */
+export function setDateTextParser(fn: DateTextParser | undefined): DateTextParser | undefined {
+  const prev = textToDate;
+  textToDate = fn;
+  return prev;
+}
+
+/** VB's two-digit year window: 0-29 is 2000-2029, 30-99 is 1930-1999. */
+export function pivotYear(y: number): number {
+  return y <= 29 ? 2000 + y : y <= 99 ? 1900 + y : y;
+}
+
+/**
+ * Text to date: a number, the locale's short date and/or long time
+ * (`localeParser`, by default the one of the running program), then the
+ * locale-free `yyyy-mm-dd[ hh:nn[:ss]]` and `m/d/yyyy[ hh:nn[:ss]]` (also `m/d/yy`).
+ */
+export function parseDate(text: string, localeParser: DateTextParser | undefined = textToDate): VBDate | undefined {
   const s = text.trim();
   const num = parseNumber(s);
   if (num !== undefined) return { kind: 'date', serial: num };
+  const fromLocale = localeParser?.(s);
+  if (fromLocale) return fromLocale;
   const t = String.raw`(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?`;
   let y: number, m: number, d: number, rest: string[];
   let mm = new RegExp(String.raw`^(\d{4})-(\d{1,2})-(\d{1,2})${t}$`).exec(s);
   if (mm) { y = +mm[1]; m = +mm[2]; d = +mm[3]; rest = mm.slice(4); }
   else {
-    mm = new RegExp(String.raw`^(\d{1,2})/(\d{1,2})/(\d{4})${t}$`).exec(s);
+    mm = new RegExp(String.raw`^(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})${t}$`).exec(s);
     if (!mm) return undefined;
-    m = +mm[1]; d = +mm[2]; y = +mm[3]; rest = mm.slice(4);
+    m = +mm[1]; d = +mm[2]; y = mm[3].length === 2 ? pivotYear(+mm[3]) : +mm[3]; rest = mm.slice(4);
   }
   const [h, n, sec] = rest.map(x => (x === undefined ? 0 : +x));
+  return validDate(y, m, d, h, n, sec);
+}
+
+/** The date for these parts, or undefined when a part is out of range (Feb 30, 25:00). */
+export function validDate(y: number, m: number, d: number, h: number, n: number, sec: number): VBDate | undefined {
   if (m < 1 || m > 12 || d < 1 || d > 31 || h > 23 || n > 59 || sec > 59) return undefined;
   const out = dateFrom(y, m, d, h, n, sec);
   return dateParts(out.serial).d === d ? out : undefined; // reject Feb 30 etc.

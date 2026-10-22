@@ -63,8 +63,8 @@ describe('brief', () => {
     const fake = new FakeObject('CommandButton', { items });
     const out = await runForm(sub('  Command1(2).Caption = "x"'), { Command1: fake });
     expect(out).toEqual([]);
-    expect(fake.items[2].props.Caption).toBe('x');
-    expect(fake.items[1].props.Caption).toBe('');
+    expect(fake.elements[2].props.Caption).toBe('x');
+    expect(fake.elements[1].props.Caption).toBe('');
   });
 
   test('with block', async () => {
@@ -643,5 +643,136 @@ describe('re-entrant events', () => {
     host.gate.resolve('continue');
     await a;
     expect(host.lines()).toEqual(['a1', 'a2']);
+  });
+});
+
+describe('form members without Me (final review)', () => {
+  const meForm = (props: Record<string, VBValue> = {}) =>
+    new FakeObject('Form', { defaultMember: undefined, props: { Caption: 'Form1', Width: 4800, Left: 120, ...props }, methods: { Hide: () => 0 } });
+
+  test('Caption = "x" sets the form\'s Caption; a bare Caption reads it', async () => {
+    const me = meForm();
+    expect(await runForm(sub('  Caption = "Hello"', '  Debug.Print Caption'), { Me: me, Form1: me })).toEqual(['Hello']);
+    expect(me.props.Caption).toBe('Hello');
+  });
+
+  test('Width is read and written through the form', async () => {
+    const me = meForm();
+    expect(await runForm(sub('  Width = Width + 1200', '  Debug.Print Width'), { Me: me })).toEqual([' 6000 ']);
+    expect(me.props.Width).toBe(6000);
+  });
+
+  test('a bare method name calls the form\'s method; an unknown one is Sub or Function not defined', async () => {
+    const me = meForm();
+    expect(await runForm(sub('  Hide', '  Debug.Print "after"', '  Frobnicate 1'), { Me: me }))
+      .toEqual(['after', '[Error 0 at Form1:4] Compile error: Sub or Function not defined']);
+    expect(me.log).toEqual(['Hide']);
+  });
+
+  test('Me.Caption still works', async () => {
+    const me = meForm();
+    expect(await runForm(sub('  Me.Caption = "M"', '  Debug.Print Me.Caption; Caption'), { Me: me })).toEqual(['MM']);
+  });
+
+  test('Option Explicit: form members are declared names; other names are not', async () => {
+    const me = meForm();
+    const code = lines('Option Explicit', 'Sub Form_Load()', '  Caption = "OE"', '  Debug.Print Caption', '  y = 1', 'End Sub');
+    expect(await runForm(code, { Me: me })).toEqual(['OE', '[Error 0 at Form1:5] Compile error: Variable not defined']);
+    expect(me.props.Caption).toBe('OE');
+  });
+
+  test('a built-in with call arguments wins over a form property of the same name', async () => {
+    const me = meForm();
+    expect(await runForm(sub('  Debug.Print Left("abc", 2); Left'), { Me: me })).toEqual(['ab 120 ']);
+  });
+
+  test('control and form members come before global Publics inside the form, not in other modules', async () => {
+    const host = new TestHost();
+    const text1 = new FakeObject('TextBox', { props: { Text: '', Caption: '' } });
+    const me = meForm();
+    host.objects.set('me', me);
+    host.objects.set('text1', text1);
+    const prog = new Program([
+      { name: 'Module1', kind: 'module', source: lines('Public Text1 As String', 'Public Caption As String', 'Sub SetGlobals()', '  Text1 = "global"', '  Caption = "gcap"', 'End Sub') },
+      { name: 'Form1', kind: 'form', source: sub('  SetGlobals', '  Text1 = "control"', '  Caption = "form"', '  Debug.Print Module1.Text1; " "; Module1.Caption') },
+    ], host, TEST_OPTIONS);
+    await prog.runEvent('Form1', 'Form_Load');
+    expect(host.lines()).toEqual(['global gcap']);
+    expect(text1.props.Text).toBe('control');
+    expect(me.props.Caption).toBe('form');
+  });
+
+  test('the module\'s own variables come before form members', async () => {
+    const me = meForm();
+    const code = lines('Dim Caption As String', 'Sub Form_Load()', '  Caption = "var"', '  Debug.Print Caption', 'End Sub');
+    expect(await runForm(code, { Me: me })).toEqual(['var']);
+    expect(me.props.Caption).toBe('Form1');
+  });
+
+  test('a form property is read once per use (no extra read by the fast path)', async () => {
+    const me = meForm();
+    me.logAccess = true;
+    expect(await runForm(sub('  Dim x', '  x = Width * 2', '  x = Width * 2', '  Debug.Print x'), { Me: me })).toEqual([' 9600 ']);
+    expect(me.log).toEqual(['get:Width', 'get:Width']);
+  });
+
+  test('a standard module does not see the form\'s members', async () => {
+    const host = new TestHost();
+    const me = meForm();
+    host.objects.set('me', me);
+    const prog = new Program([{ name: 'Module1', kind: 'module', source: lines('Sub Main()', '  Caption = "x"', '  Debug.Print Caption', 'End Sub') }], host, TEST_OPTIONS);
+    await prog.runEvent('Module1', 'Main');
+    expect(host.lines()).toEqual(['x']);
+    expect(me.props.Caption).toBe('Form1');
+  });
+
+  test('Set of a form property and an indexed form property', async () => {
+    const pic = new FakeObject('Picture', { defaultMember: undefined, props: {} });
+    const me = meForm({ Picture: pic, List: ['a', 'b'] as unknown as VBValue });
+    expect(await runForm(sub('  Set Picture = Picture', '  List(1) = "z"', '  Debug.Print List(0); List(1)'), { Me: me })).toEqual(['az']);
+    expect(me.props.Picture).toBe(pic);
+  });
+});
+
+describe('For Each over objects and End in a sync-fired event (final review)', () => {
+  const makeArr = () => {
+    const items = {
+      2: new FakeObject('CommandButton', { props: { Caption: 'two' } }),
+      0: new FakeObject('CommandButton', { props: { Caption: 'zero' } }),
+      1: new FakeObject('CommandButton', { props: { Caption: 'one' } }),
+    };
+    return new FakeObject('CommandButton', { defaultMember: undefined, items });
+  };
+
+  test('For Each c In Command1 visits the control array in index order', async () => {
+    const code = lines('Option Explicit', 'Sub Form_Load()', '  Dim c As Variant, b As CommandButton', '  For Each c In Command1',
+      '    Debug.Print c.Caption', '  Next', '  For Each b In Command1', '    b.Caption = UCase(b.Caption)', '  Next', '  Debug.Print Command1(2).Caption', 'End Sub');
+    expect(await runForm(code, { Command1: makeArr() })).toEqual(['zero', 'one', 'two', 'TWO']);
+  });
+
+  test('For Each over an object without items is 438, over Nothing 91', async () => {
+    const text1 = new FakeObject('TextBox');
+    expect(await runForm(sub('  Dim c', '  For Each c In Text1', '  Next'), { Text1: text1 }))
+      .toEqual(['[Error 438 at Form1:3] Object doesn\'t support this property or method']);
+    expect(await runForm(sub('  Dim c, o As Object', '  For Each c In o', '  Next')))
+      .toEqual(['[Error 91 at Form1:3] Object variable or With block variable not set']);
+  });
+
+  test('End in an event fired synchronously by a host call stops the outer statement at once', async () => {
+    const host = new TestHost();
+    let prog!: Program;
+    class Firing extends Spy {
+      override getMember(name: string, args: VBValue[]) {
+        void prog.runEvent('Form1', 'Obj_Change');
+        return super.getMember(name, args);
+      }
+    }
+    const obj = new Firing('Spy', { fire: 'v' });
+    ({ prog } = form(lines('Sub Form_Load()', '  Debug.Print Obj.Fire; "after"', '  Debug.Print "next"', 'End Sub',
+      'Sub Obj_Change()', '  End', 'End Sub'), { Obj: obj }, host));
+    await prog.runEvent('Form1', 'Form_Load');
+    expect(host.lines()).toEqual([]);
+    expect(prog.state).toBe('ended');
+    expect(host.endCalls).toBe(1);
   });
 });

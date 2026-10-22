@@ -1,10 +1,15 @@
 // Errors for the VibeBasic language core. Later tasks extend this file
 // (VBRuntimeError, vbErrorText).
 
-/** A compile-time (lexer/parser) error. `line` and `col` are 1-based. */
+/**
+ * A compile-time (lexer/parser) error. `line` and `col` are 1-based;
+ * `moduleName` is set by `parseModule` / `findSyntaxErrors` (and so for the
+ * error `new Program(...)` throws), so the IDE can open that module's code.
+ */
 export class VBSyntaxError extends Error {
   line: number;
   col: number;
+  moduleName?: string;
   constructor(message: string, line: number, col: number) {
     super(message);
     this.name = 'VBSyntaxError';
@@ -26,6 +31,7 @@ const ERROR_TEXTS: Record<number, string> = {
   20: 'Resume without error',
   28: 'Out of stack space',
   35: 'Sub or Function not defined',
+  51: 'Internal error',
   53: 'File not found',
   91: 'Object variable or With block variable not set',
   92: 'For loop not initialized',
@@ -68,4 +74,16 @@ export class VBRuntimeError extends Error {
     e.compile = true;
     return e;
   }
+}
+
+/**
+ * A plain JS error (a bug in host code or in the interpreter) turned into
+ * VB run-time error 51, `Internal error: <message>`, so it goes through the
+ * normal error path (On Error, onRuntimeError). The original is logged with
+ * console.error.
+ */
+export function internalError(e: unknown): VBRuntimeError {
+  console.error('VibeBasic: internal error', e);
+  const message = e instanceof Error ? e.message : String(e);
+  return new VBRuntimeError(51, `Internal error: ${message}`);
 }

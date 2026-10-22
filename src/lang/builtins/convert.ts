@@ -3,10 +3,10 @@
 // TypeName VarType.
 
 import { VBRuntimeError } from '../errors';
-import { plain, isObject } from '../interp/operators';
+import { plain } from '../interp/operators';
 import { printNumber } from '../printFormat';
 import {
-  EmptyT, NothingT, NullT, VBArray, VBRecord, coerce, isDate, toNumber, toStr, vbTypeName,
+  EmptyT, NothingT, NullT, VBArray, VBRecord, coerce, isDate, isObject, toNumber, toStr, vbTypeName,
   type VBValue,
 } from '../values';
 import { def } from './util';

@@ -2,16 +2,10 @@
 
 import type { BinaryOp, UnaryOp } from '../ast';
 import { VBRuntimeError } from '../errors';
-import type { VBObject } from '../host';
 import {
-  EmptyT, Null, NullT, NothingT, VBArray, VBRecord, coerce, compare, isDate, toBool, toNumber, toStr,
+  EmptyT, Null, NullT, NothingT, coerce, compare, isDate, isObject, toBool, toNumber, toStr,
   type VBDate, type VBValue,
 } from '../values';
-
-export function isObject(v: VBValue): v is VBObject {
-  return typeof v === 'object' && !(v instanceof EmptyT) && !(v instanceof NullT) && !(v instanceof NothingT)
-    && !(v instanceof VBArray) && !(v instanceof VBRecord) && !isDate(v);
-}
 
 /** A plain value: objects give their default member (no default member: 438); Nothing is error 91. */
 export function plain(v: VBValue): VBValue {
