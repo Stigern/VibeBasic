@@ -21,6 +21,14 @@ export interface Backend {
   onCloseRequested(handler: () => Promise<boolean>): void;
   /** Closes the main window without asking again (the caller already confirmed). */
   closeMainWindow(): Promise<void>;
+  /** Made apps: the embedded project text (Contents/Resources/vibebasic-project.vbb), or null in the IDE. */
+  getEmbeddedProject(): Promise<string | null>;
+  /** Exits the whole app. */
+  quitApp(): Promise<void>;
+  /** The folder that contains the .app ('' when unknown). */
+  getAppDir(): Promise<string>;
+  /** Made apps: the runtime menu's Quit (Cmd+Q) was chosen. */
+  onQuitRequested(handler: () => void): void;
 }
 
 let cached: Backend | undefined;

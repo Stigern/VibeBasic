@@ -64,6 +64,22 @@ export class BrowserBackend implements Backend {
     window.close(); // best effort: browsers only close windows opened by script
   }
 
+  async getEmbeddedProject(): Promise<string | null> {
+    return null;
+  }
+
+  async quitApp(): Promise<void> {
+    // Nothing to quit in the browser.
+  }
+
+  async getAppDir(): Promise<string> {
+    return '';
+  }
+
+  onQuitRequested(_handler: () => void): void {
+    // No runtime menu in the browser.
+  }
+
   onCloseRequested(_handler: () => Promise<boolean>): void {
     // Best effort: beforeunload cannot await an async handler, so the browser's own
     // confirmation prompt stands in for the IDE's "Save changes?" dialog (development only).

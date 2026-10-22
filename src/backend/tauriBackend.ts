@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import type { Backend, FileFilter } from './backend';
@@ -63,6 +64,22 @@ export class TauriBackend implements Backend {
 
   async closeMainWindow(): Promise<void> {
     await getCurrentWindow().destroy();
+  }
+
+  getEmbeddedProject(): Promise<string | null> {
+    return call<string | null>('get_embedded_project', {});
+  }
+
+  async quitApp(): Promise<void> {
+    await call<void>('quit_app', {});
+  }
+
+  async getAppDir(): Promise<string> {
+    return (await call<string | null>('get_app_dir', {})) ?? '';
+  }
+
+  onQuitRequested(handler: () => void): void {
+    void listen('vb:quit-requested', () => handler());
   }
 
   onCloseRequested(handler: () => Promise<boolean>): void {

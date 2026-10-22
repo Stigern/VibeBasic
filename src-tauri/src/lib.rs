@@ -1,3 +1,4 @@
+mod embedded;
 mod files;
 mod make_app;
 
@@ -9,7 +10,10 @@ pub fn run() {
       files::read_text_file,
       files::write_text_file,
       files::read_binary_file,
-      make_app::make_app
+      make_app::make_app,
+      embedded::get_embedded_project,
+      embedded::quit_app,
+      embedded::get_app_dir
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {
@@ -19,6 +23,7 @@ pub fn run() {
             .build(),
         )?;
       }
+      embedded::setup_runtime(app.handle())?;
       Ok(())
     })
     .run(tauri::generate_context!())
