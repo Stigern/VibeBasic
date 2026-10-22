@@ -59,7 +59,7 @@ export class RunController {
   /** F5 / Ctrl+F5. In break mode F5 continues. */
   async start(fullCompile: boolean): Promise<void> {
     if (this.ide.mode === 'break') { this.pendingBreak?.('continue'); return; }
-    if (this.ide.mode === 'run' || this.starting) return;
+    if (this.ide.mode === 'run' || this.starting || this.ide.busy) return;
     this.starting = true;
     let session: RunSession | null;
     try {

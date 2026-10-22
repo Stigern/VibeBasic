@@ -40,6 +40,12 @@ pub fn get_app_dir() -> Option<String> {
   Some(bundle.parent()?.to_string_lossy().to_string())
 }
 
+/// The made app's name (CFBundleName; App.EXEName). None outside a bundle.
+#[tauri::command]
+pub fn get_app_name() -> Option<String> {
+  current_bundle().ok().map(|b| bundle_display_name(&b))
+}
+
 /// CFBundleName of the bundle at `bundle`, else its file name without `.app`.
 pub fn bundle_display_name(bundle: &Path) -> String {
   let from_plist = plist::Value::from_file(bundle.join("Contents/Info.plist"))

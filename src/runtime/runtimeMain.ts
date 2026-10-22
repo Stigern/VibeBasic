@@ -41,6 +41,7 @@ function sessionEnded(): void {
 
 export async function startRuntime(project: Project, backend: Backend, host: TauriFormHost = new TauriFormHost()): Promise<void> {
   const appPath = await backend.getAppDir().catch(() => '');
+  const appName = await backend.getAppName().catch(() => '');
   let session: RunSession;
   try {
     session = new RunSession(project, host, {
@@ -49,6 +50,7 @@ export async function startRuntime(project: Project, backend: Backend, host: Tau
       onEnded: () => { sessionEnded(); void host.dispose().finally(() => backend.quitApp()); },
       readFile: p => backend.readBinaryFile(p),
       appPath,
+      appName,
     }, 'app');
   } catch (e) {
     await fatalError(backend, `Compile error:\n\n${e instanceof Error ? e.message : String(e)}`, host);

@@ -204,3 +204,13 @@ describe('RunSession', () => {
     expect(out).toEqual(['i1', 'i2', 'load']);
   });
 });
+
+test('App.EXEName is the project name in the IDE and cb.appName in a made app', async () => {
+  const mk = () => { const p = newProject(); p.name = 'Proj'; p.forms = [newForm('Form1', 'Private Sub Form_Load()\nDebug.Print App.EXEName\nEnd Sub')]; p.startupForm = 'Form1'; return p; };
+  await start(mk());
+  expect(out.join('')).toContain('Proj');
+  session!.end();
+  out = [];
+  await start(mk(), { appName: 'Mitt Program' });
+  expect(out.join('')).toContain('Mitt Program');
+});

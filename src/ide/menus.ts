@@ -38,6 +38,7 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
   const sub = (label: string, items: MenuItem[]): MenuItem => ({ label, submenu: items });
   const never = () => false;
   const design = () => (state?.mode ?? 'design') === 'design';
+  const idle = () => !state?.busy;
 
   return [
     { label: 'File', items: [
@@ -47,7 +48,7 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
       mk('Save Project', 'saveProject', 'Ctrl+S'),
       mk('Save Project As...', 'saveProjectAs'),
       sep(),
-      mk(() => `Make ${projectName()}.app...`, 'makeApp', undefined, design),
+      mk(() => `Make ${projectName()}.app...`, 'makeApp', undefined, () => design() && idle()),
       sep(),
       mk('Exit', 'exit'),
     ] },
@@ -96,11 +97,11 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
       mk('Toggle Breakpoint', 'toggleBreakpoint', 'F9', never),
     ] },
     { label: 'Run', items: [
-      mk(() => (state?.mode === 'break' ? 'Continue' : 'Start'), 'start', 'F5', () => (state?.mode ?? 'design') !== 'run'),
-      mk('Start With Full Compile', 'startFullCompile', 'Ctrl+F5', () => (state?.mode ?? 'design') === 'design'),
+      mk(() => (state?.mode === 'break' ? 'Continue' : 'Start'), 'start', 'F5', () => idle() && (state?.mode ?? 'design') !== 'run'),
+      mk('Start With Full Compile', 'startFullCompile', 'Ctrl+F5', () => idle() && (state?.mode ?? 'design') === 'design'),
       mk('Break', 'break', 'Ctrl+Break', () => state?.mode === 'run'),
       mk('End', 'end', undefined, () => (state?.mode ?? 'design') !== 'design'),
-      mk('Restart', 'restart', 'Shift+F5', () => (state?.mode ?? 'design') !== 'design'),
+      mk('Restart', 'restart', 'Shift+F5', () => idle() && (state?.mode ?? 'design') !== 'design'),
     ] },
     { label: 'Tools', items: [
       mk('Ask AI...', 'askAi', 'Ctrl+I'),

@@ -26,6 +26,8 @@ export class IdeState {
   currentTool: ControlType | 'Pointer' = 'Pointer';
   /** Plan 03 sets run / break. */
   mode: 'design' | 'run' | 'break' = 'design';
+  /** True while Make runs: Make and Run are disabled. */
+  busy = false;
   options: IdeOptions = { ...DEFAULT_OPTIONS };
   controlsLocked = false;
   /** Form/module selected in the Project Explorer (target of Project > Remove). */
@@ -70,6 +72,7 @@ export class IdeState {
   setSelection(sel: { formId: string; ids: string[] } | null): void { this.selection = sel; this.emit('selection'); }
   setActiveView(v: ActiveView): void { this.activeView = v; this.emit('activeView'); }
   setMode(m: 'design' | 'run' | 'break'): void { this.mode = m; this.emit('mode'); }
+  setBusy(b: boolean): void { this.busy = b; this.emit('mode'); }
   /** Selecting a tool; `Pointer` resets. */
   setTool(t: ControlType | 'Pointer'): void { this.currentTool = t; this.emit('tool'); }
   setOptions(o: Partial<IdeOptions>): void { this.options = { ...this.options, ...o }; this.emit('options'); }

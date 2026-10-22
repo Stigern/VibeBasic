@@ -213,6 +213,15 @@ export function addAssetCmd(id: string, asset: Asset): Command {
   };
 }
 
+export function removeAssetCmd(id: string): Command {
+  let old: Asset | undefined;
+  return {
+    label: 'Remove Picture',
+    do(p) { old = p.assets[id]; delete p.assets[id]; },
+    undo(p) { if (old) p.assets[id] = old; },
+  };
+}
+
 /** Changes the name (and optionally the control-array index). Never touches code: event procedures keep the old name (VB6). */
 export function renameCmd(formId: string, targetId: string | 'form', newName: string, newIndex: number | null): Command {
   let oldName = '';

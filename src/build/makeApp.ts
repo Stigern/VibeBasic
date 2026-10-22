@@ -18,8 +18,14 @@ export async function makeAppFlow(ide: IdeState, backend: Backend, doc: Document
     await messageBox98(doc, { prompt: "Can't make the app while the program is running.", title: 'VibeBasic', buttons: 48 });
     return;
   }
+  if (ide.busy) return;
+  ide.setBusy(true);
+  const body = doc.body;
+  const oldCursor = body.style.cursor;
+  body.style.cursor = 'wait';
   const p = ide.project;
   try {
+    await backend.canMakeApp();
     const target = await backend.saveAppDialog(sanitizeAppFileName(p.title || p.name) + '.app');
     if (target === null) return;
     const file = target.split('/').pop() ?? target;
@@ -28,5 +34,8 @@ export async function makeAppFlow(ide: IdeState, backend: Backend, doc: Document
     await backend.makeApp({ targetPath: target, appName, projectJson: serializeProject(p), iconPngBase64: icon, overwrite: true });
   } catch (e) {
     await messageBox98(doc, { prompt: e instanceof Error ? e.message : String(e), title: 'VibeBasic', buttons: vbCritical });
+  } finally {
+    body.style.cursor = oldCursor;
+    ide.setBusy(false);
   }
 }

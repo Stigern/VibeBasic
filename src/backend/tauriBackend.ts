@@ -89,6 +89,14 @@ export class TauriBackend implements Backend {
     return (await call<string | null>('get_app_dir', {})) ?? '';
   }
 
+  async getAppName(): Promise<string> {
+    return (await call<string | null>('get_app_name', {})) ?? '';
+  }
+
+  canMakeApp(): Promise<void> {
+    return call<void>('can_make_app', {});
+  }
+
   onQuitRequested(handler: () => void): void {
     void listen('vb:quit-requested', () => handler());
   }

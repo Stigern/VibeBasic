@@ -84,6 +84,14 @@ export class BrowserBackend implements Backend {
     return '';
   }
 
+  async getAppName(): Promise<string> {
+    return '';
+  }
+
+  async canMakeApp(): Promise<void> {
+    throw new Error('Make requires the desktop version of VibeBasic.');
+  }
+
   onQuitRequested(_handler: () => void): void {
     // No runtime menu in the browser.
   }

@@ -31,6 +31,10 @@ export interface Backend {
   quitApp(): Promise<void>;
   /** The folder that contains the .app ('' when unknown). */
   getAppDir(): Promise<string>;
+  /** The made app's name (CFBundleName; App.EXEName); '' when unknown. */
+  getAppName(): Promise<string>;
+  /** Rejects with the reason text when Make can't work here (browser, or desktop not run as a built .app). */
+  canMakeApp(): Promise<void>;
   /** Made apps: the runtime menu's Quit (Cmd+Q) was chosen. */
   onQuitRequested(handler: () => void): void;
 }

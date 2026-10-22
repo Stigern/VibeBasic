@@ -19,6 +19,8 @@ export interface SessionCallbacks {
   onEnded(): void;
   readFile(path: string): Promise<Uint8Array>;            // LoadPicture
   appPath: string;
+  /** App.EXEName; defaults to the project name (the IDE). Made apps pass the bundle name. */
+  appName?: string;
 }
 
 /** Patches are sent at the latest 16 ms after they were queued. */
@@ -67,7 +69,7 @@ export class RunSession implements Host, FormSession {
     this.queue = new TimedPatchQueue((key, m) => this.forms.get(key.toLowerCase())?.deliver(m));
     for (const f of project.forms) this.forms.set(f.name.toLowerCase(), new FormInstance(f, this));
     this.title = project.title || project.name;
-    this.app = new AppObject(this.title, cb.appPath, project.name);
+    this.app = new AppObject(this.title, cb.appPath, cb.appName || project.name);
     const modules: SourceModule[] = [
       ...project.forms.map(f => ({ name: f.name, kind: 'form' as const, source: f.code })),
       ...project.modules.map(m => ({ name: m.name, kind: 'module' as const, source: m.code })),

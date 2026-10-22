@@ -213,8 +213,17 @@ pub fn build_app_from(
     if !overwrite {
       return Err(MakeError::Exists);
     }
-    if !target_real.join("Contents/Info.plist").is_file() {
+    let plist_path = target_real.join("Contents/Info.plist");
+    if !plist_path.is_file() {
       return Err(MakeError::Io("the existing target is not an app bundle".to_string()));
+    }
+    let made_here = plist::Value::from_file(&plist_path)
+      .ok()
+      .and_then(|v| v.into_dictionary())
+      .and_then(|d| d.get("CFBundleIdentifier").and_then(|i| i.as_string().map(|s| s.starts_with("no.vibebasic.app."))))
+      .unwrap_or(false);
+    if !made_here {
+      return Err(MakeError::Io("Can't replace an app that wasn't made with VibeBasic.".to_string()));
     }
   }
 
@@ -252,10 +261,12 @@ fn build_inner(
   signer: &dyn Signer,
   icons: &dyn IconConverter,
 ) -> Result<(), MakeError> {
-  let status = Command::new("ditto").arg(source).arg(target).output().map_err(io)?;
+  // No resource forks, extended attributes or quarantine flag: FinderInfo breaks codesign, quarantine breaks App.Path.
+  let status = Command::new("ditto").args(["--norsrc", "--noextattr", "--noqtn"]).arg(source).arg(target).output().map_err(io)?;
   if !status.status.success() {
     return Err(MakeError::Tool(format!("ditto: {}", String::from_utf8_lossy(&status.stderr).trim())));
   }
+  let _ = Command::new("xattr").arg("-cr").arg(target).output();
   let contents = target.join("Contents");
   let resources = contents.join("Resources");
   fs::create_dir_all(&resources).map_err(io)?;
@@ -303,6 +314,12 @@ pub fn normalize_target(raw: &str) -> Result<PathBuf, MakeError> {
   let base = file.strip_suffix(".app").unwrap_or(&file);
   let parent = path.parent().ok_or_else(|| MakeError::Io("invalid target path".to_string()))?;
   Ok(parent.join(format!("{}.app", sanitize_app_file_name(base))))
+}
+
+/// Ok when VibeBasic runs as a built .app (the only place Make works).
+#[tauri::command]
+pub fn can_make_app() -> Result<(), String> {
+  current_bundle().map(|_| ()).map_err(|e| e.message())
 }
 
 #[tauri::command]
@@ -468,8 +485,14 @@ mod tests {
 
   fn make_old_bundle(target: &Path) {
     fs::create_dir_all(target.join("Contents")).unwrap();
-    fs::write(target.join("Contents/Info.plist"), b"old plist").unwrap();
+    set_bundle_id(target, "no.vibebasic.app.old");
     fs::write(target.join("old"), b"old").unwrap();
+  }
+
+  fn set_bundle_id(target: &Path, id: &str) {
+    let mut d = plist::Dictionary::new();
+    d.insert("CFBundleIdentifier".into(), id.into());
+    plist::Value::Dictionary(d).to_file_xml(target.join("Contents/Info.plist")).unwrap();
   }
 
   struct FailSigner;
@@ -544,6 +567,45 @@ mod tests {
     let r = build_app_from(&src, &target, &spec(false), true, &FakeSigner(RefCell::new(vec![])), &FakeIcons(RefCell::new(0)));
     assert!(matches!(r, Err(MakeError::Io(m)) if m.contains("not an app bundle")));
     assert!(target.join("precious").exists());
+  }
+
+  #[test]
+  fn refuses_to_replace_foreign_app() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = fake_source(tmp.path());
+    let target = tmp.path().join("Safari.app");
+    make_old_bundle(&target);
+    set_bundle_id(&target, "com.apple.Safari");
+    let signer = FakeSigner(RefCell::new(vec![]));
+    let r = build_app_from(&src, &target, &spec(false), true, &signer, &FakeIcons(RefCell::new(0)));
+    assert!(matches!(r, Err(MakeError::Io(m)) if m.contains("Can't replace an app that wasn't made with VibeBasic.")));
+    assert!(target.join("old").exists());
+    assert!(signer.0.borrow().is_empty());
+    no_leftovers(tmp.path());
+  }
+
+  fn xattr_ok(args: &[&str], path: &Path) -> bool {
+    Command::new("xattr").args(args).arg(path).output().map(|o| o.status.success()).unwrap_or(false)
+  }
+
+  #[test]
+  fn built_bundle_drops_quarantine_and_finder_info() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = fake_source(tmp.path());
+    let probe = src.join("Contents/Resources/x");
+    let q = "0081;00000000;Test;";
+    if !xattr_ok(&["-w", "com.apple.quarantine", q], &src) || !xattr_ok(&["-w", "com.apple.quarantine", q], &probe) {
+      return; // xattr not available here
+    }
+    let target = tmp.path().join("T.app");
+    build_app_from(&src, &target, &spec(false), false, &FakeSigner(RefCell::new(vec![])), &FakeIcons(RefCell::new(0))).unwrap();
+    let listing = |p: &Path| {
+      let o = Command::new("xattr").arg(p).output().unwrap();
+      String::from_utf8_lossy(&o.stdout).into_owned()
+    };
+    assert!(listing(&src).contains("com.apple.quarantine"), "precondition");
+    assert!(!listing(&target).contains("com.apple.quarantine"));
+    assert!(!listing(&target.join("Contents/Resources/x")).contains("com.apple.quarantine"));
   }
 
   #[test]

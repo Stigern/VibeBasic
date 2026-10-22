@@ -17,6 +17,7 @@ function fakeBackend(embedded: string | null | Error) {
     getEmbeddedProject: async () => { if (embedded instanceof Error) throw embedded; return embedded; },
     quitApp: async () => { log.push('quit'); },
     getAppDir: async () => '/Apps',
+    getAppName: async () => 'App',
     showMainWindow: async () => { log.push('show'); },
     readBinaryFile: async () => new Uint8Array(),
     onQuitRequested: (h: () => void) => { quitHandler = h; },
@@ -105,4 +106,14 @@ test('dialog parent only when the owner window is visible', async () => {
   expect((await resolveParent(o, async () => null)).parent).toBeUndefined();
   expect((await resolveParent(o, async () => { throw new Error('x'); })).alwaysOnTop).toBe(true);
   expect(await resolveParent({ alwaysOnTop: false } as WindowCreateOptions, win(false))).toEqual({ alwaysOnTop: false });
+});
+
+test('startRuntime asks the backend for the bundle name', async () => {
+  const p = newProject();
+  p.forms = [];
+  const { b } = fakeBackend(null);
+  const getAppName = vi.fn(async () => 'Mitt Program');
+  (b as any).getAppName = getAppName;
+  await startRuntime(p, b, fakeHost());
+  expect(getAppName).toHaveBeenCalled();
 });
