@@ -86,7 +86,7 @@ pub fn list_volumes() -> Vec<Volume> {
   volumes_in(Path::new("/Volumes"))
 }
 
-/// Lists one folder. Symlinks to folders are not followed (not listed, so no symlink loops); a symlink to a file is a file.
+/// Lists one folder (one level: nothing is followed further). A symlink to a folder is a folder, a symlink to a file a file.
 /// An entry that can't be read is skipped; a folder that can't be opened is an error.
 #[tauri::command]
 pub fn list_dir(path: String) -> Result<DirListing, String> {
@@ -96,7 +96,8 @@ pub fn list_dir(path: String) -> Result<DirListing, String> {
   for e in rd.flatten() {
     let name = e.file_name().to_string_lossy().to_string();
     let Ok(ft) = e.file_type() else { continue };
-    if ft.is_dir() {
+    // a symlinked folder (/tmp, /var and /etc at "/") is listed like any other; DirListBox only goes one level down
+    if ft.is_dir() || (ft.is_symlink() && std::fs::metadata(e.path()).is_ok_and(|m| m.is_dir())) {
       dirs.push(name);
     } else if ft.is_file() || (ft.is_symlink() && std::fs::metadata(e.path()).is_ok_and(|m| m.is_file())) {
       files.push(FileEntry { hidden: name.starts_with('.'), name });
@@ -163,7 +164,7 @@ mod tests {
   }
 
   #[test]
-  fn list_dir_does_not_follow_symlinked_folders() {
+  fn list_dir_lists_symlinked_folders_and_files() {
     let dir = unique_dir("sym");
     std::fs::create_dir(dir.join("real")).unwrap();
     std::fs::write(dir.join("f.txt"), "x").unwrap();
@@ -171,7 +172,7 @@ mod tests {
     std::os::unix::fs::symlink(dir.join("f.txt"), dir.join("link.txt")).unwrap();
     std::os::unix::fs::symlink(dir.join("gone"), dir.join("broken")).unwrap();
     let l = list_dir(dir.to_string_lossy().to_string()).unwrap();
-    assert_eq!(l.dirs, vec!["real"]);
+    assert_eq!(l.dirs, vec!["loop", "real"]);
     let names: Vec<&str> = l.files.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, vec!["f.txt", "link.txt"]);
     std::fs::remove_dir_all(dir).ok();

@@ -123,6 +123,8 @@ export class ControlObject implements VBObject {
   private loading: Promise<void> | null = null;
   private loadSeq = 0;
   private pendingName: string | null = null;
+  /** The listing read while checking a new Path (the reload that follows uses it instead of reading again). */
+  private prefetched: { path: string; listing: DirListing } | null = null;
   /** DriveListBox: the volumes, once known. */
   private volumes: Volume[] | null = null;
   /** Winsock, Inet, WebBrowser: their methods and network state. */
@@ -315,7 +317,9 @@ export class ControlObject implements VBObject {
     const files = this.ctx.files;
     if (!files) return;
     const seq = ++this.loadSeq, path = String(this.props.Path);
-    const p: Promise<void> = new Promise<DirListing>(r => r(files.listDir(path)))
+    const pre = this.prefetched;
+    this.prefetched = null;
+    const p: Promise<void> = new Promise<DirListing>(r => r(pre?.path === path ? pre.listing : files.listDir(path)))
       .catch((): DirListing => ({ dirs: [], files: [] }))
       .then(l => {
         if (seq !== this.loadSeq) return;
@@ -342,6 +346,24 @@ export class ControlObject implements VBObject {
     p.List = list;
     p.ListIndex = index;
     return { List: list, ListIndex: index };
+  }
+
+  /**
+   * DirListBox / FileListBox.Path = "x": the folder is read first (the statement waits for it); error 76 when it does not
+   * exist. A folder that exists but cannot be read (no permission) is accepted and lists nothing.
+   */
+  private async setPath(value: string): Promise<void> {
+    const path = resolvePath(String(this.props.Path), value);
+    let listing: DirListing;
+    try {
+      listing = await this.ctx.files!.listDir(path);
+    } catch (e) {
+      if (!/permission denied|not permitted/i.test(String(e instanceof Error ? e.message : e))) throw new VBRuntimeError(76);
+      listing = { dirs: [], files: [] };
+    }
+    this.prefetched = { path, listing };
+    this.write(this.propDef('Path'), path);
+    this.prefetched = null;   // used by the reload in write(); left over when the Path did not change
   }
 
   /** FileListBox.FileName = "x" selects the file; "folder/x" also changes Path. */
@@ -628,6 +650,10 @@ export class ControlObject implements VBObject {
       if (!tab) throw new VBRuntimeError(5);
       this.selectTab(tab.index);
       return;
+    }
+    if (pd.name === 'Path' && isBrowserType(this.def.type) && this.ctx.files) {
+      if (args.length) throw new VBRuntimeError(450);
+      return this.setPath(toStr(this.plain(value)));
     }
     if (pd.name === 'FileName' && this.def.type === 'FileListBox') {
       if (args.length) throw new VBRuntimeError(450);

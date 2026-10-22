@@ -6,7 +6,7 @@ import type { AiChatOptions } from '../ai/sse';
 export interface FileFilter { name: string; extensions: string[] }
 /** A drive of DriveListBox: `path` is what `Drive1.Drive` returns ("/" is the startup disk). */
 export interface Volume { name: string; path: string }
-/** One folder: sub-folder names and files, sorted; the symlinked folders are left out. */
+/** One folder: sub-folder names (symlinked folders too, as plain names) and files, sorted. */
 export interface DirListing { dirs: string[]; files: { name: string; hidden: boolean }[] }
 
 /** Inet (OpenURL / Execute): one HTTP(S) request; `headers` are "Name: value" lines, `timeoutSecs` 0 = none. */

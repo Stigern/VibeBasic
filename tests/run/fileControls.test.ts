@@ -190,3 +190,17 @@ test('the user: pick a drive, double-click a folder, click a file raise Change, 
   await click(row(1));   // the folder above: ListIndex -2
   expect(r.out.at(-1)).toBe('dirclick:-2');
 });
+
+test('Path of a folder that does not exist is error 76; Path and the list stay as they were', async () => {
+  const r = await run([
+    'Private Sub Form_Load()',
+    '  On Error Resume Next',
+    '  Dir1.Path = "/Users/nobody"',
+    '  Debug.Print Err.Number; Dir1.Path; Dir1.ListCount',
+    '  Err.Clear',
+    '  File1.Path = "/nope"',
+    '  Debug.Print Err.Number; File1.Path',
+    'End Sub',
+  ].join('\n'), ALL);
+  expect(r.out).toEqual([' 76 /Users/stig 1 ', ' 76 /Users/stig']);
+});
