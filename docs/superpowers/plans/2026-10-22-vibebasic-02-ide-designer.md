@@ -700,3 +700,17 @@ test('unknown object', () => expect(completionsFor('Foo.', form)).toBeNull());
 - [ ] **Steg 3: Implementer** som en kilde for `@codemirror/autocomplete`.
 - [ ] **Steg 4: Kjør tester.** Forventet: PASS. Kjør også hele `npm test`.
 - [ ] **Steg 5: Commit** med meldingen `feat(ide): member completion list`.
+
+---
+
+## Arvet fra plan 01 (gjennomgang, 2026-10-22)
+
+- **Systemfarger er negative.** Heks-literaler følger VB6s fortegnsregler, så `&H8000000F` er en negativ Long. `vbColorToCss` må godta negative systemfarger (bruk `n >>> 0`). Legg til en test for `vbColorToCss(&H8000000F som negativt tall)`.
+- **`checkLineSyntax` og linjefortsettelse.** En linje som slutter på ` _`, gir `Expected: expression`. Kodevinduet må slå sammen fortsettelseslinjer før det sjekker.
+- **Syntaksfarger.** `KEYWORD_CASE` inneholder også innebygde funksjoner og konstanter. Farg bare tokens med `kind === 'keyword'` blå, ellers blir `MsgBox` blå, noe VB6 ikke gjør.
+- **Kjente kosmetiske avvik i `prettifyLine`:**
+  - `Date - 1` blir `Date -1`.
+  - `&hff` beholder små bokstaver.
+  - `Print#1` og `rs!x` blir delt rart opp.
+  - `collectIdentifiers` blir forvirret av en uavsluttet `Type` eller `Enum` mens man skriver.
+- **Feilplassering.** `VBSyntaxError.moduleName` finnes og kan brukes til å åpne riktig kodevindu.

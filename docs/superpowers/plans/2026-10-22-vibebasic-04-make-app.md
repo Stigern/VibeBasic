@@ -187,3 +187,12 @@ test('blocked while running', async () => { /* mode 'run' → melding, ingen dia
 - [ ] **Steg 5: Noter resultatet** i `docs/superpowers/plans/2026-10-22-vibebasic-04-make-app.md` under en ny overskrift «Verifisert», med dato og hva som ble sjekket. Commit med meldingen `docs(make): verified end-to-end`.
 
 Merk: mottakere av appen må høyreklikke → Åpne første gang (Gatekeeper), fordi appen bare er ad-hoc-signert. Det godtar spec-en.
+
+---
+
+## Arvet fra grunnmuren (gjennomgang, 2026-10-22)
+
+- Cargo-pakken heter fortsatt `app`/`app_lib`, med maler for beskrivelse og forfatter.
+- `tauri.conf.json` har Android-rester og `bundle.targets: "all"`.
+- Den kjørbare filen heter derfor `app`, og oppgave 2 gir den nytt navn.
+- Rydd i dette i oppgave 1 eller 2.

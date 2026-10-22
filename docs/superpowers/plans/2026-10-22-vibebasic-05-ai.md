@@ -362,3 +362,10 @@ test('disabled during run', () => { /* mode 'run' → menypunktet enabled() fals
 - [ ] **Steg 4: Kodemodus.** Stå i `Command1_Click` og skriv: «Tell fra 1 til 100 og vis det i ProgressBar1, med DoEvents.» Forhåndsvisningen skal vise endringen. Trykk OK og F5.
 - [ ] **Steg 5: Feiltilfeller.** Skriv feil IP og sjekk at feilmeldingen er lesbar. Stopp Ollama midt i et svar og sjekk at det gir en feilmelding og ingen endring.
 - [ ] **Steg 6: Noter resultatet,** inkludert hvilke modeller som fungerte godt, under «Verifisert» nederst i denne planen. Commit med meldingen `docs(ai): verified against Ollama`.
+
+---
+
+## Arvet fra grunnmuren (gjennomgang, 2026-10-22)
+
+- `tauri.conf.json` har `"csp": null` (standard i malen). Stram den inn før AI-arbeidet.
+- AI-kall går uansett via Rust, så webview trenger ingen tilgang til nettverket.

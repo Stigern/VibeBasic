@@ -430,3 +430,20 @@ test('calc.vbb full scenario', async () => { /* klikk 1, +, 2, = → Text1 = "3"
   3. Skriv `x = 1 / 0` og velg Debug. Du skal få gul linje, og `? x` i Immediate-vinduet skal virke.
   4. Trykk End. Alle skjemavinduer skal lukkes.
 - [ ] **Steg 4: Commit** med meldingen `test(run): end-to-end scenarios`.
+
+---
+
+## Arvet fra plan 01 (gjennomgang, 2026-10-22)
+
+Kontrakten for `Host` og `VBObject` er dokumentert i `src/lang/host.ts`. Det viktigste:
+
+- **Krav til `getMember`, `hasMember` og `resolveName`:** de må være billige og uten bivirkninger, fordi en Let til `obj.navn` leser `getMember` først. `setMember` kalles bare når `hasMember` er sann. `callMethod` kaster 438 for ukjente metoder.
+- **Navneoppslag i skjemakode:** navn som `resolveName` returnerer, kommer før globale Public-variabler, og egenskaper på `Me` kan brukes uten `Me.`. Det gjelder også vertsglobaler som App og Screen. Vurder å la `resolveName` bare gi skjemalokale navn der.
+- **Standardmedlemmer:**
+  - Objektargumenter til `callMethod` løses til standardmedlemmet når objektet har et. `List1.AddItem Text1` legger altså til teksten. Metoder som trenger selve objektet, for eksempel PaintPicture, trenger et unntak.
+  - `Form1.Text1 = Text2` gir `setMember(navn, args, objekt)`. Kontrollobjektet må selv løse dette til standardmedlemmet.
+- **Feilobjekter:** verten må kaste en ny `VBRuntimeError` hver gang, fordi forplantningsmerket hører til hver forekomst. Vanlige JS-feil blir feil 51 «Internal error».
+- **Kontrollmatriser:** `items?()` på `VBObject` brukes av `For Each`. `ControlArrayObject` må implementere den.
+- **Break mens verten venter:** `requestPause` kan ikke avbryte en handler som venter på verten, for eksempel `Form2.Show vbModal`. Break-knappen virker først når det modale skjemaet lukkes. Dokumenter dette i runController, eller løs det der.
+- **Mål ytelsen i oppgave 7:** `setTimeout(0)` i driveren og i `doEvents` kan bli strupet til 4 ms i WKWebView. Mål `For i = 1 To 100000 … DoEvents` i ekte Tauri. Er det tregt, bytt til `MessageChannel` og tidsbasert slicing.
+- **Avvik å nevne i brukerdokumentasjon:** `Resume Next` etter en feil i hodet på en For-, Select- eller With-setning hopper over hele setningen.
