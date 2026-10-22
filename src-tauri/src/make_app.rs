@@ -1,10 +1,10 @@
 //! Make app: builds a standalone .app by copying VibeBasic.app itself.
 
-#[allow(dead_code)] // used by the Make app dialog (later task)
-/// Removes `/` and `:` and trims whitespace. Empty names become `Project1`.
+/// Removes control characters, `/` and `:`, trims whitespace and leading dots.
+/// Empty names (and `.`/`..`) become `Project1`.
 pub fn sanitize_app_file_name(name: &str) -> String {
-  let cleaned: String = name.chars().filter(|c| *c != '/' && *c != ':').collect();
-  let trimmed = cleaned.trim();
+  let cleaned: String = name.chars().filter(|c| !c.is_control() && *c != '/' && *c != ':').collect();
+  let trimmed = cleaned.trim().trim_start_matches('.').trim();
   if trimmed.is_empty() {
     "Project1".to_string()
   } else {
@@ -162,12 +162,13 @@ fn run_tool(cmd: &mut Command) -> Result<(), String> {
 
 /// `exe` is `X.app/Contents/MacOS/<binary>`; returns `X.app`.
 pub fn bundle_from_exe(exe: &Path) -> Result<PathBuf, MakeError> {
-  let bundle = exe
-    .parent()
-    .and_then(|p| p.parent())
-    .and_then(|p| p.parent())
-    .ok_or(MakeError::NotBundled)?;
-  if bundle.extension().is_some_and(|e| e == "app") {
+  let macos = exe.parent().ok_or(MakeError::NotBundled)?;
+  let contents = macos.parent().ok_or(MakeError::NotBundled)?;
+  let bundle = contents.parent().ok_or(MakeError::NotBundled)?;
+  if macos.file_name().is_some_and(|n| n == "MacOS")
+    && contents.file_name().is_some_and(|n| n == "Contents")
+    && bundle.extension().is_some_and(|e| e == "app")
+  {
     Ok(bundle.to_path_buf())
   } else {
     Err(MakeError::NotBundled)
@@ -179,6 +180,13 @@ pub fn current_bundle() -> Result<PathBuf, MakeError> {
   bundle_from_exe(&exe)
 }
 
+fn unique_sibling(parent: &Path, stem: &str, kind: &str) -> PathBuf {
+  use std::sync::atomic::{AtomicU32, Ordering};
+  static COUNTER: AtomicU32 = AtomicU32::new(0);
+  let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+  parent.join(format!(".{stem}.{kind}-{}-{n}.app", std::process::id()))
+}
+
 pub fn build_app_from(
   source_bundle: &Path,
   target: &Path,
@@ -187,21 +195,54 @@ pub fn build_app_from(
   signer: &dyn Signer,
   icons: &dyn IconConverter,
 ) -> Result<(), MakeError> {
-  if fs::symlink_metadata(target).is_ok() {
+  // Guards first: nothing is touched before these pass.
+  let src = fs::canonicalize(source_bundle).map_err(io)?;
+  let name = target
+    .file_name()
+    .ok_or_else(|| MakeError::Io("invalid target path".to_string()))?
+    .to_os_string();
+  let parent_raw = target.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+  let parent = fs::canonicalize(parent_raw).map_err(io)?;
+  let target_real = parent.join(&name);
+  let exists = fs::symlink_metadata(&target_real).is_ok();
+  let target_cmp = if exists { fs::canonicalize(&target_real).map_err(io)? } else { target_real.clone() };
+  if target_cmp == src || target_cmp.starts_with(&src) || src.starts_with(&target_cmp) {
+    return Err(MakeError::Io("Can't replace VibeBasic itself.".to_string()));
+  }
+  if exists {
     if !overwrite {
       return Err(MakeError::Exists);
     }
-    if target.is_dir() {
-      fs::remove_dir_all(target).map_err(io)?;
-    } else {
-      fs::remove_file(target).map_err(io)?;
+    if !target_real.join("Contents/Info.plist").is_file() {
+      return Err(MakeError::Io("the existing target is not an app bundle".to_string()));
     }
   }
-  let result = build_inner(source_bundle, target, spec, signer, icons);
-  if result.is_err() {
-    let _ = fs::remove_dir_all(target);
+
+  // Build in a sibling temp bundle, then swap it into place.
+  let stem = Path::new(&name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+  let tmp = unique_sibling(&parent, &stem, "tmp");
+  let _ = fs::remove_dir_all(&tmp);
+  if let Err(e) = build_inner(source_bundle, &tmp, spec, signer, icons) {
+    let _ = fs::remove_dir_all(&tmp);
+    return Err(e);
   }
-  result
+  if exists {
+    let aside = unique_sibling(&parent, &stem, "old");
+    if let Err(e) = fs::rename(&target_real, &aside) {
+      let _ = fs::remove_dir_all(&tmp);
+      return Err(io(e));
+    }
+    if let Err(e) = fs::rename(&tmp, &target_real) {
+      let _ = fs::rename(&aside, &target_real);
+      let _ = fs::remove_dir_all(&tmp);
+      return Err(io(e));
+    }
+    let _ = fs::remove_dir_all(&aside);
+  } else if let Err(e) = fs::rename(&tmp, &target_real) {
+    let _ = fs::remove_dir_all(&tmp);
+    return Err(io(e));
+  }
+  Ok(())
 }
 
 fn build_inner(
@@ -247,6 +288,23 @@ fn build_inner(
   signer.sign(target).map_err(MakeError::Tool)
 }
 
+/// Absolute path required; trailing separators dropped; the file name is
+/// sanitized and gets exactly one `.app` suffix.
+pub fn normalize_target(raw: &str) -> Result<PathBuf, MakeError> {
+  let path: PathBuf = Path::new(raw).components().collect();
+  if !path.is_absolute() {
+    return Err(MakeError::Io("the target path must be absolute".to_string()));
+  }
+  let file = path
+    .file_name()
+    .ok_or_else(|| MakeError::Io("invalid target path".to_string()))?
+    .to_string_lossy()
+    .into_owned();
+  let base = file.strip_suffix(".app").unwrap_or(&file);
+  let parent = path.parent().ok_or_else(|| MakeError::Io("invalid target path".to_string()))?;
+  Ok(parent.join(format!("{}.app", sanitize_app_file_name(base))))
+}
+
 #[tauri::command]
 pub async fn make_app(
   target_path: String,
@@ -266,12 +324,7 @@ pub async fn make_app(
       None => None,
     };
     let source = current_bundle()?;
-    let mut target = PathBuf::from(target_path);
-    if target.extension().is_none_or(|e| e != "app") {
-      let mut s = target.into_os_string();
-      s.push(".app");
-      target = PathBuf::from(s);
-    }
+    let target = normalize_target(&target_path)?;
     let spec = BuildSpec { app_name, project_json, icon_png };
     build_app_from(&source, &target, &spec, overwrite, &CodesignSigner, &SipsIconConverter)
   })
@@ -360,7 +413,9 @@ mod tests {
     assert_eq!(p["CFBundleDisplayName"].as_string(), Some("Mitt Program"));
     assert_eq!(p["CFBundleIdentifier"].as_string(), Some("no.vibebasic.app.mittprogram"));
     assert!(p.get("CFBundleIconFile").is_none());
-    assert_eq!(*signer.0.borrow(), vec![target.clone()]);
+    // signed once, as a sibling temp bundle that is then renamed into place
+    assert_eq!(signer.0.borrow().len(), 1);
+    assert_eq!(signer.0.borrow()[0].parent(), target.canonicalize().unwrap().parent());
     let lic = fs::read_to_string(target.join("Contents/Resources/LICENSES.txt")).unwrap();
     assert!(lic.contains("Pixel font 'MS Sans Serif' by lou (FontStruct), licensed CC BY-SA 3.0"));
     assert!(lic.contains("https://creativecommons.org/licenses/by-sa/3.0/"));
@@ -386,8 +441,7 @@ mod tests {
     let tmp = tempfile::tempdir().unwrap();
     let src = fake_source(tmp.path());
     let target = tmp.path().join("T.app");
-    fs::create_dir_all(&target).unwrap();
-    fs::write(target.join("old"), b"old").unwrap();
+    make_old_bundle(&target);
     let signer = FakeSigner(RefCell::new(vec![]));
     build_app_from(&src, &target, &spec(false), true, &signer, &FakeIcons(RefCell::new(0))).unwrap();
     assert!(!target.join("old").exists());
@@ -410,5 +464,108 @@ mod tests {
   fn not_bundled_when_exe_not_in_app() {
     assert_eq!(bundle_from_exe(Path::new("/x/target/debug/app")), Err(MakeError::NotBundled));
     assert_eq!(bundle_from_exe(Path::new("/Apps/V.app/Contents/MacOS/V")), Ok(PathBuf::from("/Apps/V.app")));
+  }
+
+  fn make_old_bundle(target: &Path) {
+    fs::create_dir_all(target.join("Contents")).unwrap();
+    fs::write(target.join("Contents/Info.plist"), b"old plist").unwrap();
+    fs::write(target.join("old"), b"old").unwrap();
+  }
+
+  struct FailSigner;
+  impl Signer for FailSigner {
+    fn sign(&self, _: &Path) -> Result<(), String> {
+      Err("boom".into())
+    }
+  }
+
+  fn no_leftovers(dir: &Path) {
+    let names: Vec<_> = fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert!(names.iter().all(|n| !n.contains(".tmp-") && !n.contains(".old-")), "{names:?}");
+  }
+
+  #[test]
+  fn refuses_to_replace_source_itself() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = fake_source(tmp.path());
+    let r = build_app_from(&src, &src, &spec(false), true, &FakeSigner(RefCell::new(vec![])), &FakeIcons(RefCell::new(0)));
+    assert!(matches!(r, Err(MakeError::Io(m)) if m.contains("Can't replace VibeBasic itself")));
+    assert!(src.join("Contents/MacOS/VibeBasic").exists());
+    assert!(src.join("Contents/Resources/x").exists());
+  }
+
+  #[test]
+  fn refuses_target_inside_or_around_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = fake_source(tmp.path());
+    let inside = src.join("Contents/Resources/Inner.app");
+    let r = build_app_from(&src, &inside, &spec(false), false, &FakeSigner(RefCell::new(vec![])), &FakeIcons(RefCell::new(0)));
+    assert!(matches!(r, Err(MakeError::Io(_))));
+    assert!(!inside.exists());
+    // source inside target
+    let outer = tmp.path().join("Outer.app");
+    fs::create_dir_all(&outer).unwrap();
+    let src2 = fake_source(&outer);
+    let r = build_app_from(&src2, &outer, &spec(false), true, &FakeSigner(RefCell::new(vec![])), &FakeIcons(RefCell::new(0)));
+    assert!(matches!(r, Err(MakeError::Io(_))));
+    assert!(src2.join("Contents/MacOS/VibeBasic").exists());
+  }
+
+  #[test]
+  fn failing_signer_leaves_old_target_intact() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = fake_source(tmp.path());
+    let target = tmp.path().join("T.app");
+    make_old_bundle(&target);
+    let r = build_app_from(&src, &target, &spec(false), true, &FailSigner, &FakeIcons(RefCell::new(0)));
+    assert!(matches!(r, Err(MakeError::Tool(_))));
+    assert_eq!(fs::read(target.join("old")).unwrap(), b"old");
+    assert!(!target.join("Contents/MacOS").exists());
+    no_leftovers(tmp.path());
+  }
+
+  #[test]
+  fn successful_overwrite_leaves_no_temp_dirs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = fake_source(tmp.path());
+    let target = tmp.path().join("T.app");
+    make_old_bundle(&target);
+    build_app_from(&src, &target, &spec(false), true, &FakeSigner(RefCell::new(vec![])), &FakeIcons(RefCell::new(0))).unwrap();
+    no_leftovers(tmp.path());
+  }
+
+  #[test]
+  fn refuses_to_delete_non_bundle() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = fake_source(tmp.path());
+    let target = tmp.path().join("Docs.app");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("precious"), b"p").unwrap();
+    let r = build_app_from(&src, &target, &spec(false), true, &FakeSigner(RefCell::new(vec![])), &FakeIcons(RefCell::new(0)));
+    assert!(matches!(r, Err(MakeError::Io(m)) if m.contains("not an app bundle")));
+    assert!(target.join("precious").exists());
+  }
+
+  #[test]
+  fn sanitize_rejects_dots_and_control_chars() {
+    assert_eq!(sanitize_app_file_name(".."), "Project1");
+    assert_eq!(sanitize_app_file_name("."), "Project1");
+    assert_eq!(sanitize_app_file_name(".hidden"), "hidden");
+    assert_eq!(sanitize_app_file_name("a\0b\nc"), "abc");
+  }
+
+  #[test]
+  fn normalize_target_rules() {
+    assert_eq!(normalize_target("/Apps/My: App/").unwrap(), PathBuf::from("/Apps/My App.app"));
+    assert_eq!(normalize_target("/Apps/X.app").unwrap(), PathBuf::from("/Apps/X.app"));
+    assert_eq!(normalize_target("/Apps/..").unwrap_err().message().contains("Could not make the app"), true);
+    assert!(normalize_target("rel/X.app").is_err());
+    assert!(normalize_target("/").is_err());
+  }
+
+  #[test]
+  fn bundle_from_exe_requires_contents_macos() {
+    assert_eq!(bundle_from_exe(Path::new("/x/Foo.app/Resources/a/bin")), Err(MakeError::NotBundled));
+    assert_eq!(bundle_from_exe(Path::new("/x/Foo.app/Contents/Other/bin")), Err(MakeError::NotBundled));
   }
 }
