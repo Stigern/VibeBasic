@@ -29,6 +29,17 @@ export class TauriBackend implements Backend {
     return (await save({ defaultPath: defaultFileName, filters: [PROJECT_FILTER] })) ?? null;
   }
 
+  async saveAppDialog(defaultName: string): Promise<string | null> {
+    return (await save({ defaultPath: defaultName, filters: [{ name: 'Application', extensions: ['app'] }] })) ?? null;
+  }
+
+  async makeApp(o: { targetPath: string; appName: string; projectJson: string; iconPngBase64: string | null; overwrite: boolean }): Promise<void> {
+    await call<void>('make_app', {
+      targetPath: o.targetPath, appName: o.appName, projectJson: o.projectJson,
+      iconPngBase64: o.iconPngBase64, overwrite: o.overwrite,
+    });
+  }
+
   async openFileDialog(filters: FileFilter[]): Promise<string | null> {
     const r = await open({ multiple: false, directory: false, filters });
     return typeof r === 'string' ? r : null;

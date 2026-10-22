@@ -1,5 +1,9 @@
 // Project Properties dialog and the shared tabbed-dialog runner (also used by Options).
-import { compositeCmd, setProjectFieldCmd, type Command } from '../model/commands';
+import { getBackend } from '../backend/backend';
+import { addAssetCmd, compositeCmd, setProjectFieldCmd, setProjectIconCmd, type Command } from '../model/commands';
+import { newId } from '../model/controls';
+import type { Asset } from '../model/types';
+import { bytesToBase64 } from './propertyEditors';
 import { validateName } from '../model/controls';
 import { createCombo } from '../ui98/combo';
 import { h } from '../ui98/dom';
@@ -41,6 +45,46 @@ export const field = (label: string, control: HTMLElement): HTMLElement => h('la
 
 /** Extra tabs for Project Properties. Plan 04 pushes a builder for the "Make" tab here. */
 export const projectPropertiesTabs: DialogTabBuilder[] = [];
+
+/** Make tab: the icon of made apps. Stored in project.assets / project.iconAsset, one undo step. */
+function makeTab(ide: IdeState): DialogTab {
+  const p = ide.project;
+  // undefined: unchanged; null: cleared; otherwise a newly picked PNG
+  let pending: { id: string; asset: Asset } | null | undefined;
+  const current = (): Asset | null => {
+    if (pending !== undefined) return pending ? pending.asset : null;
+    return p.iconAsset ? p.assets[p.iconAsset] ?? null : null;
+  };
+  const preview = h('img', { class: 'dlgform98-icon', width: '32', height: '32', alt: '' }) as HTMLImageElement;
+  const clear = h('button', { type: 'button' }, 'Clear') as HTMLButtonElement;
+  const refresh = () => {
+    const a = current();
+    if (a) preview.src = `data:${a.mime};base64,${a.dataBase64}`; else preview.removeAttribute('src');
+    preview.style.visibility = a ? 'visible' : 'hidden';
+    clear.disabled = !a;
+  };
+  const browse = h('button', { type: 'button' }, 'Browse...') as HTMLButtonElement;
+  browse.addEventListener('click', async () => {
+    const backend = getBackend();
+    const path = await backend.openFileDialog([{ name: 'PNG image', extensions: ['png'] }]);
+    if (!path) return;
+    const bytes = await backend.readBinaryFile(path);
+    pending = { id: `asset-${newId()}`, asset: { mime: 'image/png', dataBase64: bytesToBase64(bytes) } };
+    refresh();
+  });
+  clear.addEventListener('click', () => { pending = null; refresh(); });
+  refresh();
+  return {
+    label: 'Make',
+    content: h('div', { class: 'dlgform98' }, field('Icon:', h('span', {}, preview, browse, clear))),
+    commands: () => {
+      if (pending === undefined) return [];
+      if (pending === null) return p.iconAsset === null ? [] : [setProjectIconCmd(null)];
+      return [addAssetCmd(pending.id, pending.asset), setProjectIconCmd(pending.id)];
+    },
+  };
+}
+projectPropertiesTabs.push(makeTab);
 
 function generalTab(ide: IdeState): DialogTab {
   const p = ide.project;

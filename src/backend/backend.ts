@@ -9,6 +9,10 @@ export interface Backend {
   /** Open dialog filtered to *.vbb. Null when cancelled. */
   openProjectDialog(): Promise<string | null>;
   saveProjectDialog(defaultFileName: string): Promise<string | null>;
+  /** Save dialog for a made app (filter .app). Null when cancelled. */
+  saveAppDialog(defaultName: string): Promise<string | null>;
+  /** Builds a standalone .app from the project (desktop only). Rejects with the error text. */
+  makeApp(o: { targetPath: string; appName: string; projectJson: string; iconPngBase64: string | null; overwrite: boolean }): Promise<void>;
   openFileDialog(filters: FileFilter[]): Promise<string | null>;
   readTextFile(path: string): Promise<string>;
   writeTextFile(path: string, text: string): Promise<void>;

@@ -47,7 +47,7 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
       mk('Save Project', 'saveProject', 'Ctrl+S'),
       mk('Save Project As...', 'saveProjectAs'),
       sep(),
-      mk(() => `Make ${projectName()}.app...`, 'makeApp'),
+      mk(() => `Make ${projectName()}.app...`, 'makeApp', undefined, design),
       sep(),
       mk('Exit', 'exit'),
     ] },

@@ -26,6 +26,14 @@ export class BrowserBackend implements Backend {
     return /\.vbb$/i.test(name) ? name : name + '.vbb';
   }
 
+  async saveAppDialog(_defaultName: string): Promise<string | null> {
+    return null;
+  }
+
+  async makeApp(_o: { targetPath: string; appName: string; projectJson: string; iconPngBase64: string | null; overwrite: boolean }): Promise<void> {
+    throw new Error('Make requires the desktop version of VibeBasic.');
+  }
+
   async openFileDialog(filters: FileFilter[]): Promise<string | null> {
     const ext = filters.flatMap((f) => f.extensions).map((x) => '*.' + x).join(', ');
     return this.ask(`Open file (file name${ext ? ', ' + ext : ''}):`, '');

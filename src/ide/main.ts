@@ -15,6 +15,7 @@ import { createToolbox } from './toolbox';
 import { createProjectExplorer, registerProjectActions, type ProjectExplorer } from './projectExplorer';
 import { showProjectProperties } from './projectDialogs';
 import { showOptions } from './optionsDialog';
+import { makeAppFlow } from '../build/makeApp';
 import { FileController } from './fileController';
 import { RunController } from './runController';
 import { createImmediateWindow } from './immediate';
@@ -63,6 +64,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   actions.openProject = () => { if (state.mode === 'design') void fc.open(); };
   actions.saveProject = () => { void fc.save(); };
   actions.saveProjectAs = () => { void fc.saveAs(); };
+  actions.makeApp = () => { if (state.mode === 'design') void makeAppFlow(state, backend); };
   actions.exit = () => { void fc.exit(); };
   backend.onCloseRequested(() => fc.confirmDiscard());
   // Form windows: real Tauri windows in the app, a floating layer over the MDI area in the browser

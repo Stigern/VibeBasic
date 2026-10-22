@@ -352,3 +352,13 @@ export function setProjectFieldCmd(field: 'name' | 'title' | 'startupForm', valu
     undo(p) { p[field] = old; },
   };
 }
+
+/** Project icon (Make tab): `iconAsset` is an asset id or null. */
+export function setProjectIconCmd(id: string | null): Command {
+  let old: string | null = null;
+  return {
+    label: 'Change project icon',
+    do(p) { old = p.iconAsset; p.iconAsset = id; },
+    undo(p) { p.iconAsset = old; },
+  };
+}
