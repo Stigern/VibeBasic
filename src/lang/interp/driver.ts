@@ -65,11 +65,14 @@ export async function runGenerator<T>(root: Gen<T>, scope?: ExecScope): Promise<
       }
       restore?.();
       restore = undefined;
+      scope?.beforeAwait?.();
       try {
         input = { ok: true, value: await y };
       } catch (e) {
         input = { ok: false, error: e };
       }
+      // Event handlers that started while we waited run to completion first.
+      for (let nested = scope?.afterAwait?.(); nested; nested = scope?.afterAwait?.()) await nested;
       restore = scope?.activate();
     }
   } finally {
@@ -79,10 +82,18 @@ export async function runGenerator<T>(root: Gen<T>, scope?: ExecScope): Promise<
   return input.value as T;
 }
 
-/** Per-program state that must be current while its code runs (e.g. the date-text locale). */
+/** Per-program state that must be current while its code runs (e.g. the date-text locale), and the await hooks. */
 export interface ExecScope {
   /** Makes the scope current and returns a function that restores the previous state. */
   activate(): () => void;
+  /** Called just before the driver awaits a yielded promise. */
+  beforeAwait?(): void;
+  /**
+   * Called after a yielded promise has settled, before the generator resumes:
+   * a promise to wait for first (nested event handlers still running), or
+   * undefined to resume now. Called again after each wait.
+   */
+  afterAwait?(): Promise<void> | undefined;
 }
 
 /**

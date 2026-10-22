@@ -251,6 +251,10 @@ export class Frame {
 /** One running event handler (or Immediate command): its call stack, innermost frame last. */
 export class Run {
   readonly frames: Frame[] = [];
+  /** Start order among runs (0: not an event run); a run waits for runs with a higher seq (nested events). */
+  seq = 0;
+  /** Resolves when the run has finished (set for event runs). */
+  done?: Promise<void>;
   constructor(readonly rt: Runtime) {}
 
   get top(): Frame | undefined { return this.frames[this.frames.length - 1]; }

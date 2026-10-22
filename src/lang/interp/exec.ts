@@ -19,7 +19,7 @@ import { Empty, NothingT, NullT, VBArray, VBRef, compare, toNumber, type VBValue
 import { EndSignal, nextTick, type Gen } from './driver';
 import { Frame, ProcRef, Run, Variable, lc, storeValue, type Slot } from './scope';
 import {
-  assign, callBuiltin, callProc, constExpr, evalArgValues, evalExpr, lookup, memberGet, variableOf, withObject,
+  afterHostCall, assign, callBuiltin, callProc, constExpr, evalArgValues, evalExpr, lookup, memberGet, variableOf, withObject,
 } from './eval';
 import { compareResult, isObject, plain, truthy } from './operators';
 import { BuiltinRef, EnumRef, ModuleRef } from './scope';
@@ -120,7 +120,13 @@ function* boundary(f: Frame): Gen<void> {
   if (rt.stopping) throw END;
   if (rt.stmtCount >= rt.sliceSize) {
     rt.stmtCount = 0;
-    yield nextTick();
+    // A time slice is not an event pump: events arriving now are queued (Runtime.slicing).
+    rt.slicing++;
+    try {
+      yield nextTick();
+    } finally {
+      rt.slicing--;
+    }
     if (rt.stopping) throw END;
   }
   if (rt.pauseRequested) yield* pauseHere(f);
@@ -496,6 +502,7 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
       if (!isObject(obj)) throw new VBRuntimeError(424);
       const r = obj.callMethod(s.kind === 'unload' ? 'Unload' : 'Load', []);
       if (r instanceof Promise) yield r;
+      else yield* afterHostCall(f);
       return;
     }
     case 'onError': case 'resume':
@@ -535,6 +542,7 @@ function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Com
       const argv = yield* evalArgValues(f, args);
       const r = base.callMethod(target.name, argv);
       if (r instanceof Promise) yield r;
+      else yield* afterHostCall(f);
       return;
     }
     throw new VBRuntimeError(424);

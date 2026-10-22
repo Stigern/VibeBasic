@@ -42,6 +42,14 @@ export class Runtime {
   readonly runs = new Set<Run>();
   /** The frame that is stopped in break mode (Immediate evaluates there; Task 8). */
   breakFrame?: Frame;
+  /** Runs currently waiting in a time slice (`nextTick`); events arriving meanwhile are queued. */
+  slicing = 0;
+  /** Events that arrived during a time slice, started at the next event pump or when the run finishes. */
+  private readonly eventQueue: (() => void)[] = [];
+  private runSeq = 0;
+  private endedResolve!: () => void;
+  /** Resolves when the program ends (stops waits for nested runs). */
+  readonly ended = new Promise<void>(r => { this.endedResolve = r; });
   readonly sliceSize: number;
   readonly locale: string;
   readonly builtinCtx: BuiltinCtx;
@@ -210,7 +218,71 @@ export class Runtime {
     this.state = 'ended';
     this.stopping = true;
     this.pauseRequested = false;
+    this.endedResolve();
     this.host.onEnd();
+  }
+
+  // ---- event runs (re-entrancy) ----
+  //
+  // VB6 runs one handler at a time on one stack. A handler that waits in a
+  // host promise (DoEvents, a dialog, an async method such as a modal Show)
+  // pumps events: handlers started meanwhile run nested, and the waiting
+  // handler resumes only after they have all finished (`nestedRuns`, used by
+  // the driver after every await and by `afterHostCall` after synchronous host
+  // calls that may fire events). A time slice (`nextTick` while a long loop
+  // runs) is not a pump: events arriving then are queued and start at the
+  // next pump or when the busy handler finishes, as VB6 would process them
+  // after the handler (or at its next DoEvents).
+
+  /** Registers an event run: start order and a promise that resolves when it finishes. */
+  beginRun(run: Run): () => void {
+    let finish!: () => void;
+    run.seq = ++this.runSeq;
+    run.done = new Promise<void>(r => { finish = r; });
+    this.activeRuns++;
+    this.runs.add(run);
+    return () => {
+      this.runs.delete(run);
+      this.activeRuns--;
+      if (this.activeRuns === 0 && this.state === 'running') this.state = 'idle';
+      if (this.slicing === 0) this.drainEvents();
+      finish();
+    };
+  }
+
+  /** Waits for event runs started after `run` (nested handlers); undefined when there are none or the program is stopping. */
+  nestedRuns(run: Run): Promise<void> | undefined {
+    if (this.stopping || run.seq === 0) return undefined;
+    let later: Promise<void>[] | undefined;
+    for (const r of this.runs) {
+      if (r.seq > run.seq) (later ??= []).push(r.done!);
+    }
+    if (!later) return undefined;
+    return Promise.race([Promise.all(later).then(() => undefined), this.ended]);
+  }
+
+  /** True when an event arriving now must be queued (a run is in a time slice). */
+  get busy(): boolean { return this.slicing > 0; }
+
+  /** Queues an event start for later (see `drainEvents`). */
+  queueEvent(start: () => void): void {
+    this.eventQueue.push(start);
+  }
+
+  /** Starts the queued events (an event pump). */
+  drainEvents(): void {
+    if (this.eventQueue.length === 0) return;
+    const queued = this.eventQueue.splice(0);
+    for (const start of queued) start();
+  }
+
+  /** The driver scope of an event run: locale, event pump before awaits, nested runs after. */
+  runScope(run: Run): ExecScope {
+    return {
+      activate: this.scope.activate,
+      beforeAwait: () => { if (this.slicing === 0) this.drainEvents(); },
+      afterAwait: () => this.nestedRuns(run),
+    };
   }
 
   /** Creates module-level variables (once, before the first event runs). */
@@ -272,20 +344,32 @@ export class Program {
    * Runs a Sub (an event handler or Main) and resolves when it has finished.
    * ByRef parameters share the given VBRefs, so the caller sees changes
    * (KeyAscii = 0). Does nothing if the procedure does not exist, or while
-   * the program is in break mode or has ended. Unhandled errors go to
-   * `host.onRuntimeError`; the promise still resolves.
+   * the program is in break mode or has ended (the event is dropped).
+   * Unhandled errors go to `host.onRuntimeError`; the promise still resolves.
+   *
+   * Re-entrant: called while another handler waits in a host promise
+   * (DoEvents, a dialog, an async method) or from inside a host call
+   * (setMember firing a Change event), the new handler runs nested and the
+   * waiting one resumes only after it has finished. Called while a handler
+   * is in a time slice of a long loop, the event is queued and runs when that
+   * handler finishes or reaches DoEvents (or any other host wait).
    */
   async runEvent(moduleName: string, procName: string, args: VBRef[] = []): Promise<void> {
     const rt = this.rt;
     if (rt.state === 'ended' || rt.state === 'break') return;
     const ref = rt.modules.get(lc(moduleName))?.procs.get(lc(procName));
     if (!ref) return;
+    if (rt.busy) {
+      // a handler is running a long stretch of code: VB6 handles this event after it (or at its next DoEvents)
+      return new Promise<void>((resolve, reject) => {
+        rt.queueEvent(() => { this.runEvent(moduleName, procName, args).then(resolve, reject); });
+      });
+    }
     const run = new Run(rt);
-    rt.activeRuns++;
-    rt.runs.add(run);
+    const finish = rt.beginRun(run);
     rt.state = 'running';
     try {
-      await runGenerator(rt.entry(run, ref, args), rt.scope);
+      await runGenerator(rt.entry(run, ref, args), rt.runScope(run));
     } catch (e) {
       if (e instanceof VBRuntimeError) {
         // raised outside any statement, e.g. binding the handler's arguments
@@ -298,9 +382,7 @@ export class Program {
         throw e;
       }
     } finally {
-      rt.runs.delete(run);
-      rt.activeRuns--;
-      if (rt.activeRuns === 0 && rt.state === 'running') rt.state = 'idle';
+      finish();
     }
   }
 

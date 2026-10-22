@@ -235,7 +235,7 @@ function parseNumber(text: string): number | undefined {
 function resolve(v: VBValue): VBValue {
   if (v instanceof NothingT) throw new VBRuntimeError(91);
   if (isObject(v)) {
-    if (v.defaultMember === undefined) throw new VBRuntimeError(13);
+    if (v.defaultMember === undefined) throw new VBRuntimeError(438);
     return resolve(v.getMember(v.defaultMember, []));
   }
   return v;

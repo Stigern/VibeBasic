@@ -139,11 +139,18 @@ const NOT_SYNC = Symbol('notSync');
 /** Expressions that once needed the generator path (performance hint only). */
 const needsGen = new WeakSet<Expr>();
 
+/** A value the fast path may hand on: host objects are not (using one as a value calls into host code). */
+function syncValue(v: VBValue): VBValue | typeof NOT_SYNC {
+  return typeof v === 'object' && isObject(v) ? NOT_SYNC : v;
+}
+
 /**
  * Fast path: evaluates expressions made only of literals, variables,
  * constants, operators, array elements and record fields without creating
  * generators. Returns NOT_SYNC (before any side effect) for anything else:
- * procedure/built-in calls, host objects, With members, undeclared names.
+ * procedure/built-in calls, host objects (also held in variables, array
+ * elements or fields), With members, undeclared names. It never calls into
+ * host code, so falling back to the generator path never repeats a host call.
  */
 function evalSync(f: Frame, e: Expr): VBValue | typeof NOT_SYNC {
   switch (e.kind) {
@@ -151,12 +158,12 @@ function evalSync(f: Frame, e: Expr): VBValue | typeof NOT_SYNC {
     case 'name': {
       const key = lc(e.name);
       const local = f.locals.get(key);
-      if (local) return local.value;
+      if (local) return syncValue(local.value);
       if (key === 'empty') return Empty;
       if (key === 'null') return Null;
       if (key === 'me') return NOT_SYNC;
       const b = lookup(f, key, e.name);
-      return b instanceof Variable || b instanceof ValueRef ? b.value : NOT_SYNC;
+      return b instanceof Variable || b instanceof ValueRef ? syncValue(b.value) : NOT_SYNC;
     }
     case 'unary': {
       const v = evalSync(f, e.operand);
@@ -186,12 +193,12 @@ function evalSync(f: Frame, e: Expr): VBValue | typeof NOT_SYNC {
         if (v === NOT_SYNC) return v;
         idx[i] = toNumber(v);
       }
-      return arr.get(idx);
+      return syncValue(arr.get(idx));
     }
     case 'member': {
       if (e.object.kind !== 'name' && e.object.kind !== 'member' && e.object.kind !== 'call') return NOT_SYNC;
       const base = evalSync(f, e.object);
-      return base instanceof VBRecord ? getField(base, e.name) : NOT_SYNC;
+      return base instanceof VBRecord ? syncValue(getField(base, e.name)) : NOT_SYNC;
     }
   }
   return NOT_SYNC;
@@ -242,6 +249,16 @@ function* bindingValue(f: Frame, b: Binding | undefined, e: NameExpr): Gen<VBVal
   throw compileError(b instanceof EnumRef ? 'Expected: expression' : 'Expected variable or procedure, not module');
 }
 
+/**
+ * After a synchronous call into a host object: if the host started event
+ * handlers that are still running (e.g. setting Text1.Text fired a Change
+ * handler that waits in a MsgBox), wait for them, as VB6 runs them nested.
+ */
+export function* afterHostCall(f: Frame): Gen<void> {
+  const p = f.rt.nestedRuns(f.run);
+  if (p) yield p;
+}
+
 /** Top `With` object. */
 export function withObject(f: Frame): VBValue {
   if (f.withStack.length === 0) throw compileError('Invalid or unqualified reference');
@@ -263,7 +280,11 @@ function* evalMember(f: Frame, e: MemberExpr, args: (Expr | MissingArg)[] | null
   return yield* memberGet(f, base, e.name, args);
 }
 
-/** `base.name` or `base.name(args)` as a value. */
+/**
+ * `base.name` or `base.name(args)` as a value. On a host object:
+ * `a.b` is `getMember('b', [])`; `a.b(args)` is `getMember('b', args)` when
+ * `hasMember('b')`, else `callMethod('b', args)` (a Promise result is awaited).
+ */
 export function* memberGet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: string, args: (Expr | MissingArg)[] | null): Gen<VBValue> {
   if (base instanceof EnumRef) {
     const v = base.members.get(lc(name));
@@ -277,10 +298,15 @@ export function* memberGet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: 
   }
   if (base instanceof NothingT) throw new VBRuntimeError(91);
   if (isObject(base)) {
-    const argv = args ? yield* evalArgValues(f, args) : [];
-    if (base.hasMember(name)) return base.getMember(name, argv);
-    const r = base.callMethod(name, argv);
-    return r instanceof Promise ? (yield r) as VBValue : r;
+    let r: VBValue | Promise<VBValue>;
+    if (args === null) r = base.getMember(name, []);
+    else {
+      const argv = yield* evalArgValues(f, args);
+      r = base.hasMember(name) ? base.getMember(name, argv) : base.callMethod(name, argv);
+    }
+    if (r instanceof Promise) return (yield r) as VBValue;
+    yield* afterHostCall(f);
+    return r;
   }
   throw new VBRuntimeError(424);
 }
@@ -327,8 +353,10 @@ function* indexValue(f: Frame, v: VBValue, args: (Expr | MissingArg)[]): Gen<VBV
   if (isObject(v)) {
     const argv = yield* evalArgValues(f, args);
     if (v.item && argv.length === 1) return v.item(toNumber(argv[0]));
-    if (v.defaultMember !== undefined) return v.getMember(v.defaultMember, argv);
-    throw new VBRuntimeError(438);
+    if (v.defaultMember === undefined) throw new VBRuntimeError(438);
+    const r = v.getMember(v.defaultMember, argv);
+    yield* afterHostCall(f);
+    return r;
   }
   throw new VBRuntimeError(13);
 }
@@ -431,7 +459,7 @@ function* refOf(f: Frame, e: Expr): Gen<BoundArg | null> {
 // Assignment
 // ---------------------------------------------------------------------------
 
-/** Sets the default member of a host object (`Text1 = "x"`, `List1(0) = "y"`). */
+/** Sets the default member of a host object (`Text1 = "x"`, `List1(0) = "y"`); `value` is a plain value. */
 function setDefault(obj: VBValue, args: VBValue[], value: VBValue): void {
   if (obj instanceof NothingT) throw new VBRuntimeError(91);
   if (!isObject(obj)) throw new VBRuntimeError(424);
@@ -439,19 +467,56 @@ function setDefault(obj: VBValue, args: VBValue[], value: VBValue): void {
   obj.setMember(obj.defaultMember, args, value);
 }
 
-/** `target = value` (Let) or `Set target = value`. */
-export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean): Gen<void> {
+const isObjectValue = (v: VBValue) => v instanceof NothingT || isObject(v);
+
+/** Declared types that can hold an object reference (Set target). */
+function holdsObjects(t: VBTypeName): boolean {
+  return t === 'Variant' || t === 'Object' || (typeof t === 'object' && 'objectType' in t);
+}
+
+/**
+ * Assignment to a variable. `Set v = obj` stores the reference (a variable that
+ * cannot hold objects is a type mismatch). A Let into an object variable
+ * (`As Object`, `As TextBox`) sets the default member of the object it holds
+ * (Nothing: error 91); any other Let stores the plain value (an object's default member).
+ */
+function assignVariable(v: Variable, value: VBValue, isSet: boolean): void {
   if (isSet) {
-    if (!(value instanceof NothingT) && !isObject(value)) throw new VBRuntimeError(424);
-  } else if (value instanceof NothingT || isObject(value)) {
-    value = plain(value);
+    if (!holdsObjects(v.type)) throw new VBRuntimeError(13);
+    v.set(value);
+    return;
   }
+  if (v.type !== 'Variant' && holdsObjects(v.type)) {
+    setDefault(v.value, [], plain(value));
+    return;
+  }
+  v.set(plain(value));
+}
+
+/**
+ * `target = value` (Let) or `Set target = value`.
+ *
+ * Host objects: `Text1 = "x"` sets Text1's default member; `obj.name = v` and
+ * `obj.name(args) = v` go through `memberSet`; `Command1(2) = v` sets the
+ * default member of `item(2)` (or the default member with arguments when the
+ * object has no `item`).
+ */
+export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean): Gen<void> {
+  if (isSet && !isObjectValue(value)) throw new VBRuntimeError(424);
   switch (target.kind) {
     case 'name': {
       let b = bindingOf(f, target);
       if (b === undefined) b = implicitVariable(f, target);
-      if (b instanceof Variable) { b.set(value); return; }
-      if (b instanceof ObjectRef && !isSet) { setDefault(b.obj, [], value); return; }
+      if (b instanceof Variable && !b.opts.isConst) {
+        assignVariable(b, value, isSet);
+        if (!isSet && b.type !== 'Variant' && holdsObjects(b.type)) yield* afterHostCall(f);
+        return;
+      }
+      if (b instanceof ObjectRef && !isSet) {
+        setDefault(b.obj, [], plain(value));
+        yield* afterHostCall(f);
+        return;
+      }
       if (b instanceof ProcRef) throw compileError('Function call on left-hand side of assignment must return Variant or Object');
       throw compileError('Assignment to constant not permitted');
     }
@@ -468,8 +533,7 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean):
         const base = t.kind === 'member' ? yield* memberBase(f, t.object) : withObject(f);
         if (!(base instanceof ModuleRef) && !(base instanceof EnumRef) && isObject(base)) {
           // `List1.List(2) = "x"`
-          const argv = yield* evalArgValues(f, target.args);
-          base.setMember(t.name, argv, value);
+          yield* memberSet(f, base, t.name, yield* evalArgValues(f, target.args), value, isSet);
           return;
         }
         container = yield* memberGet(f, base, t.name, null);
@@ -478,38 +542,65 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean):
       }
       if (container instanceof VBArray) {
         const idx = yield* evalIndices(f, target.args);
+        if (!isSet) value = plain(value);
         container.set(idx, value instanceof VBRecord || value instanceof VBArray ? value.clone() : value);
         return;
       }
+      if (container instanceof NothingT) throw new VBRuntimeError(91);
       if (isObject(container)) {
+        if (isSet) throw compileError('Invalid use of property');
         const argv = yield* evalArgValues(f, target.args);
-        if (container.item && argv.length === 1) { setDefault(container.item(toNumber(argv[0])), [], value); return; }
-        setDefault(container, argv, value);
+        if (container.item && argv.length === 1) setDefault(container.item(toNumber(argv[0])), [], plain(value));
+        else setDefault(container, argv, plain(value));
+        yield* afterHostCall(f);
         return;
       }
-      if (container instanceof NothingT) throw new VBRuntimeError(91);
       throw new VBRuntimeError(13);
     }
     case 'member': case 'withMember': {
       const base = target.kind === 'member' ? yield* memberBase(f, target.object) : withObject(f);
-      yield* memberSet(f, base, target.name, value);
+      yield* memberSet(f, base, target.name, [], value, isSet);
       return;
     }
   }
   throw compileError('Expected: variable');
 }
 
-function* memberSet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: string, value: VBValue): Gen<void> {
-  if (base instanceof VBRecord) { setField(f.rt, base, lc(name), value); return; }
+/**
+ * `base.name(args) = value`. On a host object (the member must exist,
+ * `hasMember`, else error 438):
+ * - `Set`, or a Let of an object/Nothing (`Picture1.Picture = LoadPicture(f)`): `setMember(name, args, value)`;
+ * - a Let of a plain value: the member is read first (`getMember(name, args)`);
+ *   if it holds an object, that object's default member is set
+ *   (`Form1.Text1 = "x"`, `Text1.Font = "Arial"`), else `setMember(name, args, value)`.
+ */
+function* memberSet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: string, args: VBValue[], value: VBValue, isSet: boolean): Gen<void> {
+  if (base instanceof NothingT) throw new VBRuntimeError(91);
+  if (!(base instanceof ModuleRef) && !(base instanceof EnumRef) && isObject(base)) {
+    if (!base.hasMember(name)) throw new VBRuntimeError(438);
+    if (isSet || isObjectValue(value)) base.setMember(name, args, value);
+    else {
+      let current: VBValue | undefined;
+      try {
+        current = base.getMember(name, args);
+      } catch (e) {
+        if (!(e instanceof VBRuntimeError)) throw e; // e.g. a write-only property: setMember decides
+      }
+      if (current !== undefined && isObject(current)) setDefault(current, [], value);
+      else base.setMember(name, args, value);
+    }
+    yield* afterHostCall(f);
+    return;
+  }
+  if (args.length > 0) throw new VBRuntimeError(424);
+  if (base instanceof VBRecord) { setField(f.rt, base, lc(name), isSet ? value : plain(value)); return; }
   if (base instanceof ModuleRef) {
     const v = base.module.vars.get(lc(name));
     if (!v) throw compileError('Method or data member not found');
-    v.set(value);
+    assignVariable(v, value, isSet);
     return;
   }
   if (base instanceof EnumRef) throw compileError('Assignment to constant not permitted');
-  if (base instanceof NothingT) throw new VBRuntimeError(91);
-  if (isObject(base)) { base.setMember(name, [], value); return; }
   throw new VBRuntimeError(424);
 }
 
