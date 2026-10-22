@@ -1,31 +1,67 @@
-// Properties window: object list on top, alphabetic property list below. Edits go through IdeState.stack.
+// Properties window (VB6): object box on top, Alphabetic / Categorized property lists, description pane at the
+// bottom. Every edit goes through IdeState.stack as one undo step. Dropdowns and editor popups are rendered in
+// the body-level popup layer (ui98/floating.ts), so the window's scrolling panes never clip them.
 import { getBackend, type Backend } from '../backend/backend';
 import { addAssetCmd, compositeCmd, renameCmd, setPropertyCmd, type Command } from '../model/commands';
 import { CONTROL_TYPES, getPropDef, newId, validateName, type PropDef } from '../model/controls';
 import type { ControlDef, ControlType, FontValue, FormDef, PropValue } from '../model/types';
 import { messageBox98, vbYes } from '../ui98/dialogs';
-import { createCombo, type Combo } from '../ui98/combo';
+import { createCombo } from '../ui98/combo';
 import { h } from '../ui98/dom';
+import { showFloating } from '../ui98/floating';
 import { createTabs } from '../ui98/tabs';
 import type { IdeState } from './ideState';
 import { bytesToBase64, createColorPopup, formatPropertyValue, mimeFromPath, parsePropertyInput, showFontDialog } from './propertyEditors';
+import { CATEGORIES, categoryOf, describeProperty, type Category } from './propertyInfo';
 
 const VB_OK_EXCL = 48, VB_YESNO_QUESTION = 4 | 32;
 const NAME_DEF: PropDef = { name: '(Name)', kind: 'string', default: '', designTime: true, runtime: 'rw' };
 const INDEX_DEF: PropDef = { name: 'Index', kind: 'int', default: 0, designTime: true, runtime: 'rw', min: 0 };
 const DEFAULT_FONT: FontValue = { name: 'MS Sans Serif', size: 8, bold: false, italic: false, underline: false };
 
+// The chosen tab (Alphabetic / Categorized) is remembered for the session and, when storage works, across runs.
+const TAB_KEY = 'vibebasic.properties.tab';
+let rememberedTab = (() => { try { return localStorage.getItem(TAB_KEY) === '1' ? 1 : 0; } catch { return 0; } })();
+
 interface Target { id: string | 'form'; type: ControlType; name: string; index: number | null; props: Record<string, PropValue> }
 
 export interface PropertiesWindow { refresh(): void; focus(): void }
 
+/** "Form1 Form" → <b>Form1</b> Form, as in VB6's object box. */
+function formatObject(label: string): Node {
+  const i = label.lastIndexOf(' ');
+  const f = document.createDocumentFragment();
+  if (i < 0) { f.append(h('b', {}, label)); return f; }
+  f.append(h('b', {}, label.slice(0, i)), label.slice(i));
+  return f;
+}
+
 export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: { backend?: Backend } = {}): PropertiesWindow {
   const doc = host.ownerDocument;
-  let active: string | null = null;
-  let objectCombo: Combo | null = null;
+  let active: string | null = null;      // the selected property row
+  let wantFocus = false;                 // move the keyboard focus to the active row after the next render
+  let epoch = 0;                         // bumped on every render; editors of older renders are dead
+  let flushEdit: (() => boolean) | null = null;   // commits the active inline editor; false when the text is invalid
+  let openActive: (() => void) | null = null;     // opens the active row's dialog/popup (Enter, double-click, typing)
+  let closers: (() => void)[] = [];               // closes the open lists/popups of the current render
+  let rowOrder: string[] = [];
+  const collapsed = new Set<Category>();
   let objectEntries: { label: string; id: string | 'form' }[] = [];
-  const listEl = h('div', { class: 'pw98-list' });
-  const root = h('div', { class: 'pw98' });
+
+  const objectCombo = createCombo({
+    items: [], format: formatObject,
+    onChange: v => {
+      const form = currentForm(), e = objectEntries.find(x => x.label === v);
+      if (form && e) ide.setSelection({ formId: form.id, ids: e.id === 'form' ? [] : [e.id] });
+    },
+  });
+  const lists = [h('div', { class: 'pw98-list' }), h('div', { class: 'pw98-list pw98-categorized' })];
+  const tabs = createTabs([{ label: 'Alphabetic', content: lists[0] }, { label: 'Categorized', content: lists[1] }], {
+    selected: rememberedTab,
+    onSelect: i => { rememberedTab = i; try { localStorage.setItem(TAB_KEY, String(i)); } catch { /* storage unavailable */ } refresh(); },
+  });
+  const desc = h('div', { class: 'pw98-desc' });
+  const root = h('div', { class: 'pw98' }, objectCombo.el, tabs.el, desc);
   host.replaceChildren(root);
 
   const currentForm = (): FormDef | undefined => {
@@ -39,7 +75,11 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
   };
   const labelOf = (name: string, index: number | null, type: string) => `${name}${index !== null ? `(${index})` : ''} ${type}`;
 
-  const invalid = async () => { await messageBox98(doc, { prompt: 'Invalid property value', title: 'VibeBasic', buttons: VB_OK_EXCL }); refresh(); };
+  const invalid = async () => {
+    await messageBox98(doc, { prompt: 'Invalid property value', title: 'VibeBasic', buttons: VB_OK_EXCL });
+    wantFocus = true;
+    refresh();
+  };
 
   function setValue(form: FormDef, ts: Target[], def: PropDef, value: PropValue, extra: Command[] = []): void {
     const cmds = ts.map(t => setPropertyCmd(form.id, t.id, def.name, value));
@@ -109,81 +149,138 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     setValue(form, ts, def, { asset: id }, [addAssetCmd(id, { mime: mimeFromPath(path), dataBase64: bytesToBase64(bytes) })]);
   }
 
-  function editorFor(form: FormDef, ts: Target[], def: PropDef, cell: HTMLElement, value: PropValue | undefined): void {
+  /** Values a bool/enum row cycles through (double-click) and lists in its dropdown. */
+  const choices = (def: PropDef): { value: PropValue; label: string }[] =>
+    def.kind === 'bool' ? [{ value: true, label: 'True' }, { value: false, label: 'False' }] : (def.enumValues ?? []);
+
+  /** Builds the editor of the active row in `cell`. */
+  function editorFor(form: FormDef, ts: Target[], def: PropDef, cell: HTMLElement, value: PropValue | undefined): HTMLElement | null {
+    const myEpoch = epoch;
     const mixed = value === undefined && ts.length > 1;   // differing values in a multi-selection: blank
     const shown = mixed ? '' : formatPropertyValue(def, value);
-    const text = mixed ? '' : def.kind === 'text' ? String(value ?? '') : def.kind === 'list' ? (Array.isArray(value) ? value.join('\n') : '') : shown;
     let done = false;
-    const commit = (t: string) => { if (done || ide.mode !== 'design') return; done = true; void applyText(form, ts, def, t); };
-    const mkInput = (multi: boolean) => {
-      const el: HTMLInputElement | HTMLTextAreaElement = multi ? h('textarea', { class: 'pw98-editor', rows: '4' }) : h('input', { type: 'text', class: 'pw98-editor' });
-      el.value = text;
-      el.addEventListener('keydown', ((e: KeyboardEvent) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          if (multi && (e.ctrlKey || e.metaKey)) {
-            const a = el.selectionStart ?? el.value.length, b = el.selectionEnd ?? a;
-            el.value = el.value.slice(0, a) + '\n' + el.value.slice(b);
-            el.selectionStart = el.selectionEnd = a + 1;
-          } else commit(el.value);
-        } else if (e.key === 'Escape') { done = true; refresh(); }
-        e.stopPropagation();
-      }) as EventListener);
-      el.addEventListener('blur', () => { if (el.value !== text) commit(el.value); });
+    const live = () => !done && myEpoch === epoch && ide.mode === 'design';
+    const commitText = (t: string) => { if (!live()) return; done = true; void applyText(form, ts, def, t); };
+    const commitValue = (v: PropValue) => { if (!live()) return; done = true; void applyValue(form, ts, def, v); };
+
+    // single-line text box: Enter commits, Escape restores the old value, leaving the row commits
+    const inline = (initial: string): HTMLInputElement => {
+      const el = h('input', { type: 'text', class: 'pw98-editor', value: initial });
+      el.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); wantFocus = true; commitText(el.value); }
+        else if (e.key === 'Escape') { e.preventDefault(); el.value = initial; el.select(); }
+      });
+      el.addEventListener('blur', () => { if (el.value !== initial) commitText(el.value); });
+      flushEdit = () => {
+        if (!live() || el.value === initial) return true;
+        const ok = parsePropertyInput(def, el.value).ok;
+        commitText(el.value);
+        return ok;
+      };
       return el;
     };
+    const button = (label: string, title: string, onclick: () => void) => {
+      const b = h('button', { type: 'button', class: 'pw98-btn', title }, label);
+      b.addEventListener('mousedown', e => e.preventDefault());   // the row keeps the focus
+      b.addEventListener('click', () => { if (live()) onclick(); });
+      return b;
+    };
+    const valText = () => h('span', { class: 'pw98-valtext' }, shown);
+
+    // multi-line editor under the cell (List, Panels, multi-line Text): Enter = new line, Ctrl+Enter or clicking away commits
+    const openMultiline = () => {
+      if (!live()) return;
+      const initial = mixed ? '' : def.kind === 'list' ? (Array.isArray(value) ? value.join('\n') : '') : String(value ?? '');
+      const ta = h('textarea', { class: 'pw98-multiedit', rows: '8', spellcheck: false });
+      ta.value = initial;
+      let discard = false;
+      const fl = showFloating(cell, h('div', { class: 'pw98-popup' }, ta), {
+        align: 'right', minWidth: 170,
+        onClose: reason => {
+          if (discard) return;
+          if (reason === 'escape') { wantFocus = true; refresh(); return; }
+          if (reason !== 'outside') wantFocus = true;
+          if (ta.value !== initial) commitText(ta.value); else if (wantFocus) refresh();
+        },
+      });
+      ta.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); fl.close('api'); }
+      });
+      closers.push(() => { discard = true; fl.close(); });
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    };
+
     switch (def.kind) {
       case 'bool': case 'enum': {
-        const items = def.kind === 'bool' ? ['True', 'False'] : (def.enumValues ?? []).map(e => e.label);
-        const combo = createCombo({ items, value: shown, onChange: v => commit(v) });
+        const combo = createCombo({ items: choices(def).map(c => c.label), value: shown, openOnClick: false, onChange: v => { wantFocus = true; commitText(v); } });
+        closers.push(() => combo.close());
+        openActive = () => combo.open();
         cell.replaceChildren(combo.el);
-        return;
+        return combo.el.querySelector('input');
       }
-      case 'text': case 'list': cell.replaceChildren(mkInput(true)); return;
+      case 'text': case 'list': {
+        const multi = def.kind === 'list' || ts.every(t => t.props.MultiLine === true);
+        if (!multi) { const el = inline(mixed ? '' : String(value ?? '')); cell.replaceChildren(el); return el; }
+        openActive = openMultiline;
+        cell.replaceChildren(valText(), button('', 'Edit', openMultiline));
+        cell.lastElementChild!.append(h('span', { class: 'cb98-glyph' }));
+        return null;
+      }
       case 'color': {
-        const input = mkInput(false);
-        let popup: HTMLElement | null = null;
-        const close = () => { popup?.remove(); popup = null; };
-        const btn = h('button', { type: 'button', class: 'pw98-btn', title: 'Pick colour', onclick: () => {
-          if (popup) return close();
-          popup = createColorPopup(n => commit(String(n)), close);
-          cell.appendChild(popup);
-        } }, '▾');
+        const input = inline(shown);
+        const openColors = () => {
+          let discard = false;
+          const popup = createColorPopup(n => { discard = true; fl.close(); wantFocus = true; commitValue(n); }, () => fl.close());
+          const fl = showFloating(cell, popup, { align: 'right', onClose: () => { if (!discard) input.focus(); } });
+          closers.push(() => { discard = true; fl.close(); });
+        };
+        openActive = openColors;
+        const btn = button('', 'Pick colour', openColors);
+        btn.append(h('span', { class: 'cb98-glyph' }));
         cell.replaceChildren(input, btn);
-        return;
+        return input;
       }
       case 'font': case 'picture': {
-        const btn = h('button', { type: 'button', class: 'pw98-btn', title: '...', onclick: async () => {
+        const open = async () => {
           if (def.kind === 'picture') return pickPicture(form, ts, def);
           const cur = ts[0].props[def.name];
           const f = await showFontDialog(doc, cur && typeof cur === 'object' && 'name' in cur ? cur : DEFAULT_FONT);
-          if (f) void applyValue(form, ts, def, f);
-        } }, '...');
-        cell.replaceChildren(h('span', { class: 'pw98-valtext' }, shown), btn);
-        return;
+          wantFocus = true;
+          if (f) commitValue(f); else refresh();
+        };
+        openActive = () => void open();
+        cell.replaceChildren(valText(), button('...', def.kind === 'font' ? 'Font' : 'Picture', () => void open()));
+        return null;
       }
-      default: cell.replaceChildren(mkInput(false));
+      default: {
+        const el = inline(shown);
+        cell.replaceChildren(el);
+        return el;
+      }
     }
   }
 
+  // ---- render --------------------------------------------------------------------------------------------------
   function refresh(): void {
+    const hadFocus = wantFocus || root.contains(doc.activeElement);
+    wantFocus = false;
+    epoch++;
+    flushEdit = null;
+    openActive = null;
+    for (const c of closers.splice(0)) c();
     const form = currentForm();
-    if (!form) { root.replaceChildren(); objectCombo = null; return; }
+    root.classList.toggle('pw98-empty', !form);
+    if (!form) { for (const l of lists) l.replaceChildren(); desc.replaceChildren(); objectCombo.setItems([]); objectCombo.setValue(''); rowOrder = []; return; }
     const ts = targets(form);
     const multi = ts.length > 1;
 
-    // Object list
+    // Object box: the form and all its controls
     objectEntries = [{ label: labelOf(form.name, null, 'Form'), id: 'form' },
       ...form.controls.map((c: ControlDef) => ({ label: labelOf(c.name, c.index, c.type), id: c.id }))];
     const first = ts[0];
-    const cur = multi ? '' : labelOf(first.name, first.index, first.type);
-    objectCombo = createCombo({
-      items: objectEntries.map(e => e.label), value: cur,
-      onChange: v => {
-        const e = objectEntries.find(x => x.label === v);
-        if (e) ide.setSelection({ formId: form.id, ids: e.id === 'form' ? [] : [e.id] });
-      },
-    });
+    objectCombo.setItems(objectEntries.map(e => e.label));
+    objectCombo.setValue(multi ? '' : labelOf(first.name, first.index, first.type));
 
     // Rows: properties common to all selected types
     const defs = CONTROL_TYPES[first.type].props.filter(d => d.designTime).filter(d => ts.every(t => {
@@ -192,7 +289,8 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     }));
     const rows: PropDef[] = [...(multi ? [] : [NAME_DEF]), ...defs];
     if (!multi && first.index !== null) rows.push(INDEX_DEF);
-    rows.sort((a, b) => (a === NAME_DEF ? -1 : b === NAME_DEF ? 1 : a.name.localeCompare(b.name)));
+    const byName = (a: PropDef, b: PropDef) => (a === NAME_DEF ? -1 : b === NAME_DEF ? 1 : a.name.localeCompare(b.name));
+    rows.sort(byName);
     if (active && !rows.some(r => r.name === active)) active = null;
 
     const valueOf = (d: PropDef): PropValue | undefined => {
@@ -201,26 +299,127 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
       return ts.every(t => JSON.stringify(get(t)) === JSON.stringify(v0)) ? v0 : undefined;
     };
 
-    const rowEls = rows.map(d => {
+    let focusEl: HTMLElement | null = null;
+    const rowEl = (d: PropDef): HTMLElement => {
       const v = valueOf(d);
       const cell = h('div', { class: 'pw98-value' });
-      const row = h('div', { class: `pw98-row${active === d.name ? ' selected' : ''}`, 'data-prop': d.name, tabindex: '0' },
+      const isActive = active === d.name;
+      const row = h('div', { class: `pw98-row${isActive ? ' selected' : ''}`, 'data-prop': d.name, tabindex: '-1' },
         h('div', { class: 'pw98-name' }, d.name), cell);
-      if (active === d.name) editorFor(form, ts, d, cell, v);
+      if (isActive) focusEl = editorFor(form, ts, d, cell, v) ?? row;
       else cell.textContent = v === undefined && multi ? '' : formatPropertyValue(d, v);
-      row.addEventListener('click', () => { if (ide.mode === 'design' && active !== d.name) { active = d.name; refresh(); (listEl.querySelector('.pw98-row.selected .pw98-editor, .pw98-row.selected input') as HTMLElement | null)?.focus(); } });
-      row.addEventListener('keydown', e => {
-        if (e.key === 'Delete' && d.kind === 'picture' && e.target === row) { e.preventDefault(); e.stopPropagation(); void applyValue(form, ts, d, null); }
-      });
+      const activate = (e: Event) => {
+        if (ide.mode !== 'design' || active === d.name) return;
+        if (e.type === 'mousedown') e.preventDefault();   // the row is re-rendered: focus goes to its new editor
+        select(d.name);
+      };
+      row.addEventListener('mousedown', activate);
+      row.addEventListener('click', activate);
+      row.addEventListener('dblclick', () => { if (ide.mode === 'design') cycleOrOpen(form, ts, d, v); });
       return row;
-    });
-    listEl.replaceChildren(...rowEls);
-    const tabs = createTabs([{ label: 'Alphabetic', content: listEl }]);
-    root.replaceChildren(objectCombo.el, tabs.el);
+    };
+
+    const list = lists[tabs.selected];
+    lists[1 - tabs.selected].replaceChildren();
+    const els: HTMLElement[] = [];
+    rowOrder = [];
+    if (tabs.selected === 0) {
+      for (const d of rows) { els.push(rowEl(d)); rowOrder.push(d.name); }
+    } else {
+      for (const cat of CATEGORIES) {
+        const inCat = rows.filter(d => categoryOf(d.name) === cat);
+        if (!inCat.length) continue;
+        const shut = collapsed.has(cat);
+        const head = h('div', { class: 'pw98-cat', 'data-cat': cat }, h('span', { class: 'pw98-cat-box' }, shut ? '+' : '-'), cat);
+        head.addEventListener('click', () => { if (shut) collapsed.delete(cat); else collapsed.add(cat); refresh(); });
+        els.push(head);
+        if (shut) continue;
+        for (const d of inCat) { els.push(rowEl(d)); rowOrder.push(d.name); }
+      }
+    }
+    list.replaceChildren(...els);
+
+    // Description pane
+    desc.replaceChildren(...(active ? [h('b', {}, active), h('div', {}, describeProperty(active))] : []));
+
     // Read-only while a program runs or is in break mode (edit-and-continue comes in phase 6)
     if (ide.mode !== 'design') for (const el of root.querySelectorAll<HTMLElement>('input, textarea, select, button')) el.setAttribute('disabled', '');
     root.classList.toggle('pw98-readonly', ide.mode !== 'design');
+    objectCombo.el.querySelector('input')!.disabled = false;   // the object box still selects
+
+    const f = focusEl as HTMLElement | null;
+    if (hadFocus && f) {
+      f.focus();
+      if (f instanceof HTMLInputElement && !f.readOnly) f.select();
+    }
   }
+
+  function select(name: string): void {
+    if (flushEdit && !flushEdit()) return;   // invalid text: stay on the row (the message box restores it)
+    active = name;
+    wantFocus = true;
+    refresh();
+  }
+
+  function cycleOrOpen(form: FormDef, ts: Target[], d: PropDef, v: PropValue | undefined): void {
+    if (d.kind === 'bool' || d.kind === 'enum') {
+      const cs = choices(d);
+      const i = cs.findIndex(c => JSON.stringify(c.value) === JSON.stringify(v));
+      wantFocus = true;
+      void applyValue(form, ts, d, cs[(i + 1) % cs.length].value);
+    } else openActive?.();
+  }
+
+  // ---- keyboard ------------------------------------------------------------------------------------------------
+  root.addEventListener('keydown', e => {
+    const t = e.target as HTMLElement;
+    const list = lists[tabs.selected];
+    if (e.defaultPrevented || ide.mode !== 'design' || !list.contains(t)) return;
+    const inField = t.tagName === 'INPUT' && !(t as HTMLInputElement).readOnly;
+    const move = (delta: number) => {
+      e.preventDefault();
+      if (!rowOrder.length) return;
+      const i = active ? rowOrder.indexOf(active) : -1;
+      const next = i < 0 ? 0 : Math.max(0, Math.min(rowOrder.length - 1, i + delta));
+      if (rowOrder[next] !== active) select(rowOrder[next]);
+    };
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !e.altKey && !e.ctrlKey && !e.metaKey) return move(e.key === 'ArrowDown' ? 1 : -1);
+    if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey) return move(e.shiftKey ? -1 : 1);
+    // Ctrl+Shift+<letter>: next property starting with that letter
+    const letter = /^Key([A-Z])$/.exec(e.code)?.[1] ?? (/^[a-z]$/i.test(e.key) ? e.key.toUpperCase() : null);
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && letter) {
+      e.preventDefault();
+      e.stopPropagation();
+      const i = active ? rowOrder.indexOf(active) : -1;
+      for (let k = 1; k <= rowOrder.length; k++) {
+        const n = rowOrder[(i + k) % rowOrder.length];
+        if (n.replace(/^\(/, '').toUpperCase().startsWith(letter)) { if (n !== active) select(n); break; }
+      }
+      return;
+    }
+    if (inField) return;
+    const d = active ? getActiveDef() : undefined;
+    if ((e.key === 'Delete' || e.key === 'Backspace') && !e.ctrlKey && !e.metaKey) {
+      // consumed: Delete in the Properties window never deletes the selected control
+      e.preventDefault();
+      e.stopPropagation();
+      const form = currentForm();
+      if (form && d?.kind === 'picture') void applyValue(form, targets(form), d, null);
+      return;
+    }
+    if (!d || t.closest('.cb98')) return;   // dropdown lists handle their own keys (first-letter selection)
+    if (e.key === 'Enter' || (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey)) {
+      e.preventDefault();
+      openActive?.();
+    }
+  });
+
+  const getActiveDef = (): PropDef | undefined => {
+    if (active === NAME_DEF.name) return NAME_DEF;
+    const form = currentForm();
+    if (!form || !active) return undefined;
+    return active === INDEX_DEF.name && targets(form)[0].index !== null ? INDEX_DEF : getPropDef(targets(form)[0].type, active);
+  };
 
   ide.on('selection', refresh);
   ide.on('project', refresh);
@@ -229,6 +428,10 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
   refresh();
   return {
     refresh,
-    focus() { (root.querySelector('.pw98-row.selected .pw98-editor, .pw98-row.selected input, .pw98-row') as HTMLElement | null)?.focus(); },
+    focus() {
+      const el = root.querySelector<HTMLElement>('.pw98-row.selected .pw98-editor, .pw98-row.selected .cb98-input, .pw98-row.selected')
+        ?? root.querySelector<HTMLElement>('.pw98-row');
+      el?.focus();
+    },
   };
 }

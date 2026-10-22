@@ -76,7 +76,7 @@ test('Auto Syntax Check off: no error', () => {
 const procItems = () => {
   const combos = cw.win.el.querySelectorAll('.cb98');
   (combos[1].querySelector('.cb98-arrow') as HTMLElement).click();
-  return [...combos[1].querySelectorAll('.cb98-item')] as HTMLElement[];
+  return [...document.querySelectorAll('.popup98-layer .cb98-item')] as HTMLElement[];
 };
 
 test('procedure dropdown bolds implemented events', () => {
@@ -102,7 +102,7 @@ test('object dropdown lists (General), Form, controls alphabetically, arrays onc
   c.name = 'Command1'; c.index = 0;
   ide.emit('project');
   (cw.win.el.querySelector('.cb98 .cb98-arrow') as HTMLElement).click();
-  expect([...cw.win.el.querySelectorAll('.cb98')[0].querySelectorAll('.cb98-item')].map(e => e.textContent))
+  expect([...document.querySelectorAll('.popup98-layer .cb98-item')].map(e => e.textContent))
     .toEqual(['(General)', 'Form', 'Command1', 'Text1']);
 });
 
