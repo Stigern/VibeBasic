@@ -1,0 +1,156 @@
+/*
+ * VibeBasic Win98 / VB6 theme. Builds on 98.css (MIT) and its "Pixelated MS Sans Serif" fonts (CC BY-SA 3.0);
+ * both are vendored in ./vendor together with their licences. Import this file from every page
+ * (index.html, form.html, dev pages) - it pulls in 98.css itself.
+ */
+@import './vendor/98.css';
+
+:root {
+  --w98-face: #c0c0c0;
+  --w98-light: #ffffff;
+  --w98-hilight: #dfdfdf;
+  --w98-shadow: #808080;
+  --w98-dark: #0a0a0a;
+  --w98-title-from: #000080;
+  --w98-title-to: #1084d0;
+  --w98-inactive-from: #808080;
+  --w98-inactive-to: #b5b5b5;
+  /* Pixel font first; if it is removed the page falls back to Tahoma 11px. */
+  --w98-font: "Pixelated MS Sans Serif", Tahoma, Geneva, sans-serif;
+  --w98-raised: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf;
+  --w98-pressed: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px #808080;
+  --w98-sunken: inset -1px -1px #fff, inset 1px 1px #808080, inset -2px -2px #dfdfdf, inset 2px 2px #0a0a0a;
+  --w98-window: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf, inset -2px -2px #808080, inset 2px 2px #fff;
+}
+
+html, body {
+  margin: 0;
+  background: var(--w98-face);
+  color: #000;
+  font: 11px var(--w98-font);
+  -webkit-font-smoothing: none;
+}
+body, .window, .title-bar, button, input, label, legend, select, textarea, table, option, li[role=tab] {
+  font-family: var(--w98-font);
+  font-size: 11px;
+}
+* { cursor: default; }
+input[type=text], textarea { cursor: text; }
+
+/* ---------- title bar (shared by dialogs and MDI windows) ---------- */
+.title-bar { user-select: none; -webkit-user-select: none; min-height: 18px; box-sizing: border-box; }
+.title-bar .title-bar-text {
+  flex: 1; min-width: 0; margin-right: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.title-bar-icon { width: 16px; height: 16px; margin-right: 3px; image-rendering: pixelated; }
+.title-bar-controls { flex: none; }
+.title-bar-controls .tb98-btn {
+  display: block; box-sizing: border-box; width: 16px; height: 14px; padding: 0;
+  background-color: var(--w98-face); box-shadow: var(--w98-raised);
+  background-repeat: no-repeat;
+}
+.title-bar-controls .tb98-btn:active { box-shadow: var(--w98-pressed); }
+.tb98-close {
+  margin-left: 2px;
+  background-position: top 3px left 4px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg width='8' height='7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M0 0h2v1h1v1h2V1h1V0h2v1H7v1H6v1H5v1h1v1h1v1h1v1H6V6H5V5H3v1H2v1H0V6h1V5h1V4h1V3H2V2H1V1H0V0z' fill='%23000'/%3E%3C/svg%3E");
+}
+.title-bar-controls .tb98-close[aria-disabled=true] {
+  box-shadow: var(--w98-raised);
+  background-position: top 4px left 5px, top 3px left 4px;
+  background-image:
+    url("data:image/svg+xml;charset=utf-8,%3Csvg width='8' height='7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M0 0h2v1h1v1h2V1h1V0h2v1H7v1H6v1H5v1h1v1h1v1h1v1H6V6H5V5H3v1H2v1H0V6h1V5h1V4h1V3H2V2H1V1H0V0z' fill='%23fff'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml;charset=utf-8,%3Csvg width='8' height='7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M0 0h2v1h1v1h2V1h1V0h2v1H7v1H6v1H5v1h1v1h1v1h1v1H6V6H5V5H3v1H2v1H0V6h1V5h1V4h1V3H2V2H1V1H0V0z' fill='%23808080'/%3E%3C/svg%3E");
+}
+
+/* ---------- dialogs ---------- */
+.dlg98-overlay {
+  position: fixed; inset: 0; z-index: 100000;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent;
+}
+.dlg98 { min-width: 180px; max-width: 90vw; box-shadow: var(--w98-window), 1px 1px 0 #000; }
+.dlg98 .window-body, .dlg98-body { margin: 0; padding: 12px 12px 12px; }
+.dlg98-message { display: flex; align-items: center; gap: 14px; min-height: 32px; }
+.dlg98-icon { flex: none; width: 32px; height: 32px; }
+.dlg98-icon svg { display: block; }
+.dlg98-text { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 420px; line-height: 13px; user-select: text; -webkit-user-select: text; cursor: text; }
+.dlg98-buttons { display: flex; justify-content: center; gap: 6px; margin-top: 18px; }
+.dlg98-buttons button { min-width: 75px; }
+.dlg98-body.side { display: grid; grid-template-columns: 1fr auto; column-gap: 12px; row-gap: 12px; }
+.dlg98-body.side .dlg98-inputcontent { display: contents; }
+.dlg98-body.side .dlg98-inputcontent .dlg98-text { grid-column: 1; grid-row: 1; min-width: 260px; }
+.dlg98-body.side .dlg98-inputcontent .dlg98-input { grid-column: 1 / -1; grid-row: 2; width: 100%; box-sizing: border-box; }
+.dlg98-body.side .dlg98-buttons { grid-column: 2; grid-row: 1; flex-direction: column; margin-top: 0; justify-content: flex-start; }
+.dlg98-input[type=text] { user-select: text; }
+
+/* ---------- menu bar and menus ---------- */
+.mb98 { display: flex; align-items: stretch; background: var(--w98-face); padding: 1px 0; user-select: none; -webkit-user-select: none; position: relative; z-index: 10; }
+.mb98-top { position: relative; padding: 3px 7px; line-height: 13px; border: 1px solid transparent; }
+.mb98-top:hover { border-color: #fff #808080 #808080 #fff; }
+.mb98-top.open { border-color: #808080 #fff #fff #808080; padding: 4px 6px 2px 8px; }
+.menu98 {
+  position: absolute; left: -1px; top: 100%; z-index: 99999; box-sizing: border-box;
+  min-width: 120px; width: max-content; padding: 3px;
+  background: var(--w98-face); box-shadow: var(--w98-window); white-space: nowrap; text-align: left;
+}
+.menu98.sub { left: 100%; top: -3px; margin-left: -4px; }
+.menu98-item { display: flex; align-items: center; position: relative; min-height: 18px; padding: 1px 2px; line-height: 13px; color: #000; }
+.menu98-item.hot { background: var(--w98-title-from); color: #fff; }
+.menu98-item.disabled { color: var(--w98-shadow); text-shadow: 1px 1px 0 #fff; }
+.menu98-item.disabled.hot { color: var(--w98-shadow); text-shadow: none; }
+.menu98-item.sep { min-height: 0; padding: 3px 0; pointer-events: none; }
+.menu98-item.sep hr { width: 100%; height: 0; margin: 0; border: 0; border-top: 1px solid var(--w98-shadow); border-bottom: 1px solid #fff; }
+.menu98-check { flex: none; width: 18px; text-align: center; font-weight: bold; }
+.menu98-label { flex: 1; }
+.menu98-shortcut { padding-left: 28px; }
+.menu98-arrow { flex: none; width: 16px; text-align: right; font-size: 7px; }
+
+/* ---------- MDI windows ---------- */
+.mdi98 { position: absolute; display: flex; flex-direction: column; box-sizing: border-box; }
+.mdi98 > .title-bar { flex: none; }
+.mdi98-body { flex: 1; min-height: 0; margin: 0; overflow: auto; position: relative; background: var(--w98-face); }
+.mdi98-grip {
+  position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; z-index: 5;
+  background:
+    linear-gradient(135deg, transparent 0 4px, #808080 4px 5px, #fff 5px 6px, transparent 6px 8px, #808080 8px 9px, #fff 9px 10px, transparent 10px 12px, #808080 12px 13px, #fff 13px 14px);
+}
+.title-bar.inactive { background: linear-gradient(90deg, var(--w98-inactive-from), var(--w98-inactive-to)); }
+
+/* ---------- toolbar ---------- */
+.tb98-bar { display: flex; align-items: center; padding: 2px; background: var(--w98-face); user-select: none; -webkit-user-select: none; }
+.tb98-tool { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 24px; height: 24px; padding: 0 3px; border: 1px solid transparent; }
+.tb98-tool:hover:not(.disabled) { border-color: #fff #808080 #808080 #fff; }
+.tb98-tool:active:not(.disabled), .tb98-tool.checked { border-color: #808080 #fff #fff #808080; }
+.tb98-tool.checked { background: repeating-conic-gradient(#fff 0% 25%, var(--w98-face) 0% 50%) 0 0 / 2px 2px; }
+.tb98-tool.disabled { color: var(--w98-shadow); }
+.tb98-tool.disabled .tb98-icon { opacity: 0.45; filter: grayscale(1); }
+.tb98-icon { width: 16px; height: 16px; image-rendering: pixelated; display: inline-block; }
+.tb98-icon svg { display: block; width: 16px; height: 16px; }
+.tb98-label { padding: 0 2px; }
+.tb98-sep { flex: none; box-sizing: border-box; width: 2px; height: 22px; margin: 0 3px; border-left: 1px solid var(--w98-shadow); border-right: 1px solid #fff; }
+
+/* ---------- combo box ---------- */
+.cb98 { position: relative; display: inline-flex; align-items: stretch; box-sizing: border-box; height: 21px; min-width: 60px; background: #fff; box-shadow: var(--w98-sunken); padding: 2px; }
+.cb98 input[type=text].cb98-input { flex: 1; min-width: 0; height: auto; padding: 0 2px; border: 0; box-shadow: none; background: transparent; line-height: 15px; outline: none; color: #000; }
+.cb98-arrow {
+  flex: none; box-sizing: border-box; width: 16px; margin: -2px -2px -2px 0; background: var(--w98-face); box-shadow: var(--w98-raised);
+  display: flex; align-items: center; justify-content: center;
+}
+.cb98-arrow:active { box-shadow: var(--w98-pressed); }
+.cb98-glyph { width: 0; height: 0; border-left: 3.5px solid transparent; border-right: 3.5px solid transparent; border-top: 4px solid #000; }
+.cb98-list { position: absolute; left: 0; right: 0; top: 100%; z-index: 99999; box-sizing: border-box; max-height: 200px; overflow: auto; background: #fff; border: 1px solid #000; }
+.cb98-item { padding: 1px 3px; white-space: nowrap; }
+.cb98-item:hover, .cb98-item.selected { background: var(--w98-title-from); color: #fff; }
+
+/* ---------- tabs ---------- */
+.tabs98 { display: flex; flex-direction: column; }
+.tabs98-strip { display: flex; padding-left: 2px; position: relative; z-index: 1; margin-bottom: -2px; user-select: none; -webkit-user-select: none; }
+.tabs98-tab {
+  box-sizing: border-box; padding: 3px 9px 4px; margin-top: 2px; background: var(--w98-face);
+  box-shadow: inset -1px 0 #0a0a0a, inset 1px 1px #dfdfdf, inset -2px 0 #808080, inset 2px 2px #fff;
+  border-top-left-radius: 2px; border-top-right-radius: 2px;
+}
+.tabs98-tab.selected { margin-top: 0; margin-left: -2px; margin-right: -1px; padding: 5px 11px 6px; position: relative; z-index: 8; }
+.tabs98-tab:focus { outline: 1px dotted #000; outline-offset: -4px; }
+.tabs98-panel { position: relative; z-index: 2; padding: 8px; background: var(--w98-face); box-shadow: var(--w98-window); }
