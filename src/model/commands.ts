@@ -204,6 +204,21 @@ export function setPropertyCmd(formId: string, targetId: string | 'form', name: 
   };
 }
 
+/** Replaces the code of a form or module (AI proposals). Undo restores the old code. */
+export function setCodeCmd(itemId: string, newCode: string): Command {
+  let old = '';
+  const itemOf = (p: Project): { code: string } => {
+    const it = p.forms.find(f => f.id === itemId) ?? p.modules.find(m => m.id === itemId);
+    if (!it) throw new Error(`Code item not found: ${itemId}`);
+    return it;
+  };
+  return {
+    label: 'Change code',
+    do(p) { const it = itemOf(p); old = it.code; it.code = newCode; },
+    undo(p) { itemOf(p).code = old; },
+  };
+}
+
 /** Adds an asset (picture data) under `id`. Combine with setPropertyCmd in a compositeCmd so both undo together. */
 export function addAssetCmd(id: string, asset: Asset): Command {
   return {

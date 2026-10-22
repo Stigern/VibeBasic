@@ -4,6 +4,7 @@ import { addFormCmd, addModuleCmd, removeItemCmd } from '../model/commands';
 import { newForm, newId } from '../model/controls';
 import { h } from '../ui98/dom';
 import { messageBox98 } from '../ui98/dialogs';
+import { popupMenu } from '../ui98/popup';
 import { openCodeWindow } from './codeWindow';
 import { openDesigner, type DesignerEnv } from './designer';
 import { OPTION_EXPLICIT, type IdeState } from './ideState';
@@ -69,21 +70,6 @@ export function registerProjectActions(ide: IdeState, actions: IdeActions, env: 
   actions.addForm = () => addForm(ide, env);
   actions.addModule = () => addModule(ide, env);
   actions.removeItem = (id?: string) => { const t = id ?? ide.currentItemId(); if (t) removeItem(ide, t); };
-}
-
-function popupMenu(doc: Document, x: number, y: number, items: { label: string; action: () => void }[]): void {
-  const menu = h('div', { class: 'menu98 pe98-menu', style: `position:fixed;left:${x}px;top:${y}px;z-index:1000` });
-  const close = () => { menu.remove(); doc.removeEventListener('mousedown', onOutside, true); };
-  const onOutside = (e: Event) => { if (!menu.contains(e.target as Node)) close(); };
-  for (const it of items) {
-    const el = h('div', { class: 'menu98-item' }, h('span', { class: 'menu98-check' }), h('span', { class: 'menu98-label' }, it.label));
-    el.addEventListener('mouseenter', () => el.classList.add('hot'));
-    el.addEventListener('mouseleave', () => el.classList.remove('hot'));
-    el.addEventListener('click', () => { close(); it.action(); });
-    menu.appendChild(el);
-  }
-  doc.body.appendChild(menu);
-  doc.addEventListener('mousedown', onOutside, true);
 }
 
 export function createProjectExplorer(host: HTMLElement, ide: IdeState, env?: DesignerEnv): ProjectExplorer {
