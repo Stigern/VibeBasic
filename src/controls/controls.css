@@ -377,3 +377,10 @@
 .vb-web-frame { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
 .vb-Inet, .vb-Winsock { background: #c0c0c0; box-shadow: var(--w98-raised); }
 .vb-Inet svg, .vb-Winsock svg { display: block; }
+
+/* ---------- MSChart ---------- */
+.vb-MSChart { background: #fff; box-shadow: var(--w98-sunken); overflow: hidden; }
+.vb-chart { width: 100%; height: 100%; outline: none; user-select: none; }
+.vb-chart svg { display: block; }
+.vb-run .ch-bar, .vb-run .ch-pt, .vb-run .ch-slice { cursor: pointer; }
+.ch-sel { stroke: #fff; stroke-width: 2; stroke-dasharray: 3 2; }

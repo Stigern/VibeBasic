@@ -16,6 +16,7 @@ import { findListImage, type ImageLookup, type ImageSource } from '../model/imag
 import { TBR_DROPDOWN, TBR_PLACEHOLDER, TBR_SEPARATOR, parseButton } from '../model/toolbar';
 import { flagOn, ssTabLayout } from '../model/ssTab';
 import { twipsToPx } from '../model/twips';
+import { msChart } from './chart';
 import { dtPicker, maskedEdit, monthView } from './calendar';
 import { inetIcon, webBrowser, winsockIcon } from './webBrowser';
 import { decodeRuns, encodeRuns, formatAt, readRuns, replaceRange, selectionOffsets, setSelectionOffsets, writeRuns, type Run, type RtfFormat, type RtfPatch } from './richText';
@@ -1429,6 +1430,7 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   WebBrowser: webBrowser,
   Inet: inetIcon,
   Winsock: winsockIcon,
+  MSChart: msChart,
 };
 
 // ---------------------------------------------------------------------------------------------------------------

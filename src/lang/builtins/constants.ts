@@ -131,3 +131,11 @@ group({
 
 // WebBrowser (SHDOCVW.DLL): Navigate flags
 group({ navOpenInNewWindow: 1, navNoHistory: 2, navNoReadFromCache: 4, navNoWriteToCache: 8 });
+
+// MSChart (MSCHRT20.OCX): chartType and Plot.Axis(id)
+group({
+  VtChChartType3dBar: 0, VtChChartType2dBar: 1, VtChChartType3dLine: 2, VtChChartType2dLine: 3,
+  VtChChartType3dArea: 4, VtChChartType2dArea: 5, VtChChartType3dStep: 6, VtChChartType2dStep: 7,
+  VtChChartType2dPie: 14, VtChChartType2dXY: 16,
+  VtChAxisIdX: 0, VtChAxisIdY: 1, VtChAxisIdY2: 2, VtChAxisIdZ: 3,
+});

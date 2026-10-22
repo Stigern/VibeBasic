@@ -6,6 +6,7 @@ import { KEYWORDS } from '../lang/tokens';
 import { syncSSTab } from './ssTab';
 import { MAX_DATE, MIN_DATE, nowSerial, systemStartOfWeek } from './dateControls';
 import { fitText } from './mask';
+import { CHART_TYPE_NAMES } from './chart';
 import type { ControlDef, ControlType, FontValue, FormDef, PropValue, Project } from './types';
 
 export type PropKind = 'string' | 'text' | 'int' | 'bool' | 'color' | 'enum' | 'font' | 'picture' | 'list'
@@ -641,6 +642,26 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       { name: 'PeekData', params: 'data, [type], [maxLen]' }, { name: 'SendData', params: 'data' },
     ],
   }),
+
+  // MSCHRT20.OCX. A table of RowCount x ColumnCount numbers: a column is a series, a row a data point (as MSChart's default). Row and Column
+  // (from 1) pick the cell that Data, RowLabel and ColumnLabel work on; ChartData takes a 2-D array whose first row / column may be labels.
+  // ChartLines is the data as the window gets it (see model/chart.ts); AxisTitles holds the Plot.Axis(id).AxisTitle.Text of the four axes.
+  MSChart: def({
+    type: 'MSChart', component: 'MSCHRT20.OCX', namePrefix: 'MSChart', defaultWidth: 3615, defaultHeight: 2415, toolboxTooltip: 'MSChart',
+    defaultEvent: 'PointSelected', defaultMember: null,
+    props: [
+      ...common(),
+      p('chartType', 'enum', 1, { enumValues: CHART_TYPE_NAMES.map(([value, l]) => ({ value, label: `${value} - ${l}` })) }),
+      int('RowCount', 5, { min: 1, max: 4096 }), int('ColumnCount', 4, { min: 1, max: 256 }),
+      int('Row', 1, { designTime: false, min: 1 }), int('Column', 1, { designTime: false, min: 1 }),
+      bool('ShowLegend', true), str('TitleText'), bool('Stacking', false), bool('AllowSelections', true),
+      rt('Data', 'int', 0), rt('RowLabel', 'string', ''), rt('ColumnLabel', 'string', ''), rt('ChartData', 'string', ''),
+      rt('Plot', 'string', '', 'ro'),
+      p('ChartLines', 'list', [], { designTime: false, runtime: 'none' }),
+      p('AxisTitles', 'list', [], { designTime: false, runtime: 'none' }),
+    ],
+    events: [ev('PointSelected', 'Series As Integer, DataPoint As Integer, MouseFlags As Integer, Cancel As Integer'), evClick(), evDbl(), ...evMouse()],
+  }),
 };
 
 /** VB6 toolbox order: every control type. The Toolbox shows the intrinsic ones, then the checked components' ones
@@ -649,7 +670,7 @@ export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
   'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar',
   'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit',
-  'WebBrowser', 'Inet', 'Winsock',
+  'WebBrowser', 'Inet', 'Winsock', 'MSChart',
 ];
 
 // ---------------------------------------------------------------------------------------------------------------

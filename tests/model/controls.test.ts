@@ -18,7 +18,7 @@ const ALL = Object.keys(CONTROL_TYPES) as ControlType[];
 const NON_FORM = ALL.filter(t => t !== 'Form') as Exclude<ControlType, 'Form'>[];
 
 test('registry has every ControlType keyed by its own type', () => {
-  expect(ALL.sort()).toEqual(['CheckBox', 'ComboBox', 'CommandButton', 'Form', 'Frame', 'HScrollBar', 'Image', 'Label', 'ListBox', 'OptionButton', 'PictureBox', 'ProgressBar', 'TextBox', 'Timer', 'VScrollBar', 'Shape', 'Line', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'DriveListBox', 'DirListBox', 'FileListBox', 'SSTab', 'ImageList', 'Toolbar', 'DTPicker', 'MonthView', 'MaskedEdit', 'WebBrowser', 'Inet', 'Winsock'].sort());
+  expect(ALL.sort()).toEqual(['CheckBox', 'ComboBox', 'CommandButton', 'Form', 'Frame', 'HScrollBar', 'Image', 'Label', 'ListBox', 'OptionButton', 'PictureBox', 'ProgressBar', 'TextBox', 'Timer', 'VScrollBar', 'Shape', 'Line', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'DriveListBox', 'DirListBox', 'FileListBox', 'SSTab', 'ImageList', 'Toolbar', 'DTPicker', 'MonthView', 'MaskedEdit', 'WebBrowser', 'Inet', 'Winsock', 'MSChart'].sort());
   for (const [k, d] of Object.entries(CONTROL_TYPES)) expect(d.type).toBe(k);
 });
 
@@ -163,7 +163,7 @@ test('methods', () => {
 
 test('toolbox order follows VB6', () => {
   expect(TOOLBOX_ORDER).toEqual(['Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
-    'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar', 'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit', 'WebBrowser', 'Inet', 'Winsock']);
+    'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar', 'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit', 'WebBrowser', 'Inet', 'Winsock', 'MSChart']);
 });
 
 test('getPropDef is case-insensitive and returns undefined for unknown', () => {

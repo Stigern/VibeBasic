@@ -13,7 +13,7 @@ import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 type Props = Record<string, PropValue>;
 type Target = { id: string; def: ControlDef | null };
 
-const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'Toolbar', 'DTPicker', 'TreeView', 'ListView', 'MSFlexGrid', 'RichTextBox']);
+const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'Toolbar', 'DTPicker', 'MSChart', 'TreeView', 'ListView', 'MSFlexGrid', 'RichTextBox']);
 const KEY_CODES: Record<string, number> = {
   Backspace: 8, Tab: 9, Enter: 13, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34, End: 35, Home: 36,
   ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46,
@@ -238,6 +238,8 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   // MaskedEdit: a character the mask refuses, and a full mask with AutoTab (the focus moves on)
   custom('vbvalidationerror', (id, d) => emit(id, 'ValidationError', [String(d.text), Number(d.pos)]));
   custom('vbautotab', id => focusNext(id));
+  // MSChart: a click on a bar, point or slice (1-based series = column, data point = row; MouseFlags 0; Cancel is not used)
+  custom('vbpointselect', (id, d) => emit(id, 'PointSelected', [Number(d.series), Number(d.point), Number(d.flags), 0]));
   custom('vbdirclick', (id, d) => emit(id, 'Click', [], { ListIndex: Number(d.index) }));
   custom('vbdiropen', (id, d) => emit(id, 'Change', [], { Path: String(d.path), List: [], ListIndex: -1 }));
   // WebBrowser: the page of a Navigate has loaded (reported even while the form is blocked: the run session raises the events)

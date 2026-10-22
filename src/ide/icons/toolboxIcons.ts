@@ -51,5 +51,7 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
     + '<path d="M12 9v4M10 11.500l2 2.500 2-2.500" stroke="#008000" fill="none" stroke-width="1.500"/>'),
   Winsock: svg(box(0, 2, 6, 5, '#c0c0c0') + '<rect x="1" y="3" width="4" height="3" fill="#008080"/>' + box(10, 9, 6, 5, '#c0c0c0') + '<rect x="11" y="10" width="4" height="3" fill="#008080"/>'
     + '<path d="M3 7v4h7M6 4.500h4v4.500" stroke="#000" fill="none"/><path d="M1 8h4M11 15h4" stroke="#000"/>'),
+  MSChart: svg(box(1, 1, 14, 14) + '<rect x="2" y="2" width="12" height="12" fill="#c0c0c0"/><rect x="3" y="8" width="2" height="5" fill="#000080" stroke="#000"/><rect x="6" y="4" width="2" height="9" fill="#800000" stroke="#000"/>'
+    + '<rect x="9" y="6" width="2" height="7" fill="#ffff00" stroke="#000"/><rect x="12" y="9" width="1" height="4" fill="#008080" stroke="#000"/>'),
   Form: svg(box(1, 2, 14, 12, '#c0c0c0') + '<rect x="2" y="3" width="12" height="3" fill="#000080"/>'),
 };

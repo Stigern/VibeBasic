@@ -9,7 +9,8 @@ export type ControlType = 'Form' | 'CommandButton' | 'Label' | 'TextBox' | 'Chec
   | 'SSTab'
   | 'ImageList' | 'Toolbar'
   | 'DTPicker' | 'MonthView' | 'MaskedEdit'
-  | 'WebBrowser' | 'Inet' | 'Winsock';
+  | 'WebBrowser' | 'Inet' | 'Winsock'
+  | 'MSChart';
 export interface FontValue { name: string; size: number; bold: boolean; italic: boolean; underline: boolean }
 export interface PictureRef { asset: string }                 // key in Project.assets
 export type PropValue = string | number | boolean | string[] | FontValue | PictureRef | null;
