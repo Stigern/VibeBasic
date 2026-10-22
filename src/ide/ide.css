@@ -59,7 +59,7 @@
 /* Project Properties / Options dialog forms */
 .dlgform98 { display: flex; flex-direction: column; gap: 8px; min-width: 300px; }
 .dlgform98-row { display: flex; align-items: center; gap: 8px; }
-.dlgform98-row > span { flex: 0 0 120px; }
+.dlgform98-row > span { flex: 0 0 130px; }
 .dlgform98-row > input, .dlgform98-row > .cb98 { flex: 1; min-width: 0; }
 .dlgform98-row > input.dlgform98-num { flex: 0 0 70px; }
 .dlgform98-check { display: flex; align-items: center; gap: 6px; }

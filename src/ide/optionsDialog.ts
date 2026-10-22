@@ -27,7 +27,7 @@ export async function showOptions(ide: IdeState, backend: Pick<Backend, 'saveSet
     content: h('div', { class: 'dlgform98' }, grid.el, field('Grid Width (twips):', w), field('Grid Height (twips):', hh), align.el),
     validate: () => (positiveInt(w.value) && positiveInt(hh.value) ? null : 'Invalid property value'),
   };
-  const tabs = [editor, general, ...optionsTabs.map(b => b(ide))];
+  const tabs = [editor, general, ...optionsTabs.map(b => b(ide, doc))];
   await runTabbedDialog(doc, 'Options', tabs, () => {
     ide.setOptions({
       autoSyntaxCheck: syntax.input.checked, requireVariableDeclaration: reqDecl.input.checked,
