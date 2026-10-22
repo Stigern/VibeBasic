@@ -131,6 +131,21 @@ describe('member dispatch', () => {
     expect(spy.calls).toEqual(['call Show()', 'call Show(1,x)', 'call Move(5)', 'call Move(6,7)']);
   });
 
+  test('object arguments to callMethod are passed as their default member when they have one', async () => {
+    const list = new FakeObject('ListBox');
+    const t1 = new FakeObject('TextBox', { props: { Text: 'typed', Caption: '' } });
+    const spy = new Spy('Form', { });
+    const form1 = new FakeObject('Form', { defaultMember: undefined, props: { Caption: '' } });
+    await runForm(sub('  List1.AddItem Text1', '  Dim x', '  x = Form2.Show(1, Form1)', '  Form2.Show 1, Form1'), { List1: list, Text1: t1, Form2: spy, Form1: form1 });
+    expect(list.log).toEqual(['AddItem:typed']);
+    let received: VBValue[] = [];
+    const spy2: VBObject = { vbTypeName: 'Form', hasMember: () => false, getMember: () => 0, setMember: () => {}, callMethod: (_n, a) => { received = a; return 0; } };
+    await runForm(sub('  Form2.Show 1, Form1, Text1'), { Form2: spy2, Form1: form1, Text1: t1 });
+    expect(received[1]).toBe(form1);
+    expect(received[2]).toBe('typed');
+    expect(spy.calls).toEqual(['call Show(1,[object Object])', 'call Show(1,[object Object])']);
+  });
+
   test('method statement on a With object and on a control array element', async () => {
     const list = new FakeObject('ListBox');
     const items = { 3: new FakeObject('ListBox') };
@@ -147,12 +162,31 @@ describe('member dispatch', () => {
     expect(spy.calls).toEqual(['get Caption()', 'set Caption()=Hi', 'get Caption(2)', 'set Caption(2)=5']);
   });
 
-  test('Let of an object value to a member passes the object (Picture1.Picture = LoadPicture(...))', async () => {
-    const spy = new Spy('PictureBox', { picture: 0 });
+  test('Let of an object to a member that holds an object passes the object (Picture1.Picture = LoadPicture(...))', async () => {
+    const pic0 = new Spy('Picture');
+    const spy = new Spy('PictureBox', { picture: pic0 });
     const pic = new Spy('Picture');
     await runForm(sub('  Obj.Picture = LoadPicture("")', '  Obj.Picture = Pic'), { Obj: spy, Pic: pic });
-    expect(spy.calls).toEqual(['set Picture()=object', 'set Picture()=object']);
+    expect(spy.calls).toEqual(['get Picture()', 'set Picture()=object', 'get Picture()', 'set Picture()=object']);
     expect(pic.calls).toEqual([]);
+    expect(pic0.calls).toEqual([]);
+  });
+
+  test('Let of an object to a plain member stores its default value (Label1.Caption = Text1)', async () => {
+    const label1 = new FakeObject('Label', { defaultMember: 'Caption' });
+    const t1 = new FakeObject('TextBox', { props: { Text: 'from text1', Caption: '' } });
+    const t2 = new FakeObject('TextBox', { props: { Text: 'from text2', Caption: '' } });
+    const out = await runForm(sub('  Label1.Caption = Text1', '  Text1.Text = Text2', '  Debug.Print TypeName(Label1.Caption); Label1.Caption; "|"; Text1.Text'),
+      { Label1: label1, Text1: t1, Text2: t2 });
+    expect(out).toEqual(['Stringfrom text1|from text2']);
+    expect(label1.props.Caption).toBe('from text1');
+    expect(t1.props.Text).toBe('from text2');
+  });
+
+  test('Let of an object without a default member to a plain member is 438', async () => {
+    const form1 = new FakeObject('Form', { defaultMember: undefined, props: { Caption: '' } });
+    expect(await runForm(sub('  Label1.Caption = Form1'), { Label1: new FakeObject('Label'), Form1: form1 }))
+      .toEqual(['[Error 438 at Form1:2] Object doesn\'t support this property or method']);
   });
 
   test('Set to a member passes the reference', async () => {
@@ -497,6 +531,94 @@ describe('re-entrant events', () => {
     await a;
     expect(host.lines()).toEqual(['a1', 'b1']);
     expect(prog.state).toBe('ended');
+  });
+
+  test('an event fired synchronously by its own handler recursing is error 28, not a JS stack overflow', async () => {
+    const host = new TestHost();
+    let prog!: Program;
+    const text1 = new FakeObject();
+    const origSet = text1.setMember.bind(text1);
+    text1.setMember = (name, args, value) => { origSet(name, args, value); void prog.runEvent('Form1', 'Text1_Change'); };
+    ({ prog } = form(lines(
+      'Dim n As Long',
+      'Sub Text1_Change()',
+      '  n = n + 1',
+      '  Text1.Text = CStr(n)',
+      'End Sub',
+    ), { Text1: text1 }, host));
+    // (an unhandled rejection from a JS stack overflow would also fail the Vitest run)
+    await prog.runEvent('Form1', 'Text1_Change');
+    await new Promise(r => setTimeout(r, 20));
+    expect(host.lines()).toEqual(['[Error 28 at Form1:4] Out of stack space']);
+    expect(prog.state).toBe('ended');
+    expect(host.endCalls).toBe(1);
+  });
+
+  test('synchronously fired events may nest below the limit', async () => {
+    const host = new TestHost();
+    let prog!: Program;
+    const text1 = new FakeObject();
+    const origSet = text1.setMember.bind(text1);
+    text1.setMember = (name, args, value) => { origSet(name, args, value); void prog.runEvent('Form1', 'Text1_Change'); };
+    ({ prog } = form(lines(
+      'Dim n As Long',
+      'Sub Text1_Change()',
+      '  n = n + 1',
+      '  If n < 90 Then Text1.Text = CStr(n) Else Debug.Print n',
+      'End Sub',
+    ), { Text1: text1 }, host));
+    await prog.runEvent('Form1', 'Text1_Change');
+    expect(host.lines()).toEqual([' 90 ']);
+    expect(prog.state).toBe('idle');
+  });
+
+  test('events arriving while an unhandled error is reported are dropped', async () => {
+    class ErrHost extends TestHost {
+      prog!: Program;
+      inner?: Promise<void>;
+      override async onRuntimeError(...a: Parameters<TestHost['onRuntimeError']>) {
+        this.inner = this.prog.runEvent('Form1', 'Tick'); // a Timer tick while the error dialog is open
+        await new Promise(r => setTimeout(r, 5));
+        return super.onRuntimeError(...a);
+      }
+    }
+    const host = new ErrHost();
+    const { prog } = form(lines(
+      'Sub A_Click()', '  Debug.Print 1 / 0', 'End Sub',
+      'Sub Tick()', '  Debug.Print "tick"', 'End Sub',
+    ), {}, host);
+    host.prog = prog;
+    await prog.runEvent('Form1', 'A_Click');
+    await host.inner;
+    expect(host.lines()).toEqual(['[Error 11 at Form1:2] Division by zero']);
+  });
+
+  test('events queued during a busy loop that then fails are not run', async () => {
+    const host = new TestHost();
+    host.errorChoice = 'end';
+    const { prog } = form(lines(
+      'Sub A_Click()', '  Dim i As Long', '  For i = 1 To 500', '  Next', '  Debug.Print 1 / 0', 'End Sub',
+      'Sub B_Click()', '  Debug.Print "b"', 'End Sub',
+    ), {}, host, 10);
+    let b: Promise<void> | undefined;
+    setTimeout(() => { b = prog.runEvent('Form1', 'B_Click'); }, 0);
+    await prog.runEvent('Form1', 'A_Click');
+    await b;
+    expect(b).toBeDefined();
+    expect(host.lines()).toEqual(['[Error 11 at Form1:5] Division by zero']);
+  });
+
+  test('many DoEvents waits with nested events do not pile up end listeners', async () => {
+    const host = new TestHost();
+    const { prog } = form(lines(
+      'Sub A_Click()', '  Dim i As Long', '  For i = 1 To 300', '    DoEvents', '  Next', '  Debug.Print "done"', 'End Sub',
+      'Sub B_Click()', 'End Sub',
+    ), {}, host);
+    host.doEvents = () => new Promise<void>(resolve => setTimeout(() => { void prog.runEvent('Form1', 'B_Click'); resolve(); }, 0));
+    await prog.runEvent('Form1', 'A_Click');
+    expect(host.lines()).toEqual(['done']);
+    // internal: no waiter left registered on program end
+    expect((prog as unknown as { rt: { endWaiters: Set<unknown> } }).rt.endWaiters.size).toBe(0);
   });
 
   test('events are dropped while the program is in break mode', async () => {

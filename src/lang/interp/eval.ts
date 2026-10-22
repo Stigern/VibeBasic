@@ -255,8 +255,41 @@ function* bindingValue(f: Frame, b: Binding | undefined, e: NameExpr): Gen<VBVal
  * handler that waits in a MsgBox), wait for them, as VB6 runs them nested.
  */
 export function* afterHostCall(f: Frame): Gen<void> {
-  const p = f.rt.nestedRuns(f.run);
-  if (p) yield p;
+  const rt = f.rt;
+  checkOverflow(rt);
+  const p = rt.nestedRuns(f.run);
+  if (p) {
+    yield p;
+    checkOverflow(rt);
+  }
+}
+
+/** Error 28 in the running statement when an event was refused for nesting too deep (see Runtime.runEvent). */
+function checkOverflow(rt: Runtime): void {
+  if (rt.overflow) {
+    rt.overflow = false;
+    throw new VBRuntimeError(28);
+  }
+}
+
+/** Awaits a promise from a host object or built-in, then checks for nested events (see afterHostCall). */
+export function* awaitHost(f: Frame, p: Promise<VBValue>): Gen<VBValue> {
+  const v = (yield p) as VBValue;
+  yield* afterHostCall(f);
+  return v;
+}
+
+/**
+ * Arguments for `callMethod`: an object with a default member is passed as
+ * that value (`List1.AddItem Text1` adds Text1.Text); objects without one (a
+ * Form as owner, a Picture) and Nothing are passed as they are.
+ */
+export function methodArgs(argv: VBValue[]): VBValue[] {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a !== undefined && isObject(a) && a.defaultMember !== undefined) argv[i] = plain(a);
+  }
+  return argv;
 }
 
 /** Top `With` object. */
@@ -302,9 +335,9 @@ export function* memberGet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: 
     if (args === null) r = base.getMember(name, []);
     else {
       const argv = yield* evalArgValues(f, args);
-      r = base.hasMember(name) ? base.getMember(name, argv) : base.callMethod(name, argv);
+      r = base.hasMember(name) ? base.getMember(name, argv) : base.callMethod(name, methodArgs(argv));
     }
-    if (r instanceof Promise) return (yield r) as VBValue;
+    if (r instanceof Promise) return yield* awaitHost(f, r);
     yield* afterHostCall(f);
     return r;
   }
@@ -392,7 +425,7 @@ export function* callBuiltin(f: Frame, b: BuiltinRef, args: (Expr | MissingArg)[
   const { minArgs, maxArgs, fn } = b.builtin;
   if (argv.length < minArgs || argv.length > maxArgs) throw new VBRuntimeError(450);
   const r = fn(argv, f.rt.builtinCtx);
-  return r instanceof Promise ? (yield r) as VBValue : r;
+  return r instanceof Promise ? yield* awaitHost(f, r) : r;
 }
 
 /** Calls a user Sub/Function: binds arguments in the caller, then runs the body as a SubCall. */
@@ -569,16 +602,19 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean):
 /**
  * `base.name(args) = value`. On a host object (the member must exist,
  * `hasMember`, else error 438):
- * - `Set`, or a Let of an object/Nothing (`Picture1.Picture = LoadPicture(f)`): `setMember(name, args, value)`;
- * - a Let of a plain value: the member is read first (`getMember(name, args)`);
- *   if it holds an object, that object's default member is set
- *   (`Form1.Text1 = "x"`, `Text1.Font = "Arial"`), else `setMember(name, args, value)`.
+ * - `Set`: `setMember(name, args, value)` with the reference;
+ * - a Let: the member is read first (`getMember(name, args)`). If it holds an
+ *   object (or Nothing):
+ *   - an object value (or Nothing) is passed as it is (`Picture1.Picture = LoadPicture(f)`);
+ *   - a plain value sets that object's default member (`Form1.Text1 = "x"`, `Text1.Font = "Arial"`).
+ *   Otherwise `setMember(name, args, plain(value))`: an object value gives its
+ *   default member (`Label1.Caption = Text1`; none: error 438).
  */
 function* memberSet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: string, args: VBValue[], value: VBValue, isSet: boolean): Gen<void> {
   if (base instanceof NothingT) throw new VBRuntimeError(91);
   if (!(base instanceof ModuleRef) && !(base instanceof EnumRef) && isObject(base)) {
     if (!base.hasMember(name)) throw new VBRuntimeError(438);
-    if (isSet || isObjectValue(value)) base.setMember(name, args, value);
+    if (isSet) base.setMember(name, args, value);
     else {
       let current: VBValue | undefined;
       try {
@@ -586,8 +622,12 @@ function* memberSet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: string,
       } catch (e) {
         if (!(e instanceof VBRuntimeError)) throw e; // e.g. a write-only property: setMember decides
       }
-      if (current !== undefined && isObject(current)) setDefault(current, [], value);
-      else base.setMember(name, args, value);
+      if (current !== undefined && isObjectValue(current)) {
+        if (isObjectValue(value)) base.setMember(name, args, value);
+        else setDefault(current, [], value);
+      } else {
+        base.setMember(name, args, plain(value));
+      }
     }
     yield* afterHostCall(f);
     return;

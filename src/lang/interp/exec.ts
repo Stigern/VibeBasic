@@ -19,7 +19,8 @@ import { Empty, NothingT, NullT, VBArray, VBRef, compare, toNumber, type VBValue
 import { EndSignal, nextTick, type Gen } from './driver';
 import { Frame, ProcRef, Run, Variable, lc, storeValue, type Slot } from './scope';
 import {
-  afterHostCall, assign, callBuiltin, callProc, constExpr, evalArgValues, evalExpr, lookup, memberGet, variableOf, withObject,
+  afterHostCall, assign, awaitHost, callBuiltin, callProc, constExpr, evalArgValues, evalExpr, lookup, memberGet, methodArgs,
+  variableOf, withObject,
 } from './eval';
 import { compareResult, isObject, plain, truthy } from './operators';
 import { BuiltinRef, EnumRef, ModuleRef } from './scope';
@@ -169,15 +170,29 @@ export function* handleError(f: Frame, e: unknown): Gen<ErrorOutcome> {
   if (e instanceof EndSignal) throw e;
   let err: VBRuntimeError;
   if (e instanceof VBRuntimeError) err = e;
-  else if (e instanceof RangeError && /call stack/i.test(e.message)) err = new VBRuntimeError(28);
+  else if (isStackOverflow(e)) err = new VBRuntimeError(28);
   else throw e;
   return yield* unhandledError(f, err);
+}
+
+/**
+ * A JS stack overflow (V8/JavaScriptCore: RangeError "Maximum call stack size
+ * exceeded"). Uses no regex: this runs when the stack is nearly exhausted.
+ */
+export function isStackOverflow(e: unknown): boolean {
+  return e instanceof RangeError && e.message.indexOf('call stack') >= 0;
 }
 
 function* unhandledError(f: Frame, err: VBRuntimeError): Gen<ErrorOutcome> {
   const rt = f.run.rt;
   if (rt.stopping) throw END;
-  yield rt.host.onRuntimeError(err, f.location());
+  // no event pump while the error is reported (events are dropped, like in break mode)
+  rt.eventsSuspended++;
+  try {
+    yield rt.host.onRuntimeError(err, f.location());
+  } finally {
+    rt.eventsSuspended--;
+  }
   // 'debug' (break mode, Continue = RETRY) is Task 8; for now both answers end the program.
   rt.endProgram();
   throw END;
@@ -501,7 +516,7 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
       if (obj instanceof NothingT) throw new VBRuntimeError(91);
       if (!isObject(obj)) throw new VBRuntimeError(424);
       const r = obj.callMethod(s.kind === 'unload' ? 'Unload' : 'Load', []);
-      if (r instanceof Promise) yield r;
+      if (r instanceof Promise) yield* awaitHost(f, r);
       else yield* afterHostCall(f);
       return;
     }
@@ -540,8 +555,8 @@ function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Com
     if (base instanceof NothingT) throw new VBRuntimeError(91);
     if (isObject(base)) {
       const argv = yield* evalArgValues(f, args);
-      const r = base.callMethod(target.name, argv);
-      if (r instanceof Promise) yield r;
+      const r = base.callMethod(target.name, methodArgs(argv));
+      if (r instanceof Promise) yield* awaitHost(f, r);
       else yield* afterHostCall(f);
       return;
     }

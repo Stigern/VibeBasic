@@ -10,7 +10,15 @@ import { parseModule } from '../parser';
 import { VBArray, VBRecord, VBRef, defaultValue, setDateTextFormatter, toNumber, type DateTextFormatter, type VBValue } from '../values';
 import { EndSignal, SubCall, runGenerator, type ExecScope, type Gen } from './driver';
 import { constExpr } from './eval';
-import { declareVariable, evalBounds, handleError, invokeProc, type BoundArg } from './exec';
+import { declareVariable, evalBounds, handleError, invokeProc, isStackOverflow, type BoundArg } from './exec';
+
+/**
+ * Event handlers nested in each other (an event fired while another handler
+ * waits or sets a property) beyond this depth are error 28, Out of stack
+ * space. Synchronously fired events nest on the JS stack, so this stays well
+ * below what the JS engine allows.
+ */
+export const MAX_EVENT_NESTING = 100;
 import {
   Frame, GlobalScope, ModuleScope, ProcRef, Run, Variable, fitFixed, lc, type FieldInfo, type TypeInfo,
 } from './scope';
@@ -47,9 +55,15 @@ export class Runtime {
   /** Events that arrived during a time slice, started at the next event pump or when the run finishes. */
   private readonly eventQueue: (() => void)[] = [];
   private runSeq = 0;
-  private endedResolve!: () => void;
-  /** Resolves when the program ends (stops waits for nested runs). */
-  readonly ended = new Promise<void>(r => { this.endedResolve = r; });
+  /** Waits for nested runs (`nestedRuns`) that the end of the program must release; each removes itself when done. */
+  readonly endWaiters = new Set<() => void>();
+  /**
+   * > 0 while an unhandled error is being reported (and, in Task 8, while
+   * onBreak is pending): no event pump, new events are dropped.
+   */
+  eventsSuspended = 0;
+  /** Set when an event was refused for nesting too deep; the running statement raises error 28. */
+  overflow = false;
   readonly sliceSize: number;
   readonly locale: string;
   readonly builtinCtx: BuiltinCtx;
@@ -218,7 +232,9 @@ export class Runtime {
     this.state = 'ended';
     this.stopping = true;
     this.pauseRequested = false;
-    this.endedResolve();
+    const waiters = [...this.endWaiters];
+    this.endWaiters.clear();
+    for (const w of waiters) w();
     this.host.onEnd();
   }
 
@@ -258,7 +274,20 @@ export class Runtime {
       if (r.seq > run.seq) (later ??= []).push(r.done!);
     }
     if (!later) return undefined;
-    return Promise.race([Promise.all(later).then(() => undefined), this.ended]);
+    const nested = later;
+    return new Promise<void>(resolve => {
+      const done = () => {
+        this.endWaiters.delete(done);
+        resolve();
+      };
+      this.endWaiters.add(done);
+      void Promise.all(nested).then(done);
+    });
+  }
+
+  /** False in break mode, after the end, and while an error is reported: an event arriving now is dropped. */
+  get acceptsEvents(): boolean {
+    return this.state !== 'ended' && this.state !== 'break' && this.eventsSuspended === 0;
   }
 
   /** True when an event arriving now must be queued (a run is in a time slice). */
@@ -356,9 +385,14 @@ export class Program {
    */
   async runEvent(moduleName: string, procName: string, args: VBRef[] = []): Promise<void> {
     const rt = this.rt;
-    if (rt.state === 'ended' || rt.state === 'break') return;
+    if (!rt.acceptsEvents) return;
     const ref = rt.modules.get(lc(moduleName))?.procs.get(lc(procName));
     if (!ref) return;
+    if (rt.runs.size >= MAX_EVENT_NESTING) {
+      // VB6: Out of stack space. Raised by the statement that fired the event (afterHostCall / awaitHost).
+      rt.overflow = true;
+      return;
+    }
     if (rt.busy) {
       // a handler is running a long stretch of code: VB6 handles this event after it (or at its next DoEvents)
       return new Promise<void>((resolve, reject) => {
@@ -371,15 +405,21 @@ export class Program {
     try {
       await runGenerator(rt.entry(run, ref, args), rt.runScope(run));
     } catch (e) {
-      if (e instanceof VBRuntimeError) {
+      const err = isStackOverflow(e) ? new VBRuntimeError(28) : e;
+      if (err instanceof VBRuntimeError) {
         // raised outside any statement, e.g. binding the handler's arguments
         if (!rt.stopping) {
           const at: CodeLocation = { moduleName: ref.module.name, procName: ref.proc.name, line: ref.proc.line };
-          await rt.host.onRuntimeError(e, at);
+          rt.eventsSuspended++;
+          try {
+            await rt.host.onRuntimeError(err, at);
+          } finally {
+            rt.eventsSuspended--;
+          }
           rt.endProgram();
         }
-      } else if (!(e instanceof EndSignal)) {
-        throw e;
+      } else if (!(err instanceof EndSignal)) {
+        throw err;
       }
     } finally {
       finish();
