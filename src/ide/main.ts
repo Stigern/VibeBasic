@@ -9,6 +9,7 @@ import { IdeState } from './ideState';
 import { buildLayout, type IdeLayout } from './layout';
 import { buildMenus, type IdeActions } from './menus';
 import { openDesigner, registerDesignerActions } from './designer';
+import { createPropertiesWindow, type PropertiesWindow } from './properties';
 import { createToolbox } from './toolbox';
 
 export interface Ide { state: IdeState; layout: IdeLayout; actions: IdeActions; menus: ReturnType<typeof buildMenus>; refresh(): void }
@@ -21,12 +22,13 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   const layout = buildLayout(root);
   const doc = root.ownerDocument;
 
+  let propsWin: PropertiesWindow | undefined;
   const actions: IdeActions = {
     undo: () => state.stack.undo(),
     redo: () => state.stack.redo(),
     viewImmediate: () => layout.setPaneVisible('immediate', !layout.isPaneVisible('immediate')),
     viewProjectExplorer: () => layout.setPaneVisible('project', true),
-    viewProperties: () => layout.setPaneVisible('properties', true),
+    viewProperties: () => { layout.setPaneVisible('properties', true); propsWin?.focus(); },
     viewToolbox: () => layout.setPaneVisible('toolbox', true),
     about: () => { void messageBox98(doc, { prompt: ABOUT_TEXT, title: 'About VibeBasic', buttons: vbOK }); },
   };
@@ -48,6 +50,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     tb('toolbox', 'Toolbox', 'viewToolbox'),
   ]);
   createToolbox(layout.toolboxHost, state);
+  propsWin = createPropertiesWindow(layout.propertiesHost, state, { backend });
   bindShortcuts(menus, window);
 
   refresh = () => { menubar.refresh(); toolbar.refresh(); };

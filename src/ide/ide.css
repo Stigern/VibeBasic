@@ -19,3 +19,30 @@
 .tbx98-btn:hover { border-color: #fff #808080 #808080 #fff; }
 .tbx98-btn.checked { border-color: #808080 #fff #fff #808080; background: repeating-conic-gradient(#fff 0% 25%, var(--w98-face) 0% 50%) 0 0 / 2px 2px; }
 .tbx98-btn svg { display: block; width: 16px; height: 16px; }
+
+/* Properties window */
+.pw98 { display: flex; flex-direction: column; height: 100%; padding: 2px; box-sizing: border-box; gap: 2px; }
+.pw98 > .cb98 { width: 100%; flex: none; }
+.pw98 > .tabs98 { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pw98 .tabs98-panel { flex: 1; min-height: 0; overflow: auto; padding: 0; background: #fff; }
+.pw98-list { font-size: 11px; background: #fff; min-height: 100%; }
+.pw98-row { display: flex; min-height: 17px; border-bottom: 1px solid #c0c0c0; position: relative; outline: none; }
+.pw98-name { flex: 0 0 45%; padding: 1px 3px; box-sizing: border-box; border-right: 1px solid #c0c0c0; background: #fff; white-space: nowrap; overflow: hidden; }
+.pw98-value { flex: 1; min-width: 0; padding: 1px 3px; box-sizing: border-box; display: flex; align-items: flex-start; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pw98-row.selected .pw98-name { background: #000080; color: #fff; }
+.pw98-editor { flex: 1; min-width: 0; font: inherit; border: 0; padding: 0; margin: 0; outline: none; background: #fff; }
+.pw98-valtext { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.pw98-btn { flex: none; width: 16px; height: 16px; padding: 0; line-height: 10px; font-size: 10px; min-width: 0; }
+.pw98-row .cb98 { flex: 1; height: 17px; padding: 0; }
+.pw98-popup { position: absolute; z-index: 20; top: 100%; right: 0; width: 190px; background: var(--w98-face); box-shadow: var(--w98-outset, 1px 1px #000); }
+.pw98-palette { display: grid; grid-template-columns: repeat(8, 20px); gap: 2px; padding: 4px; }
+.pw98-swatch { width: 20px; height: 16px; border: 1px solid #808080; }
+.pw98-syslist { max-height: 160px; overflow: auto; background: #fff; }
+.pw98-sysitem { display: flex; align-items: center; gap: 4px; padding: 1px 3px; white-space: nowrap; }
+.pw98-sysitem:hover { background: #000080; color: #fff; }
+.pw98-swatch-sm { width: 12px; height: 10px; border: 1px solid #000; flex: none; }
+.pw98-fontdlg { display: flex; gap: 8px; }
+.pw98-fontdlg > div { display: flex; flex-direction: column; gap: 4px; }
+.pw98-fontlist { min-width: 140px; }
+.pw98-fontsize { width: 50px; }
+.pw98-fontsample { border: 1px solid #808080; padding: 8px; min-width: 90px; background: #fff; }

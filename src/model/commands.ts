@@ -2,7 +2,7 @@
 // only through these. Commands look up forms/controls by id every time they run, and capture what undo needs
 // (old values, array positions, deleted subtrees) at do-time, so they work as long as the stack is used in order.
 
-import type { ControlDef, FormDef, ModuleDef, Project, PropValue } from './types';
+import type { Asset, ControlDef, FormDef, ModuleDef, Project, PropValue } from './types';
 
 export interface Command { label: string; do(p: Project): void; undo(p: Project): void }
 
@@ -197,6 +197,15 @@ export function setPropertyCmd(formId: string, targetId: string | 'form', name: 
       const props = propsOf(p);
       if (had) props[name] = clone(oldValue); else delete props[name];
     },
+  };
+}
+
+/** Adds an asset (picture data) under `id`. Combine with setPropertyCmd in a compositeCmd so both undo together. */
+export function addAssetCmd(id: string, asset: Asset): Command {
+  return {
+    label: 'Add Picture',
+    do(p) { p.assets[id] = { ...asset }; },
+    undo(p) { delete p.assets[id]; },
   };
 }
 
