@@ -26,7 +26,7 @@ test('form window: options, hello handshake, ordered queue, routing, cleanup', a
   const f = fakeGlue();
   const host = new TauriFormHost(f.glue);
   const w = await host.openForm(snap('Form1'), { modal: true });
-  expect(f.log.created[0]).toMatchObject({ label: 'vbform-Form1', o: { url: 'form.html#Form1', decorations: false, visible: false, alwaysOnTop: true, width: 320, center: true } });
+  expect(f.log.created[0]).toMatchObject({ label: 'vbform-Form1', o: { url: 'form.html#Form1', decorations: false, visible: false, alwaysOnTop: false, parent: 'main', width: 320, center: true } });
   w.send({ t: 'patch', id: 'form', props: { Caption: 'x' } });
   await f.tick();
   expect(f.log.emitted).toEqual([]);                       // nothing before the window said hello
@@ -43,25 +43,27 @@ test('form window: options, hello handshake, ordered queue, routing, cleanup', a
   expect(f.listeners()).toBe(0);
 });
 
-test('msgbox opens an always-on-top dialog window, blocks forms, returns the result', async () => {
+test('msgbox opens a dialog window owned by the form, blocks forms, returns the result', async () => {
   const f = fakeGlue();
   const host = new TauriFormHost(f.glue);
   const w = await host.openForm(snap('Form1'), { modal: false });
   f.fire('vb:hello', 'Form1');
   const p = host.messageBox({ prompt: 'Hi', title: 'T', buttons: 4 });
   await f.tick();
-  expect(f.log.created[1]).toMatchObject({ label: 'vbdialog-1', o: { url: 'form.html#dialog-1', alwaysOnTop: true, decorations: false, visible: false } });
-  f.fire('vb:hello', 'dialog-1');
+  const label = f.log.created[1].label, key = label.slice(2);   // vbdialog-<n> / dialog-<n>
+  expect(label).toMatch(/^vbdialog-\d+$/);
+  expect(f.log.created[1]).toMatchObject({ o: { url: `form.html#${key}`, alwaysOnTop: false, parent: 'vbform-Form1', decorations: false, visible: false } });
+  f.fire('vb:hello', key);
   await f.tick();
-  expect(f.log.emitted).toContainEqual(['vbdialog-1', 'vb:dialog', { kind: 'msgbox', prompt: 'Hi', title: 'T', buttons: 4 }]);
+  expect(f.log.emitted).toContainEqual([label, 'vb:dialog', { kind: 'msgbox', prompt: 'Hi', title: 'T', buttons: 4 }]);
   expect(f.log.emitted).toContainEqual(['vbform-Form1', 'vb:to', { t: 'blocked', blocked: true }]);
-  f.fire('vb:from', { key: 'dialog-1', result: 7 });
+  f.fire('vb:from', { key, result: 7 });
   expect(await p).toBe(7);
   await f.tick();
-  expect(f.log.destroyed).toEqual(['vbdialog-1']);
+  expect(f.log.destroyed).toEqual([label]);
   expect(f.log.emitted.at(-1)).toEqual(['vbform-Form1', 'vb:to', { t: 'blocked', blocked: false }]);
   await host.dispose();
-  expect(f.log.destroyed).toEqual(['vbdialog-1', 'vbform-Form1']);
+  expect(f.log.destroyed).toEqual([label, 'vbform-Form1']);
   expect(f.listeners()).toBe(0);
   void w;
 });
@@ -79,12 +81,13 @@ test('dispose destroys a pending dialog window before resolving; OS-closed dialo
   const host = new TauriFormHost(f.glue);
   const a = host.inputBox({ prompt: 'p', title: 't', defaultText: 'x' });
   await f.tick();
-  f.fire('vb:from', { key: 'dialog-1', cancelled: true });
+  expect(f.log.created[0].o.parent).toBe('main');   // no form window: owned by the IDE window
+  f.fire('vb:from', { key: f.log.created[0].label.slice(2), cancelled: true });
   expect(await a).toBe('');
   const b = host.messageBox({ prompt: 'p', title: 't', buttons: 1 });
   await f.tick();
   await host.dispose();
-  expect(f.log.destroyed).toEqual(['vbdialog-1', 'vbdialog-2']);
+  expect(f.log.destroyed).toEqual([f.log.created[0].label, f.log.created[1].label]);
   expect(await b).toBe(2);
 });
 
@@ -96,4 +99,31 @@ test('cascade restarts when no forms are open', async () => {
   await (await host.openForm(s, { modal: false })).close();
   await host.openForm(s, { modal: false });
   expect(f.log.created.map(c => c.o.x)).toEqual([60, 60]);
+});
+
+test('dialog labels are unique across hosts (a late dispose of an old run cannot destroy a new dialog)', async () => {
+  const f1 = fakeGlue(), f2 = fakeGlue();
+  const old = new TauriFormHost(f1.glue), cur = new TauriFormHost(f2.glue);
+  void old.messageBox({ prompt: 'a', title: 't', buttons: 0 });
+  void cur.messageBox({ prompt: 'b', title: 't', buttons: 0 });
+  await f1.tick();
+  expect(f1.log.created[0].label).not.toBe(f2.log.created[0].label);
+  await old.dispose();
+  expect(f1.log.destroyed).toEqual([f1.log.created[0].label]);
+  await cur.dispose();
+});
+
+test('a modal form and a dialog belong to the last visible form window', async () => {
+  const f = fakeGlue();
+  const host = new TauriFormHost(f.glue);
+  await host.openForm(snap('Form1'), { modal: false });
+  const w2 = await host.openForm(snap('Form2'), { modal: false });
+  w2.send({ t: 'hide' });
+  await host.openForm(snap('Form3'), { modal: true });
+  expect(f.log.created[2].o).toMatchObject({ parent: 'vbform-Form1', alwaysOnTop: false });
+  expect(f.log.created[1].o.parent).toBeUndefined();
+  void host.messageBox({ prompt: 'p', title: 't', buttons: 0 });
+  await f.tick();
+  expect(f.log.created[3].o.parent).toBe('vbform-Form3');
+  await host.dispose();
 });

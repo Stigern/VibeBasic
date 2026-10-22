@@ -27,9 +27,17 @@ import {
   Frame, GlobalScope, ModuleScope, ProcRef, Run, Variable, fitFixed, lc, type FieldInfo, type TypeInfo,
 } from './scope';
 
+const now = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
 export interface SourceModule { name: string; kind: 'form' | 'module'; source: string }
 export interface ProgramOptions {
-  sliceSize?: number /* default 10000 */;
+  /**
+   * Statements between clock checks (default 1000). Without `sliceMs` an
+   * explicit sliceSize yields at every check (count-based slices, tests).
+   */
+  sliceSize?: number;
+  /** A time slice is taken when this many ms have passed since the last one (default 16; 0 when sliceSize is given). */
+  sliceMs?: number;
   locale?: string;
   /** Default MsgBox/InputBox title (default 'Project1'). */
   appTitle?: string;
@@ -79,6 +87,9 @@ export class Runtime {
   /** Set when an event was refused for nesting too deep; the running statement raises error 28. */
   overflow = false;
   readonly sliceSize: number;
+  readonly sliceMs: number;
+  /** performance.now() of the last time slice (or of the start of the current run). */
+  lastSlice = 0;
   readonly locale: string;
   readonly builtinCtx: BuiltinCtx;
   /** Makes this program's locale (date text and parsing) current while its code runs; pass to `runGenerator`. */
@@ -97,7 +108,8 @@ export class Runtime {
   private initialized = false;
 
   constructor(sources: SourceModule[], readonly host: Host, opts: ProgramOptions = {}) {
-    this.sliceSize = Math.max(1, opts.sliceSize ?? 10000);
+    this.sliceSize = Math.max(1, opts.sliceSize ?? 1000);
+    this.sliceMs = Math.max(0, opts.sliceMs ?? (opts.sliceSize !== undefined ? 0 : 16));
     this.locale = opts.locale ?? Intl.DateTimeFormat().resolvedOptions().locale;
     const appTitle = opts.appTitle ?? 'Project1';
     this.err = new ErrObject(appTitle);
@@ -342,8 +354,18 @@ export class Runtime {
   // next pump or when the busy handler finishes, as VB6 would process them
   // after the handler (or at its next DoEvents).
 
+  /** At a clock check (`sliceSize` statements): true when a time slice is due; resets the count either way. */
+  sliceDue(): boolean {
+    this.stmtCount = 0;
+    return this.sliceMs <= 0 || now() - this.lastSlice >= this.sliceMs;
+  }
+
+  /** A time slice just ended. */
+  sliced(): void { this.lastSlice = now(); }
+
   /** Registers an event run: start order and a promise that resolves when it finishes. */
   beginRun(run: Run): () => void {
+    if (this.activeRuns === 0) this.lastSlice = now();   // an idle program starts a fresh slice
     let finish!: () => void;
     run.seq = ++this.runSeq;
     run.done = new Promise<void>(r => { finish = r; });

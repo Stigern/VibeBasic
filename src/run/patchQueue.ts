@@ -27,6 +27,10 @@ export class PatchQueue {
     if (!this.forms.size) return;
     const forms = this.forms;
     this.forms = new Map();
-    for (const [key, ids] of forms) for (const [id, props] of ids) this.sendFn(key, { t: 'patch', id, props });
+    // one message per form (one IPC call for a whole DoEvents flush)
+    for (const [key, ids] of forms) {
+      const items = [...ids].map(([id, props]) => ({ id, props }));
+      this.sendFn(key, items.length === 1 ? { t: 'patch', ...items[0] } : { t: 'patches', items });
+    }
   }
 }

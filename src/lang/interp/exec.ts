@@ -126,8 +126,9 @@ export function* execBlock(f: Frame, body: Stmt[], start = 0): Gen<Completion> {
 /**
  * Statement boundary (every statement, and every loop iteration so that an
  * empty `Do: Loop` can be stopped): sets the current line and counts the
- * boundary; true when `boundary()` must run: stop on End, give the event
- * loop a turn every `sliceSize` boundaries, enter break mode on a pause request.
+ * boundary; true when `boundary()` must run: stop on End, check the clock
+ * every `sliceSize` boundaries (a time slice when `sliceMs` have passed since
+ * the last one), enter break mode on a pause request.
  */
 function atBoundary(f: Frame, line: number): boolean {
   const rt = f.run.rt;
@@ -139,14 +140,15 @@ function atBoundary(f: Frame, line: number): boolean {
 function* boundary(f: Frame): Gen<void> {
   const rt = f.run.rt;
   if (rt.stopping) throw END;
-  if (rt.stmtCount >= rt.sliceSize) {
-    rt.stmtCount = 0;
+  if (rt.stmtCount >= rt.sliceSize && rt.sliceDue()) {
     // A time slice is not an event pump: events arriving now are queued (Runtime.slicing).
     rt.slicing++;
     try {
-      yield nextTick();
+      // count-based slices (an explicit sliceSize, tests) keep the plain setTimeout(0) turn: every timer queued before runs first
+      yield rt.sliceMs > 0 ? nextTick() : new Promise<void>(r => setTimeout(r, 0));
     } finally {
       rt.slicing--;
+      rt.sliced();
     }
     if (rt.stopping) throw END;
   }

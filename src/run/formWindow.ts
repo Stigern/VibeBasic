@@ -125,13 +125,13 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
       if (was) apply(tg.id, { Value: true }); else emit(tg.id, 'Click', [], { Value: true });
     }
   });
-  on<MouseEvent>('dblclick', e => { const tg = targetOf(e.target); if (!blocked && tg) emit(tg.id, 'DblClick'); });
+  on<MouseEvent>('dblclick', e => { const tg = targetOf(e.target); if (!blocked && tg && usable(tg.id)) emit(tg.id, 'DblClick'); });
 
   // --- mouse ---
   function mouse(event: string) {
     return (e: MouseEvent) => {
       const tg = targetOf(e.target);
-      if (blocked || !tg) return;
+      if (blocked || !tg || !usable(tg.id)) return;   // a disabled control gets no mouse events
       const box = (tg.id === 'form' ? surface.clientEl : viewOf(tg.id)!.el).getBoundingClientRect();
       const button = event === 'MouseMove' ? e.buttons & 7 : e.button === 0 ? 1 : e.button === 2 ? 2 : e.button === 1 ? 4 : 0;
       emit(tg.id, event, [button, shiftBits(e), Math.round((e.clientX - box.left) * 15), Math.round((e.clientY - box.top) * 15)]);
@@ -241,7 +241,9 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
       const r = entries[entries.length - 1]?.contentRect;
       if (!r || disposed) return;
       const width = Math.round(r.width * 15), height = Math.round(r.height * 15);
-      if (width === formState.Width && height === formState.Height) return;
+      // same pixel size as the form state: no change (also the echo of a size set by code, which need not be whole pixels)
+      const px = (v: PropValue | undefined) => Math.round(Number(v) / 15);
+      if (Math.round(r.width) === px(formState.Width) && Math.round(r.height) === px(formState.Height)) return;
       apply('form', { Width: width, Height: height });
       send({ t: 'resized', width, height });
     });
@@ -260,6 +262,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     receive(m) {
       switch (m.t) {
         case 'patch': if (m.id === 'form' || defs.has(m.id)) apply(m.id, m.props); break;
+        case 'patches': for (const p of m.items) if (p.id === 'form' || defs.has(p.id)) apply(p.id, p.props); break;
         case 'focus': viewOf(m.id)?.inputEl?.focus(); break;
         case 'show': surface.el.style.display = ''; focusInitial(); break;
         case 'hide': surface.el.style.display = 'none'; break;

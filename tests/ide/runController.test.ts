@@ -9,10 +9,14 @@ import { startIde } from '../../src/ide/main';
 import { RunController } from '../../src/ide/runController';
 import { newControl, newForm, newProject } from '../../src/model/controls';
 import { InlineFormHost } from '../../src/run/inlineFormHost';
-import { compileErrorBox } from '../../src/ui98/dialogs';
+import { compileErrorBox, messageBox98 } from '../../src/ui98/dialogs';
 
-vi.mock('../../src/ui98/dialogs', async orig => ({ ...(await orig<typeof import('../../src/ui98/dialogs')>()), compileErrorBox: vi.fn(async () => {}) }));
+vi.mock('../../src/ui98/dialogs', async orig => {
+  const real = await orig<typeof import('../../src/ui98/dialogs')>();
+  return { ...real, compileErrorBox: vi.fn(async () => {}), messageBox98: vi.fn(real.messageBox98) };
+});
 const box = vi.mocked(compileErrorBox);
+const msgBox = vi.mocked(messageBox98);
 const rect = { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON() {} };
 Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
 Range.prototype.getBoundingClientRect = () => rect as DOMRect;
@@ -187,4 +191,42 @@ test('project changes are blocked while running; a second start during the compi
   expect(app.state.project.modules.length).toBe(0);
   expect(app.state.stack.canUndo).toBe(true);   // undo did not run
   app.run.end();
+});
+
+test('Shift+F5: the new run waits for the previous host teardown', async () => {
+  setup('');
+  const made: InlineFormHost[] = [];
+  let release!: () => void;
+  const factory = () => {
+    const h = new InlineFormHost(container);
+    if (made.length === 0) h.dispose = () => new Promise<void>(r => { release = r; }) as unknown as void;
+    made.push(h);
+    return h;
+  };
+  (rc as unknown as { hostFactory: () => InlineFormHost }).hostFactory = factory;
+  await rc.start(false);
+  expect(made.length).toBe(1);
+  const restarted = rc.restart();
+  await tick(); await tick();
+  expect(made.length).toBe(1);          // still waiting for the old dispose
+  release();
+  await restarted;
+  expect(made.length).toBe(2);
+  expect(ide.mode).toBe('run');
+});
+
+test('a failing session start shows a critical message box', async () => {
+  setup('');
+  msgBox.mockClear();
+  msgBox.mockImplementationOnce(async () => 1);
+  (rc as unknown as { hostFactory: () => InlineFormHost }).hostFactory = () => {
+    const h = new InlineFormHost(container);
+    h.openForm = async () => { throw new Error('no window'); };
+    return h;
+  };
+  await rc.start(false);
+  expect(msgBox).toHaveBeenCalledTimes(1);
+  expect(msgBox.mock.calls[0][1]).toMatchObject({ buttons: 16 });
+  expect(String(msgBox.mock.calls[0][1].prompt)).toContain('no window');
+  expect(ide.mode).toBe('design');
 });

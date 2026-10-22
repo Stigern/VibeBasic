@@ -117,3 +117,17 @@ describe('ControlObject', () => {
     expect(c.timerChanged).toHaveBeenCalledTimes(2);
   });
 });
+
+test('one flush sends all patches of a form as one message', () => {
+  const sent: [string, ToWindow][] = [];
+  const q = new PatchQueue((k, m) => sent.push([k, m]));
+  q.set('f1', 'a', { Caption: '1' });
+  q.set('f1', 'b', { Value: 5 });
+  q.set('f1', 'a', { Caption: '2' });
+  q.set('f2', 'form', { Caption: 'x' });
+  q.flush();
+  expect(sent).toEqual([
+    ['f1', { t: 'patches', items: [{ id: 'a', props: { Caption: '2' } }, { id: 'b', props: { Value: 5 } }] }],
+    ['f2', { t: 'patch', id: 'form', props: { Caption: 'x' } }],
+  ]);
+});

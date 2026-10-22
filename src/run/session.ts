@@ -3,6 +3,7 @@
 
 import type { BreakInfo, CodeLocation, Host, VBObject } from '../lang/host';
 import { VBRuntimeError } from '../lang/errors';
+import { macrotask } from '../lang/interp/driver';
 import { Program, type SourceModule } from '../lang/interp/program';
 import type { VBRef, VBValue } from '../lang/values';
 import type { PictureRef, Project } from '../model/types';
@@ -33,6 +34,9 @@ class TimedPatchQueue extends PatchQueue {
   }
 }
 
+/** Minimum time between two DoEvents calls that really give the event loop a turn. */
+const DOEVENTS_MS = 8;
+
 const MIME: Record<string, string> = {
   bmp: 'image/bmp', dib: 'image/bmp', gif: 'image/gif', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
   ico: 'image/x-icon', cur: 'image/x-icon', wmf: 'image/wmf', emf: 'image/emf', svg: 'image/svg+xml', webp: 'image/webp',
@@ -56,6 +60,7 @@ export class RunSession implements Host, FormSession {
   private modalStack: FormInstance[] = [];
   private timers = new Map<ControlObject, ReturnType<typeof setInterval>>();
   private timerBusy = new Set<ControlObject>();
+  private lastYield = -Infinity;   // performance.now() of the last real DoEvents yield
 
   constructor(private project: Project, readonly formHost: FormHost, private cb: SessionCallbacks, readonly mode: 'ide' | 'app') {
     for (const [k, a] of Object.entries(project.assets)) this.assets[k] = `data:${a.mime};base64,${a.dataBase64}`;
@@ -180,9 +185,16 @@ export class RunSession implements Host, FormSession {
 
   debugPrint(text: string, newline: boolean): void { this.cb.debugPrint(text, newline); }
 
+  /**
+   * DoEvents. Queued VB events are pumped by the driver on every await; the window (UI, timers, IPC) gets a real
+   * macrotask at most every DOEVENTS_MS, so `For i = 1 To 20000: DoEvents: Next` does not take 20000 timer turns.
+   */
   async doEvents(): Promise<void> {
+    const t = performance.now();
+    if (t - this.lastYield < DOEVENTS_MS) return;
     this.queue.flush();
-    await new Promise(r => setTimeout(r, 0));
+    await macrotask();
+    this.lastYield = performance.now();
   }
 
   async loadPicture(path: string): Promise<VBValue> {

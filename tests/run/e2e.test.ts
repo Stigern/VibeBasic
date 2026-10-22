@@ -97,3 +97,30 @@ test('calc.vbb full scenario', async () => {
   click('cmdClear'); await tick(); await tick();
   expect(text1()).toBe('');
 });
+
+test('20000 DoEvents finish quickly; a Timer still fires during the loop', async () => {
+  const p = loopProject([
+    'Dim ticks As Long',
+    'Private Sub Timer1_Timer()', '    ticks = ticks + 1', 'End Sub',
+    'Private Sub Command1_Click()',
+    '    Dim i As Long',
+    '    For i = 1 To 20000', '        Label1.Caption = CStr(i)', '        Command1.Caption = CStr(i)', '        DoEvents', '    Next',
+    '    Debug.Print "ticks"; ticks > 0',
+    'End Sub', '',
+  ].join('\n'));
+  const t1 = newControl(p.forms[0], 'Timer', { left: 0, top: 0 }, null);
+  t1.name = 'Timer1'; t1.props.Interval = 20; t1.props.Enabled = true;
+  const l1 = newControl(p.forms[0], 'Label', { left: 120, top: 1000 }, null);
+  l1.name = 'Label1';
+  p.forms[0].controls.push(t1, l1);
+  setup(p);
+  const printed: string[] = [];
+  (rc as unknown as { opts: { immediate: { print(t: string): void } } }).opts.immediate.print = t => printed.push(t);
+  await rc.start(false);
+  const t = Date.now();
+  click('Command1');
+  await until(() => printed.length > 0, 10000);
+  const ms = Date.now() - t;
+  expect(printed[0]).toBe('ticksTrue');
+  expect(ms).toBeLessThan(1500);
+}, 15000);

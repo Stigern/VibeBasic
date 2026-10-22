@@ -4,7 +4,7 @@
 // A generator talks to the driver by yielding:
 //   - a Promise: the driver awaits it and resumes the generator with the
 //     result (or throws the rejection into it). Host dialogs, DoEvents and
-//     the periodic `setTimeout(0)` slice use this.
+//     the periodic time slice (`nextTick`) use this.
 //   - a SubCall: the driver runs that generator to completion on its own
 //     explicit stack and resumes the caller with its return value (or throws
 //     its error into the caller). Every VB procedure call goes through a
@@ -121,7 +121,50 @@ export function runSync<T>(gen: Gen<T>, onYield: () => never): T {
   return r.value;
 }
 
+/**
+ * Resolves on the next macrotask (lets the UI, timers and IPC run). Uses one
+ * shared MessageChannel: unlike `setTimeout(0)` it is not clamped to 4 ms
+ * when called in a tight loop (DoEvents, time slices). At least every
+ * TIMER_TURN_MS it uses `setTimeout(0)` instead, which runs after every timer
+ * that is already due: an event loop that prefers channel messages (Node does)
+ * cannot starve VB Timers.
+ */
+export function macrotask(): Promise<void> {
+  return new Promise<void>(resolve => {
+    const ch = channel();
+    const t = Date.now();
+    if (!ch || t - lastTimerTurn >= TIMER_TURN_MS) {
+      lastTimerTurn = t;
+      setTimeout(resolve, 0);
+      return;
+    }
+    waiting.push(resolve);
+    if (waiting.length === 1) ch.port2.postMessage(0);
+  });
+}
+
+const TIMER_TURN_MS = 25;
+let lastTimerTurn = 0;
+
+/** Resolvers waiting for the next channel message (FIFO; one message wakes them all). */
+let waiting: (() => void)[] = [];
+let shared: MessageChannel | null | undefined;
+function channel(): MessageChannel | null {
+  if (shared !== undefined) return shared;
+  if (typeof MessageChannel !== 'function') return (shared = null);
+  const ch = new MessageChannel();
+  ch.port1.onmessage = () => {
+    const ready = waiting;
+    waiting = [];
+    for (const r of ready) r();
+  };
+  // Node (vitest): an open port with a listener would keep the process alive
+  (ch.port1 as unknown as { unref?: () => void }).unref?.();
+  (ch.port2 as unknown as { unref?: () => void }).unref?.();
+  return (shared = ch);
+}
+
 /** A promise that resolves on the next macrotask, letting the UI and timers run. */
 export function nextTick(): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, 0));
+  return macrotask();
 }

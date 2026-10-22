@@ -1,11 +1,12 @@
 // Entry of form.html: one Tauri window of the running program. form.html#<key> shows form <key>,
 // form.html#dialog-<n> shows a MsgBox / InputBox / error dialog. Protocol: see tauriFormHost.ts.
 
-import { LogicalSize } from '@tauri-apps/api/dpi';
+import { LogicalPosition, LogicalSize } from '@tauri-apps/api/dpi';
 import { emit } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { runDialog, type DialogSpec } from './dialogSpec';
 import { mountFormWindow } from './formWindow';
+import type { PropValue } from '../model/types';
 import type { FormSnapshot, ToWindow } from './protocol';
 import type { FromPayload } from './tauriFormHost';
 
@@ -21,6 +22,20 @@ function markDragRegions(): void {
   for (const el of root.querySelectorAll('.title-bar, .title-bar-text, .title-bar-icon')) el.setAttribute('data-tauri-drag-region', '');
 }
 
+/** The form's own properties in a patch message (null when it has none). */
+function formPatch(m: ToWindow): Record<string, PropValue> | null {
+  if (m.t === 'patch') return m.id === 'form' ? m.props : null;
+  if (m.t !== 'patches') return null;
+  let r: Record<string, PropValue> | null = null;
+  for (const p of m.items) if (p.id === 'form') r = { ...(r ?? {}), ...p.props };
+  return r;
+}
+
+const twips = (v: PropValue | undefined): number | null => (typeof v === 'number' && Number.isFinite(v) ? v / 15 : null);
+
+/** Cmd+W / Ctrl+W when no menu item delivers it as a close request. */
+const isCloseKey = (e: KeyboardEvent) => (e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'w';
+
 async function startForm(): Promise<void> {
   let mounted: ReturnType<typeof mountFormWindow> | null = null;
   const early: ToWindow[] = [];
@@ -29,8 +44,21 @@ async function startForm(): Promise<void> {
   const show = async () => { await win.show(); await win.setFocus(); };
   const handle = (m: ToWindow) => {
     mounted!.receive(m);
-    if (m.t === 'patch' && m.id === 'form') markDragRegions();   // title bar is rebuilt on chrome changes
-    else if (m.t === 'show') { wantVisible = true; if (firstShown) void show(); }
+    const fp = formPatch(m);
+    if (fp) {
+      markDragRegions();   // title bar is rebuilt on chrome changes
+      // size / position set by code move the native window (the ResizeObserver ignores the echo: same pixel size)
+      if ('Width' in fp || 'Height' in fp) {
+        const w = twips(fp.Width) ?? window.innerWidth, h = twips(fp.Height) ?? window.innerHeight;
+        void win.setSize(new LogicalSize(Math.max(1, Math.round(w)), Math.max(1, Math.round(h)))).catch(() => {});
+      }
+      if ('Left' in fp || 'Top' in fp) {
+        void (async () => {
+          const pos = (await win.outerPosition()).toLogical(await win.scaleFactor());
+          await win.setPosition(new LogicalPosition(Math.round(twips(fp.Left) ?? pos.x), Math.round(twips(fp.Top) ?? pos.y)));
+        })().catch(() => {});
+      }
+    } else if (m.t === 'show') { wantVisible = true; if (firstShown) void show(); }
     else if (m.t === 'hide') { wantVisible = false; void win.hide(); }
     else if (m.t === 'blocked') blocked = m.blocked;
   };
@@ -43,7 +71,9 @@ async function startForm(): Promise<void> {
   });
 
   // Cmd+W / OS close: the program decides (QueryUnload), the window never closes itself.
-  await win.onCloseRequested(e => { e.preventDefault(); if (mounted && !blocked) void send({ key, m: { t: 'closeRequest' } }); });
+  const closeRequest = () => { if (mounted && !blocked) void send({ key, m: { t: 'closeRequest' } }); };
+  await win.onCloseRequested(e => { e.preventDefault(); closeRequest(); });
+  window.addEventListener('keydown', e => { if (isCloseKey(e)) { e.preventDefault(); closeRequest(); } }, true);
   await win.listen<FormSnapshot>('vb:snapshot', async e => {
     if (mounted) return;
     root.dataset.vbWindow = '';
@@ -62,6 +92,7 @@ async function startDialog(): Promise<void> {
   document.body.classList.add('vb-dialog-window');
   let started = false;
   await win.onCloseRequested(e => { e.preventDefault(); void send({ key, cancelled: true }); });
+  window.addEventListener('keydown', e => { if (isCloseKey(e)) { e.preventDefault(); void send({ key, cancelled: true }); } }, true);
   await win.listen<DialogSpec>('vb:dialog', async e => {
     if (started) return;
     started = true;

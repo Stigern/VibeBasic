@@ -204,6 +204,21 @@ describe('mountFormWindow', () => {
     expect(get(l).textContent).toBe('Hei');
   });
 
+  test('patches message updates several controls', () => {
+    const l = mk('Label', { Caption: 'x' });
+    const m = mk('Label', { Caption: 'y' });
+    const get = mount([l, m], {});
+    win.receive({ t: 'patches', items: [{ id: l.id, props: { Caption: 'A' } }, { id: m.id, props: { Caption: 'B' } }] });
+    expect([get(l).textContent, get(m).textContent]).toEqual(['A', 'B']);
+  });
+
+  test('a disabled control gets no mouse or DblClick events', () => {
+    const l = mk('Label', { Enabled: false });
+    const get = mount([l], { [l.id]: ['MouseDown', 'MouseUp', 'MouseMove', 'DblClick'] });
+    for (const type of ['mousedown', 'mouseup', 'mousemove', 'dblclick']) get(l).dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0 }));
+    expect(sent.filter(m => m.t === 'event')).toEqual([]);
+  });
+
   test('patch keeps user text on rebuild and tab order follows TabIndex', () => {
     const a = mk('TextBox', { TabIndex: 1 });
     const b = mk('TextBox', { TabIndex: 0 });

@@ -9,7 +9,7 @@ import type { BreakInfo } from '../lang/host';
 import { findSyntaxErrors } from '../lang/parser';
 import { RunSession } from '../run/session';
 import type { FormHost } from '../run/formHost';
-import { compileErrorBox } from '../ui98/dialogs';
+import { compileErrorBox, messageBox98 } from '../ui98/dialogs';
 import type { CodeWindow } from './codeWindow';
 import type { IdeState } from './ideState';
 
@@ -26,6 +26,8 @@ export class RunController {
   private breakWin: CodeWindow | null = null;
   private errorWins: CodeWindow[] = [];
   private starting = false;
+  /** The previous run's host teardown: a new run waits for it (Shift+F5), so it cannot destroy the new run's windows. */
+  private lastDispose: Promise<void> = Promise.resolve();
 
   constructor(private ide: IdeState, private hostFactory: () => FormHost, private openCode: (itemId: string) => CodeWindow, private opts: RunOptions = {}) {}
 
@@ -71,6 +73,8 @@ export class RunController {
     } catch (e) {
       console.error(e);
       session.end();
+      const msg = e instanceof Error ? e.message : String(e);
+      await messageBox98(this.doc, { prompt: `Could not start the program:\n${msg}`, title: 'VibeBasic', buttons: 16 }).catch(() => {});
     }
   }
 
@@ -88,6 +92,7 @@ export class RunController {
         if (errs.length) { await this.showCompileError(errs[0]); return null; }
       }
     }
+    await Promise.race([this.lastDispose, new Promise(r => setTimeout(r, 3000))]);   // a hung teardown must not block F5 forever
     const host = this.hostFactory();
     let session!: RunSession;
     try {
@@ -151,9 +156,12 @@ export class RunController {
   }
 
   private disposeHost(host: FormHost): void {
+    let p: Promise<void>;
     try {
-      void Promise.resolve((host as { dispose?: () => unknown }).dispose?.()).catch(() => {});
-    } catch { /* a failing dispose must not break the state machine */ }
+      p = Promise.resolve((host as { dispose?: () => unknown }).dispose?.()).then(() => {}, () => {});
+    } catch { p = Promise.resolve(); /* a failing dispose must not break the state machine */ }
+    const prev = this.lastDispose;
+    this.lastDispose = Promise.all([prev, p]).then(() => {});
   }
 
   private ended(s: RunSession): void {

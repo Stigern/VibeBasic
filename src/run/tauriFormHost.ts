@@ -1,5 +1,8 @@
 // FormHost that shows every running form as its own Tauri window (form.html#<key>, label vbform-<key>) and every
-// MsgBox / InputBox / error dialog as a separate always-on-top window (form.html#dialog-<n>, label vbdialog-<n>).
+// MsgBox / InputBox / error dialog as a separate window (form.html#dialog-<n>, label vbdialog-<n>; n is unique for the
+// whole app, so a late dispose of an earlier run never destroys a dialog of the current one). Dialogs and modal forms
+// are child windows (`parent`) of the topmost visible form window, or of the IDE window; always-on-top only when that
+// parent does not exist.
 //
 // Wire protocol (main <-> window), all Tauri events:
 //   window -> main  'vb:hello'    key                      the page is listening; main answers:
@@ -23,7 +26,12 @@ export interface WindowCreateOptions {
   url: string; title: string; width: number; height: number; x?: number; y?: number; center: boolean;
   resizable: boolean; minimizable: boolean; maximizable: boolean;
   decorations: false; visible: false; alwaysOnTop: boolean; focus: boolean;
+  /** Label of the owner window (dialogs, modal forms): stays above it, not above every app. */
+  parent?: string;
 }
+
+/** Dialog numbers are unique across runs (and hosts). */
+let dialogSeq = 0;
 
 /** The few Tauri calls the host needs; replaced by a fake in tests. */
 export interface TauriGlue {
@@ -36,6 +44,9 @@ export const tauriGlue: TauriGlue = {
   async createWindow(label, o) {
     const stale = await WebviewWindow.getByLabel(label);
     if (stale) await stale.destroy().catch(() => {});
+    if (o.parent && !(await WebviewWindow.getByLabel(o.parent))) {
+      o = { ...o, parent: undefined, alwaysOnTop: true };   // no owner window: at least stay above the program's other windows
+    }
     const w = new WebviewWindow(label, o);
     await new Promise<void>((resolve, reject) => {
       void w.once('tauri://created', () => resolve());
@@ -56,10 +67,17 @@ export class TauriFormHost implements FormHost {
   private closers = new Set<() => Promise<void>>();
   private forms = new Set<{ apply(): void }>();
   private cascade = 0;
-  private dialogSeq = 0;
   private openDialogs = 0;
+  /** Open form windows in opening order (owner candidates for dialogs and modal forms). */
+  private order: { label: string; visible: boolean }[] = [];
 
   constructor(private glue: TauriGlue = tauriGlue) {}
+
+  /** The window a new dialog or modal form belongs to: the last opened visible form window, else the IDE window. */
+  private ownerLabel(): string {
+    for (let i = this.order.length - 1; i >= 0; i--) if (this.order[i].visible) return this.order[i].label;
+    return 'main';
+  }
 
   private ensureListening(): Promise<unknown> {
     this.listening ??= Promise.all([
@@ -109,6 +127,9 @@ export class TauriFormHost implements FormHost {
     const listeners: ((m: FromWindow) => void)[] = [];
     const early: FromWindow[] = [];
     let sessionBlocked = false, closed = false;
+    const parent = o.modal ? this.ownerLabel() : undefined;
+    const slot = { label, visible: true };
+    this.order.push(slot);
     const w = { apply: () => ch.post('vb:to', { t: 'blocked', blocked: sessionBlocked || this.openDialogs > 0 } satisfies ToWindow) };
     this.entries.set(s.key, {
       hello: () => ch.open(['vb:snapshot', s]),
@@ -123,6 +144,7 @@ export class TauriFormHost implements FormHost {
       closed = true;
       this.entries.delete(s.key);
       this.forms.delete(w);
+      this.order = this.order.filter(x => x !== slot);
       if (this.forms.size === 0) this.cascade = 0;
       this.closers.delete(close);
       await this.destroy(label, handle);
@@ -132,13 +154,15 @@ export class TauriFormHost implements FormHost {
     const handle = this.glue.createWindow(label, {
       ...windowOptionsFor(s.form, this.cascade++),
       url: `form.html#${encodeURIComponent(s.key)}`, title: String(s.form.props.Caption ?? s.form.name),
-      decorations: false, visible: false, alwaysOnTop: o.modal, focus: true,
+      decorations: false, visible: false, alwaysOnTop: false, focus: true,
+      ...(parent ? { parent } : {}),
     });
     try { await handle; } catch (e) { await close(); throw e; }
     if (this.openDialogs > 0) w.apply();
     return {
       send: m => {
         if (closed) return;
+        if (m.t === 'show' || m.t === 'hide') slot.visible = m.t === 'show';
         if (m.t === 'blocked') { sessionBlocked = m.blocked; w.apply(); } else ch.post('vb:to', m);
       },
       onMessage: cb => { listeners.push(cb); for (const m of early.splice(0)) cb(m); },
@@ -148,7 +172,7 @@ export class TauriFormHost implements FormHost {
 
   /** One dialog window; every form window is blocked while any dialog is open. */
   private async dialog(spec: DialogSpec, cancelled: number | string): Promise<number | string> {
-    const n = ++this.dialogSeq;
+    const n = ++dialogSeq;
     const key = `dialog-${n}`, label = `vbdialog-${n}`;
     await this.ensureListening();
     if (this.openDialogs++ === 0) for (const f of this.forms) f.apply();
@@ -164,7 +188,7 @@ export class TauriFormHost implements FormHost {
     const handle = this.glue.createWindow(label, {
       url: `form.html#${key}`, title, width: 420, height: 160, center: true,
       resizable: false, minimizable: false, maximizable: false,
-      decorations: false, visible: false, alwaysOnTop: true, focus: true,
+      decorations: false, visible: false, alwaysOnTop: false, focus: true, parent: this.ownerLabel(),
     });
     try {
       return await Promise.race([result, handle.then(() => result)]);

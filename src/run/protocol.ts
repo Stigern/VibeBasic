@@ -11,6 +11,7 @@ export interface FormSnapshot {
 
 export type ToWindow =
   | { t: 'patch'; id: string | 'form'; props: Record<string, PropValue> }
+  | { t: 'patches'; items: { id: string | 'form'; props: Record<string, PropValue> }[] }   // one flush, several controls
   | { t: 'focus'; id: string }
   | { t: 'show' } | { t: 'hide' }
   | { t: 'blocked'; blocked: boolean }            // modal form or break mode: ignore input
