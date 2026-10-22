@@ -24,3 +24,7 @@ log = "0.4"
 tauri = { version = "2.12.5", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2.8.3"
+
+# macOS 27: dyld rejects stripped proc-macro dylibs ("mis-aligned LINKEDIT string pool")
+[profile.release]
+strip = "none"
