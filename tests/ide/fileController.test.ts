@@ -113,7 +113,7 @@ test('exit closes the window only after confirmation', async () => {
 
 test('title', () => {
   fc.updateTitle();
-  expect(backend.setWindowTitle).toHaveBeenCalledWith('Project1 - VibeBasic [design]');
+  expect(backend.setWindowTitle).toHaveBeenCalledWith(`Project1 - VibeBasic ${__APP_VERSION__} [design]`);
 });
 
 test('New Project applies Require Variable Declaration to Form1', async () => {
