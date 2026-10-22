@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import type { Backend, FileFilter } from './backend';
 import type { ChatMessage } from '../ai/types';
+import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
 
 const PROJECT_FILTER: FileFilter = { name: 'VibeBasic Project', extensions: ['vbb'] };
 
@@ -102,8 +103,22 @@ export class TauriBackend implements Backend {
     return call<string[]>('ai_list_models', { baseUrl, apiKey });
   }
 
-  aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string): Promise<string> {
-    return call<string>('ai_chat', { baseUrl, apiKey, model, messages, reasoningEffort: reasoningEffort || null });
+  async aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string, opts?: AiChatOptions): Promise<string> {
+    const args = { baseUrl, apiKey, model, messages, reasoningEffort: reasoningEffort || null };
+    if (!opts?.onDelta && !opts?.signal) return call<string>('ai_chat', args);
+    if (opts.signal?.aborted) throw new Error('cancelled');
+    const streamId = `ai-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    const unlisten = await listen<{ id: string; kind: AiDeltaKind; text: string }>('ai:delta', e => {
+      if (e.payload.id === streamId) opts.onDelta?.(e.payload.kind, e.payload.text);
+    });
+    const onAbort = () => { void invoke('ai_cancel', { streamId }).catch(() => {}); };
+    opts.signal?.addEventListener('abort', onAbort);
+    try {
+      return await call<string>('ai_chat', { ...args, streamId });
+    } finally {
+      opts.signal?.removeEventListener('abort', onAbort);
+      unlisten();
+    }
   }
 
   onQuitRequested(handler: () => void): void {

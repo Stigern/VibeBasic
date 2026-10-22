@@ -6,10 +6,12 @@ mod make_app;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    .manage(ai::AiStreams::default())
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       ai::ai_list_models,
       ai::ai_chat,
+      ai::ai_cancel,
       files::read_text_file,
       files::write_text_file,
       files::read_binary_file,
