@@ -15,7 +15,9 @@ import { emitTo, listen } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { getBackend, type DirListing, type NetApi, type Volume } from '../backend/backend';
 import type { FontValue } from '../model/types';
+import { VBRuntimeError } from '../lang/errors';
 import { runFileDialog, type FileDialogRequest } from './commonDialog';
+import { mediaRef, type OpenedMedia } from './mediaSource';
 import type { DialogSpec } from './dialogSpec';
 import type { RuntimeErrorInfo } from './errorDialog';
 import type { FormHost, FormWindow } from './formHost';
@@ -239,6 +241,26 @@ export class TauriFormHost implements FormHost {
   listDir(path: string): Promise<DirListing> { return getBackend().listDir(path); }
   /** Inet and Winsock: the sockets and requests belong to this (main) window, which runs the program. */
   net(): NetApi { return getBackend(); }
+
+  /** MMControl / MediaPlayer: the backend keeps the path under a token; the form window reads the bytes by it (media_read). */
+  async openMedia(fullPath: string, mime: string): Promise<OpenedMedia> {
+    const b = getBackend();
+    if (!b.mediaOpen || !b.mediaRead) throw new VBRuntimeError(53);
+    let token: string;
+    try {
+      token = await b.mediaOpen(fullPath);
+    } catch (e) {
+      const text = e instanceof Error ? e.message : String(e);
+      if (text.startsWith('53|')) throw new VBRuntimeError(53);
+      throw new Error(text.replace(/^\d+\|/, ''));   // too big: the controls report that they cannot play it
+    }
+    let open = true;
+    return {
+      src: mediaRef(token, mime),
+      bytes: () => b.mediaRead!(token),
+      release: () => { if (open) { open = false; void b.mediaClose?.(token).catch(() => {}); } },
+    };
+  }
 
   async colorDialog(o: { color: number }): Promise<number | null> {
     const r = String(await this.dialog({ kind: 'color', ...o }, ''));

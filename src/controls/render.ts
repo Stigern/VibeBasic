@@ -40,6 +40,8 @@ export interface ControlView {
   childHostFor?(child: ControlDef): HTMLElement;
   /** Applies changed properties (design-time and run-time ones, e.g. Caption, Value, ListIndex). Never mutates the ControlDef. */
   update(changed: Record<string, PropValue>): void;
+  /** The control goes away (see Renderer.destroy). */
+  destroy?(): void;
 }
 
 export interface FormSurface {
@@ -63,6 +65,8 @@ export interface FormSurface {
   /** Design-mode grid dots; gridX/gridY in twips. Ignored in run mode. */
   setGrid(o: { showGrid?: boolean; gridX?: number; gridY?: number }): void;
   setActive(active: boolean): void;
+  /** The form closes: every control frees what it holds (Renderer.destroy). */
+  dispose(): void;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -137,6 +141,8 @@ export interface Renderer {
   bg?(): string | null;
   /** Shown at run time although the type is invisible at run time (the Agent's layer of characters). */
   overlay?: boolean;
+  /** The control is removed or its form closes: free what build() made outside the DOM (Blob URLs ...). */
+  destroy?(): void;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -616,43 +622,60 @@ function richTextBox(c: Ctx): Renderer {
       c.setInput(input);
     },
     patch(k) {
-      let rewrote = false;
-      if (has(k, 'Runs') && c.str('Runs') !== '' && encodeRuns(readRuns(input)) !== c.str('Runs')) {   // text with formats (set by code, or the echo of the user's own typing)
-        const runs = decodeRuns(c.str('Runs'));
-        if (runs) { write(runs); rewrote = true; }
-      }
-      if (has(k, 'Text') && (input.textContent ?? '') !== c.str('Text')) {
-        input.textContent = c.str('Text');
-        pending = null;
-        rewrote = true;
-      }
-      if (has(k, 'ScrollBars')) {
-        const sb = c.num('ScrollBars');
-        input.style.overflowX = sb === 1 || sb === 3 ? 'scroll' : 'hidden';
-        input.style.overflowY = sb === 2 || sb === 3 ? 'scroll' : 'hidden';
-        input.style.whiteSpace = sb === 1 || sb === 3 ? 'pre' : 'pre-wrap';
-      }
-      if (has(k, 'Locked', 'Enabled')) input.contentEditable = c.mode === 'run' && !c.bool('Locked') && c.bool('Enabled') ? 'true' : 'false';
-      if (k === null) return;
-      if (rewrote) { cur = { start: clamp(cur.start), length: 0 }; cur.length = clamp(cur.start + cur.length) - cur.start; }
-      if (k.has('SelStart') || k.has('SelLength')) {
-        const start = clamp(c.num('SelStart')), len = clamp(start + c.num('SelLength')) - start;
-        if (start !== cur.start || len !== cur.length) { cur = { start, length: len }; pending = null; rewrote = true; }
-      }
-      if (rewrote) show();
-      // a format set at an insertion point waits for the next typing (a format of a selection arrives as Runs)
-      if (cur.length === 0) {
-        const want: Record<string, string | number | boolean> = {};
-        const eff = effective();
-        for (const [prop, key] of RTF_PROPS) {
-          if (!k.has(prop)) continue;
-          const v = key === 'bold' || key === 'italic' || key === 'underline' ? c.bool(prop) : key === 'fontName' ? c.str(prop) : c.num(prop);
-          if (v !== eff[key]) want[key] = v;
-        }
-        if (Object.keys(want).length) pending = { ...pending, ...want as RtfPatch };
+      // RtfOps: the program's text and selection changes in order (see ControlObject.send); each is applied as if it came alone
+      const ops = k?.has('RtfOps') ? c.props.RtfOps : undefined;
+      if (!Array.isArray(ops)) { apply(k); return; }
+      delete c.props.RtfOps;
+      const rest = new Set(k);
+      rest.delete('RtfOps');
+      if (rest.size) apply(rest);
+      for (const o of ops) {
+        let op: Record<string, PropValue>;
+        try { op = JSON.parse(String(o)) as Record<string, PropValue>; } catch { continue; }
+        if (!op || typeof op !== 'object') continue;
+        Object.assign(c.props, op);
+        apply(new Set(Object.keys(op)));
       }
     },
   };
+
+  function apply(k: Keys): void {
+    let rewrote = false;
+    if (has(k, 'Runs') && c.str('Runs') !== '' && encodeRuns(readRuns(input)) !== c.str('Runs')) {   // text with formats (set by code, or the echo of the user's own typing)
+      const runs = decodeRuns(c.str('Runs'));
+      if (runs) { write(runs); rewrote = true; }
+    }
+    if (has(k, 'Text') && (input.textContent ?? '') !== c.str('Text')) {
+      input.textContent = c.str('Text');
+      pending = null;
+      rewrote = true;
+    }
+    if (has(k, 'ScrollBars')) {
+      const sb = c.num('ScrollBars');
+      input.style.overflowX = sb === 1 || sb === 3 ? 'scroll' : 'hidden';
+      input.style.overflowY = sb === 2 || sb === 3 ? 'scroll' : 'hidden';
+      input.style.whiteSpace = sb === 1 || sb === 3 ? 'pre' : 'pre-wrap';
+    }
+    if (has(k, 'Locked', 'Enabled')) input.contentEditable = c.mode === 'run' && !c.bool('Locked') && c.bool('Enabled') ? 'true' : 'false';
+    if (k === null) return;
+    if (rewrote) { cur = { start: clamp(cur.start), length: 0 }; cur.length = clamp(cur.start + cur.length) - cur.start; }
+    if (k.has('SelStart') || k.has('SelLength')) {
+      const start = clamp(c.num('SelStart')), len = clamp(start + c.num('SelLength')) - start;
+      if (start !== cur.start || len !== cur.length) { cur = { start, length: len }; pending = null; rewrote = true; }
+    }
+    if (rewrote) show();
+    // a format set at an insertion point waits for the next typing (a format of a selection arrives as Runs)
+    if (cur.length === 0) {
+      const want: Record<string, string | number | boolean> = {};
+      const eff = effective();
+      for (const [prop, key] of RTF_PROPS) {
+        if (!k.has(prop)) continue;
+        const v = key === 'bold' || key === 'italic' || key === 'underline' ? c.bool(prop) : key === 'fontName' ? c.str(prop) : c.num(prop);
+        if (v !== eff[key]) want[key] = v;
+      }
+      if (Object.keys(want).length) pending = { ...pending, ...want as RtfPatch };
+    }
+  }
 }
 
 function progressBar(c: Ctx): Renderer {
@@ -1448,7 +1471,7 @@ export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetRe
   const defaults = DEFAULTS[def.type];
   const el = h('div', { class: `vb-ctl vb-${def.type} vb-${mode}`, dataset: { controlId: def.id } });
   const props: Record<string, PropValue> = { ...def.props };
-  const view: ControlView = { el, update };
+  const view: ControlView = { el, update, destroy: () => r.destroy?.() };
 
   const get = (n: string): PropValue => (props[n] !== undefined ? props[n] : defaults[n] ?? null);
   const ctx: Ctx = {
@@ -1764,7 +1787,7 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
         for (const d of defs.values()) if (d.parentId !== null && doomed.has(d.parentId) && !doomed.has(d.id)) { doomed.add(d.id); grew = true; }
       }
       const hadImages = [...doomed].some(d => defs.get(d)?.type === 'ImageList');
-      for (const d of doomed) { views.get(d)?.el.remove(); views.delete(d); defs.delete(d); }
+      for (const d of doomed) { views.get(d)?.destroy?.(); views.get(d)?.el.remove(); views.delete(d); defs.delete(d); }
       order = order.filter(o => !doomed.has(o));
       if (hadImages) imagesChanged();
     },
@@ -1782,6 +1805,7 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
       active = a;
       titleBar?.classList.toggle('inactive', !a);
     },
+    dispose() { for (const v of views.values()) v.destroy?.(); },
   };
 
   layoutChrome();

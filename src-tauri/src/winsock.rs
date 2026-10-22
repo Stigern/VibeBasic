@@ -110,21 +110,56 @@ struct Inner {
   /// Accepted by a listener, waiting for Accept: request id -> stream (oldest first).
   pending: Vec<(u32, TcpStream)>,
   next_request: u32,
+  /// Sockets still opening (Connect, Listen, Bind, Accept): id -> ticket. Close and close_all take the entry away, so a socket that
+  /// finishes opening after them is dropped instead of living on with nobody to close it.
+  opening: HashMap<u32, u64>,
+  next_ticket: u64,
 }
 
 /// Every open socket of the app (one running program at a time).
 #[derive(Default, Clone)]
 pub struct Sockets(Arc<Mutex<Inner>>);
 
+/// The socket was closed (Close, or the end of the program) while it was still opening.
+fn cancelled() -> String {
+  "10053|Connection is aborted due to timeout or other failure".to_string()
+}
+
 impl Sockets {
-  fn put(&self, id: u32, s: Sock) {
-    if let Some(old) = self.0.lock().unwrap().socks.insert(id, s) {
+  /// Socket `id` starts opening; the ticket is what `put` checks.
+  fn begin(&self, id: u32) -> u64 {
+    let mut g = self.0.lock().unwrap();
+    g.next_ticket += 1;
+    let t = g.next_ticket;
+    g.opening.insert(id, t);
+    t
+  }
+
+  /// Opening is over: the socket is kept, unless Close or close_all came in between (then it is stopped and dropped).
+  fn put(&self, id: u32, ticket: u64, s: Sock) -> Result<(), String> {
+    let mut g = self.0.lock().unwrap();
+    if g.opening.get(&id) != Some(&ticket) {
+      drop(g);
+      s.stop();
+      return Err(cancelled());
+    }
+    g.opening.remove(&id);
+    if let Some(old) = g.socks.insert(id, s) {
       old.stop();
+    }
+    Ok(())
+  }
+
+  /// Opening failed: forget the ticket (only when it is still this one's).
+  fn abandon(&self, id: u32, ticket: u64) {
+    let mut g = self.0.lock().unwrap();
+    if g.opening.get(&id) == Some(&ticket) {
+      g.opening.remove(&id);
     }
   }
 
   /// Splits a connected stream: the reader task sends Data / Close / Error, the writer half stays here for SendData.
-  fn start_tcp(&self, id: u32, stream: TcpStream, emit: Emit) -> SocketInfo {
+  fn start_tcp(&self, id: u32, ticket: u64, stream: TcpStream, emit: Emit) -> Result<SocketInfo, String> {
     let local = stream.local_addr().ok();
     let peer = stream.peer_addr().ok();
     let info = SocketInfo {
@@ -152,24 +187,47 @@ impl Sockets {
         }
       }
     });
-    self.put(id, Sock::Tcp { writer: Arc::new(tokio::sync::Mutex::new(wr)), reader: task.abort_handle() });
-    info
+    // the reader task is aborted (and the write half dropped) when the socket was closed meanwhile: the connection closes
+    self.put(id, ticket, Sock::Tcp { writer: Arc::new(tokio::sync::Mutex::new(wr)), reader: task.abort_handle() })?;
+    Ok(info)
+  }
+
+  /// Runs `open` with a ticket for `id`; an error forgets the ticket.
+  async fn opening<T>(&self, id: u32, open: impl std::future::Future<Output = Result<T, String>>) -> Result<(u64, T), String> {
+    let ticket = self.begin(id);
+    match open.await {
+      Ok(v) => Ok((ticket, v)),
+      Err(e) => {
+        self.abandon(id, ticket);
+        Err(e)
+      }
+    }
   }
 
   pub async fn connect(&self, id: u32, host: &str, port: u16, emit: Emit) -> Result<SocketInfo, String> {
-    let addrs = resolve(host, port).await?;
-    let stream = tokio::time::timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS), TcpStream::connect(&addrs[..]))
-      .await
-      .map_err(|_| "10060|Connection is aborted due to timeout or other failure".to_string())?
-      .map_err(io_err)?;
+    let (ticket, stream) = self
+      .opening(id, async {
+        let addrs = resolve(host, port).await?;
+        tokio::time::timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS), TcpStream::connect(&addrs[..]))
+          .await
+          .map_err(|_| "10060|Connection is aborted due to timeout or other failure".to_string())?
+          .map_err(io_err)
+      })
+      .await?;
     let _ = stream.set_nodelay(true);
-    Ok(self.start_tcp(id, stream, emit))
+    self.start_tcp(id, ticket, stream, emit)
   }
 
   /// Listen: every incoming connection is kept as a request until Accept takes it (ConnectionRequest event).
   pub async fn listen(&self, id: u32, port: u16, ip: &str, emit: Emit) -> Result<SocketInfo, String> {
-    let l = TcpListener::bind((bind_ip(ip), port)).await.map_err(io_err)?;
-    let local = l.local_addr().map_err(io_err)?;
+    let (ticket, l) = self.opening(id, async { TcpListener::bind((bind_ip(ip), port)).await.map_err(io_err) }).await?;
+    let local = match l.local_addr() {
+      Ok(a) => a,
+      Err(e) => {
+        self.abandon(id, ticket);
+        return Err(io_err(e));
+      }
+    };
     let me = self.clone();
     let task = tokio::spawn(async move {
       loop {
@@ -195,26 +253,40 @@ impl Sockets {
         }
       }
     });
-    self.put(id, Sock::Listener { task: task.abort_handle() });
+    self.put(id, ticket, Sock::Listener { task: task.abort_handle() })?;
     Ok(SocketInfo { local_ip: local.ip().to_string(), local_port: local.port(), remote_ip: String::new(), remote_port: 0 })
   }
 
   /// Accept requestID: the waiting connection becomes socket `id`.
   pub async fn accept(&self, id: u32, request_id: u32, emit: Emit) -> Result<SocketInfo, String> {
+    let ticket = self.begin(id);
     let stream = {
       let mut g = self.0.lock().unwrap();
-      let i = g.pending.iter().position(|(r, _)| *r == request_id).ok_or_else(bad_state)?;
-      g.pending.remove(i).1
+      match g.pending.iter().position(|(r, _)| *r == request_id) {
+        Some(i) => g.pending.remove(i).1,
+        None => {
+          drop(g);
+          self.abandon(id, ticket);
+          return Err(bad_state());
+        }
+      }
     };
     let _ = stream.set_nodelay(true);
-    Ok(self.start_tcp(id, stream, emit))
+    self.start_tcp(id, ticket, stream, emit)
   }
 
   /// UDP: binds the local port (0: any free one); each datagram that arrives is a Data event.
   pub async fn bind_udp(&self, id: u32, port: u16, ip: &str, emit: Emit) -> Result<SocketInfo, String> {
-    let s = Arc::new(UdpSocket::bind((bind_ip(ip), port)).await.map_err(io_err)?);
+    let (ticket, s) = self.opening(id, async { UdpSocket::bind((bind_ip(ip), port)).await.map_err(io_err) }).await?;
+    let s = Arc::new(s);
     let _ = s.set_broadcast(true);
-    let local = s.local_addr().map_err(io_err)?;
+    let local = match s.local_addr() {
+      Ok(a) => a,
+      Err(e) => {
+        self.abandon(id, ticket);
+        return Err(io_err(e));
+      }
+    };
     let rs = s.clone();
     let task = tokio::spawn(async move {
       let mut buf = vec![0u8; 65536];
@@ -231,7 +303,7 @@ impl Sockets {
         }
       }
     });
-    self.put(id, Sock::Udp { sock: s, reader: task.abort_handle() });
+    self.put(id, ticket, Sock::Udp { sock: s, reader: task.abort_handle() })?;
     Ok(SocketInfo { local_ip: local.ip().to_string(), local_port: local.port(), remote_ip: String::new(), remote_port: 0 })
   }
 
@@ -256,19 +328,23 @@ impl Sockets {
     }
   }
 
+  /// Close: also a socket that is still opening (it is dropped when it gets there).
   pub fn close(&self, id: u32) {
-    if let Some(s) = self.0.lock().unwrap().socks.remove(&id) {
+    let mut g = self.0.lock().unwrap();
+    g.opening.remove(&id);
+    if let Some(s) = g.socks.remove(&id) {
       s.stop();
     }
   }
 
-  /// The end of the program: every socket and waiting connection is closed.
+  /// The end of the program: every socket and waiting connection is closed, and every socket still opening is dropped when it opens.
   pub fn close_all(&self) {
     let mut g = self.0.lock().unwrap();
     for (_, s) in g.socks.drain() {
       s.stop();
     }
     g.pending.clear();
+    g.opening.clear();
   }
 }
 
@@ -394,6 +470,37 @@ mod tests {
     // nobody listens any more
     assert!(s.connect(3, "127.0.0.1", info.local_port, emit.clone()).await.unwrap_err().starts_with("10061|"));
     assert!(s.connect(4, "", 80, emit).await.unwrap_err().starts_with("11001|"));
+  }
+
+  /// Close (or End) while Connect is still under way: the connection that opens later is dropped, not kept with nobody to close it.
+  #[tokio::test(flavor = "multi_thread")]
+  async fn close_during_connect_or_accept_drops_the_late_socket() {
+    let s = Sockets::default();
+    let (emit, mut rx) = collector();
+    let server = s.listen(1, 0, "127.0.0.1", emit.clone()).await.unwrap();
+    // a connect whose TCP handshake is held back: ticket taken, then Close, then the connection opens
+    let ticket = s.begin(2);
+    s.close(2);
+    let stream = TcpStream::connect(("127.0.0.1", server.local_port)).await.unwrap();
+    assert!(s.start_tcp(2, ticket, stream, emit.clone()).unwrap_err().starts_with("10053|"));
+    assert!(!s.0.lock().unwrap().socks.contains_key(&2));
+    // the server sees the dropped connection close
+    let SockEvent::ConnectionRequest { request_id, .. } = next(&mut rx).await else { panic!("no ConnectionRequest") };
+    s.accept(3, request_id, emit.clone()).await.unwrap();
+    assert_eq!(next(&mut rx).await, SockEvent::Close { id: 3 });
+    // End (close_all) during a connect: the same
+    let ticket = s.begin(4);
+    s.close_all();
+    let stream = TcpStream::connect(("127.0.0.1", server.local_port)).await;
+    if let Ok(stream) = stream {
+      assert!(s.start_tcp(4, ticket, stream, emit.clone()).is_err());
+    }
+    assert!(s.0.lock().unwrap().socks.is_empty());
+    assert!(s.0.lock().unwrap().opening.is_empty());
+    // a real connect after Close of an earlier one on another id still works
+    let l = s.listen(5, 0, "127.0.0.1", emit.clone()).await.unwrap();
+    assert!(s.connect(6, "127.0.0.1", l.local_port, emit).await.is_ok());
+    s.close_all();
   }
 
   #[tokio::test(flavor = "multi_thread")]

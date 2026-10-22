@@ -28,6 +28,7 @@ import type { NetSession } from '../net';
 import { decodeChart, encodeChart, resizeChart, sampleChart, MAX_CHART_COLS, MAX_CHART_ROWS, type ChartModel } from '../../model/chart';
 import { chartFromArray, chartToArray, ChartPlot } from './chartObjects';
 import { InetControl, WebBrowserControl, WinsockControl, type NetControl, type NetHost } from './netControls';
+import type { OpenedMedia } from '../mediaSource';
 import type { RichControl, RichHost } from './richControl';
 import { MciControl, MediaPlayerControl } from './mediaControls';
 import { AgentControl } from './agentControl';
@@ -53,9 +54,12 @@ export interface RunContext {
   net?(): NetSession;
   /** Raises an event of the control from outside code (a socket's DataArrival ...); resolves when the handler has finished. */
   raise?(ctrl: ControlObject, event: string, args: VBRef[]): Promise<void>;
-  /** MMControl, MediaPlayer: a file of the program (relative to App.Path); error 53 when it cannot be read. */
-  readFile?(path: string): Promise<Uint8Array>;
+  /** MMControl, MediaPlayer: opens a file of the program (relative to App.Path) for the window to play; error 53 when it is missing. */
+  openMedia?(path: string, mime: string): Promise<OpenedMedia>;
 }
+
+/** RichTextBox: the props that go to the window in order, as RtfOps (see send). */
+const RTF_OP_PROPS = new Set(['Text', 'Runs', 'SelStart', 'SelLength', 'SelBold', 'SelItalic', 'SelUnderline', 'SelColor', 'SelFontName', 'SelFontSize']);
 
 /** The properties that name an ImageList of the form (`Toolbar1.ImageList = ImageList1`). */
 const IMAGE_REFS = new Set(['ImageList', 'Icons', 'SmallIcons']);
@@ -216,9 +220,9 @@ export class ControlObject implements VBObject {
       props: this.props, name: this.def.name,
       raise: (event, args) => this.ctx.raise?.(this, event, args) ?? Promise.resolve(),
       send: p => this.send(p),
-      readFile: path => {
-        const r = this.ctx.readFile;
-        return r ? r(path) : Promise.reject(new VBRuntimeError(53));
+      openMedia: (path, mime) => {
+        const o = this.ctx.openMedia;
+        return o ? o(path, mime) : Promise.reject(new VBRuntimeError(53));
       },
     };
   }
@@ -962,9 +966,17 @@ export class ControlObject implements VBObject {
 
   private send(props: Record<string, PropValue>): void {
     if (this.def.type === 'Timer' || this.def.type === 'CommonDialog' || this.def.type === 'Inet' || this.def.type === 'Winsock') return;   // no view
+    if (this.def.type === 'RichTextBox') {
+      // a RichTextBox applies each change at the selection as it is then (SelStart = 3: SelBold = True: SelStart = 9 must not merge
+      // into one patch): the text and selection changes queue as an ordered list (RtfOps) that the window replays, so a loop that
+      // colours many words still goes out in the normal coalesced flush
+      const op: Record<string, PropValue> = {}, rest: Record<string, PropValue> = {};
+      for (const [k, v] of Object.entries(props)) (RTF_OP_PROPS.has(k) ? op : rest)[k] = v;
+      if (Object.keys(rest).length) this.queue.set(this.formKey, this.def.id, rest);
+      if (Object.keys(op).length) this.queue.set(this.formKey, this.def.id, { RtfOps: [JSON.stringify(op)] });
+      return;
+    }
     this.queue.set(this.formKey, this.def.id, props);
-    // a RichTextBox applies each change at the selection as it is now: no merging of SelStart = 3 and SelBold = True into one patch
-    if (this.def.type === 'RichTextBox') this.queue.flush();
   }
 
   // -- SSTab ------------------------------------------------------------------------------------------------

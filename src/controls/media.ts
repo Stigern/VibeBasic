@@ -1,51 +1,68 @@
 // MMControl (MCI32.OCX) and MediaPlayer (MSDXM.OCX) renderers.
 //
-// Both hold an HTML media element at run time that follows the props `MediaSrc` (the file as a data URL; it becomes a Blob URL here)
-// and `MediaCmd` (model/media.ts MediaCommand: play or stand at a position). The run session keeps the real state by its own clock,
-// so nothing is reported back except the user's clicks: `vbuseraction` { verb, pos? } on inputEl (formWindow.ts sends it as the
-// state `UserAction`). An MMControl showing video (AVIVideo) puts the picture in a small Win98 window over the form, as MCI's
-// default display window does.
+// Both hold an HTML media element at run time that follows the props `MediaSrc` (which file: a token this window reads the file by,
+// or a Blob URL of the run session's document; see run/mediaSource.ts) and `MediaCmd` (model/media.ts MediaCommand: play or stand
+// at a position). The run session keeps the real state by its own clock; reported back are the user's clicks (`vbuseraction`
+// { verb, pos? } on inputEl) and the element's end and length (`vbmediastate` { verb: 'ended' } / { verb: 'duration', ms }, so a
+// Play whose length was unknown still ends); formWindow.ts sends both as the state `UserAction`. An MMControl showing video
+// (AVIVideo) puts the picture in a small Win98 window over the form, as MCI's default display window does.
 
 import { MCI_BUTTONS } from '../model/controls';
+import { mediaElementUrl } from '../run/mediaSource';
 import { decodeMediaCmd, mciEnabled, type MciButton, type MediaCommand } from '../model/media';
 import { h } from '../ui98/dom';
 import type { Ctx, Renderer } from './render';
 
 // -- the media element ---------------------------------------------------------------------------------------------
 
-function blobUrl(dataUrl: string): string {
-  const m = /^data:([^;,]*)(;base64)?,(.*)$/s.exec(dataUrl);
-  if (!m || !m[2] || typeof URL.createObjectURL !== 'function') return dataUrl;
-  const bin = atob(m[3]);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return URL.createObjectURL(new Blob([bytes], { type: m[1] || 'application/octet-stream' }));
-}
-
-/** Keeps `el` in step with MediaSrc / MediaCmd. */
-export function mediaFollower(el: HTMLMediaElement) {
-  let url: string | null = null, src = '', seq = -1, to = -1;
+/**
+ * Keeps `el` in step with MediaSrc / MediaCmd. `report` gets the element's end and its length ({ verb: 'ended' } / { verb: 'duration',
+ * ms }). The Blob URL made here for a file is revoked on the next file and on `destroy` (the control rebuilt or removed, the form closed).
+ */
+export function mediaFollower(el: HTMLMediaElement, report: (d: Record<string, string | number>) => void = () => {}) {
+  let own: string | null = null, src = '', seq = -1, to = -1, gen = 0, ready = false;
+  let last: MediaCommand | null = null;
+  const drop = () => { if (own) URL.revokeObjectURL(own); own = null; };
   el.addEventListener('timeupdate', () => { if (to >= 0 && el.currentTime * 1000 >= to && !el.paused) el.pause(); });
+  el.addEventListener('ended', () => { if (src) report({ verb: 'ended' }); });
+  const length = () => { const d = el.duration; if (src && Number.isFinite(d) && d > 0) report({ verb: 'duration', ms: Math.round(d * 1000) }); };
+  el.addEventListener('durationchange', length);
+  el.addEventListener('loadedmetadata', length);
+  const apply = (c: MediaCommand): void => {
+    el.volume = Math.max(0, Math.min(1, c.volume));
+    el.muted = c.muted;
+    const want = c.pos / 1000;
+    if (Math.abs((el.currentTime || 0) - want) > 0.3) { try { el.currentTime = want; } catch { /* not seekable yet */ } }
+    if (c.playing) { const p = el.play() as Promise<void> | undefined; p?.catch?.(() => { /* a format the WebView cannot play */ }); }
+    else if (!el.paused) el.pause();
+  };
   return {
     src(data: string): void {
       if (data === src) return;
       src = data;
       seq = -1;
-      if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
-      url = data ? blobUrl(data) : null;
-      if (url) el.src = url; else el.removeAttribute('src');
+      const g = ++gen;
+      ready = false;
+      drop();
+      if (!data) { el.removeAttribute('src'); return; }
+      void mediaElementUrl(data).then(r => {
+        if (g !== gen) { if (r?.own) URL.revokeObjectURL(r.url); return; }   // another file (or none) meanwhile
+        if (!r) { el.removeAttribute('src'); return; }
+        if (r.own) own = r.url;
+        el.src = r.url;
+        ready = true;
+        if (last) { seq = last.seq; to = last.to; apply(last); }   // a command that came while the file was loading
+      });
     },
     cmd(c: MediaCommand | null): void {
       if (!c || c.seq === seq || !src) return;
+      last = c;
+      if (!ready) return;   // the file is still loading: applied when it is there
       seq = c.seq; to = c.to;
-      el.volume = Math.max(0, Math.min(1, c.volume));
-      el.muted = c.muted;
-      const want = c.pos / 1000;
-      if (Math.abs((el.currentTime || 0) - want) > 0.3) { try { el.currentTime = want; } catch { /* not seekable yet */ } }
-      if (c.playing) { const p = el.play() as Promise<void> | undefined; p?.catch?.(() => { /* a format the WebView cannot play */ }); }
-      else if (!el.paused) el.pause();
+      apply(c);
     },
     get current(): number { return (el.currentTime || 0) * 1000; },
+    destroy(): void { gen++; ready = false; drop(); el.removeAttribute('src'); },
   };
 }
 
@@ -115,7 +132,8 @@ export function mmControl(c: Ctx): Renderer {
       c.setInput(root);
       media = h('video', { class: 'vb-mci-media', playsinline: true }) as HTMLVideoElement;
       c.el.appendChild(media);
-      follow = mediaFollower(media);
+      follow?.destroy();
+      follow = mediaFollower(media, d => c.fire('vbmediastate', d));
       root.addEventListener('click', e => {
         const b = (e.target as Element).closest<HTMLElement>('.mci-btn');
         if (b && !b.classList.contains('off') && root.getAttribute('aria-disabled') !== 'true') c.fire('vbuseraction', { verb: b.dataset.button });
@@ -132,6 +150,7 @@ export function mmControl(c: Ctx): Renderer {
         else showPopup(cmd);
       }
     },
+    destroy() { follow?.destroy(); follow = null; popup?.remove(); popup = null; },
     bg: () => null,
   };
 }
@@ -200,7 +219,8 @@ export function mediaPlayer(c: Ctx): Renderer {
         c.setInput(root);
         const video = h('video', { class: 'mp-video', playsinline: true }) as HTMLVideoElement;
         display.appendChild(video);
-        follow = mediaFollower(video);
+        follow?.destroy();   // a rebuild (ShowControls ...): the old element's Blob URL goes
+        follow = mediaFollower(video, d => c.fire('vbmediastate', d));
         follow.src(c.str('MediaSrc'));
         video.addEventListener('timeupdate', tick);
         root.addEventListener('click', e => {
@@ -227,6 +247,7 @@ export function mediaPlayer(c: Ctx): Renderer {
       }
       if (k?.has('Mute')) layout();
     },
+    destroy() { follow?.destroy(); follow = null; },
     bg: () => null,
   };
 }

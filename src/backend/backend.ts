@@ -66,6 +66,12 @@ export interface Backend extends NetApi {
   readTextFile(path: string): Promise<string>;
   writeTextFile(path: string, text: string): Promise<void>;
   readBinaryFile(path: string): Promise<Uint8Array>;
+  /** MMControl / MediaPlayer (Tauri only): opens a file for a form window to read by the token; rejects "53|..." (missing) or
+   *  "296|..." (too big). */
+  mediaOpen?(path: string): Promise<string>;
+  /** The bytes of an opened media file. */
+  mediaRead?(token: string): Promise<Uint8Array>;
+  mediaClose?(token: string): Promise<void>;
   /** Small JSON settings (IDE options ...) kept in localStorage under `vibebasic.settings:<key>`. Null when absent. */
   loadSettings<T>(key: string): Promise<T | null>;
   saveSettings(key: string, v: unknown): Promise<void>;

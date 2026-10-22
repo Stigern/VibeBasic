@@ -52,7 +52,10 @@ export function webBrowser(c: Ctx): Renderer {
         if (!waiting || !frame) return;
         const seq = waiting;
         waiting = 0;
-        c.fire('vbwebload', { seq });
+        // the title only when the page is readable from here (it never is for another site); the run session falls back to the URL
+        let title = '';
+        try { title = frame.contentDocument?.title ?? ''; } catch { /* another origin */ }
+        c.fire('vbwebload', { seq, title });
       });
       c.el.replaceChildren(frame);
       c.setInput(frame);

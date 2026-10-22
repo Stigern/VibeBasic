@@ -3,6 +3,8 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { newControl, newForm, newProject } from '../../src/model/controls';
 import type { ControlType, PropValue } from '../../src/model/types';
 import { InlineFormHost } from '../../src/run/inlineFormHost';
+import { MEDIA_TOKEN, mediaElementUrl, mediaRef, setMediaLoader, type OpenedMedia } from '../../src/run/mediaSource';
+import type { FormSnapshot, ToWindow } from '../../src/run/protocol';
 import { RunSession } from '../../src/run/session';
 
 // A fake audio element: jsdom has no media playback. Every media element reports 1.5 s of metadata when loaded; play() and pause() work.
@@ -30,7 +32,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function run(code: string, controls: [Exclude<ControlType, 'Form'>, string, Record<string, PropValue>?][]) {
+async function run(code: string, controls: [Exclude<ControlType, 'Form'>, string, Record<string, PropValue>?][], host: InlineFormHost = new InlineFormHost(container)) {
   const p = newProject();
   p.forms = [newForm('Form1', code)];
   p.startupForm = 'Form1';
@@ -42,7 +44,7 @@ async function run(code: string, controls: [Exclude<ControlType, 'Form'>, string
   p.components = ['MCI32.OCX', 'MSDXM.OCX', 'AGENTCTL.DLL'];
   const out: string[] = [];
   const files: string[] = [];
-  session = new RunSession(p, new InlineFormHost(container), {
+  session = new RunSession(p, host, {
     debugPrint: t => { out.push(t); }, onBreak: async () => 'end', onEnded: () => {},
     readFile: async path => { files.push(path); if (!/\.(wav|mp3)$/.test(path)) throw new Error('ENOENT'); return new Uint8Array([82, 73, 70, 70]); },
     appPath: '/app',
@@ -134,4 +136,90 @@ Private Sub Form_Load()
 End Sub
 `, [['Agent', 'Agent1']]);
   expect(r.out).toEqual(['TrueThe character "clippy.acs" cannot be found. The known characters are Robby and Wizard', ' 0 Wizard']);
+});
+
+test('MMControl: Play with Notify and Wait still ends when the length is unknown: the window reports its element\'s end', async () => {
+  Object.defineProperty(media, 'duration', { configurable: true, get: () => NaN });   // the probe cannot tell the length
+  const r = await run(`
+Private Sub Form_Load()
+  MMControl1.FileName = "long.wav"
+  MMControl1.Command = "Open"
+  Debug.Print "len"; MMControl1.Length
+End Sub
+Private Sub Command1_Click()
+  MMControl1.Notify = True
+  MMControl1.Wait = True
+  MMControl1.Command = "Play"
+  Debug.Print "after wait"; MMControl1.Mode = mciModeStop
+End Sub
+Private Sub MMControl1_Done(NotifyCode As Integer)
+  Debug.Print "done"; NotifyCode
+End Sub
+`, [['MMControl', 'MMControl1'], ['CommandButton', 'Command1']]);
+  expect(r.out).toEqual(['len 0 ']);
+  container.querySelector<HTMLElement>('.vb-btn')!.click();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(r.out).toEqual(['len 0 ']);   // no length, no end timer: only the element can tell
+  container.querySelector('video')!.dispatchEvent(new Event('ended'));
+  await vi.advanceTimersByTimeAsync(50);
+  expect(r.out.slice(1)).toEqual(['done 1 ', 'after waitTrue']);
+});
+
+test('MediaPlayer: FileName with AutoStart plays (and returns); a length the window learns later lets the clock reach EndOfStream', async () => {
+  Object.defineProperty(media, 'duration', { configurable: true, get: () => NaN });
+  const r = await run(`
+Private Sub Form_Load()
+  MediaPlayer1.FileName = "song.mp3"
+  Debug.Print "state"; MediaPlayer1.PlayState
+End Sub
+Private Sub MediaPlayer1_EndOfStream(ByVal Result As Long)
+  Debug.Print "end"; MediaPlayer1.Duration
+End Sub
+`, [['MediaPlayer', 'MediaPlayer1']]);
+  expect(r.out).toEqual(['state 2 ']);   // mpPlaying
+  Object.defineProperty(media, 'duration', { configurable: true, get: () => 2 });
+  container.querySelector('video')!.dispatchEvent(new Event('durationchange'));
+  await vi.advanceTimersByTimeAsync(2100);
+  expect(r.out.slice(1)).toEqual(['end 2 ']);
+});
+
+test('a form window of its own gets a token for the file, never the bytes; the file is closed with the control', async () => {
+  const opened: string[] = [], released: string[] = [], patches: string[] = [];
+  class TokenHost extends InlineFormHost {
+    async openMedia(fullPath: string, mime: string): Promise<OpenedMedia> {
+      opened.push(fullPath);
+      return { src: mediaRef('t1', mime), bytes: async () => new Uint8Array([82, 73, 70, 70]), release: () => { released.push(fullPath); } };
+    }
+    override async openForm(s: FormSnapshot, o: { modal: boolean }) {
+      const w = await super.openForm(s, o);
+      return { ...w, send: (m: ToWindow) => { patches.push(JSON.stringify(m)); w.send(m); } };
+    }
+  }
+  const url = vi.fn((b: Blob) => `blob:test/${b.size}`), revoke = vi.fn();
+  Object.assign(URL, { createObjectURL: url, revokeObjectURL: revoke });
+  setMediaLoader(async token => (token === 't1' ? new Uint8Array([1, 2, 3]) : Promise.reject(new Error('no'))));
+  try {
+    const r = await run(`
+Private Sub Form_Load()
+  MMControl1.FileName = "tada.wav"
+  MMControl1.Command = "Open"
+  Debug.Print MMControl1.Length; MMControl1.Error
+End Sub
+Private Sub Command1_Click()
+  MMControl1.Command = "Close"
+End Sub
+`, [['MMControl', 'MMControl1'], ['CommandButton', 'Command1']], new TokenHost(container));
+    expect(opened).toEqual(['/app/tada.wav']);
+    expect(r.out).toEqual([' 1500  0 ']);
+    expect(container.querySelector('video')!.getAttribute('src')).toBe('blob:test/3');   // the window read the file by the token
+    container.querySelector<HTMLElement>('.vb-btn')!.click();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(released).toEqual(['/app/tada.wav']);
+    expect(revoke).toHaveBeenCalledWith('blob:test/3');
+    expect(patches.join('\n')).not.toContain('data:');
+    expect(await mediaElementUrl(`${MEDIA_TOKEN}nope:audio/wav`)).toBeNull();
+  } finally {
+    setMediaLoader(null);
+    Object.assign(URL, { createObjectURL: undefined, revokeObjectURL: undefined });
+  }
 });

@@ -146,7 +146,7 @@ export class WinsockControl implements NetControl {
     this.state = SCK.connecting;
     this.early = [];
     void net.ready.then(() => net.api.sockConnect(id, host, port)).then(info => {
-      if (gen !== this.gen) return;
+      if (gen !== this.gen) { this.dropStale(net, id); return; }   // Close (or End) came while connecting: the late connection goes too
       this.took(info);
       p.RemotePort = info.remotePort;
       this.state = SCK.connected;
@@ -170,7 +170,7 @@ export class WinsockControl implements NetControl {
     try {
       await net.ready;
       const info = await net.api.sockListen(id, Number(this.h.props.LocalPort), '');
-      if (gen === this.gen) this.took(info);
+      if (gen === this.gen) this.took(info); else this.dropStale(net, id);
     } catch (e) {
       if (gen === this.gen) this.reset();
       throw netError(e);
@@ -189,7 +189,7 @@ export class WinsockControl implements NetControl {
     try {
       await net.ready;
       const info = await net.api.sockAccept(id, requestId);
-      if (gen !== this.gen) return Empty;
+      if (gen !== this.gen) { this.dropStale(net, id); return Empty; }
       this.took(info);
       this.h.props.RemotePort = info.remotePort;
       this.state = SCK.connected;
@@ -216,7 +216,7 @@ export class WinsockControl implements NetControl {
     try {
       await net.ready;
       const info = await net.api.sockBind(id, Number(this.h.props.LocalPort), ip);
-      if (gen === this.gen) this.took(info);
+      if (gen === this.gen) this.took(info); else this.dropStale(net, id);
     } catch (e) {
       if (gen === this.gen) this.reset();
       throw netError(e);
@@ -282,6 +282,12 @@ export class WinsockControl implements NetControl {
       }
     }
     this.reset();
+  }
+
+  /** A socket that opened after this control was closed (Close or End during Connect, Accept, Listen or Bind): nobody owns it. */
+  private dropStale(net: NetSession, id: number): void {
+    net.release(id);
+    void net.api.sockClose(id).catch(() => {});
   }
 
   private reset(): void {
@@ -529,17 +535,6 @@ export function webUrl(url: string): string {
   return `http://${u}`;
 }
 
-const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
-/** The <title> of an HTML page, '' when there is none. */
-export function htmlTitle(html: string): string {
-  const m = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
-  if (!m) return '';
-  return m[1].replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, (all, e: string) => {
-    if (e[0] === '#') { const n = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : Number(e.slice(1)); return Number.isFinite(n) ? String.fromCodePoint(n) : all; }
-    return ENTITIES[e.toLowerCase()] ?? all;
-  }).replace(/\s+/g, ' ').trim();
-}
-
 const failed = (method: string): VBRuntimeError => new VBRuntimeError(-2147467259, `Method '${method}' of object 'IWebBrowser2' failed`);
 
 export class WebBrowserControl implements NetControl {
@@ -606,37 +601,24 @@ export class WebBrowserControl implements NetControl {
     this.h.send({ Src: url, NavSeq: this.seq });
   }
 
-  /** The window: the page of NavSeq `Loaded` is there. */
+  /** The window: the page of NavSeq `Loaded` is there (`LoadedTitle`: its title, when the window could read it). */
   applyState(props: Record<string, PropValue>): void {
     if (!('Loaded' in props) || Number(props.Loaded) !== this.waiting || this.waiting === 0) return;
     this.waiting = 0;
-    void this.completed(String(this.h.props.LocationURL ?? ''), this.refreshing);
+    void this.completed(String(this.h.props.LocationURL ?? ''), this.refreshing, typeof props.LoadedTitle === 'string' ? props.LoadedTitle : '');
   }
 
-  private async completed(url: string, refresh: boolean): Promise<void> {
+  /** LocationName is the page's title only when the window could read it (never for another site's page): else the URL. The page is
+   *  never fetched a second time to find its title (that would repeat a GET with side effects, without the frame's cookies). */
+  private async completed(url: string, refresh: boolean, title: string): Promise<void> {
     const p = this.h.props, seq = this.seq;
     p.Busy = false;
     if (!refresh) await this.h.raise('NavigateComplete2', [new VBRef(this.h.self), new VBRef(url)]);
     await this.h.raise('DocumentComplete', [new VBRef(this.h.self), new VBRef(url)]);
     await this.h.raise('StatusTextChange', [new VBRef('Done')]);
-    if (refresh) return;
-    const title = await this.fetchTitle(url);
-    if (seq !== this.seq) return;
-    p.LocationName = title || url;
+    if (refresh || seq !== this.seq) return;
+    p.LocationName = title.trim() || url;
     await this.h.raise('TitleChange', [new VBRef(p.LocationName)]);
-  }
-
-  /** The page's title, read once more through the backend: the iframe of another site cannot be looked into. */
-  private async fetchTitle(url: string): Promise<string> {
-    if (!/^https?:/i.test(url)) return '';
-    try {
-      const net = this.h.net();
-      await net.ready;
-      const r = await net.api.inetRequest({ id: net.requestId(), url, method: 'GET', headers: '', body: new Uint8Array(0), timeoutSecs: 15, userName: '', password: '' });
-      return htmlTitle(bodyText(r.body, r.headers));
-    } catch {
-      return '';
-    }
   }
 
   dispose(): void { this.waiting = 0; }

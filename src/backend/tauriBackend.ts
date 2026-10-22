@@ -121,6 +121,13 @@ export class TauriBackend implements Backend {
     return r instanceof Uint8Array ? r : new Uint8Array(r);
   }
 
+  mediaOpen(path: string): Promise<string> { return call<string>('media_open', { path }); }
+  async mediaRead(token: string): Promise<Uint8Array> {
+    const r = await call<number[] | ArrayBuffer | Uint8Array>('media_read', { token });
+    return r instanceof Uint8Array ? r : new Uint8Array(r);
+  }
+  async mediaClose(token: string): Promise<void> { await call<void>('media_close', { token }); }
+
   async loadSettings<T>(key: string): Promise<T | null> {
     try {
       const raw = localStorage.getItem('vibebasic.settings:' + key);

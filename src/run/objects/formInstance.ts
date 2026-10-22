@@ -9,6 +9,7 @@ import { formScaleSize } from '../../controls/render';
 import { CONTROL_TYPES, getPropDef } from '../../model/controls';
 import type { ControlDef, FormDef, PictureRef, PropValue } from '../../model/types';
 import type { FormHost, FormWindow } from '../formHost';
+import { localMedia } from '../mediaSource';
 import type { PatchQueue } from '../patchQueue';
 import type { NetSession } from '../net';
 import type { FormSnapshot, FromWindow, ToWindow } from '../protocol';
@@ -37,6 +38,8 @@ export interface FormSession {
   net(): NetSession;
   /** MMControl and MediaPlayer: a file of the program (relative to App.Path); error 53 when it cannot be read. */
   readFile(path: string): Promise<Uint8Array>;
+  /** The full path of a file of the program. */
+  resolvePath(path: string): string;
 }
 
 interface FormState {
@@ -84,7 +87,12 @@ export class FormInstance implements VBObject {
       controlByName: n => this.state().byName.get(lc(n)),
       files: { listVolumes: () => this.s.formHost.listVolumes(), listDir: p => this.s.formHost.listDir(p), defaultPath: this.s.appPath },
       net: () => this.s.net(),
-      readFile: p => this.s.readFile(p),
+      // MMControl / MediaPlayer: a window of its own reads the file itself (FormHost.openMedia); the inline host shares this document
+      openMedia: async (p, mime) => {
+        const host = this.s.formHost;
+        if (host.openMedia) return host.openMedia(this.s.resolvePath(p), mime);
+        return localMedia(await this.s.readFile(p), mime);
+      },
       raise: (c, event, args) => (this.st?.byId.get(c.def.id) === c && !this.s.ended ? this.fireControl(c, event, args) : Promise.resolve()),
     };
     // Load Name(i) / Unload Name(i): elements of controls without a view (Winsock, Inet, Timer ...) only

@@ -1,9 +1,10 @@
 // Run-time behaviour of MMControl (MCI32.OCX) and MediaPlayer (MSDXM.OCX).
 //
-// A file is read through the backend (RichHost.readFile, the same call as LoadPicture), probed for its length by a media element of
-// this (main) window, and handed to the form window as a data URL (`MediaSrc`), where an HTML media element plays it. The position is
-// kept here by a clock (MediaClock), so Mode, Position, Done and EndOfStream do not depend on the window: the window's element only
-// follows the state it gets as `MediaCmd`.
+// A file is opened through the form host (RichHost.openMedia, see mediaSource.ts), probed for its length by a media element of this
+// (main) window, and named to the form window by `MediaSrc` (a token the window reads the file by, or a Blob URL of this document),
+// where an HTML media element plays it: the bytes never go through a patch. The position is kept here by a clock (MediaClock), so
+// Mode, Position, Done and EndOfStream do not depend on the window: the window's element follows the state it gets as `MediaCmd`, and
+// reports only its end and, when the probe could not tell, its length (UserAction 'ended' / 'duration'), so a Play always ends.
 
 import { VBRuntimeError } from '../../lang/errors';
 import { Empty, VBRef, coerce, toBool, toStr, type VBValue } from '../../lang/values';
@@ -13,15 +14,10 @@ import {
   type MediaCommand,
 } from '../../model/media';
 import type { PropValue } from '../../model/types';
+import type { OpenedMedia } from '../mediaSource';
 import { Timers, userAction, type RichControl, type RichHost } from './richControl';
 
 const num = (v: VBValue): number => coerce(v, 'Long') as number;
-
-function dataUrl(bytes: Uint8Array, mime: string): string {
-  let s = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return `data:${mime};base64,${btoa(s)}`;
-}
 
 /** The length (ms) of a media file, read by a media element of this window; 0 when it does not tell in time. Rejects when the
  *  WebView cannot play the file. */
@@ -45,13 +41,23 @@ export function probeLength(src: string, video: boolean, timeoutMs = 4000): Prom
   });
 }
 
-/** Reads and probes `path`; the window's URL, the length and whether it has pictures. Throws 53 (missing) or 'cannot play'. */
-async function openMedia(h: RichHost, path: string, video: boolean): Promise<{ src: string; length: number }> {
-  const bytes = await h.readFile(path);
+/** Opens and probes `path`: the open file (its `src` for the window) and the length. Throws 53 (missing) or 'cannot play'. */
+async function openMedia(h: RichHost, path: string, video: boolean): Promise<{ media: OpenedMedia; length: number }> {
   const mime = mediaMime(path);
-  const src = dataUrl(bytes, mime);
-  const probe = typeof URL.createObjectURL === 'function' ? URL.createObjectURL(new Blob([bytes as BlobPart], { type: mime })) : src;
-  try { return { src, length: await probeLength(probe, video) }; } finally { if (probe !== src) URL.revokeObjectURL(probe); }
+  const media = await h.openMedia(path, mime);
+  try {
+    let probe = media.src, own = false;
+    if (!probe.startsWith('blob:') && !probe.startsWith('data:')) {   // a token of the window: read the bytes here once for the probe
+      const bytes = await media.bytes();
+      if (typeof URL.createObjectURL !== 'function') throw new Error('cannot play');
+      probe = URL.createObjectURL(new Blob([bytes as BlobPart], { type: mime }));
+      own = true;
+    }
+    try { return { media, length: await probeLength(probe, video) }; } finally { if (own) URL.revokeObjectURL(probe); }
+  } catch (e) {
+    media.release();
+    throw e;
+  }
 }
 
 /** The playback state: a position that runs on while playing, up to `to` or the end. */
@@ -65,6 +71,8 @@ export class MediaClock {
   status = '';
   /** Called when playing reaches its end (`to` or the length). */
   onEnd: (() => void) | null = null;
+  /** Closes the open file (its Blob URL or token). */
+  private release: (() => void) | null = null;
   private at = 0;
   private since: number | null = null;
   private stopAt = -1;
@@ -81,8 +89,10 @@ export class MediaClock {
     return Math.min(this.end(), this.at + (Date.now() - this.since));
   }
 
-  load(src: string, length: number, video: boolean, title: string): void {
+  load(src: string, length: number, video: boolean, title: string, release: (() => void) | null = null): void {
     this.halt();
+    this.free();
+    this.release = release;
     Object.assign(this, { src, length, video, title, at: 0, stopAt: -1 });
     this.send({ MediaSrc: src, MediaCmd: this.cmd() });
   }
@@ -90,6 +100,23 @@ export class MediaClock {
     this.halt();
     Object.assign(this, { src: '', length: 0, at: 0, stopAt: -1 });
     this.send({ MediaSrc: '', MediaCmd: this.cmd() });
+    this.free();
+  }
+  /** The window's element ended: the end, unless the clock got there first (or is not playing). */
+  windowEnded(): void {
+    if (this.since === null) return;
+    this.timers.clear(this.timer);
+    this.reachedEnd();
+  }
+  /** The window's element knows the length the probe could not tell: the clock can reach the end now. */
+  windowLength(ms: number): void {
+    if (this.length || !(ms > 0)) return;
+    this.length = Math.round(ms);
+    if (this.since !== null) {
+      this.timers.clear(this.timer);
+      const left = this.end() - this.position();
+      this.timer = Number.isFinite(left) ? this.timers.after(left, () => this.reachedEnd()) : null;
+    }
   }
   /** Plays from `from` (ms; the current position when undefined) to `to` (-1: the end). */
   play(from?: number, to = -1): void {
@@ -116,8 +143,9 @@ export class MediaClock {
   }
   /** Re-sends the state (volume, mute, status changed). */
   sync(): void { this.send({ MediaCmd: this.cmd() }); }
-  dispose(): void { this.halt(); }
+  dispose(): void { this.halt(); this.free(); }
 
+  private free(): void { const r = this.release; this.release = null; r?.(); }
   private clamp(ms: number): number { return Math.max(0, this.length ? Math.min(this.length, ms) : ms); }
   private halt(): void {
     if (this.since !== null) this.at = this.position();
@@ -139,6 +167,13 @@ export class MediaClock {
     };
     return encodeMediaCmd(c);
   }
+}
+
+/** The window's own reports about its media element (not clicks): true when `a` was one. */
+function windowReport(clock: MediaClock, a: Record<string, string | number>): boolean {
+  if (a.verb === 'ended') { clock.windowEnded(); return true; }
+  if (a.verb === 'duration') { clock.windowLength(Number(a.ms)); return true; }
+  return false;
 }
 
 // -- MMControl -----------------------------------------------------------------------------------------------------
@@ -194,7 +229,9 @@ export class MciControl implements RichControl {
 
   applyState(props: Record<string, PropValue>): void {
     const a = userAction(props);
-    if (a && MCI_BUTTONS.includes(String(a.verb) as typeof MCI_BUTTONS[number])) void this.button(String(a.verb));
+    if (!a) return;
+    if (windowReport(this.clock, a)) return;
+    if (MCI_BUTTONS.includes(String(a.verb) as typeof MCI_BUTTONS[number])) void this.button(String(a.verb));
   }
 
   /** A click on a button: <Button>Click(Cancel), the command, then <Button>Completed(Errorcode). */
@@ -265,14 +302,14 @@ export class MciControl implements RichControl {
     const path = String(p.FileName ?? '');
     if (!path) { this.setError(275); return; }
     const video = mciIsVideo(String(p.DeviceType ?? ''), path);
-    let r: { src: string; length: number };
+    let r: { media: OpenedMedia; length: number };
     try {
       r = await openMedia(this.h, path, video);
     } catch (e) {
       this.setError(e instanceof VBRuntimeError ? 275 : 296);
       return;
     }
-    this.clock.load(r.src, r.length, video, fileTitle(path));
+    this.clock.load(r.media.src, r.length, video, fileTitle(path), r.media.release);
     this.view({ Mode: MCI_MODE.stop, CanPlay: true, CanStep: video, CanEject: false, CanRecord: false, Tracks: 1, Track: 1, UsesWindows: video, DeviceID: MciControl.nextId++ });
     this.startStatus();
   }
@@ -411,7 +448,7 @@ export class MediaPlayerControl implements RichControl {
 
   applyState(props: Record<string, PropValue>): void {
     const a = userAction(props);
-    if (!a) return;
+    if (!a || windowReport(this.clock, a)) return;
     const len = this.clock.length;
     switch (a.verb) {
       case 'play': void this.play(); break;
@@ -435,7 +472,7 @@ export class MediaPlayerControl implements RichControl {
       this.p.ReadyState = 1;
       this.clock.status = 'Opening...';
       this.clock.sync();
-      let r: { src: string; length: number };
+      let r: { media: OpenedMedia; length: number };
       try {
         r = await openMedia(this.h, path, isVideoFile(path));
       } catch (e) {
@@ -446,12 +483,12 @@ export class MediaPlayerControl implements RichControl {
         this.clock.sync();
         throw e instanceof VBRuntimeError ? e : new VBRuntimeError(5, 'Cannot play this file');
       }
-      if (gen !== this.gen) return;
-      this.clock.load(r.src, r.length, isVideoFile(path), fileTitle(path));
+      if (gen !== this.gen) { r.media.release(); return; }
+      this.clock.load(r.media.src, r.length, isVideoFile(path), fileTitle(path), r.media.release);
       this.p.ReadyState = 4;
       this.clock.status = 'Ready';
       this.clock.sync();
-      if (this.p.AutoStart !== false) await this.play();
+      if (this.p.AutoStart !== false) await this.start();   // not play(): that waits for this very opening
     };
     const p = run();
     this.opening = p.catch(() => undefined).finally(() => { if (this.opening === p) this.opening = null; });
@@ -460,6 +497,9 @@ export class MediaPlayerControl implements RichControl {
 
   private async play(): Promise<void> {
     if (this.opening) await this.opening;
+    await this.start();
+  }
+  private async start(): Promise<void> {
     if (!this.clock.open) return;
     if (this.clock.playing) return;
     if (Number(this.p.PlayState) === MP_STATE.stopped) this.loops = 0;

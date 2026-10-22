@@ -219,13 +219,18 @@ export class RunSession implements Host, FormSession {
 
   /** A file of the program (relative paths are from App.Path; VB code builds Windows paths: App.Path & "\pic.bmp"). 53 when it cannot be read. */
   async readFile(path: string): Promise<Uint8Array> {
-    const p = path.replace(/\\/g, '/');
-    const full = p.startsWith('/') || /^[A-Za-z]:\//.test(p) ? p : `${this.cb.appPath.replace(/\\/g, '/').replace(/\/+$/, '')}/${p}`;
+    const full = this.resolvePath(path);
     try {
       return await this.cb.readFile(full);
     } catch {
       throw new VBRuntimeError(53);
     }
+  }
+
+  /** The full path of a file of the program (relative paths are from App.Path). */
+  resolvePath(path: string): string {
+    const p = path.replace(/\\/g, '/');
+    return p.startsWith('/') || /^[A-Za-z]:\//.test(p) ? p : `${this.cb.appPath.replace(/\\/g, '/').replace(/\/+$/, '')}/${p}`;
   }
 
   async loadPicture(path: string): Promise<VBValue> {

@@ -34,6 +34,11 @@ function keyAscii(e: KeyboardEvent): number | null {
   return e.key.length === 1 ? e.key.charCodeAt(0) : null;
 }
 
+/** One RichTextBox change of an RtfOps list (props in the order the program set them). */
+function parseOp(o: string): Props {
+  try { const v: unknown = JSON.parse(o); return v && typeof v === 'object' ? v as Props : {}; } catch { return {}; }
+}
+
 function isTextField(el: EventTarget | null): el is HTMLInputElement | HTMLTextAreaElement {
   return el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && (el.type === 'text' || el.type === 'password'));
 }
@@ -80,7 +85,9 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   }
   /** Applies props to the mirror and the DOM (also keeps text typed by the user across rebuilds of the control). */
   function apply(id: string, props: Props): void {
-    Object.assign(propsOf(id), props);
+    const { RtfOps: ops, ...plain } = props;
+    Object.assign(propsOf(id), plain);
+    if (Array.isArray(ops)) for (const o of ops) Object.assign(propsOf(id), parseOp(o));   // the mirror ends where the replay ends
     surface.update(id, props);
     if (id === 'form') return;
     if ('TabIndex' in props) { computeTabOrder(); for (const k of defs.keys()) retab(k); } else retab(id);
@@ -242,12 +249,18 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   custom('vbpointselect', (id, d) => emit(id, 'PointSelected', [Number(d.series), Number(d.point), Number(d.flags), 0]));
   // MMControl / MediaPlayer buttons, Agent characters clicked or dragged: the run session decides what happens (and which events follow)
   custom('vbuseraction', (id, d) => send({ t: 'state', id, props: { UserAction: JSON.stringify(d) } }));
+  // MMControl / MediaPlayer: the media element ended or knows its length (reported even while the form is blocked or disabled: a
+  // Play with Wait or Notify waits for it)
+  on<CustomEvent>('vbmediastate', e => {
+    const tg = targetOf(e.target);
+    if (tg?.def && e.target === viewOf(tg.id)?.inputEl) send({ t: 'state', id: tg.id, props: { UserAction: JSON.stringify(e.detail) } });
+  });
   custom('vbdirclick', (id, d) => emit(id, 'Click', [], { ListIndex: Number(d.index) }));
   custom('vbdiropen', (id, d) => emit(id, 'Change', [], { Path: String(d.path), List: [], ListIndex: -1 }));
   // WebBrowser: the page of a Navigate has loaded (reported even while the form is blocked: the run session raises the events)
   on<CustomEvent>('vbwebload', e => {
     const tg = targetOf(e.target);
-    if (tg?.def?.type === 'WebBrowser') send({ t: 'state', id: tg.id, props: { Loaded: Number(e.detail.seq) } });
+    if (tg?.def?.type === 'WebBrowser') send({ t: 'state', id: tg.id, props: { Loaded: Number(e.detail.seq), LoadedTitle: String(e.detail.title ?? '') } });
   });
   custom('vbcolclick', (id, d) => emit(id, 'ColumnClick', [Number(d.index)]));
   custom('vbcellclick', (id, d) => {
@@ -391,6 +404,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
       observer?.disconnect();
       // an open combo list holds a document listener until it is closed
       for (const v of surface.views.values()) v.inputEl?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      surface.dispose();   // media Blob URLs
       surface.el.remove();
     },
   };

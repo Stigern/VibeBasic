@@ -4,7 +4,7 @@ import type { Backend, InetRequest, InetResponse, NetApi, SocketEvent, SocketInf
 import { newControl, newForm, newProject } from '../../src/model/controls';
 import type { ControlType, PropValue } from '../../src/model/types';
 import { InlineFormHost } from '../../src/run/inlineFormHost';
-import { htmlTitle, stringBytes, webUrl } from '../../src/run/objects/netControls';
+import { stringBytes, webUrl } from '../../src/run/objects/netControls';
 import { frameSandbox } from '../../src/controls/webBrowser';
 import { RunSession } from '../../src/run/session';
 
@@ -136,6 +136,28 @@ End Sub`, [['Winsock', 'Winsock1']]);
   expect(net.calls).toContain(`close ${id}`);
 });
 
+test('Winsock: Close while Connect is still under way closes the connection that opens later (no ghost client)', async () => {
+  const net = new FakeNet();
+  let opened: (i: SocketInfo) => void = () => {};
+  net.sockConnect = async (id, host, port) => { net.calls.push(`connect ${id} ${host}:${port}`); return new Promise<SocketInfo>(r => { opened = r; }); };
+  const { out } = await run(`
+Private Sub Form_Load()
+  Winsock1.Connect "slow.test", 7000
+  Winsock1.Close
+  Debug.Print "state " & Winsock1.State
+End Sub
+Private Sub Winsock1_Connect()
+  Debug.Print "connected"
+End Sub`, [['Winsock', 'Winsock1']], net);
+  const id = net.idOf('connect');
+  const closes = () => net.calls.filter(c => c === `close ${id}`).length;
+  const before = closes();
+  opened(net.info({ remotePort: 7000 }));   // the slow connect completes after Close
+  await settle();
+  expect(out).toEqual(['state 0']);
+  expect(closes()).toBe(before + 1);
+});
+
 test('Winsock server: Close and Accept requestID in ConnectionRequest; a control array takes several clients; End closes them', async () => {
   const one = await run(`
 Private Sub Form_Load()
@@ -195,7 +217,6 @@ End Sub`, [['Winsock', 'sck', {}, 0]]);
 
 test('WebBrowser: Navigate raises BeforeNavigate2 (Cancel honoured), sets LocationURL and raises NavigateComplete2 and TitleChange', async () => {
   const net = new FakeNet();
-  net.pages['http://example.test/page'] = { body: '<html><head><title>Hei &amp; velkommen</title></head></html>' };
   const { out, p } = await run(`
 Private Sub Form_Load()
   WebBrowser1.Navigate "http://blocked.test/"
@@ -222,8 +243,9 @@ End Sub`, [['WebBrowser', 'WebBrowser1']], net);
     'before http://blocked.test/', 'after cancel []',
     'before http://example.test/page', 'url http://example.test/page busy True',
     'complete http://example.test/page True busy False',
-    'title Hei & velkommen = Hei & velkommen',
+    'title http://example.test/page = http://example.test/page',   // another site's title cannot be read: the URL
   ]);
+  expect(net.calls.some(c => c.includes('example.test'))).toBe(false);   // the page is not fetched a second time for its title
 });
 
 test('WebBrowser URLs: http, https and about:blank only, never the app itself', () => {
@@ -233,5 +255,4 @@ test('WebBrowser URLs: http, https and about:blank only, never the app itself', 
   for (const bad of ['javascript:alert(1)', 'tauri://localhost/index.html', 'file:///etc/passwd', 'data:text/html,x', 'http://localhost:1420/x']) {
     expect(frameSandbox(bad, 'http://localhost:1420')).toBeNull();
   }
-  expect(htmlTitle('<TITLE>\n A &lt;b&gt; &#229;</TITLE>')).toBe('A <b> å');
 });

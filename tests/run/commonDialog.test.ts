@@ -14,7 +14,12 @@ afterEach(() => { if (session && session.state !== 'ended') session.end(); sessi
 const tick = () => new Promise(r => setTimeout(r, 0));
 
 type FakeBackend = Pick<Backend, 'showOpenDialog' | 'showSaveDialog'>;
+const sent: string[] = [];   // the kinds of the messages to the form windows
 class TestHost extends InlineFormHost {
+  override async openForm(...a: Parameters<InlineFormHost['openForm']>) {
+    const w = await super.openForm(...a);
+    return { ...w, send: (m: Parameters<typeof w.send>[0]) => { sent.push(m.t); w.send(m); } };
+  }
   override async colorDialog(): Promise<number | null> { return 0xff; }
   override async fontDialog(): Promise<FontValue | null> { return { name: 'Arial', size: 14, bold: true, italic: false, underline: true }; }
 }
@@ -136,4 +141,30 @@ test('RichTextBox: typing raises Change with the plain Text; moving the selectio
   rtf.dispatchEvent(new Event('input', { bubbles: true }));
   for (let i = 0; i < 10; i++) await tick();
   expect(r.out).toEqual(['S:1,2', 'S:4,0', 'C:abcd']);
+});
+
+test('RichTextBox: many Sel* writes in one procedure go out in one patch and are replayed in order', async () => {
+  const r = await run([
+    'Private Sub Command1_Click()',
+    '  Dim i As Integer',
+    '  RichTextBox1.Text = "aa bb cc dd ee"',
+    '  For i = 0 To 4',
+    '    RichTextBox1.SelStart = i * 3',
+    '    RichTextBox1.SelLength = 2',
+    '    RichTextBox1.SelColor = 255',
+    '    RichTextBox1.SelBold = (i Mod 2 = 0)',
+    '  Next',
+    '  RichTextBox1.SelStart = 14',
+    '  RichTextBox1.SelLength = 0',
+    '  RichTextBox1.SelItalic = True',   // waits at the caret for the next typing
+    'End Sub'].join('\n'), [['RichTextBox', 'RichTextBox1'], ['CommandButton', 'Command1']], { showOpenDialog: vi.fn(), showSaveDialog: vi.fn() });
+  sent.length = 0;
+  r.el('Command1').querySelector('button')!.click();
+  for (let i = 0; i < 30; i++) await tick();
+  expect(sent.filter(t => t === 'patch' || t === 'patches')).toHaveLength(1);
+  const rtf = r.el('RichTextBox1').querySelector<HTMLElement>('.vb-rtf')!;
+  expect(rtf.textContent).toBe('aa bb cc dd ee');
+  const bold = [...rtf.querySelectorAll<HTMLElement>('span')].filter(s => s.dataset.vbBold === '1').map(s => s.textContent);
+  expect(bold).toEqual(['aa', 'cc', 'ee']);
+  expect(r.out).toEqual([]);
 });

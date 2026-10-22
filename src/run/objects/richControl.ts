@@ -5,6 +5,7 @@
 import type { OutSlot } from '../../lang/host';
 import type { VBRef, VBValue } from '../../lang/values';
 import type { PropValue } from '../../model/types';
+import type { OpenedMedia } from '../mediaSource';
 
 export interface RichHost {
   readonly props: Record<string, PropValue>;
@@ -12,8 +13,9 @@ export interface RichHost {
   raise(event: string, args: VBRef[]): Promise<void>;
   /** Sends `props` (already stored in `props`) to the window. */
   send(props: Record<string, PropValue>): void;
-  /** A file of the program, relative to App.Path; rejects with error 53. */
-  readFile(path: string): Promise<Uint8Array>;
+  /** Opens a file of the program (relative to App.Path) for the window to play: never the bytes in a patch (see mediaSource.ts).
+   *  Rejects with error 53 when it is missing, or an Error when it cannot be played (too big). */
+  openMedia(path: string, mime: string): Promise<OpenedMedia>;
 }
 
 export interface RichControl {
