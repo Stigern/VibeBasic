@@ -447,3 +447,15 @@ Kontrakten for `Host` og `VBObject` er dokumentert i `src/lang/host.ts`. Det vik
 - **Break mens verten venter:** `requestPause` kan ikke avbryte en handler som venter på verten, for eksempel `Form2.Show vbModal`. Break-knappen virker først når det modale skjemaet lukkes. Dokumenter dette i runController, eller løs det der.
 - **Mål ytelsen i oppgave 7:** `setTimeout(0)` i driveren og i `doEvents` kan bli strupet til 4 ms i WKWebView. Mål `For i = 1 To 100000 … DoEvents` i ekte Tauri. Er det tregt, bytt til `MessageChannel` og tidsbasert slicing.
 - **Avvik å nevne i brukerdokumentasjon:** `Resume Next` etter en feil i hodet på en For-, Select- eller With-setning hopper over hele setningen.
+
+## Arvet fra plan 02 (gjennomgang, 2026-10-22)
+
+- **Tabulatorrekkefølge:** i kjøremodus følger den DOM- og z-rekkefølgen. VB6 bruker TabIndex. Skjemavinduet må sette `tabindex` etter TabIndex, eller sortere.
+- **Tekst skrevet i kjøremodus** ligger bare i DOM, ikke i props. Ombygging av en kontroll må ta vare på den, eller så må speilet være autoritativt.
+- **AutoSize** på Label, Image og PictureBox endrer ikke Width og Height i modellen. Tilstanden må speile målt størrelse hvis programmet leser Width.
+- **ComboBox lekker:** den legger en `mousedown`-lytter på dokumentet mens listen er åpen. Fjernes kontrollen i kjøring, lekker lytteren. Rydd opp i `removeControl`.
+- **Kontrollsignaler i kjøremodus:**
+  - OptionButton er ikke gjensidig utelukkende i DOM, så kjøringen må oppdatere søsknene.
+  - Rullefelt og combo sender `input`/`change` på `inputEl`, og combo sender i tillegg en `vbselect` CustomEvent. Verdien til rullefeltet ligger i `inputEl.dataset.value`.
+- **Kodevinduet** trenger et skrivebeskyttet compartment i `run` og `break`. Det legges til i `codeWindow.ts`.
+- **Hendelser:** `IdeState.on()` returnerer en avmeldingsfunksjon, og `setProject` sender `'closeWindows'` før prosjektet byttes.
