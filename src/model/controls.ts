@@ -85,6 +85,13 @@ const scrollProps = (): PropDef[] => [
 ];
 const scrollEvents = (): EventDef[] => [evChange(), ev('Scroll'), ...evFocus(), ...evKeys()];
 
+/** Shape and Line have no focus and no Enabled/TabIndex: Left Top Width Height Visible Tag. */
+const geoCommon = (): PropDef[] => [int('Left', 0), int('Top', 0), int('Width', 0), int('Height', 0), bool('Visible', true), str('Tag')];
+const BORDER_STYLES = ['Transparent', 'Solid', 'Dash', 'Dot', 'Dash-Dot', 'Dash-Dot-Dot', 'Inside Solid'];
+const SHAPE_ONLY_METHODS = (): MethodDef[] => [
+  { name: 'Move', params: MOVE }, { name: 'Refresh', params: '' }, { name: 'ZOrder', params: '[Position]' },
+];
+
 const def = (d: Omit<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'> &
   Partial<Pick<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'>>): ControlTypeDef =>
   ({ methods: baseMethods(), isContainer: false, invisibleAtRuntime: false, ...d });
@@ -262,12 +269,60 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
     events: [evClick(), ...evMouse()],
   }),
+
+  Shape: def({
+    type: 'Shape', namePrefix: 'Shape', defaultWidth: 1215, defaultHeight: 1215, toolboxTooltip: 'Shape',
+    defaultEvent: '', defaultMember: null,
+    props: [
+      ...geoCommon(),
+      en('Shape', 0, ['Rectangle', 'Square', 'Oval', 'Circle', 'Rounded Rectangle', 'Rounded Square']),
+      en('BackStyle', 0, ['Transparent', 'Opaque']), color('BackColor', BTN_FACE),
+      color('FillColor', 0), en('FillStyle', 1, ['Solid', 'Transparent', 'Horizontal Line', 'Vertical Line', 'Upward Diagonal', 'Downward Diagonal', 'Cross', 'Diagonal Cross']),
+      color('BorderColor', WIN_TEXT), en('BorderStyle', 1, BORDER_STYLES), int('BorderWidth', 1, { min: 0, max: 8192 }),
+    ],
+    events: [], methods: SHAPE_ONLY_METHODS(),
+  }),
+
+  // Line has no Left/Top/Width/Height: X1, Y1, X2, Y2 (twips, relative to the parent) are its geometry.
+  Line: def({
+    type: 'Line', namePrefix: 'Line', defaultWidth: 1215, defaultHeight: 1215, toolboxTooltip: 'Line',
+    defaultEvent: '', defaultMember: null,
+    props: [
+      int('X1', 0), int('Y1', 0), int('X2', 0), int('Y2', 0), bool('Visible', true), str('Tag'),
+      color('BorderColor', WIN_TEXT), en('BorderStyle', 1, BORDER_STYLES), int('BorderWidth', 1, { min: 1, max: 8192 }),
+    ],
+    events: [], methods: [{ name: 'Refresh', params: '' }, { name: 'ZOrder', params: '[Position]' }],
+  }),
+
+  Slider: def({
+    type: 'Slider', namePrefix: 'Slider', defaultWidth: 2055, defaultHeight: 495, toolboxTooltip: 'Slider',
+    defaultEvent: 'Change', defaultMember: 'Value',
+    props: [
+      ...common(), int('Min', 0, { min: -32768, max: 32767 }), int('Max', 10, { min: -32768, max: 32767 }), int('Value', 0),
+      int('SmallChange', 1, { min: 1, max: 32767 }), int('LargeChange', 5, { min: 1, max: 32767 }),
+      int('TickFrequency', 1, { min: 1, max: 32767 }),
+      en('TickStyle', 0, ['sldBottomRight', 'sldTopLeft', 'sldBoth', 'sldNoTicks']),
+      en('Orientation', 0, ['ccOrientationHorizontal', 'ccOrientationVertical']),
+    ],
+    events: [evChange(), ev('Scroll'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  UpDown: def({
+    type: 'UpDown', namePrefix: 'UpDown', defaultWidth: 255, defaultHeight: 495, toolboxTooltip: 'UpDown',
+    defaultEvent: 'Change', defaultMember: 'Value',
+    props: [
+      ...common(), int('Min', 0, { min: -32768, max: 32767 }), int('Max', 10, { min: -32768, max: 32767 }), int('Value', 0),
+      int('Increment', 1, { min: 1, max: 32767 }), bool('Wrap', false),
+      en('Orientation', 0, ['cc2OrientationVertical', 'cc2OrientationHorizontal']),
+    ],
+    events: [evChange(), ev('UpClick'), ev('DownClick'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
 };
 
 /** VB6 toolbox order. */
 export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
-  'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'Image', 'ProgressBar',
+  'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown',
 ];
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -314,8 +369,10 @@ export function newControl(form: FormDef, type: Exclude<ControlType, 'Form'>,
   const td = CONTROL_TYPES[type];
   const name = nextDefaultName(form, type);
   const props = defaultProps(type);
-  props.Left = rect.left;
-  props.Top = rect.top;
+  if (type === 'Line') {
+    props.X1 = rect.left; props.Y1 = rect.top;
+    props.X2 = rect.left + (rect.width ?? td.defaultWidth); props.Y2 = rect.top + (rect.height ?? td.defaultHeight);
+  } else { props.Left = rect.left; props.Top = rect.top; }
   if ('Width' in props) {
     props.Width = rect.width ?? td.defaultWidth;
     props.Height = rect.height ?? td.defaultHeight;

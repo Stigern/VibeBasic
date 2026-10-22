@@ -51,3 +51,14 @@ test('align to primary (last)', () => {
   expect(alignRects(rs, 'centers').map(r => r.left)).toEqual([310, 300]);
   expect(alignRects(rs, 'tops').map(r => r.top)).toEqual([50, 50]);
 });
+
+test('Line: bounding box from X1..Y2, hit-testing by distance to the segment, moves like a box', () => {
+  const line: ControlDef = { id: 'ln', type: 'Line', name: 'Line1', index: null, parentId: null, props: { X1: 100, Y1: 100, X2: 1100, Y2: 1100 } };
+  const f = form([ctl('b', 'CommandButton', null, 0, 0, 2000, 2000), line]);
+  expect(absoluteRect(f, 'ln')).toEqual({ left: 100, top: 100, width: 1000, height: 1000 });
+  expect(hitTest(f, 600, 620)).toBe('ln');          // on the diagonal
+  expect(hitTest(f, 1000, 200)).toBe('b');          // inside the bounding box but far from the segment
+  line.props.X1 = 1100; line.props.X2 = 100;        // the other diagonal
+  expect(hitTest(f, 600, 620)).toBe('ln');
+  expect(hitTest(f, 200, 200)).toBe('b');
+});

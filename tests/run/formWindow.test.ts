@@ -24,7 +24,7 @@ function mount(controls: ControlDef[], handled: Record<string, string[]>, formPr
   win = mountFormWindow(root, { key: 'f', form, assets: {}, handled, mode: 'ide' }, m => sent.push(m));
   return (d: ControlDef) => root.querySelector<HTMLElement>(`[data-control-id="${d.id}"]`)!;
 }
-const inputOf = <T extends HTMLElement = HTMLInputElement>(el: HTMLElement) => el.querySelector<HTMLElement>('input, textarea, select, button, [role=scrollbar]') as T;
+const inputOf = <T extends HTMLElement = HTMLInputElement>(el: HTMLElement) => el.querySelector<HTMLElement>('input, textarea, select, button, [role=scrollbar], [role=slider], [role=spinbutton]') as T;
 const click = (el: Element) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
 const key = (el: Element, type: 'keydown' | 'keyup', k: string, code = 0, init: KeyboardEventInit = {}) =>
   el.dispatchEvent(new KeyboardEvent(type, { key: k, keyCode: code, bubbles: true, cancelable: true, ...init }));
@@ -168,6 +168,40 @@ describe('mountFormWindow', () => {
     expect(sent.at(-1)).toMatchObject({ event: 'Scroll', state: { Value: 40 } });
     el.dispatchEvent(new Event('change', { bubbles: true }));
     expect(sent.at(-1)).toMatchObject({ event: 'Change', state: { Value: 40 } });
+  });
+
+  test('slider: keys step by SmallChange / LargeChange and send Scroll then Change; Value stays in range', () => {
+    const sl = mk('Slider', { Max: 10, LargeChange: 5 });
+    const get = mount([sl], { [sl.id]: ['Scroll', 'Change'] });
+    const el = inputOf(get(sl));
+    key(el, 'keydown', 'ArrowRight', 39);
+    expect(sent.filter(m => m.t === 'event' && (m.event === 'Scroll' || m.event === 'Change')).map(m => (m as any).event)).toEqual(['Scroll', 'Change']);
+    expect(sent.at(-1)).toMatchObject({ event: 'Change', state: { Value: 1 } });
+    key(el, 'keydown', 'End', 35);
+    expect(sent.at(-1)).toMatchObject({ event: 'Change', state: { Value: 10 } });
+    key(el, 'keydown', 'ArrowRight', 39);
+    expect(el.dataset.value).toBe('10');
+  });
+
+  test('up-down: UpClick/DownClick then Change; Increment and Wrap', () => {
+    const ud = mk('UpDown', { Max: 10, Value: 9, Increment: 2, Wrap: true });
+    const get = mount([ud], { [ud.id]: ['UpClick', 'DownClick', 'Change'] });
+    const el = inputOf(get(ud));
+    const evs = () => sent.filter(m => m.t === 'event').map(m => (m as any).event);
+    key(el, 'keydown', 'ArrowUp', 38);
+    expect(evs()).toEqual(['UpClick', 'Change']);
+    expect(sent.at(-1)).toMatchObject({ event: 'Change', state: { Value: 0 } });   // 9 + 2 > Max wraps to Min
+    sent.length = 0;
+    key(el, 'keydown', 'ArrowDown', 40);
+    expect(evs()).toEqual(['DownClick', 'Change']);
+    expect(sent.at(-1)).toMatchObject({ state: { Value: 10 } });                   // 0 - 2 < Min wraps to Max
+  });
+
+  test('up-down without Wrap stops at Max (UpClick only, no Change)', () => {
+    const ud = mk('UpDown', { Max: 3, Value: 3 });
+    const get = mount([ud], { [ud.id]: ['UpClick', 'Change'] });
+    key(inputOf(get(ud)), 'keydown', 'ArrowUp', 38);
+    expect(sent.filter(m => m.t === 'event').map(m => (m as any).event)).toEqual(['UpClick']);
   });
 
   test('focus and blur', () => {

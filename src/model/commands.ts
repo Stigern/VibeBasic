@@ -2,6 +2,7 @@
 // only through these. Commands look up forms/controls by id every time they run, and capture what undo needs
 // (old values, array positions, deleted subtrees) at do-time, so they work as long as the stack is used in order.
 
+import { setControlPos } from './geometry';
 import type { Asset, ControlDef, FormDef, ModuleDef, Project, PropValue } from './types';
 
 export interface Command { label: string; do(p: Project): void; undo(p: Project): void }
@@ -118,7 +119,7 @@ export function deleteControlsCmd(formId: string, idList: string[]): Command {
 }
 
 type Rect = { id: string; left: number; top: number; width: number; height: number };
-const RECT_KEYS = ['Left', 'Top', 'Width', 'Height'] as const;
+const RECT_KEYS = ['Left', 'Top', 'Width', 'Height', 'X1', 'Y1', 'X2', 'Y2'] as const;
 
 export function moveResizeCmd(formId: string, rects: Rect[]): Command {
   const changes = rects.map(c => ({ ...c }));
@@ -134,8 +135,7 @@ export function moveResizeCmd(formId: string, rects: Rect[]): Command {
         const prev: Record<string, PropValue | undefined> = {};
         for (const k of RECT_KEYS) prev[k] = c.props[k];
         old.push({ id: c.id, props: prev });
-        c.props.Left = ch.left;
-        c.props.Top = ch.top;
+        setControlPos(c, ch.left, ch.top);   // a Line only moves (its size is set through its end points)
         if ('Width' in c.props) { c.props.Width = ch.width; c.props.Height = ch.height; } // Timer etc. have no size
       });
     },
@@ -152,10 +152,12 @@ export function moveResizeCmd(formId: string, rects: Rect[]): Command {
   };
 }
 
+const POS_KEYS = ['Left', 'Top', 'X1', 'Y1', 'X2', 'Y2'] as const;
+
 /** Moves controls into another container (or the form: `parentId` null). Left/Top are relative to the new parent. */
 export function reparentCmd(formId: string, items: { id: string; parentId: string | null; left: number; top: number }[]): Command {
   const changes = items.map(i => ({ ...i }));
-  let old: { id: string; parentId: string | null; left: PropValue | undefined; top: PropValue | undefined }[] = [];
+  let old: { id: string; parentId: string | null; props: Record<string, PropValue | undefined> }[] = [];
   return {
     label: changes.length === 1 ? 'Move control' : `Move ${changes.length} controls`,
     do(p) {
@@ -166,16 +168,15 @@ export function reparentCmd(formId: string, items: { id: string; parentId: strin
         controlOf(f, ch.parentId);
         if (withDescendants(f, [ch.id]).has(ch.parentId)) throw new Error('A control cannot be placed inside itself');
       }
-      old = targets.map(c => ({ id: c.id, parentId: c.parentId, left: c.props.Left, top: c.props.Top }));
-      changes.forEach((ch, i) => { targets[i].parentId = ch.parentId; targets[i].props.Left = ch.left; targets[i].props.Top = ch.top; });
+      old = targets.map(c => ({ id: c.id, parentId: c.parentId, props: Object.fromEntries(POS_KEYS.map(k => [k, c.props[k]])) }));
+      changes.forEach((ch, i) => { targets[i].parentId = ch.parentId; setControlPos(targets[i], ch.left, ch.top); });
     },
     undo(p) {
       const f = formOf(p, formId);
       const targets = old.map(o => controlOf(f, o.id));
       for (let i = old.length - 1; i >= 0; i--) {
         targets[i].parentId = old[i].parentId;
-        targets[i].props.Left = old[i].left as PropValue;
-        targets[i].props.Top = old[i].top as PropValue;
+        for (const k of POS_KEYS) { const v = old[i].props[k]; if (v === undefined) delete targets[i].props[k]; else targets[i].props[k] = v; }
       }
     },
   };

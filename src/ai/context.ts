@@ -18,7 +18,8 @@ export function describeControlTypes(): string {
     if (methods.length) line += ` | methods: ${methods.join(', ')}`;
     lines.push(line);
   }
-  lines.push('All controls also have: Left, Top, Width, Height, Visible, Enabled, TabIndex, Tag and the methods Move, SetFocus, Refresh, ZOrder.');
+  lines.push('All controls also have: Left, Top, Width, Height, Visible, Enabled, TabIndex, Tag and the methods Move, SetFocus, Refresh, ZOrder.'
+    + ' Exceptions: Shape has no Enabled, TabIndex or SetFocus; Line has X1, Y1, X2, Y2 (twips) instead of Left, Top, Width, Height, and no Enabled, TabIndex, Move or SetFocus.');
   return lines.join('\n');
 }
 
@@ -63,11 +64,11 @@ export function describeForm(form: FormDef): string {
   lines.push(['Form', form.name, ...formParts].join(' '));
   const byId = new Map(form.controls.map(c => [c.id, c]));
   for (const c of form.controls) {
-    const geo = ['Left', 'Top', 'Width', 'Height'].filter(k => k in c.props).map(k => `${k}=${fmtValue(c.props[k])}`);
+    const geo = ['Left', 'Top', 'Width', 'Height', 'X1', 'Y1', 'X2', 'Y2'].filter(k => k in c.props).map(k => `${k}=${fmtValue(c.props[k])}`);
     const parent = c.parentId ? byId.get(c.parentId) : undefined;
     const head = [c.type, nameOf(c)];
     if (parent) head.push('in', nameOf(parent));
-    lines.push([...head, ...geo, ...propParts(c.type, c.props, new Set(['left', 'top', 'width', 'height', 'tabindex']))].join(' '));
+    lines.push([...head, ...geo, ...propParts(c.type, c.props, new Set(['left', 'top', 'width', 'height', 'x1', 'y1', 'x2', 'y2', 'tabindex']))].join(' '));
   }
   return lines.join('\n');
 }

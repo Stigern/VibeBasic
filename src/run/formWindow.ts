@@ -160,15 +160,23 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     const type = tg.def.type, el = e.target as HTMLElement;
     if (type === 'TextBox' || (type === 'ComboBox' && !(el as HTMLInputElement).readOnly)) {
       emit(tg.id, 'Change', [], { Text: (el as HTMLInputElement).value });
-    } else if (type === 'HScrollBar' || type === 'VScrollBar') emit(tg.id, 'Scroll', [], { Value: Number(el.dataset.value) || 0 });
+    } else if (type === 'HScrollBar' || type === 'VScrollBar' || type === 'Slider') emit(tg.id, 'Scroll', [], { Value: Number(el.dataset.value) || 0 });
   });
   on<Event>('change', e => {
     const tg = targetOf(e.target);
     if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl) return;
     const type = tg.def.type, el = e.target as HTMLElement;
     if (type === 'ListBox') emit(tg.id, 'Click', [], { ListIndex: (el as HTMLSelectElement).selectedIndex });
-    else if (type === 'HScrollBar' || type === 'VScrollBar') emit(tg.id, 'Change', [], { Value: Number(el.dataset.value) || 0 });
+    else if (type === 'HScrollBar' || type === 'VScrollBar' || type === 'Slider' || type === 'UpDown') emit(tg.id, 'Change', [], { Value: Number(el.dataset.value) || 0 });
   });
+  // UpDown arrows: UpClick / DownClick (then Change, from the `change` event above)
+  for (const [dom, event] of [['vbupclick', 'UpClick'], ['vbdownclick', 'DownClick']] as const) {
+    on<Event>(dom, e => {
+      const tg = targetOf(e.target);
+      if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl) return;
+      emit(tg.id, event, [], { Value: Number((e.target as HTMLElement).dataset.value) || 0 });
+    });
+  }
   on<CustomEvent>('vbselect', e => {
     const tg = targetOf(e.target);
     const ie = tg && viewOf(tg.id)?.inputEl as HTMLInputElement | undefined;

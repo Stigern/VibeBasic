@@ -38,8 +38,8 @@ test('alias and default name', () => {
 });
 test('unknown prop, type, invalid value and missing control warn', () => {
   const { p } = setup();
-  const r = parseFormOps('{"ops":[{"op":"add","type":"Label","props":{"Foo":1}},{"op":"add","type":"Slider"},{"op":"add","type":"CommandButton","name":"cmdOK","props":{"Left":"abc"}},{"op":"delete","name":"Label9"}]}', p.forms[0]) as any;
-  expect(r.warnings).toEqual(['Ignored unknown property Foo on Label.', 'Ignored unknown control type Slider.',
+  const r = parseFormOps('{"ops":[{"op":"add","type":"Label","props":{"Foo":1}},{"op":"add","type":"Gizmo"},{"op":"add","type":"CommandButton","name":"cmdOK","props":{"Left":"abc"}},{"op":"delete","name":"Label9"}]}', p.forms[0]) as any;
+  expect(r.warnings).toEqual(['Ignored unknown property Foo on Label.', 'Ignored unknown control type Gizmo.',
     'Ignored invalid value for Left on cmdOK.', 'Ignored change to missing control Label9.']);
 });
 test('taken name is renamed', () => {
@@ -148,7 +148,7 @@ test('small-model quirks: op aliases, loose props, bare array, raw newlines', ()
   ]);
 });
 test('all ops ignored: warnings go into the details text', () => {
-  const r = parseFormOps('{"ops":[{"op":"add","type":"Slider"}]}', setup().p.forms[0]);
+  const r = parseFormOps('{"ops":[{"op":"add","type":"Gizmo"}]}', setup().p.forms[0]);
   expect(r.ok).toBe(false);
-  if (!r.ok) expect(r.raw).toContain('Ignored unknown control type Slider.');
+  if (!r.ok) expect(r.raw).toContain('Ignored unknown control type Gizmo.');
 });

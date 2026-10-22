@@ -6,6 +6,7 @@ import {
   addControlsCmd, compositeCmd, deleteControlsCmd, moveResizeCmd, renameCmd, reparentCmd, setPropertyCmd, zOrderCmd, type Command,
 } from '../model/commands';
 import { CONTROL_TYPES, newControl, nextDefaultName, newId } from '../model/controls';
+import { controlPos, isLine, setControlPos } from '../model/geometry';
 import { pxToTwips, twipsToPx } from '../model/twips';
 import type { ControlDef, ControlType, FormDef, PropValue } from '../model/types';
 import { messageBox98, vbYes } from '../ui98/dialogs';
@@ -13,7 +14,7 @@ import { h } from '../ui98/dom';
 import { createMdiWindow, type MdiWindow } from '../ui98/mdiWindow';
 import { clipboardHasControls, getClipboard, setClipboard } from './clipboard';
 import {
-  absoluteRect, alignRects, computeMove, computeResize, containerAt, controlsInRect, hasSize, hitTest, sizeOf,
+  absoluteRect, alignRects, computeMove, snap, computeResize, containerAt, controlsInRect, hasSize, hitTest, sizeOf,
   type AlignHow, type Handle, type Rect, type SnapOpts,
 } from './designerLogic';
 import type { IdeState } from './ideState';
@@ -38,7 +39,7 @@ const isEditable = (t: EventTarget | null): boolean => {
   const e = t as HTMLElement | null;
   return !!e && (e.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(e.tagName ?? ''));
 };
-const relRect = (c: ControlDef): Rect => ({ left: Number(c.props.Left) || 0, top: Number(c.props.Top) || 0, ...sizeOf(c) });
+const relRect = (c: ControlDef): Rect => ({ ...controlPos(c), ...sizeOf(c) });
 
 /** Selected ids that still exist, minus those whose ancestor is also selected (the ancestor carries them). */
 function topLevelOf(form: FormDef, ids: string[]): string[] {
@@ -183,6 +184,21 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
       const c = form.controls.find(x => x.id === id);
       if (!c) continue;
       const r = absoluteRect(form, id);
+      if (isLine(c)) {   // a Line has two end point handles instead of a box and eight resize handles
+        const right = Number(c.props.X2) >= Number(c.props.X1), down = Number(c.props.Y2) >= Number(c.props.Y1);
+        const filledL = ids.length === 1 || id === primary ? 'filled' : 'hollow';
+        const end = (which: 'p1' | 'p2', first: boolean) => {
+          const atRight = first ? right : !right, atDown = first ? down : !down;
+          const cx = o.x + twipsToPx(r.left + (atRight ? r.width : 0)), cy = o.y + twipsToPx(r.top + (atDown ? r.height : 0));
+          overlay.appendChild(h('div', {
+            class: `dsg-h ${filledL}`, 'data-handle': which, 'data-id': id,
+            style: { left: `${cx - 3}px`, top: `${cy - 3}px`, cursor: 'crosshair' },
+          }));
+        };
+        // p1 is (X1, Y1): at the box's top-left when X2 >= X1 and Y2 >= Y1, mirrored otherwise
+        end('p1', false); end('p2', true);
+        continue;
+      }
       const x = o.x + twipsToPx(r.left), y = o.y + twipsToPx(r.top), w = twipsToPx(r.width), hh = twipsToPx(r.height);
       box('dsg-sel', x, y, w, hh);
       if (!hasSize(c)) continue;   // Timer: fixed size
@@ -240,12 +256,22 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
       if (!moved || !w || !hh) return { left: x0, top: y0, width: CONTROL_TYPES[tool].defaultWidth, height: CONTROL_TYPES[tool].defaultHeight };
       return { left: Math.min(x0, x1), top: Math.min(y0, y1), width: w, height: hh };
     };
-    track(e, (_dx, _dy, ev) => { ghosts = [rectFor(toTwips(ev), true)]; },
+    const lineRect = (p: { x: number; y: number }): Rect => {
+      const a = { x: so.snap ? sx(p0.x) : p0.x, y: so.snap ? sy(p0.y) : p0.y }, b = { x: so.snap ? sx(p.x) : p.x, y: so.snap ? sy(p.y) : p.y };
+      return { left: Math.min(a.x, b.x), top: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) };
+    };
+    track(e, (_dx, _dy, ev) => { ghosts = [tool === 'Line' ? lineRect(toTwips(ev)) : rectFor(toTwips(ev), true)]; },
       (moved, ev) => {
         const r = rectFor(toTwips(ev), moved);
         const parentId = containerAt(form, p0.x, p0.y, []);
         const po = parentId ? absoluteRect(form, parentId) : { left: 0, top: 0 };
         const def = newControl(form, tool, { left: r.left - po.left, top: r.top - po.top, width: r.width, height: r.height }, parentId);
+        if (tool === 'Line' && moved) {   // the line runs from where the drag began to where it ended
+          const q = toTwips(ev);
+          const pt = (v: number, g: number) => (so.snap ? Math.round(v / g) * g : v);
+          Object.assign(def.props, { X1: pt(p0.x, so.grid) - po.left, Y1: pt(p0.y, so.gridY ?? so.grid) - po.top,
+            X2: pt(q.x, so.grid) - po.left, Y2: pt(q.y, so.gridY ?? so.grid) - po.top });
+        }
         ide.stack.execute(addControlsCmd(formId, [def]));
         select([def.id]);
         ide.setTool('Pointer');
@@ -272,7 +298,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
       const sameParent = orig.every(o => o.parentId === parentId);
       const unchanged = sameParent && orig.every((o, i) => {
         const c = form.controls.find(x => x.id === o.id)!;
-        return Number(c.props.Left) === rects[i].left && Number(c.props.Top) === rects[i].top;
+        return controlPos(c).left === rects[i].left && controlPos(c).top === rects[i].top;
       });
       if (unchanged) return;
       ide.stack.execute(sameParent
@@ -323,6 +349,30 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     }, moved => { if (moved && res.length) ide.stack.execute(moveResizeCmd(formId, res.map(r => ({ id: r.id, ...r.rect })))); });
   }
 
+  /** Drags one end point (p1 = X1/Y1, p2 = X2/Y2) of a Line. */
+  function startLineEnd(e: MouseEvent, form: FormDef, id: string, which: 'p1' | 'p2'): void {
+    if (ide.controlsLocked) return;
+    const c = form.controls.find(x => x.id === id);
+    if (!c) return;
+    const kx = which === 'p1' ? 'X1' : 'X2', ky = which === 'p1' ? 'Y1' : 'Y2';
+    const parentId = c.parentId;
+    const po = parentId ? absoluteRect(form, parentId) : { left: 0, top: 0 };
+    const so = snapOpts(ide);
+    let to: { x: number; y: number } | null = null;
+    const bbox = (pt: { x: number; y: number }): Rect => {
+      const ox = Number(c.props[which === 'p1' ? 'X2' : 'X1']), oy = Number(c.props[which === 'p1' ? 'Y2' : 'Y1']);
+      return { left: po.left + Math.min(ox, pt.x), top: po.top + Math.min(oy, pt.y), width: Math.abs(pt.x - ox), height: Math.abs(pt.y - oy) };
+    };
+    const from = { x: Number(c.props[kx]), y: Number(c.props[ky]) };
+    track(e, (dx, dy) => {
+      to = { x: snap(from.x + pxToTwips(dx), so.grid, so.snap), y: snap(from.y + pxToTwips(dy), so.gridY ?? so.grid, so.snap) };
+      ghosts = [bbox(to)];
+    }, moved => {
+      if (!moved || !to) return;
+      ide.stack.execute(compositeCmd('Move line end', [setPropertyCmd(formId, id, kx, to.x), setPropertyCmd(formId, id, ky, to.y)]));
+    });
+  }
+
   function startBand(e: MouseEvent, form: FormDef): void {
     const p0 = toTwips(e);
     const rectOf = (ev: MouseEvent): Rect => {
@@ -344,7 +394,13 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     activate();
     const tgt = e.target as Element;
     const hEl = tgt.closest?.('[data-handle]') as HTMLElement | null;
-    if (hEl) { e.preventDefault(); startResize(e, form, hEl.dataset.handle as Handle, hEl.dataset.id ?? ''); return; }
+    if (hEl) {
+      e.preventDefault();
+      const hd = hEl.dataset.handle as string;
+      if (hd === 'p1' || hd === 'p2') startLineEnd(e, form, hEl.dataset.id ?? '', hd);
+      else startResize(e, form, hd as Handle, hEl.dataset.id ?? '');
+      return;
+    }
     const p = toTwips(e), m = origin().m;
     const inClient = p.x >= 0 && p.y >= 0 && p.x < pxToTwips(m.clientWidth) && p.y < pxToTwips(m.clientHeight);
     if (!inClient) { select([]); return; }
@@ -449,7 +505,7 @@ export async function pasteControls(ide: IdeState, formId: string, defs: Control
   if (!form || !defs.length) return;
   const idMap = new Map(defs.map(d => [d.id, newId()]));
   const top = defs.filter(d => !d.parentId || !idMap.has(d.parentId));
-  const minL = Math.min(...top.map(d => Number(d.props.Left) || 0)), minT = Math.min(...top.map(d => Number(d.props.Top) || 0));
+  const minL = Math.min(...top.map(d => controlPos(d).left)), minT = Math.min(...top.map(d => controlPos(d).top));
   const work: ControlDef[] = form.controls.map(c => ({ ...c }));
   const renames: Command[] = [];
   const answers = new Map<string, boolean>();
@@ -464,7 +520,7 @@ export async function pasteControls(ide: IdeState, formId: string, defs: Control
     const nd: ControlDef = structuredClone(d);
     nd.id = idMap.get(d.id)!;
     nd.parentId = d.parentId && idMap.has(d.parentId) ? idMap.get(d.parentId)! : null;
-    if (top.includes(d)) { nd.props.Left = (Number(d.props.Left) || 0) - minL; nd.props.Top = (Number(d.props.Top) || 0) - minT; }
+    if (top.includes(d)) { const q = controlPos(d); setControlPos(nd, q.left - minL, q.top - minT); }
     const same = work.filter(w => w.name.toLowerCase() === d.name.toLowerCase());
     const fresh_ = () => { nd.name = nextDefaultName({ ...form, controls: work }, d.type); nd.index = null; };
     if (same.length) {
@@ -521,7 +577,7 @@ export function registerDesignerActions(ide: IdeState, actions: IdeActions, refr
     }
     setClipboard(form.controls.filter(c => all.has(c.id)).map(c => {
       const d = structuredClone(c);
-      if (tops.includes(c.id)) { const a = absoluteRect(form, c.id); d.parentId = null; d.props.Left = a.left; d.props.Top = a.top; }
+      if (tops.includes(c.id)) { const a = absoluteRect(form, c.id); d.parentId = null; setControlPos(d, a.left, a.top); }
       return d;
     }));
     refresh();

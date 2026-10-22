@@ -66,7 +66,7 @@ describe('brief', () => {
 describe('every control type', () => {
   test.each(ALL_TYPES)('%s renders in both modes with id and absolute position', type => {
     for (const mode of ['design', 'run'] as const) {
-      const def = mk(type, { Left: 300, Top: 150 });
+      const def = mk(type, type === 'Line' ? { X1: 300, Y1: 150, X2: 600, Y2: 450 } : { Left: 300, Top: 150 });
       const v = renderControl(def, mode, none);
       expect(v.el.dataset.controlId).toBe(def.id);
       expect(v.el.classList.contains('vb-ctl')).toBe(true);

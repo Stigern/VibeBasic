@@ -523,6 +523,242 @@ function scrollBar(c: Ctx, horizontal: boolean): Renderer {
   };
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Shape, Line, Slider, UpDown
+
+let svgSeq = 0;
+const DASHES: Record<number, string> = { 2: '6 3', 3: '2 2', 4: '6 2 2 2', 5: '6 2 2 2 2 2' };
+const HATCH: Record<number, string> = { 2: 'M0 3.5H8', 3: 'M3.5 0V8', 4: 'M0 8L8 0', 5: 'M0 0L8 8', 6: 'M0 3.5H8M3.5 0V8', 7: 'M0 8L8 0M0 0L8 8' };
+const strokeAttrs = (style: number, width: number, color: string): string =>
+  style === 0 || width <= 0 ? 'stroke="none"' : `stroke="${color}" stroke-width="${width}"${DASHES[style] ? ` stroke-dasharray="${DASHES[style]}"` : ''}`;
+
+/** VB6 Shape: 0 Rectangle, 1 Square, 2 Oval, 3 Circle, 4 Rounded Rectangle, 5 Rounded Square; FillStyle 0 Solid, 1 Transparent, 2..7 hatches. */
+function shape(c: Ctx): Renderer {
+  const uid = `vbhatch${++svgSeq}`;
+  let svg: SVGSVGElement;
+  return {
+    build() {
+      svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      c.el.replaceChildren(svg);
+    },
+    patch() {
+      const W = Math.max(1, Math.round(twipsToPx(c.num('Width')))), H = Math.max(1, Math.round(twipsToPx(c.num('Height'))));
+      const kind = c.num('Shape'), bw = Math.max(0, c.num('BorderWidth'));
+      const square = kind === 1 || kind === 3 || kind === 5;
+      const w = square ? Math.min(W, H) : W, hh = square ? Math.min(W, H) : H, x = (W - w) / 2, y = (hh === H ? 0 : (H - hh) / 2);
+      const inset = bw / 2, iw = Math.max(0, w - bw), ih = Math.max(0, hh - bw);
+      const geom = (attrs: string): string => kind === 2 || kind === 3
+        ? `<ellipse cx="${x + w / 2}" cy="${y + hh / 2}" rx="${iw / 2}" ry="${ih / 2}" ${attrs}/>`
+        : `<rect x="${x + inset}" y="${y + inset}" width="${iw}" height="${ih}"${kind === 4 || kind === 5 ? ` rx="${Math.min(w, hh) / 6}"` : ''} ${attrs}/>`;
+      const fs = c.num('FillStyle');
+      let out = '';
+      if (c.num('BackStyle') === 1) out += geom(`fill="${c.color('BackColor')}" stroke="none"`);
+      if (fs === 0) out += geom(`fill="${c.color('FillColor')}" stroke="none"`);
+      else if (HATCH[fs]) {
+        out += `<defs><pattern id="${uid}" width="8" height="8" patternUnits="userSpaceOnUse"><path d="${HATCH[fs]}" stroke="${c.color('FillColor')}" fill="none"/></pattern></defs>`;
+        out += geom(`fill="url(#${uid})" stroke="none"`);
+      }
+      out += geom(`fill="none" ${strokeAttrs(c.num('BorderStyle'), bw, c.color('BorderColor'))}`);
+      svg.setAttribute('width', String(W)); svg.setAttribute('height', String(H));
+      svg.innerHTML = out;
+    },
+    bg: () => null,
+  };
+}
+
+/** VB6 Line: X1, Y1, X2, Y2 (twips, relative to the parent). The element is the bounding box; renderControl positions it. */
+function line(c: Ctx): Renderer {
+  let svg: SVGSVGElement;
+  return {
+    build() {
+      svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      c.el.replaceChildren(svg);
+    },
+    patch() {
+      const x1 = twipsToPx(c.num('X1')), y1 = twipsToPx(c.num('Y1')), x2 = twipsToPx(c.num('X2')), y2 = twipsToPx(c.num('Y2'));
+      const mx = Math.min(x1, x2), my = Math.min(y1, y2);
+      const bw = Math.max(1, c.num('BorderWidth'));
+      svg.setAttribute('width', String(Math.abs(x2 - x1))); svg.setAttribute('height', String(Math.abs(y2 - y1)));
+      svg.innerHTML = `<line x1="${x1 - mx}" y1="${y1 - my}" x2="${x2 - mx}" y2="${y2 - my}" ${strokeAttrs(c.num('BorderStyle'), bw, c.color('BorderColor'))}/>`;
+    },
+    bg: () => null,
+  };
+}
+
+/** Slider: a groove with a thumb and tick marks. User changes dispatch `input` (VB Scroll) and `change` (VB Change) on
+ *  inputEl, like the scroll bars; the value is readable from `inputEl.dataset.value`. A vertical slider has Min at the top. */
+function slider(c: Ctx): Renderer {
+  let root: HTMLElement, rail: HTMLElement, thumb: HTMLElement, ticks: HTMLElement;
+  let value = 0;
+  let pending = false;
+  const vertical = () => c.num('Orientation') === 1;
+  const lo = () => Math.min(c.num('Min'), c.num('Max'));
+  const hi = () => Math.max(c.num('Min'), c.num('Max'));
+  const clamp = (v: number) => Math.min(hi(), Math.max(lo(), v));
+  const small = () => Math.max(1, c.num('SmallChange'));
+  const large = () => Math.max(1, c.num('LargeChange'));
+
+  function layout() {
+    const range = hi() - lo();
+    root.dataset.value = String(value);
+    root.setAttribute('aria-valuenow', String(value));
+    root.setAttribute('aria-valuemin', String(lo()));
+    root.setAttribute('aria-valuemax', String(hi()));
+    const pct = `${round3(range > 0 ? ((value - lo()) / range) * 100 : 0)}%`;
+    thumb.style.left = vertical() ? '' : pct;
+    thumb.style.top = vertical() ? pct : '';
+  }
+  function drawTicks() {
+    const style = c.num('TickStyle');
+    ticks.replaceChildren();
+    ticks.dataset.style = String(style);
+    if (style === 3) return;
+    const range = hi() - lo(), freq = Math.max(1, c.num('TickFrequency'));
+    const count = Math.min(500, Math.floor(range / freq));
+    const marks: string[] = [];
+    for (let i = 0; i <= count; i++) marks.push(`${round3(range > 0 ? ((i * freq) / range) * 100 : 0)}%`);
+    if (range > 0 && count * freq < range) marks.push('100%');
+    const sides = style === 2 ? ['a', 'b'] : [style === 1 ? 'a' : 'b'];
+    for (const side of sides) for (const m of marks) {
+      ticks.appendChild(h('div', { class: `sl-tick ${side}`, style: { [vertical() ? 'top' : 'left']: m } }));
+    }
+  }
+  function set(v: number): boolean {
+    v = clamp(v);
+    if (v === value) return false;
+    value = v;
+    c.props.Value = v;
+    layout();
+    c.fire('input');
+    pending = true;
+    return true;
+  }
+  const commit = () => { if (pending) { pending = false; c.fire('change'); } };
+  const fromPoint = (e: MouseEvent): number => {
+    const r = rail.getBoundingClientRect();
+    const len = vertical() ? r.height : r.width;
+    const pos = vertical() ? e.clientY - r.top : e.clientX - r.left;
+    return len > 0 ? lo() + Math.round((pos / len) * (hi() - lo())) : value;
+  };
+
+  return {
+    structural: ['Orientation'],
+    build() {
+      c.el.classList.toggle('sl-vertical', vertical());
+      thumb = h('div', { class: 'sl-thumb' });
+      ticks = h('div', { class: 'sl-ticks' });
+      rail = h('div', { class: 'sl-rail' }, h('div', { class: 'sl-groove' }), ticks, thumb);
+      root = h('div', { class: 'vb-sl', role: 'slider', tabindex: '0', 'aria-orientation': vertical() ? 'vertical' : 'horizontal' }, rail);
+      c.el.replaceChildren(root);
+      c.setInput(root);
+      if (c.mode !== 'run') return;
+      const doc = c.el.ownerDocument;
+      root.addEventListener('mousedown', e => {
+        if (e.button !== 0 || root.getAttribute('aria-disabled') === 'true') return;
+        e.preventDefault();
+        root.focus();
+        if (e.target === thumb) {
+          const grab = fromPoint(e) - value;   // keeps the point where the thumb was grabbed under the pointer
+          const move = (m: MouseEvent) => { set(fromPoint(m) - grab); };
+          const up = () => { doc.removeEventListener('mousemove', move); commit(); };
+          doc.addEventListener('mousemove', move);
+          doc.addEventListener('mouseup', up, { once: true });
+        } else {
+          set(value + (fromPoint(e) < value ? -large() : large()));
+          commit();
+        }
+      });
+      root.addEventListener('keydown', e => {
+        let next: number | null = null;
+        const rev = vertical();   // Min is at the top of a vertical slider: Up/Left lower the value
+        switch (e.key) {
+          case 'ArrowLeft': case 'ArrowUp': next = value - small(); break;
+          case 'ArrowRight': case 'ArrowDown': next = value + small(); break;
+          case 'PageUp': next = rev ? value - large() : value + large(); break;
+          case 'PageDown': next = rev ? value + large() : value - large(); break;
+          case 'Home': next = lo(); break;
+          case 'End': next = hi(); break;
+        }
+        if (next === null) return;
+        e.preventDefault();
+        set(next);
+        commit();
+      });
+    },
+    patch(k) {
+      if (has(k, 'Value', 'Min', 'Max')) value = clamp(c.num('Value'));
+      if (has(k, 'Value', 'Min', 'Max', 'Orientation')) layout();
+      if (has(k, 'Min', 'Max', 'TickFrequency', 'TickStyle', 'Orientation')) drawTicks();
+    },
+    bg: () => null,
+  };
+}
+
+/** UpDown: two arrow buttons (stacked, or side by side when horizontal) that step Value by Increment, with Wrap.
+ *  A click dispatches `vbupclick` / `vbdownclick`, then `change` when the value changed; value in `inputEl.dataset.value`. */
+function upDown(c: Ctx): Renderer {
+  let root: HTMLElement;
+  let value = 0;
+  let repeatTimer: ReturnType<typeof setTimeout> | undefined;
+  let repeatInterval: ReturnType<typeof setInterval> | undefined;
+  const lo = () => Math.min(c.num('Min'), c.num('Max'));
+  const hi = () => Math.max(c.num('Min'), c.num('Max'));
+  const stopRepeat = () => { clearTimeout(repeatTimer); clearInterval(repeatInterval); repeatTimer = repeatInterval = undefined; };
+
+  function step(dir: 1 | -1): void {
+    let v = value + dir * Math.max(1, c.num('Increment'));
+    if (v > hi()) v = c.bool('Wrap') ? lo() : hi();
+    else if (v < lo()) v = c.bool('Wrap') ? hi() : lo();
+    const changed = v !== value;
+    value = v;
+    c.props.Value = v;
+    root.dataset.value = String(v);
+    root.setAttribute('aria-valuenow', String(v));
+    c.fire(dir > 0 ? 'vbupclick' : 'vbdownclick');
+    if (changed) c.fire('change');
+  }
+
+  return {
+    structural: ['Orientation'],
+    build() {
+      stopRepeat();
+      c.el.classList.toggle('ud-horizontal', c.num('Orientation') === 1);
+      const up = h('div', { class: 'ud-btn up' }), down = h('div', { class: 'ud-btn down' });
+      root = h('div', { class: 'vb-ud', role: 'spinbutton', tabindex: '0' }, up, down);
+      root.dataset.value = String(value);
+      c.el.replaceChildren(root);
+      c.setInput(root);
+      if (c.mode !== 'run') return;
+      const doc = c.el.ownerDocument;
+      const press = (dir: 1 | -1) => (e: Event) => {
+        if ((e as MouseEvent).button !== 0 || root.getAttribute('aria-disabled') === 'true') return;
+        e.preventDefault();
+        root.focus();
+        stopRepeat();
+        step(dir);
+        repeatTimer = setTimeout(() => { repeatInterval = setInterval(() => step(dir), 100); }, 400);
+        doc.addEventListener('mouseup', stopRepeat, { once: true });
+      };
+      up.addEventListener('mousedown', press(1));
+      down.addEventListener('mousedown', press(-1));
+      root.addEventListener('keydown', e => {
+        const dir = e.key === 'ArrowUp' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowDown' || e.key === 'ArrowLeft' ? -1 : 0;
+        if (!dir) return;
+        e.preventDefault();
+        step(dir);
+      });
+    },
+    patch(k) {
+      if (has(k, 'Value', 'Min', 'Max')) {
+        value = Math.min(hi(), Math.max(lo(), c.num('Value')));
+        root.dataset.value = String(value);
+        root.setAttribute('aria-valuenow', String(value));
+      }
+    },
+    bg: () => null,
+  };
+}
+
 const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   CommandButton: commandButton,
   Label: label,
@@ -538,6 +774,10 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   HScrollBar: c => scrollBar(c, true),
   VScrollBar: c => scrollBar(c, false),
   ProgressBar: progressBar,
+  Shape: shape,
+  Line: line,
+  Slider: slider,
+  UpDown: upDown,
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -578,7 +818,15 @@ export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetRe
   const hasFont = 'Font' in defaults, hasFore = 'ForeColor' in defaults, hasBack = 'BackColor' in defaults;
 
   function refresh(keys: Keys): void {
-    if (has(keys, 'Left', 'Top', 'Width', 'Height')) {
+    if (def.type === 'Line') {
+      if (has(keys, 'X1', 'Y1', 'X2', 'Y2')) {
+        const [x1, x2, y1, y2] = [ctx.num('X1'), ctx.num('X2'), ctx.num('Y1'), ctx.num('Y2')];
+        el.style.left = `${twipsToPx(Math.min(x1, x2))}px`;
+        el.style.top = `${twipsToPx(Math.min(y1, y2))}px`;
+        el.style.width = `${twipsToPx(Math.abs(x2 - x1))}px`;
+        el.style.height = `${twipsToPx(Math.abs(y2 - y1))}px`;
+      }
+    } else if (has(keys, 'Left', 'Top', 'Width', 'Height')) {
       el.style.left = `${twipsToPx(typeof props.Left === 'number' ? props.Left : 0)}px`;
       el.style.top = `${twipsToPx(typeof props.Top === 'number' ? props.Top : 0)}px`;
       ctx.applySize();

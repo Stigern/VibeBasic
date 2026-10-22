@@ -470,3 +470,15 @@ test('markDirtyExternal notifies only on the clean to dirty transition', () => {
   stack.markDirtyExternal();
   expect(changes()).toBe(3);
 });
+
+test('moveResizeCmd moves a Line by shifting X1..Y2 and undoes it', () => {
+  const { project, form, stack } = setup();
+  const line = newControl(form, 'Line', { left: 100, top: 100, width: 500, height: 300 }, null);
+  form.controls.push(line);
+  stack.execute(moveResizeCmd(form.id, [{ id: line.id, left: 400, top: 200, width: 500, height: 300 }]));
+  expect(line.props).toMatchObject({ X1: 400, Y1: 200, X2: 900, Y2: 500 });
+  expect(line.props).not.toHaveProperty('Left');
+  stack.undo();
+  expect(line.props).toMatchObject({ X1: 100, Y1: 100, X2: 600, Y2: 400 });
+  expect(project.forms[0].controls[0]).toBe(line);
+});

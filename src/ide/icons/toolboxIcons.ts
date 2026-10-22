@@ -22,5 +22,9 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
   Timer: svg('<circle cx="8" cy="8.5" r="6" fill="#fff" stroke="#000"/><path d="M8 8.5V4.5M8 8.5l3 1.5" stroke="#000" fill="none"/><rect x="6" y="1" width="4" height="1.5" fill="#000"/>'),
   Image: svg(box(1, 2, 14, 12) + '<path d="M2 13l4-6 3 4 2-2 3 4z" fill="#0000c0"/><circle cx="11.5" cy="5.5" r="1.3" fill="#c00000"/>'),
   ProgressBar: svg(box(1, 5, 14, 6) + '<rect x="2" y="6" width="3" height="4" fill="#000080"/><rect x="6" y="6" width="3" height="4" fill="#000080"/>'),
+  Shape: svg('<rect x="1.5" y="8.5" width="8" height="6" fill="#fff" stroke="#000"/><circle cx="10" cy="6" r="4.5" fill="#c0c0c0" stroke="#000"/>'),
+  Line: svg('<path d="M2 14L14 2" stroke="#000" stroke-width="1.5" fill="none" shape-rendering="auto"/>'),
+  Slider: svg('<rect x="1.5" y="7" width="13" height="3" fill="#808080" stroke="#000"/><path d="M6 3.5h4v6l-2 2.5-2-2.5z" fill="#c0c0c0" stroke="#000"/><path d="M2 13v2M5 13v2M8 13v2M11 13v2M14 13v2" stroke="#000"/>'),
+  UpDown: svg(box(4, 1, 8, 7, '#c0c0c0') + box(4, 8, 8, 7, '#c0c0c0') + '<path d="M6 6l2-3 2 3zM6 10l2 3 2-3z" fill="#000"/>'),
   Form: svg(box(1, 2, 14, 12, '#c0c0c0') + '<rect x="2" y="3" width="12" height="3" fill="#000080"/>'),
 };
