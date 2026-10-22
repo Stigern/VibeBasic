@@ -720,7 +720,8 @@ function* memberSet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: string,
   if (base instanceof NothingT) throw new VBRuntimeError(91);
   if (!(base instanceof ModuleRef) && !(base instanceof EnumRef) && isObject(base)) {
     if (!base.hasMember(name)) throw new VBRuntimeError(438);
-    if (isSet) base.setMember(name, args, value);
+    let wait: void | Promise<void> = undefined;   // a host may finish a property write later (MMControl1.Command = "Play" with Wait)
+    if (isSet) wait = base.setMember(name, args, value);
     else {
       let current: VBValue | undefined;
       try {
@@ -729,12 +730,13 @@ function* memberSet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: string,
         if (!(e instanceof VBRuntimeError)) throw e; // e.g. a write-only property: setMember decides
       }
       if (current !== undefined && isObjectValue(current)) {
-        if (isObjectValue(value)) base.setMember(name, args, value);
+        if (isObjectValue(value)) wait = base.setMember(name, args, value);
         else setDefault(current, [], value);
       } else {
-        base.setMember(name, args, plain(value));
+        wait = base.setMember(name, args, plain(value));
       }
     }
+    if (wait instanceof Promise) { yield* awaitHost(f, wait.then(() => Empty)); return; }
     yield* afterHostCall(f);
     return;
   }

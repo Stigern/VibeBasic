@@ -28,6 +28,9 @@ import type { NetSession } from '../net';
 import { decodeChart, encodeChart, resizeChart, sampleChart, MAX_CHART_COLS, MAX_CHART_ROWS, type ChartModel } from '../../model/chart';
 import { chartFromArray, chartToArray, ChartPlot } from './chartObjects';
 import { InetControl, WebBrowserControl, WinsockControl, type NetControl, type NetHost } from './netControls';
+import type { RichControl, RichHost } from './richControl';
+import { MciControl, MediaPlayerControl } from './mediaControls';
+import { AgentControl } from './agentControl';
 
 export interface RunContext {
   resolveAsset(ref: PictureRef): string | null;
@@ -50,6 +53,8 @@ export interface RunContext {
   net?(): NetSession;
   /** Raises an event of the control from outside code (a socket's DataArrival ...); resolves when the handler has finished. */
   raise?(ctrl: ControlObject, event: string, args: VBRef[]): Promise<void>;
+  /** MMControl, MediaPlayer: a file of the program (relative to App.Path); error 53 when it cannot be read. */
+  readFile?(path: string): Promise<Uint8Array>;
 }
 
 /** The properties that name an ImageList of the form (`Toolbar1.ImageList = ImageList1`). */
@@ -120,6 +125,8 @@ export class ControlObject implements VBObject {
   private volumes: Volume[] | null = null;
   /** Winsock, Inet, WebBrowser: their methods and network state. */
   private ext: NetControl | null = null;
+  /** MMControl, MediaPlayer, Agent: their properties, methods and state (see richControl.ts). */
+  private rich: RichControl | null = null;
   /** MSChart: the data table (the window gets it as the prop `ChartLines`) and the Plot.Axis(id) titles. */
   private chart: ChartModel | null = null;
 
@@ -149,6 +156,9 @@ export class ControlObject implements VBObject {
     if (def.type === 'Winsock') this.ext = new WinsockControl(this.netHost());
     else if (def.type === 'Inet') this.ext = new InetControl(this.netHost());
     else if (def.type === 'WebBrowser') this.ext = new WebBrowserControl(this.netHost());
+    if (def.type === 'MMControl') this.rich = new MciControl(this.richHost());
+    else if (def.type === 'MediaPlayer') this.rich = new MediaPlayerControl(this.richHost());
+    else if (def.type === 'Agent') this.rich = new AgentControl(this.richHost());
     if (def.type === 'MonthView') {   // the selection starts out as the Value
       const v = typeof this.props.Value === 'number' ? dayOf(this.props.Value) : dayOf(Number(CONTROL_TYPES.MonthView.props.find(p => p.name === 'Value')!.default));
       this.props.Value = v;
@@ -201,8 +211,20 @@ export class ControlObject implements VBObject {
     };
   }
 
-  /** The form unloads or the program ends: sockets close, requests are aborted. */
-  dispose(): void { this.ext?.dispose(); }
+  private richHost(): RichHost {
+    return {
+      props: this.props, name: this.def.name,
+      raise: (event, args) => this.ctx.raise?.(this, event, args) ?? Promise.resolve(),
+      send: p => this.send(p),
+      readFile: path => {
+        const r = this.ctx.readFile;
+        return r ? r(path) : Promise.reject(new VBRuntimeError(53));
+      },
+    };
+  }
+
+  /** The form unloads or the program ends: sockets close, requests are aborted, media stops. */
+  dispose(): void { this.ext?.dispose(); this.rich?.dispose(); }
 
   /** Winsock GetData / PeekData write to their first argument. */
   byRefArgs(name: string): readonly number[] | undefined { return this.ext?.byRef?.[name.toLowerCase()]; }
@@ -519,6 +541,7 @@ export class ControlObject implements VBObject {
     }
     if (isBrowserType(this.def.type) && 'Path' in props && this.props.Path !== oldPath) this.reload();   // a folder opened by a double click
     this.ext?.applyState?.(props);
+    this.rich?.applyState?.(props);
     if (this.def.type === 'RichTextBox') {   // the user typed, or moved the selection
       if ('Runs' in props) this.runs = decodeRuns(String(props.Runs ?? '')) ?? (this.props.Text ? [{ text: String(this.props.Text), fmt: {} }] : []);
       if ('SelStart' in props || 'SelLength' in props) this.pendingFmt = null;
@@ -546,6 +569,7 @@ export class ControlObject implements VBObject {
     // a method used as a function: `s = Inet1.OpenURL(url)` (the interpreter waits for a Promise)
     if (this.ext && !getPropDef(this.def.type, name) && CONTROL_TYPES[this.def.type].methods.some(m => m.name.toLowerCase() === l)) return this.callMethod(name, args) as VBValue;
     const pd = this.propDef(name);
+    if (this.rich?.get) { const v = this.rich.get(pd.name, args); if (v !== undefined) return v; }
     if (this.chart) { const v = this.chartGet(pd, args); if (v !== undefined) return v; }
     const col = this.collections.get(l);
     if (col) return args.length ? col.getMember('Item', args) : col;
@@ -580,9 +604,14 @@ export class ControlObject implements VBObject {
     return v as VBValue;
   }
 
-  setMember(name: string, args: VBValue[], value: VBValue): void {
+  setMember(name: string, args: VBValue[], value: VBValue): void | Promise<void> {
     const pd = this.propDef(name);
     if (pd.runtime === 'ro' || name.toLowerCase() === 'name' || name.toLowerCase() === 'index') throw new VBRuntimeError(383);
+    if (this.rich?.set) {
+      if (args.length) throw new VBRuntimeError(450);
+      const r = this.rich.set(pd.name, this.plain(value));
+      if (r !== false) return r === true ? undefined : r;
+    }
     if (this.chart && this.chartSet(pd, args, value)) return;
     if (pd.name === 'SelectedItem') {
       if (args.length) throw new VBRuntimeError(450);
@@ -668,6 +697,7 @@ export class ControlObject implements VBObject {
     const l = name.toLowerCase();
     if (!CONTROL_TYPES[this.def.type].methods.some(m => m.name.toLowerCase() === l)) throw new VBRuntimeError(438);
     if (this.ext) { const r = this.ext.call(l, args, refs); if (r !== undefined) return r; }
+    if (this.rich?.call) { const r = this.rich.call(l, args, refs); if (r !== undefined) return r; }
     switch (l) {
       case 'move': return this.move(args);
       case 'setfocus': this.queue.send(this.formKey, { t: 'focus', id: this.def.id }); return Empty;

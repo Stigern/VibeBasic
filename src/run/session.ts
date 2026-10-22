@@ -18,7 +18,7 @@ export interface SessionCallbacks {
   debugPrint(text: string, newline: boolean): void;
   onBreak(info: BreakInfo): Promise<'continue' | 'end'>;   // IDE: yellow line and wait. App: never called
   onEnded(): void;
-  readFile(path: string): Promise<Uint8Array>;            // LoadPicture
+  readFile(path: string): Promise<Uint8Array>;            // LoadPicture, MMControl and MediaPlayer files
   appPath: string;
   /** App.EXEName; defaults to the project name (the IDE). Made apps pass the bundle name. */
   appName?: string;
@@ -210,16 +210,21 @@ export class RunSession implements Host, FormSession {
     this.lastYield = performance.now();
   }
 
-  async loadPicture(path: string): Promise<VBValue> {
-    if (path === '') return new PictureObject(null);
-    const p = path.replace(/\\/g, '/');   // VB code builds Windows paths: App.Path & "\pic.bmp"
+  /** A file of the program (relative paths are from App.Path; VB code builds Windows paths: App.Path & "\pic.bmp"). 53 when it cannot be read. */
+  async readFile(path: string): Promise<Uint8Array> {
+    const p = path.replace(/\\/g, '/');
     const full = p.startsWith('/') || /^[A-Za-z]:\//.test(p) ? p : `${this.cb.appPath.replace(/\\/g, '/').replace(/\/+$/, '')}/${p}`;
-    let bytes: Uint8Array;
     try {
-      bytes = await this.cb.readFile(full);
+      return await this.cb.readFile(full);
     } catch {
       throw new VBRuntimeError(53);
     }
+  }
+
+  async loadPicture(path: string): Promise<VBValue> {
+    if (path === '') return new PictureObject(null);
+    const full = path.replace(/\\/g, '/');
+    const bytes = await this.readFile(path);
     const ext = /\.([^./]+)$/.exec(full)?.[1]?.toLowerCase() ?? '';
     return new PictureObject({ asset: `data:${MIME[ext] ?? 'application/octet-stream'};base64,${base64(bytes)}` });
   }

@@ -35,6 +35,8 @@ export interface FormSession {
   updateBlocked(): void;
   /** Inet, Winsock, WebBrowser: the run's network (made on first use; throws when the host has none). */
   net(): NetSession;
+  /** MMControl and MediaPlayer: a file of the program (relative to App.Path); error 53 when it cannot be read. */
+  readFile(path: string): Promise<Uint8Array>;
 }
 
 interface FormState {
@@ -82,6 +84,7 @@ export class FormInstance implements VBObject {
       controlByName: n => this.state().byName.get(lc(n)),
       files: { listVolumes: () => this.s.formHost.listVolumes(), listDir: p => this.s.formHost.listDir(p), defaultPath: this.s.appPath },
       net: () => this.s.net(),
+      readFile: p => this.s.readFile(p),
       raise: (c, event, args) => (this.st?.byId.get(c.def.id) === c && !this.s.ended ? this.fireControl(c, event, args) : Promise.resolve()),
     };
     // Load Name(i) / Unload Name(i): elements of controls without a view (Winsock, Inet, Timer ...) only

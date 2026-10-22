@@ -139,3 +139,18 @@ group({
   VtChChartType2dPie: 14, VtChChartType2dXY: 16,
   VtChAxisIdX: 0, VtChAxisIdY: 1, VtChAxisIdY2: 2, VtChAxisIdZ: 3,
 });
+
+// MMControl (MCI32.OCX): Mode, Done's NotifyCode, TimeFormat, Orientation, RecordMode, BorderStyle
+group({
+  mciModeNotOpen: 524, mciModeStop: 525, mciModePlay: 526, mciModeRecord: 527, mciModeSeek: 528, mciModePause: 529, mciModeReady: 530,
+  mciSuccessful: 1, mciSuperseded: 2, mciAborted: 4, mciFailure: 8,
+  mciFormatMilliseconds: 0, mciFormatHms: 1, mciFormatMsf: 2, mciFormatFrames: 3, mciFormatSmpte24: 4, mciFormatSmpte25: 5,
+  mciFormatSmpte30: 6, mciFormatSmpte30Drop: 7, mciFormatBytes: 8, mciFormatSamples: 9, mciFormatTmsf: 10,
+  mciOrientHorz: 0, mciOrientVert: 1, mciRecordInsert: 0, mciRecordOverwrite: 1, mciBorderNone: 0, mciFixedSingle: 1,
+});
+
+// MediaPlayer (MSDXM.OCX): PlayState and ReadyState
+group({
+  mpStopped: 0, mpPaused: 1, mpPlaying: 2, mpWaiting: 3, mpScanForward: 4, mpScanReverse: 5, mpClosed: 6,
+  mpReadyStateUninitialized: 0, mpReadyStateLoading: 1, mpReadyStateInteractive: 3, mpReadyStateComplete: 4,
+});

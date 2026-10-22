@@ -53,5 +53,11 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
     + '<path d="M3 7v4h7M6 4.500h4v4.500" stroke="#000" fill="none"/><path d="M1 8h4M11 15h4" stroke="#000"/>'),
   MSChart: svg(box(1, 1, 14, 14) + '<rect x="2" y="2" width="12" height="12" fill="#c0c0c0"/><rect x="3" y="8" width="2" height="5" fill="#000080" stroke="#000"/><rect x="6" y="4" width="2" height="9" fill="#800000" stroke="#000"/>'
     + '<rect x="9" y="6" width="2" height="7" fill="#ffff00" stroke="#000"/><rect x="12" y="9" width="1" height="4" fill="#008080" stroke="#000"/>'),
+  MMControl: svg(box(0, 4, 6, 8, '#c0c0c0') + box(5, 4, 6, 8, '#c0c0c0') + box(10, 4, 6, 8, '#c0c0c0')
+    + '<path d="M2 6v4l2.500-2z" fill="#000"/><rect x="7" y="6" width="2" height="4" fill="#000"/><path d="M12 6h1v4h-1zM14 6l-1 2 1 2z" fill="#000"/>'),
+  MediaPlayer: svg(box(1, 1, 14, 10, '#000') + '<path d="M6 3.500v5l4-2.500z" fill="#00ff00"/>' + box(1, 11, 14, 4, '#c0c0c0') + '<rect x="3" y="12.500" width="6" height="1" fill="#808080"/><rect x="5" y="12" width="2" height="2" fill="#000"/>'),
+  Agent: svg('<rect x="1.500" y="0.500" width="9" height="6" rx="2" fill="#ffffe1" stroke="#000"/><path d="M4 6.500l-1 2.500 3-2.500" fill="#ffffe1" stroke="#000"/>'
+    + box(6, 8, 9, 7, '#c0c0c0') + '<rect x="7" y="9" width="7" height="4" fill="#000080"/><rect x="8" y="10" width="1" height="1" fill="#00ffff"/><rect x="12" y="10" width="1" height="1" fill="#00ffff"/>'
+    + '<rect x="10" y="6" width="1" height="2" fill="#ff0000"/>'),
   Form: svg(box(1, 2, 14, 12, '#c0c0c0') + '<rect x="2" y="3" width="12" height="3" fill="#000080"/>'),
 };

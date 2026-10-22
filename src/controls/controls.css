@@ -384,3 +384,145 @@
 .vb-chart svg { display: block; }
 .vb-run .ch-bar, .vb-run .ch-pt, .vb-run .ch-slice { cursor: pointer; }
 .ch-sel { stroke: #fff; stroke-width: 2; stroke-dasharray: 3 2; }
+
+/* ---------- MMControl (MCI32.OCX) ---------- */
+.vb-MMControl { background: #c0c0c0; }
+.vb-MMControl.vb-bordered { outline: 1px solid #000; outline-offset: -1px; }
+.vb-mci { display: flex; width: 100%; height: 100%; user-select: none; outline: none; }
+.vb-mci.vert { flex-direction: column; }
+.mci-btn { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; background: #c0c0c0; box-shadow: var(--w98-raised); }
+.vb-run .mci-btn:not(.off):active { box-shadow: var(--w98-sunken); }
+.vb-run .mci-btn:not(.off):active svg { transform: translate(1px, 1px); }
+.mci-btn svg { display: block; flex: none; }
+.vb-mci-media { display: none; }
+.vb-mci-popup { position: absolute; left: 8px; top: 8px; z-index: 2147482000; background: #c0c0c0; box-shadow: var(--w98-raised); padding: 3px; }
+.vb-mci-popup .title-bar { height: 18px; display: flex; align-items: center; padding: 0 3px; background: linear-gradient(90deg, #000080, #1084d0); color: #fff; font: bold 11px "MS Sans Serif", Tahoma, sans-serif; }
+.vb-mci-screen { background: #000; }
+.vb-mci-screen video.shown { display: block; max-width: 320px; max-height: 240px; min-width: 160px; min-height: 120px; }
+
+/* ---------- MediaPlayer (MSDXM.OCX, Media Player 6.4) ---------- */
+.vb-MediaPlayer { background: #c0c0c0; }
+.vb-mp { display: flex; flex-direction: column; width: 100%; height: 100%; user-select: none; outline: none; font: 11px "MS Sans Serif", Tahoma, sans-serif; }
+.mp-display { flex: 1 1 auto; min-height: 0; background: #000; overflow: hidden; }
+.mp-video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.mp-bar { flex: none; padding: 2px 3px 3px; box-shadow: var(--w98-raised); background: #c0c0c0; }
+.mp-tracker { position: relative; height: 14px; margin: 1px 4px 2px; }
+.mp-groove { position: absolute; left: 0; right: 0; top: 5px; height: 4px; box-shadow: var(--w98-sunken); background: #fff; }
+.mp-thumb { position: absolute; top: 0; left: 0; width: 11px; height: 14px; background: #c0c0c0; box-shadow: var(--w98-raised); }
+.mp-row { display: flex; align-items: center; gap: 1px; height: 20px; }
+.mp-btn { width: 20px; height: 18px; display: flex; align-items: center; justify-content: center; }
+.vb-run .mp-btn:hover { box-shadow: inset -1px -1px #808080, inset 1px 1px #fff; }
+.vb-run .mp-btn:active { box-shadow: inset 1px 1px #808080, inset -1px -1px #fff; }
+.mp-btn svg { display: block; }
+.mp-sep { width: 2px; height: 16px; margin: 0 3px; box-shadow: inset 1px 0 #808080, inset -1px 0 #fff; }
+.mp-fill { flex: 1; }
+.mp-status { flex: none; display: flex; gap: 2px; height: 18px; padding: 1px 2px; box-sizing: border-box; background: #c0c0c0; }
+.mp-status > div { box-shadow: inset 1px 1px #808080, inset -1px -1px #fff; padding: 1px 4px; white-space: nowrap; overflow: hidden; }
+.mp-status-text { flex: 1; }
+
+/* ---------- Agent (AGENTCTL.DLL): the characters (controls/agentArt.ts) ---------- */
+.vb-Agent { background: #c0c0c0; box-shadow: var(--w98-raised); }
+.vb-Agent svg { display: block; }
+.vb-run.vb-Agent { background: none; box-shadow: none; overflow: visible; z-index: 2147482500; pointer-events: none; }
+.ag-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; outline: none; }
+.ag-char { position: absolute; width: 96px; height: 96px; cursor: pointer; pointer-events: auto; user-select: none; -webkit-user-select: none; --ag-dur: 1000ms; }
+.ag-char > svg { display: block; overflow: visible; }
+.ag-char .p-think, .ag-char .p-spark, .ag-char .p-bang, .ag-char .p-puff, .ag-char .p-talk { opacity: 0; }
+.ag-char .p-bulb { animation: ag-bulb 1.6s steps(1) infinite; }
+.ag-char .p-orb { animation: ag-orb 2s steps(1) infinite; }
+.ag-char:not([class*="ag-a-"]) .p-eyes { animation: ag-blink 4.5s steps(1) infinite; }
+.ag-char.ag-speaking .p-talk { animation: ag-talk .36s steps(1) infinite; }
+.ag-char.ag-moving .p-all { animation: ag-bob .3s steps(1) infinite; }
+.ag-char.ag-moving .p-wheels { animation: ag-talk .2s steps(1) infinite; }
+.ag-char[class*="ag-a-"] .p-all, .ag-char[class*="ag-a-"] .p-arm-l, .ag-char[class*="ag-a-"] .p-arm-r, .ag-char[class*="ag-a-"] .p-eyes,
+.ag-char[class*="ag-a-"] .p-think, .ag-char[class*="ag-a-"] .p-spark, .ag-char[class*="ag-a-"] .p-bang, .ag-char[class*="ag-a-"] .p-puff,
+.ag-char[class*="ag-a-"] > svg { animation-duration: var(--ag-dur); animation-timing-function: steps(1, end); animation-fill-mode: none; }
+.ag-a-wave .p-arm-r { animation-name: ag-wave; }
+.ag-a-greet .p-arm-r { animation-name: ag-wave; }
+.ag-a-greet .p-all { animation-name: ag-bow; }
+.ag-a-think .p-arm-l { animation-name: ag-chin; }
+.ag-a-think .p-think { animation-name: ag-show-dots; }
+.ag-a-think .p-eyes { animation-name: ag-look-up; }
+.ag-a-explain .p-arm-l { animation-name: ag-explain-l; }
+.ag-a-explain .p-arm-r { animation-name: ag-explain-r; }
+.ag-a-congratulate .p-all { animation-name: ag-jump; }
+.ag-a-congratulate .p-arm-l { animation-name: ag-up-l; }
+.ag-a-congratulate .p-arm-r { animation-name: ag-up-r; }
+.ag-a-congratulate .p-spark { animation-name: ag-flash; }
+.ag-a-pleased .p-all { animation-name: ag-bow; }
+.ag-a-pleased .p-spark { animation-name: ag-flash; }
+.ag-a-surprised .p-all { animation-name: ag-startle; }
+.ag-a-surprised .p-bang { animation-name: ag-hold; }
+.ag-a-surprised .p-arm-l { animation-name: ag-up-l; }
+.ag-a-surprised .p-arm-r { animation-name: ag-up-r; }
+.ag-a-sad .p-all { animation-name: ag-droop; }
+.ag-a-sad .p-eyes { animation-name: ag-look-down; }
+.ag-a-idle .p-eyes { animation-name: ag-look-around; }
+.ag-a-blink .p-eyes { animation-name: ag-hide; }
+.ag-a-acknowledge .p-all { animation-name: ag-nod; }
+.ag-a-gestureleft .p-arm-l { animation-name: ag-point-l; }
+.ag-a-gestureright .p-arm-r { animation-name: ag-point-r; }
+.ag-a-gestureup .p-arm-r { animation-name: ag-point-up; }
+.ag-a-gesturedown .p-arm-r { animation-name: ag-point-down; }
+/* the wizard holds his staff in that hand: he waves it, raises it and points with it instead of swinging his arm round */
+.ag-a-wave .ag-wizard .p-arm-r, .ag-a-greet .ag-wizard .p-arm-r, .ag-a-explain .ag-wizard .p-arm-r { animation-name: ag-staff-wave; }
+.ag-a-congratulate .ag-wizard .p-arm-r, .ag-a-surprised .ag-wizard .p-arm-r, .ag-a-gestureup .ag-wizard .p-arm-r { animation-name: ag-staff-up; }
+.ag-a-gestureright .ag-wizard .p-arm-r { animation-name: ag-staff-point; }
+.ag-a-gesturedown .ag-wizard .p-arm-r { animation-name: ag-staff-down; }
+.ag-a-showing > svg { animation-name: ag-appear; }
+.ag-a-hiding > svg { animation-name: ag-vanish; }
+.ag-a-showing .p-puff, .ag-a-hiding .p-puff { animation-name: ag-puff; }
+
+@keyframes ag-bulb { 0% { fill: #ff0000; } 50% { fill: #800000; } }
+@keyframes ag-orb { 0% { fill: #ff00ff; } 50% { fill: #800080; } 75% { fill: #ff80ff; } }
+@keyframes ag-blink { 0% { opacity: 1; } 96% { opacity: 0; } }
+@keyframes ag-talk { 0% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes ag-hide { 0% { opacity: 0; } }
+@keyframes ag-hold { 0% { opacity: 1; } 100% { opacity: 1; } }
+@keyframes ag-bob { 0% { transform: translateY(0); } 50% { transform: translateY(-1px); } }
+@keyframes ag-wave { 0% { transform: rotate(-60deg); } 12% { transform: rotate(-135deg); } 25% { transform: rotate(-165deg); } 38% { transform: rotate(-135deg); }
+  50% { transform: rotate(-165deg); } 62% { transform: rotate(-135deg); } 75% { transform: rotate(-165deg); } 88% { transform: rotate(-60deg); } }
+@keyframes ag-bow { 0% { transform: translateY(0); } 15% { transform: translateY(1px); } 30% { transform: translateY(2px); } 60% { transform: translateY(1px); } 80% { transform: translateY(0); } }
+@keyframes ag-chin { 0% { transform: rotate(-60deg); } 10% { transform: rotate(-120deg); } 20% { transform: rotate(-150deg); } 90% { transform: rotate(-90deg); } }
+@keyframes ag-show-dots { 0% { opacity: 0; } 15% { opacity: .5; } 25% { opacity: 1; } 92% { opacity: 0; } }
+@keyframes ag-look-up { 0% { transform: translate(0, 0); } 15% { transform: translate(1px, -1px); } 92% { transform: translate(0, 0); } }
+@keyframes ag-look-down { 0% { transform: translate(0, 0); } 15% { transform: translate(0, 1px); } 92% { transform: translate(0, 0); } }
+@keyframes ag-look-around { 0% { transform: translateX(0); } 20% { transform: translateX(-1px); } 45% { transform: translateX(0); } 55% { transform: translateX(1px); } 80% { transform: translateX(0); } 85% { opacity: 0; } 90% { opacity: 1; } }
+@keyframes ag-explain-l { 0% { transform: rotate(0); } 10% { transform: rotate(45deg); } 25% { transform: rotate(70deg); } 50% { transform: rotate(45deg); } 75% { transform: rotate(70deg); } 92% { transform: rotate(0); } }
+@keyframes ag-explain-r { 0% { transform: rotate(0); } 10% { transform: rotate(-70deg); } 25% { transform: rotate(-45deg); } 50% { transform: rotate(-70deg); } 75% { transform: rotate(-45deg); } 92% { transform: rotate(0); } }
+@keyframes ag-jump { 0% { transform: translateY(0); } 10% { transform: translateY(-3px); } 20% { transform: translateY(-5px); } 30% { transform: translateY(-3px); } 40% { transform: translateY(0); }
+  50% { transform: translateY(-3px); } 60% { transform: translateY(-5px); } 70% { transform: translateY(-3px); } 80% { transform: translateY(0); } }
+@keyframes ag-up-l { 0% { transform: rotate(0); } 10% { transform: rotate(140deg); } 85% { transform: rotate(140deg); } 92% { transform: rotate(0); } }
+@keyframes ag-up-r { 0% { transform: rotate(0); } 10% { transform: rotate(-140deg); } 85% { transform: rotate(-140deg); } 92% { transform: rotate(0); } }
+@keyframes ag-flash { 0% { opacity: 0; } 10% { opacity: 1; } 25% { opacity: 0; } 40% { opacity: 1; } 55% { opacity: 0; } 70% { opacity: 1; } 85% { opacity: 0; } }
+@keyframes ag-startle { 0% { transform: translate(0, 0); } 10% { transform: translate(1px, -3px); } 30% { transform: translate(1px, -1px); } 80% { transform: translate(0, 0); } }
+@keyframes ag-droop { 0% { transform: translateY(0); } 15% { transform: translateY(1px); } 85% { transform: translateY(1px); } }
+@keyframes ag-nod { 0% { transform: translateY(0); } 25% { transform: translateY(1px); } 50% { transform: translateY(0); } 75% { transform: translateY(1px); } }
+@keyframes ag-point-l { 0% { transform: rotate(0); } 10% { transform: rotate(50deg); } 20% { transform: rotate(90deg); } 85% { transform: rotate(90deg); } 92% { transform: rotate(40deg); } }
+@keyframes ag-point-r { 0% { transform: rotate(0); } 10% { transform: rotate(-50deg); } 20% { transform: rotate(-90deg); } 85% { transform: rotate(-90deg); } 92% { transform: rotate(-40deg); } }
+@keyframes ag-point-up { 0% { transform: rotate(0); } 10% { transform: rotate(-90deg); } 20% { transform: rotate(-160deg); } 85% { transform: rotate(-160deg); } 92% { transform: rotate(-80deg); } }
+@keyframes ag-point-down { 0% { transform: rotate(0); } 15% { transform: rotate(-35deg); } 85% { transform: rotate(-35deg); } }
+@keyframes ag-appear { 0% { clip-path: inset(100% 0 0 0); } 14% { clip-path: inset(84% 0 0 0); } 28% { clip-path: inset(68% 0 0 0); } 42% { clip-path: inset(52% 0 0 0); }
+  56% { clip-path: inset(36% 0 0 0); } 70% { clip-path: inset(20% 0 0 0); } 84% { clip-path: inset(6% 0 0 0); } 100% { clip-path: inset(0); } }
+@keyframes ag-vanish { 0% { clip-path: inset(0); } 14% { clip-path: inset(10% 0 0 0); } 28% { clip-path: inset(26% 0 0 0); } 42% { clip-path: inset(42% 0 0 0); }
+  56% { clip-path: inset(58% 0 0 0); } 70% { clip-path: inset(74% 0 0 0); } 84% { clip-path: inset(90% 0 0 0); } 100% { clip-path: inset(100% 0 0 0); } }
+@keyframes ag-staff-wave { 0% { transform: rotate(0); } 12% { transform: rotate(14deg); } 25% { transform: rotate(-12deg); } 38% { transform: rotate(14deg); }
+  50% { transform: rotate(-12deg); } 62% { transform: rotate(14deg); } 75% { transform: rotate(-12deg); } 88% { transform: rotate(0); } }
+@keyframes ag-staff-up { 0% { transform: translateY(0); } 10% { transform: translateY(-2px) rotate(-6deg); } 20% { transform: translateY(-4px) rotate(-8deg); } 85% { transform: translateY(-4px) rotate(-8deg); } 92% { transform: translateY(-1px); } }
+@keyframes ag-staff-point { 0% { transform: rotate(0); } 10% { transform: rotate(20deg); } 20% { transform: rotate(40deg); } 85% { transform: rotate(40deg); } 92% { transform: rotate(15deg); } }
+@keyframes ag-staff-down { 0% { transform: rotate(0); } 15% { transform: rotate(30deg); } 30% { transform: rotate(60deg); } 85% { transform: rotate(60deg); } }
+@keyframes ag-puff { 0% { opacity: 0; } 20% { opacity: .9; } 60% { opacity: .6; } 85% { opacity: 0; } }
+
+/* the Win98 speech balloon: tooltip yellow, black edge, round corners, a tail down to the character */
+.ag-balloon { display: none; position: absolute; left: -24px; bottom: calc(100% + 10px); width: max-content; max-width: 200px; min-width: 60px;
+  padding: 5px 7px; background: #ffffe1; color: #000; border: 1px solid #000; border-radius: 8px;
+  font: 11px "MS Sans Serif", Tahoma, sans-serif; line-height: 14px; white-space: normal; cursor: default; }
+.ag-balloon.shown { display: block; }
+.ag-balloon::before, .ag-balloon::after { content: ""; position: absolute; left: var(--tail, 56px); border: solid transparent; }
+.ag-balloon::before { top: 100%; border-width: 10px 6px 0 0; border-top-color: #000; }
+.ag-balloon::after { top: calc(100% - 1px); left: calc(var(--tail, 56px) + 1px); border-width: 8px 4px 0 0; border-top-color: #ffffe1; }
+.ag-balloon.below { bottom: auto; top: calc(100% + 10px); }
+.ag-balloon.below::before { top: auto; bottom: 100%; border-width: 0 6px 10px 0; border-top-color: transparent; border-bottom-color: #000; }
+.ag-balloon.below::after { top: auto; bottom: calc(100% - 1px); border-width: 0 4px 8px 0; border-top-color: transparent; border-bottom-color: #ffffe1; }
+.ag-balloon.think { border-style: dashed; border-radius: 14px; font-style: italic; }
+.ag-balloon.think::before, .ag-balloon.think::after { display: none; }

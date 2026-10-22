@@ -240,6 +240,8 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   custom('vbautotab', id => focusNext(id));
   // MSChart: a click on a bar, point or slice (1-based series = column, data point = row; MouseFlags 0; Cancel is not used)
   custom('vbpointselect', (id, d) => emit(id, 'PointSelected', [Number(d.series), Number(d.point), Number(d.flags), 0]));
+  // MMControl / MediaPlayer buttons, Agent characters clicked or dragged: the run session decides what happens (and which events follow)
+  custom('vbuseraction', (id, d) => send({ t: 'state', id, props: { UserAction: JSON.stringify(d) } }));
   custom('vbdirclick', (id, d) => emit(id, 'Click', [], { ListIndex: Number(d.index) }));
   custom('vbdiropen', (id, d) => emit(id, 'Change', [], { Path: String(d.path), List: [], ListIndex: -1 }));
   // WebBrowser: the page of a Navigate has loaded (reported even while the form is blocked: the run session raises the events)

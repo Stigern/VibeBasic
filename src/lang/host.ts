@@ -19,7 +19,8 @@ export interface VBObject {
   readonly defaultMember?: string;        // "Text" for TextBox, "Caption" for Label
   hasMember(name: string): boolean;
   getMember(name: string, args: VBValue[]): VBValue;              // also indexed: List1.List(2)
-  setMember(name: string, args: VBValue[], value: VBValue): void;
+  /** A Promise: the write finishes later and the statement waits for it. */
+  setMember(name: string, args: VBValue[], value: VBValue): void | Promise<void>;
   /** `refs[i]` is the by-reference slot of argument i when `byRefArgs(name)` lists i and the caller passed a variable (else undefined). */
   callMethod(name: string, args: VBValue[], refs?: (OutSlot | undefined)[]): VBValue | Promise<VBValue>;
   /** The 0-based positions of a method's ByRef parameters (`Winsock1.GetData data`); the method writes to them through `refs`. */

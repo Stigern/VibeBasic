@@ -39,7 +39,11 @@ export function describeControlTypes(): string {
     + ' in DataArrival(bytesTotal) Winsock1.GetData strData reads the text into a variable. Protocol sckUDPProtocol uses Bind and SendData with RemoteHost/RemotePort.'
     + ' A WebBrowser shows a page with Navigate "https://..." (NavigateComplete2, DocumentComplete, LocationURL, LocationName); many sites refuse to be shown inside another page.'
     + ' An MSChart draws a table of RowCount rows x ColumnCount columns (a column is a series, a row a data point; the sample data at first): chartType is VtChChartType2dBar 1, 3dBar 0, 2dLine 3, 2dArea 5, 2dStep 7, 2dPie 14, 2dXY 16 (3dLine 2, 3dArea 4, 3dStep 6); ShowLegend, TitleText, Stacking.'
-    + ' Code fills it with MSChart1.ChartData = a 2-D array (strings in the first row and column are the labels) or with Row, Column, Data, RowLabel and ColumnLabel (counts from 1); MSChart1.Plot.Axis(VtChAxisIdX).AxisTitle.Text sets an axis title.');
+    + ' Code fills it with MSChart1.ChartData = a 2-D array (strings in the first row and column are the labels) or with Row, Column, Data, RowLabel and ColumnLabel (counts from 1); MSChart1.Plot.Axis(VtChAxisIdX).AxisTitle.Text sets an axis title.'
+    + ' An MMControl plays a file: FileName = App.Path & "\\x.wav", Command = "Open", then Command = "Play" (Mode mciModePlay 526, mciModeStop 525; Position and Length in ms;'
+    + ' Notify = True before a command raises Done(NotifyCode) when it finishes). A MediaPlayer plays FileName (AutoStart) with Play, Pause, Stop; PlayStateChange(OldState, NewState), EndOfStream; CurrentPosition and Duration are seconds.'
+    + ' An Agent is invisible: Agent1.Characters.Load "Robby" (or "Wizard"), then Set c = Agent1.Characters("Robby"): c.Show, c.Speak "Hi", c.Play "Wave" (Greet, Think, Explain, Congratulate, Surprised, Idle),'
+    + ' c.MoveTo x, y and c.GestureAt x, y queue one after the other (pixels in the form); each returns a Request and raises Agent1_RequestComplete(Request).');
   return lines.join('\n');
 }
 

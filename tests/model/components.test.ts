@@ -18,9 +18,10 @@ test('component data drives the Toolbox: intrinsic controls first, then the chec
   const all = toolboxTools(availableComponents().map(c => c.file));
   expect([...all].sort()).toEqual([...TOOLBOX_ORDER].sort());
   // components without any control yet are not listed
-  expect(availableComponents().map(c => c.file)).toEqual(['MSCOMCTL.OCX', 'MSCOMCT2.OCX', 'COMDLG32.OCX', 'RICHTX32.OCX', 'MSFLXGRD.OCX', 'TABCTL32.OCX', 'SHDOCVW.DLL', 'MSINET.OCX', 'MSWINSCK.OCX', 'MSCHRT20.OCX', 'MSMASK32.OCX']);
+  expect(availableComponents().map(c => c.file)).toEqual(['MSCOMCTL.OCX', 'MSCOMCT2.OCX', 'COMDLG32.OCX', 'RICHTX32.OCX', 'MSFLXGRD.OCX', 'TABCTL32.OCX', 'SHDOCVW.DLL', 'MSINET.OCX', 'MSWINSCK.OCX', 'MSCHRT20.OCX', 'MSMASK32.OCX', 'MCI32.OCX', 'MSDXM.OCX', 'AGENTCTL.DLL']);
   expect(controlsOf('MSINET.OCX')).toEqual(['Inet']);
-  expect(controlsOf('MCI32.OCX')).toEqual([]);
+  expect(controlsOf('MCI32.OCX')).toEqual(['MMControl']);
+  expect(controlsOf('AGENTCTL.DLL')).toEqual(['Agent']);
 });
 
 test('an old project (no components) keeps its controls visible; a used component is always checked on load', () => {

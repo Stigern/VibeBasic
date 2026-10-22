@@ -101,6 +101,10 @@ const SHAPE_ONLY_METHODS = (): MethodDef[] => [
   { name: 'Move', params: MOVE }, { name: 'Refresh', params: '' }, { name: 'ZOrder', params: '[Position]' },
 ];
 
+/** MMControl's buttons, left to right (each has <Name>Enabled, <Name>Visible, <Name>Click and <Name>Completed). */
+export const MCI_BUTTONS = ['Prev', 'Next', 'Play', 'Pause', 'Back', 'Step', 'Stop', 'Record', 'Eject'] as const;
+const AGENT_MOUSE = 'ByVal CharacterID As String, ByVal Button As Integer, ByVal Shift As Integer, ByVal x As Integer, ByVal y As Integer';
+
 const def = (d: Omit<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'> &
   Partial<Pick<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'>>): ControlTypeDef =>
   ({ methods: baseMethods(), isContainer: false, invisibleAtRuntime: false, ...d });
@@ -662,6 +666,72 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
     events: [ev('PointSelected', 'Series As Integer, DataPoint As Integer, MouseFlags As Integer, Cancel As Integer'), evClick(), evDbl(), ...evMouse()],
   }),
+  // MCI32.OCX. The row of buttons Prev Next Play Pause Back Step Stop Record Eject. Command = "Open" / "Play" ... drives the device; the file is
+  // read by the backend and played by an HTML media element in the form window, while the run session keeps Mode and Position by its own clock
+  // (see run/objects/mediaControls.ts). Mode, Position, Length, From and To are in milliseconds (TimeFormat mciFormatMilliseconds; Hms and Msf
+  // are packed as in MCI). MediaSrc and MediaCmd are what the window gets.
+  MMControl: def({
+    type: 'MMControl', component: 'MCI32.OCX', namePrefix: 'MMControl', defaultWidth: 3540, defaultHeight: 330, toolboxTooltip: 'MMControl',
+    defaultEvent: 'Done', defaultMember: null,
+    props: [
+      ...common(),
+      bool('AutoEnable', true), en('BorderStyle', 1, ['mciBorderNone', 'mciFixedSingle']),
+      str('DeviceType'), str('FileName'),
+      en('Orientation', 0, ['mciOrientHorz', 'mciOrientVert']), en('RecordMode', 0, ['mciRecordInsert', 'mciRecordOverwrite']),
+      bool('Shareable', false), bool('Silent', false), int('UpdateInterval', 1000, { min: 0, max: 65535 }), int('Frames', 1, { designTime: false, min: 0 }),
+      ...MCI_BUTTONS.map(b => bool(`${b}Enabled`, false)), ...MCI_BUTTONS.map(b => bool(`${b}Visible`, true)),
+      rt('Command', 'string', ''), rt('Mode', 'int', 524, 'ro'), rt('Position', 'int', 0, 'ro'), rt('Length', 'int', 0, 'ro'), rt('Start', 'int', 0, 'ro'),
+      rt('From', 'int', 0), rt('To', 'int', 0), rt('Wait', 'bool', false), rt('Notify', 'bool', false), rt('TimeFormat', 'int', 0),
+      rt('Error', 'int', 0, 'ro'), rt('ErrorMessage', 'string', '', 'ro'), rt('NotifyValue', 'int', 0, 'ro'), rt('DeviceID', 'int', 0, 'ro'),
+      rt('CanPlay', 'bool', false, 'ro'), rt('CanEject', 'bool', false, 'ro'), rt('CanRecord', 'bool', false, 'ro'), rt('CanStep', 'bool', false, 'ro'),
+      rt('Tracks', 'int', 0, 'ro'), rt('Track', 'int', 1), rt('TrackLength', 'int', 0, 'ro'), rt('TrackPosition', 'int', 0, 'ro'), rt('UsesWindows', 'bool', false, 'ro'),
+      p('MediaSrc', 'string', '', { designTime: false, runtime: 'none' }), p('MediaCmd', 'string', '', { designTime: false, runtime: 'none' }),
+    ],
+    events: [
+      ...MCI_BUTTONS.flatMap(b => [ev(`${b}Click`, 'Cancel As Integer'), ev(`${b}Completed`, 'Errorcode As Long')]),
+      ev('Done', 'NotifyCode As Integer'), ev('StatusUpdate'),
+    ],
+  }),
+
+  // MSDXM.OCX (Windows Media Player 6.4): a display area (video) with the play/pause/stop buttons, a seek bar and a status line.
+  // CurrentPosition and Duration are seconds (Double); Volume is hundredths of a dB (-10000 silent .. 0 loudest).
+  MediaPlayer: def({
+    type: 'MediaPlayer', component: 'MSDXM.OCX', namePrefix: 'MediaPlayer', defaultWidth: 4200, defaultHeight: 3240, toolboxTooltip: 'MediaPlayer',
+    defaultEvent: 'PlayStateChange', defaultMember: null,
+    props: [
+      ...common(),
+      str('FileName'), bool('AutoStart', true), bool('AutoRewind', true), int('PlayCount', 1, { min: 0 }),
+      bool('ShowControls', true), bool('ShowPositionControls', true), bool('ShowTracker', true), bool('ShowStatusBar', false),
+      int('Volume', -600, { min: -10000, max: 0 }), bool('Mute', false),
+      rt('CurrentPosition', 'int', 0), rt('Duration', 'int', 0, 'ro'), rt('PlayState', 'int', 0, 'ro'), rt('ReadyState', 'int', 0, 'ro'),
+      p('MediaSrc', 'string', '', { designTime: false, runtime: 'none' }), p('MediaCmd', 'string', '', { designTime: false, runtime: 'none' }),
+    ],
+    events: [
+      ev('PlayStateChange', 'ByVal OldState As Long, ByVal NewState As Long'), ev('EndOfStream', 'ByVal Result As Long'),
+      ev('PositionChange', 'ByVal oldPosition As Double, ByVal newPosition As Double'),
+    ],
+    methods: [...baseMethods(), { name: 'Play', params: '' }, { name: 'Pause', params: '' }, { name: 'Stop', params: '' }, { name: 'Open', params: 'bstrFileName As String' }],
+  }),
+
+  // AGENTCTL.DLL (Microsoft Agent 2.0). Invisible: code loads characters (Characters.Load "Robby" or "Wizard", original pixel figures drawn
+  // in controls/agentArt.ts) that float over the form. Their Show / Hide / Speak / Play / MoveTo / GestureAt requests queue per character
+  // (run/objects/agentControl.ts). AgentChars is what the window draws: one JSON line per loaded character.
+  Agent: def({
+    type: 'Agent', component: 'AGENTCTL.DLL', namePrefix: 'Agent', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true, toolboxTooltip: 'Agent',
+    defaultEvent: 'Click', defaultMember: null, methods: [],
+    props: [
+      int('Left', 0), int('Top', 0), str('Tag'), bool('RaiseRequestErrors', true),
+      rt('Characters', 'string', '', 'ro'), rt('Connected', 'bool', true),
+      p('AgentChars', 'list', [], { designTime: false, runtime: 'none' }),
+    ],
+    events: [
+      ev('Click', AGENT_MOUSE), ev('DblClick', AGENT_MOUSE), ev('DragStart', AGENT_MOUSE), ev('DragComplete', AGENT_MOUSE),
+      ev('RequestStart', 'ByVal Request As Object'), ev('RequestComplete', 'ByVal Request As Object'),
+      ev('Show', 'ByVal CharacterID As String, ByVal Cause As Integer'), ev('Hide', 'ByVal CharacterID As String, ByVal Cause As Integer'),
+      ev('Move', 'ByVal CharacterID As String, ByVal x As Integer, ByVal y As Integer, ByVal Cause As Integer'),
+      ev('BalloonShow', 'ByVal CharacterID As String'), ev('BalloonHide', 'ByVal CharacterID As String'),
+    ],
+  }),
 };
 
 /** VB6 toolbox order: every control type. The Toolbox shows the intrinsic ones, then the checked components' ones
@@ -670,7 +740,7 @@ export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
   'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar',
   'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit',
-  'WebBrowser', 'Inet', 'Winsock', 'MSChart',
+  'WebBrowser', 'Inet', 'Winsock', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent',
 ];
 
 // ---------------------------------------------------------------------------------------------------------------

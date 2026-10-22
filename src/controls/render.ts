@@ -17,6 +17,8 @@ import { TBR_DROPDOWN, TBR_PLACEHOLDER, TBR_SEPARATOR, parseButton } from '../mo
 import { flagOn, ssTabLayout } from '../model/ssTab';
 import { twipsToPx } from '../model/twips';
 import { msChart } from './chart';
+import { mediaPlayer, mmControl } from './media';
+import { agentControl } from './agent';
 import { dtPicker, maskedEdit, monthView } from './calendar';
 import { inetIcon, webBrowser, winsockIcon } from './webBrowser';
 import { decodeRuns, encodeRuns, formatAt, readRuns, replaceRange, selectionOffsets, setSelectionOffsets, writeRuns, type Run, type RtfFormat, type RtfPatch } from './richText';
@@ -133,6 +135,8 @@ export interface Renderer {
   patch(keys: Keys): void;
   /** Background colour of `el`; null = none. Default: BackColor when the type has one. */
   bg?(): string | null;
+  /** Shown at run time although the type is invisible at run time (the Agent's layer of characters). */
+  overlay?: boolean;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1431,6 +1435,9 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   Inet: inetIcon,
   Winsock: winsockIcon,
   MSChart: msChart,
+  MMControl: mmControl,
+  MediaPlayer: mediaPlayer,
+  Agent: agentControl,
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1488,7 +1495,7 @@ export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetRe
       el.style.top = `${twipsToPx(typeof props.Top === 'number' ? props.Top : 0)}px`;
       ctx.applySize();
     }
-    const hidden = mode === 'run' && (td.invisibleAtRuntime || !ctx.bool('Visible'));
+    const hidden = mode === 'run' && !r.overlay && (td.invisibleAtRuntime || !ctx.bool('Visible'));
     el.style.display = hidden ? 'none' : '';
     const disabled = mode === 'run' && 'Enabled' in defaults && !ctx.bool('Enabled');
     el.classList.toggle('vb-disabled', disabled);
@@ -1507,7 +1514,7 @@ export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetRe
     if (ie) {
       if (mode === 'design') { ie.tabIndex = -1; ie.style.pointerEvents = 'none'; }
       else {
-        ie.tabIndex = props.TabStop === false || def.type === 'StatusBar' || def.type === 'Toolbar' ? -1 : 0;
+        ie.tabIndex = props.TabStop === false || def.type === 'StatusBar' || def.type === 'Toolbar' || def.type === 'Agent' ? -1 : 0;
         if ('disabled' in ie) (ie as HTMLButtonElement).disabled = disabled;
         else ie.setAttribute('aria-disabled', String(disabled));
       }
