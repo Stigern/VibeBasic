@@ -1,9 +1,9 @@
 // Run-time control objects: a ControlObject mirrors one control's properties and queues every change
 // as a patch to the form window; a ControlArrayObject is the `Command1(i)` collection.
 
-import type { VBObject } from '../../lang/host';
+import type { OutSlot, VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
-import { Empty, Nothing, Null, NullT, coerce, isObject, toBool, toStr, type VBDate, type VBValue } from '../../lang/values';
+import { Empty, Nothing, Null, NullT, coerce, isObject, toBool, toStr, type VBDate, type VBRef, type VBValue } from '../../lang/values';
 import { CONTROL_TYPES, getPropDef, type PropDef } from '../../model/controls';
 import { decodeRuns, encodeRuns, formatAt, formatRange, replaceRange, runsText, type RtfPatch, type Run } from '../../controls/richText';
 import type { DirListing, Volume } from '../../backend/backend';
@@ -24,6 +24,8 @@ import { dirListItem, filterFiles, findVolume, joinPath, normalizePath, resolveP
 import { columnLine, iconLine, listLine, makeColumns, makeListItems, makeNodes, nodeLines, TreeNode, type NodesCollection, type Picker } from './listCollections';
 import { listImageItemLine, makeButtons, makeListImages, toolbarLine } from './imageCollections';
 import { parseButton, setPressed } from '../../model/toolbar';
+import type { NetSession } from '../net';
+import { InetControl, WebBrowserControl, WinsockControl, type NetControl, type NetHost } from './netControls';
 
 export interface RunContext {
   resolveAsset(ref: PictureRef): string | null;
@@ -42,6 +44,10 @@ export interface RunContext {
   files?: FileContext;
   /** A control of the form by name (what `Toolbar1.ImageList` returns). */
   controlByName?(name: string): ControlObject | ControlArrayObject | undefined;
+  /** Inet, Winsock, WebBrowser: the run's network (made on first use). Throws when there is none. */
+  net?(): NetSession;
+  /** Raises an event of the control from outside code (a socket's DataArrival ...); resolves when the handler has finished. */
+  raise?(ctrl: ControlObject, event: string, args: VBRef[]): Promise<void>;
 }
 
 /** The properties that name an ImageList of the form (`Toolbar1.ImageList = ImageList1`). */
@@ -110,6 +116,8 @@ export class ControlObject implements VBObject {
   private pendingName: string | null = null;
   /** DriveListBox: the volumes, once known. */
   private volumes: Volume[] | null = null;
+  /** Winsock, Inet, WebBrowser: their methods and network state. */
+  private ext: NetControl | null = null;
 
   constructor(readonly def: ControlDef, private formKey: string, private queue: PatchQueue, private ctx: RunContext) {
     const td = CONTROL_TYPES[def.type];
@@ -134,6 +142,9 @@ export class ControlObject implements VBObject {
       this.reload();
     } else if (def.type === 'DriveListBox') this.loadVolumes();
     if (def.type === 'SSTab') syncSSTab(this.props, 'Tabs');
+    if (def.type === 'Winsock') this.ext = new WinsockControl(this.netHost());
+    else if (def.type === 'Inet') this.ext = new InetControl(this.netHost());
+    else if (def.type === 'WebBrowser') this.ext = new WebBrowserControl(this.netHost());
     if (def.type === 'MonthView') {   // the selection starts out as the Value
       const v = typeof this.props.Value === 'number' ? dayOf(this.props.Value) : dayOf(Number(CONTROL_TYPES.MonthView.props.find(p => p.name === 'Value')!.default));
       this.props.Value = v;
@@ -164,6 +175,27 @@ export class ControlObject implements VBObject {
       this.syncGrid();
     }
   }
+
+  // -- Winsock, Inet and WebBrowser --------------------------------------------------------------------------------
+
+  private netHost(): NetHost {
+    return {
+      props: this.props, name: this.def.name, self: this,
+      raise: (event, args) => this.ctx.raise?.(this, event, args) ?? Promise.resolve(),
+      net: () => {
+        const n = this.ctx.net?.();
+        if (!n) throw new VBRuntimeError(429, 'ActiveX component can\'t create object');
+        return n;
+      },
+      send: p => this.send(p),
+    };
+  }
+
+  /** The form unloads or the program ends: sockets close, requests are aborted. */
+  dispose(): void { this.ext?.dispose(); }
+
+  /** Winsock GetData / PeekData write to their first argument. */
+  byRefArgs(name: string): readonly number[] | undefined { return this.ext?.byRef?.[name.toLowerCase()]; }
 
   // -- DriveListBox, DirListBox and FileListBox ----------------------------------------------------------------
 
@@ -408,6 +440,7 @@ export class ControlObject implements VBObject {
       this.props[getPropDef(this.def.type, k)?.name ?? k] = v;
     }
     if (isBrowserType(this.def.type) && 'Path' in props && this.props.Path !== oldPath) this.reload();   // a folder opened by a double click
+    this.ext?.applyState?.(props);
     if (this.def.type === 'RichTextBox') {   // the user typed, or moved the selection
       if ('Runs' in props) this.runs = decodeRuns(String(props.Runs ?? '')) ?? (this.props.Text ? [{ text: String(this.props.Text), fmt: {} }] : []);
       if ('SelStart' in props || 'SelLength' in props) this.pendingFmt = null;
@@ -432,6 +465,8 @@ export class ControlObject implements VBObject {
       if (this.def.index === null) throw new VBRuntimeError(343, 'Object not an array');
       return this.def.index;
     }
+    // a method used as a function: `s = Inet1.OpenURL(url)` (the interpreter waits for a Promise)
+    if (this.ext && !getPropDef(this.def.type, name) && CONTROL_TYPES[this.def.type].methods.some(m => m.name.toLowerCase() === l)) return this.callMethod(name, args) as VBValue;
     const pd = this.propDef(name);
     const col = this.collections.get(l);
     if (col) return args.length ? col.getMember('Item', args) : col;
@@ -514,7 +549,9 @@ export class ControlObject implements VBObject {
     if (args.length) throw new VBRuntimeError(450);
     if (this.def.type === 'MaskedEdit' && pd.name === 'SelText' && String(this.props.Mask ?? '') !== '') { this.maskSelText(toStr(this.plain(value))); return; }
     if (isDateType(this.def.type) && DATE_PARTS.has(pd.name)) { this.setDatePart(pd.name, num(this.plain(value))); return; }
-    this.write(pd, this.convert(pd, value));
+    const v = this.convert(pd, value);
+    if (this.ext?.set?.(pd.name, v)) return;
+    this.write(pd, v);
   }
 
   /** MaskedEdit.SelText = "x" with a Mask: the characters are typed over the selection (those that do not fit are left out). */
@@ -547,9 +584,10 @@ export class ControlObject implements VBObject {
     return clampDate(s, Number(this.props.MinDate), Number(this.props.MaxDate));
   }
 
-  callMethod(name: string, args: VBValue[]): VBValue | Promise<VBValue> {
+  callMethod(name: string, args: VBValue[], refs?: (OutSlot | undefined)[]): VBValue | Promise<VBValue> {
     const l = name.toLowerCase();
     if (!CONTROL_TYPES[this.def.type].methods.some(m => m.name.toLowerCase() === l)) throw new VBRuntimeError(438);
+    if (this.ext) { const r = this.ext.call(l, args, refs); if (r !== undefined) return r; }
     switch (l) {
       case 'move': return this.move(args);
       case 'setfocus': this.queue.send(this.formKey, { t: 'focus', id: this.def.id }); return Empty;
@@ -813,7 +851,7 @@ export class ControlObject implements VBObject {
   }
 
   private send(props: Record<string, PropValue>): void {
-    if (this.def.type === 'Timer' || this.def.type === 'CommonDialog') return;   // no view
+    if (this.def.type === 'Timer' || this.def.type === 'CommonDialog' || this.def.type === 'Inet' || this.def.type === 'Winsock') return;   // no view
     this.queue.set(this.formKey, this.def.id, props);
     // a RichTextBox applies each change at the selection as it is now: no merging of SelStart = 3 and SelBold = True into one patch
     if (this.def.type === 'RichTextBox') this.queue.flush();
@@ -975,12 +1013,39 @@ export class ControlObject implements VBObject {
 }
 
 /** `Command1(i)`: the controls sharing one name, addressed by Index. */
+/** Load / Unload of control array elements at run time (the form makes and drops them). */
+export interface ElementFactory {
+  spawn(template: ControlObject, index: number): ControlObject;
+  drop(c: ControlObject): void;
+}
+
 export class ControlArrayObject implements VBObject {
   readonly vbTypeName = 'Object';
   private members = new Map<number, ControlObject>();
+  /** The elements made by `Load Name(i)` (only those can be unloaded). */
+  private loaded = new Set<ControlObject>();
 
-  constructor(readonly name: string, controls: ControlObject[] = []) {
+  constructor(readonly name: string, controls: ControlObject[] = [], private factory?: ElementFactory) {
     for (const c of controls) this.add(c);
+  }
+
+  /** `Load Name(i)`: a new element with the design-time properties of the lowest one. 360 when it exists. */
+  loadElement(index: number): void {
+    if (!this.factory) throw new VBRuntimeError(438);
+    if (this.members.has(index)) throw new VBRuntimeError(360, 'Object already loaded');
+    if (index < 0 || index > 32767) throw new VBRuntimeError(340, `Control array element '${index}' doesn't exist`);
+    const c = this.factory.spawn(this.sorted()[0], index);
+    this.add(c);
+    this.loaded.add(c);
+  }
+
+  /** `Unload Name(i)`: only an element made by Load (362 for one made at design time). */
+  unloadElement(index: number): void {
+    const c = this.item(index);
+    if (!this.loaded.has(c) || !this.factory) throw new VBRuntimeError(362, 'Can\'t unload controls created at design time');
+    this.loaded.delete(c);
+    this.remove(index);
+    this.factory.drop(c);
   }
 
   add(c: ControlObject): void { this.members.set(c.index ?? 0, c); }

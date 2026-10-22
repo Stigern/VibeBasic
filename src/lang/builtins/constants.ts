@@ -105,3 +105,29 @@ group({
   dtpLongDate: 0, dtpShortDate: 1, dtpTime: 2, dtpCustom: 3,
   mvwSunday: 1, mvwMonday: 2, mvwTuesday: 3, mvwWednesday: 4, mvwThursday: 5, mvwFriday: 6, mvwSaturday: 7,
 });
+
+// Inet (MSINET.OCX): StateChanged states, protocols, access types, data types
+group({
+  icNone: 0, icHostResolvingHost: 1, icHostResolved: 2, icConnecting: 3, icConnected: 4, icRequesting: 5, icRequestSent: 6,
+  icReceivingResponse: 7, icResponseReceived: 8, icDisconnecting: 9, icDisconnected: 10, icError: 11, icResponseCompleted: 12,
+  icUnknown: 0, icDefault: 1, icFTP: 2, icReserved: 3, icHTTP: 4, icHTTPS: 5,
+  icUseDefault: 0, icDirect: 1, icNamedProxy: 2,
+  icString: 0, icByteArray: 1,
+});
+
+// Winsock (MSWINSCK.OCX): protocols, states and error numbers
+group({
+  sckTCPProtocol: 0, sckUDPProtocol: 1,
+  sckClosed: 0, sckOpen: 1, sckListening: 2, sckConnectionPending: 3, sckResolvingHost: 4, sckHostResolved: 5,
+  sckConnecting: 6, sckConnected: 7, sckClosing: 8, sckError: 9,
+  sckOutOfMemory: 7, sckInvalidPropertyValue: 380, sckGetNotSupported: 394, sckSetNotSupported: 383,
+  sckBadState: 40006, sckInvalidArg: 40014, sckSuccess: 40017, sckUnsupported: 40018, sckInvalidOp: 40020, sckOutOfRange: 40021, sckWrongProtocol: 40026,
+  sckOpCanceled: 10004, sckInvalidArgument: 10014, sckWouldBlock: 10035, sckInProgress: 10036, sckAlreadyComplete: 10037, sckNotSocket: 10038,
+  sckMsgTooBig: 10040, sckPortNotSupported: 10043, sckAddressInUse: 10048, sckAddressNotAvailable: 10049, sckNetworkSubsystemFailed: 10050,
+  sckNetworkUnreachable: 10051, sckNetReset: 10052, sckConnectAborted: 10053, sckConnectionReset: 10054, sckNoBufferSpace: 10055,
+  sckAlreadyConnected: 10056, sckNotConnected: 10057, sckSocketShutdown: 10058, sckTimedout: 10060, sckConnectionRefused: 10061,
+  sckNotInitialized: 10093, sckHostNotFound: 11001, sckHostNotFoundTryAgain: 11002, sckNonRecoverableError: 11003, sckNoData: 11004,
+});
+
+// WebBrowser (SHDOCVW.DLL): Navigate flags
+group({ navOpenInNewWindow: 1, navNoHistory: 2, navNoReadFromCache: 4, navNoWriteToCache: 8 });

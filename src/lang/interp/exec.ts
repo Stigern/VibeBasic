@@ -19,7 +19,7 @@ import { Empty, NothingT, NullT, VBArray, VBRef, compare, isObject, toNumber, ty
 import { EndSignal, nextTick, type Gen } from './driver';
 import { Frame, ProcRef, Run, Variable, lc, storeValue, type Slot } from './scope';
 import {
-  afterHostCall, assign, awaitHost, callBuiltin, callProc, constExpr, evalArgValues, evalExpr, formMethod, lookup, memberGet,
+  afterHostCall, assign, awaitHost, callBuiltin, callProc, constExpr, evalArgValues, evalExpr, formMethod, hostRefs, lookup, memberGet,
   methodArgs, variableOf, withObject,
 } from './eval';
 import { compareResult, plain, truthy } from './operators';
@@ -655,6 +655,19 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
       yield* enterBreak(f, 'pause');
       return;
     case 'unload': case 'load': {
+      // `Load Winsock1(i)`: an element of a control array, which may not exist yet
+      if (s.target.kind === 'call' && s.target.target.kind === 'name' && s.target.args.length === 1) {
+        const arr = yield* evalExpr(f, s.target.target);
+        if (isObject(arr) && (s.kind === 'load' ? arr.loadElement : arr.unloadElement)) {
+          const a = s.target.args[0];
+          if (a.kind === 'missing') throw new VBRuntimeError(450);
+          const index = toNumber(yield* evalExpr(f, a));
+          const r = s.kind === 'load' ? arr.loadElement!(index) : arr.unloadElement!(index);
+          if (r instanceof Promise) yield* awaitHost(f, r.then(() => Empty));
+          else yield* afterHostCall(f);
+          return;
+        }
+      }
       const obj = yield* evalExpr(f, s.target);
       if (obj instanceof NothingT) throw new VBRuntimeError(91);
       if (!isObject(obj)) throw new VBRuntimeError(424);
@@ -733,7 +746,7 @@ function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Com
 /** `obj.name args` as a statement: `callMethod` (a Promise result is awaited). */
 function* callObjectMethod(f: Frame, obj: VBObject, name: string, args: (Expr | MissingArg)[]): Gen<void> {
   const argv = yield* evalArgValues(f, args);
-  const r = obj.callMethod(name, methodArgs(argv));
+  const r = obj.callMethod(name, methodArgs(argv), yield* hostRefs(f, obj, name, args));
   if (r instanceof Promise) yield* awaitHost(f, r);
   else yield* afterHostCall(f);
 }

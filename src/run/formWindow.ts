@@ -240,6 +240,11 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   custom('vbautotab', id => focusNext(id));
   custom('vbdirclick', (id, d) => emit(id, 'Click', [], { ListIndex: Number(d.index) }));
   custom('vbdiropen', (id, d) => emit(id, 'Change', [], { Path: String(d.path), List: [], ListIndex: -1 }));
+  // WebBrowser: the page of a Navigate has loaded (reported even while the form is blocked: the run session raises the events)
+  on<CustomEvent>('vbwebload', e => {
+    const tg = targetOf(e.target);
+    if (tg?.def?.type === 'WebBrowser') send({ t: 'state', id: tg.id, props: { Loaded: Number(e.detail.seq) } });
+  });
   custom('vbcolclick', (id, d) => emit(id, 'ColumnClick', [Number(d.index)]));
   custom('vbcellclick', (id, d) => {
     const cur = propsOf(id);

@@ -20,11 +20,20 @@ export interface VBObject {
   hasMember(name: string): boolean;
   getMember(name: string, args: VBValue[]): VBValue;              // also indexed: List1.List(2)
   setMember(name: string, args: VBValue[], value: VBValue): void;
-  callMethod(name: string, args: VBValue[]): VBValue | Promise<VBValue>;
+  /** `refs[i]` is the by-reference slot of argument i when `byRefArgs(name)` lists i and the caller passed a variable (else undefined). */
+  callMethod(name: string, args: VBValue[], refs?: (OutSlot | undefined)[]): VBValue | Promise<VBValue>;
+  /** The 0-based positions of a method's ByRef parameters (`Winsock1.GetData data`); the method writes to them through `refs`. */
+  byRefArgs?(name: string): readonly number[] | undefined;
+  /** `Load Name(i)` / `Unload Name(i)` of a control array element (a control array object only). */
+  loadElement?(index: number): void | Promise<void>;
+  unloadElement?(index: number): void | Promise<void>;
   item?(index: number): VBObject;         // control arrays: Command1(2)
   /** The elements for `For Each` (a control array's controls in index order, a collection's items). */
   items?(): VBObject[];
 }
+
+/** A by-reference argument of a host method: assigning `value` stores into the caller's variable (converted to its type). */
+export interface OutSlot { value: VBValue }
 
 /** Where code is running: module, procedure (`''` when none) and 1-based source line. */
 export interface CodeLocation { moduleName: string; procName: string; line: number }

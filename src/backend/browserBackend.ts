@@ -1,4 +1,4 @@
-import type { Backend, DirListing, FileFilter, Volume } from './backend';
+import type { Backend, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { ChatMessage } from '../ai/types';
 import { readSseEvent, parseSseChunk, type AiChatOptions } from '../ai/sse';
 
@@ -188,6 +188,38 @@ export class BrowserBackend implements Backend {
     const by = (a: string, b: string) => a.toLowerCase().localeCompare(b.toLowerCase());
     return { dirs: [...dirs].sort(by), files: files.sort((a, b) => by(a.name, b.name)) };
   }
+
+  // -- Inet with fetch (the page's CORS rules apply); no sockets in a browser --
+
+  private inetAborts = new Map<string, AbortController>();
+
+  async inetRequest(r: InetRequest): Promise<InetResponse> {
+    const ac = new AbortController();
+    this.inetAborts.set(r.id, ac);
+    const timer = r.timeoutSecs > 0 ? setTimeout(() => ac.abort(), r.timeoutSecs * 1000) : undefined;
+    const headers = new Headers();
+    for (const line of r.headers.split(/\r?\n/)) { const i = line.indexOf(':'); if (i > 0) headers.set(line.slice(0, i).trim(), line.slice(i + 1).trim()); }
+    try {
+      const res = await fetch(r.url, { method: r.method, headers, body: r.body.length ? r.body.slice() : undefined, signal: ac.signal });
+      return { status: res.status, statusText: res.statusText, version: 'HTTP/1.1', headers: [...res.headers.entries()], body: new Uint8Array(await res.arrayBuffer()) };
+    } catch {
+      throw new Error(ac.signal.aborted ? '35761|Request timed out' : '35754|Unable to connect to remote host');
+    } finally {
+      clearTimeout(timer);
+      this.inetAborts.delete(r.id);
+    }
+  }
+  async inetCancel(id: string): Promise<void> { this.inetAborts.get(id)?.abort(); }
+  private noSockets(): never { throw new Error('10050|Winsock needs the VibeBasic desktop app'); }
+  async sockConnect(): Promise<SocketInfo> { this.noSockets(); }
+  async sockListen(): Promise<SocketInfo> { this.noSockets(); }
+  async sockAccept(): Promise<SocketInfo> { this.noSockets(); }
+  async sockBind(): Promise<SocketInfo> { this.noSockets(); }
+  async sockSend(): Promise<void> { this.noSockets(); }
+  async sockClose(): Promise<void> { /* nothing is open */ }
+  async netReset(): Promise<void> { for (const ac of this.inetAborts.values()) ac.abort(); this.inetAborts.clear(); }
+  async netLocalIp(): Promise<string> { return '127.0.0.1'; }
+  async onSocketEvent(_handler: (e: SocketEvent) => void): Promise<() => void> { return () => {}; }
 
   async readTextFile(path: string): Promise<string> {
     const text = localStorage.getItem(FS_PREFIX + path);

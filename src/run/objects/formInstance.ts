@@ -10,8 +10,9 @@ import { CONTROL_TYPES, getPropDef } from '../../model/controls';
 import type { ControlDef, FormDef, PictureRef, PropValue } from '../../model/types';
 import type { FormHost, FormWindow } from '../formHost';
 import type { PatchQueue } from '../patchQueue';
+import type { NetSession } from '../net';
 import type { FormSnapshot, FromWindow, ToWindow } from '../protocol';
-import { ControlArrayObject, ControlObject, type RunContext } from './controlObject';
+import { ControlArrayObject, ControlObject, type ElementFactory, type RunContext } from './controlObject';
 
 /** What a form needs from its run session. */
 export interface FormSession {
@@ -32,6 +33,8 @@ export interface FormSession {
   pushModal(form: FormInstance): void;
   popModal(form: FormInstance): void;
   updateBlocked(): void;
+  /** Inet, Winsock, WebBrowser: the run's network (made on first use; throws when the host has none). */
+  net(): NetSession;
 }
 
 interface FormState {
@@ -78,6 +81,24 @@ export class FormInstance implements VBObject {
       dialogs: this.s.formHost,
       controlByName: n => this.state().byName.get(lc(n)),
       files: { listVolumes: () => this.s.formHost.listVolumes(), listDir: p => this.s.formHost.listDir(p), defaultPath: this.s.appPath },
+      net: () => this.s.net(),
+      raise: (c, event, args) => (this.st?.byId.get(c.def.id) === c && !this.s.ended ? this.fireControl(c, event, args) : Promise.resolve()),
+    };
+    // Load Name(i) / Unload Name(i): elements of controls without a view (Winsock, Inet, Timer ...) only
+    const elements: ElementFactory = {
+      spawn: (t, index) => {
+        if (!CONTROL_TYPES[t.def.type].invisibleAtRuntime) throw new VBRuntimeError(5, 'Loading an element of a visible control array is not supported');
+        const def: ControlDef = { ...t.def, id: `${t.def.id}~${index}`, index, props: copyProps(t.def.props) };
+        const c = new ControlObject(def, this.key, this.s.queue, ctx);
+        this.state().byId.set(def.id, c);
+        if (def.type === 'Timer') this.s.syncTimer(this, c);
+        return c;
+      },
+      drop: c => {
+        c.dispose();
+        this.st?.byId.delete(c.def.id);
+        if (c.def.type === 'Timer') { c.props.Enabled = false; this.s.syncTimer(this, c); }
+      },
     };
     const formDef = { id: 'form', type: 'Form', name: this.def.name, index: null, parentId: null, props: this.def.props } as unknown as ControlDef;
     const st: FormState = { form: new ControlObject(formDef, this.key, this.s.queue, ctx), byId: new Map(), byName: new Map() };
@@ -87,7 +108,7 @@ export class FormInstance implements VBObject {
       if (d.index === null) st.byName.set(lc(d.name), c);
       else {
         let arr = st.byName.get(lc(d.name));
-        if (!(arr instanceof ControlArrayObject)) st.byName.set(lc(d.name), arr = new ControlArrayObject(d.name));
+        if (!(arr instanceof ControlArrayObject)) st.byName.set(lc(d.name), arr = new ControlArrayObject(d.name, [], elements));
         arr.add(c);
       }
     }
@@ -194,6 +215,7 @@ export class FormInstance implements VBObject {
     this.blocked = false;
     this.loadDone = null;
     for (const t of timers) this.s.syncTimer(this, t);
+    for (const c of this.st?.byId.values() ?? []) c.dispose();   // sockets close, requests stop
     this.st = null;
     const w = this.window;
     this.window = null;

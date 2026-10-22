@@ -8,6 +8,7 @@ import { Program, type SourceModule } from '../lang/interp/program';
 import type { VBRef, VBValue } from '../lang/values';
 import type { PictureRef, Project } from '../model/types';
 import type { FormHost } from './formHost';
+import { NetSession } from './net';
 import { PatchQueue } from './patchQueue';
 import { AppObject, PictureObject, ScreenObject } from './objects/appObjects';
 import type { ControlObject } from './objects/controlObject';
@@ -63,6 +64,7 @@ export class RunSession implements Host, FormSession {
   private timers = new Map<ControlObject, ReturnType<typeof setInterval>>();
   private timerBusy = new Set<ControlObject>();
   private lastYield = -Infinity;   // performance.now() of the last real DoEvents yield
+  private netSession: NetSession | null = null;
 
   constructor(private project: Project, readonly formHost: FormHost, private cb: SessionCallbacks, readonly mode: 'ide' | 'app') {
     for (const [k, a] of Object.entries(project.assets)) this.assets[k] = `data:${a.mime};base64,${a.dataBase64}`;
@@ -112,6 +114,14 @@ export class RunSession implements Host, FormSession {
     if (this.ended || this.program.state === 'running' || this.program.state === 'break') return;
     for (const f of this.forms.values()) if (f.loaded) return;
     this.program.end();
+  }
+
+  /** Inet, Winsock, WebBrowser: made when the first such control is created; closed at the end of the program. */
+  net(): NetSession {
+    if (this.netSession) return this.netSession;
+    const api = this.formHost.net?.();
+    if (!api) throw new VBRuntimeError(429, 'ActiveX component can\'t create object');
+    return this.netSession = new NetSession(api);
   }
 
   resolveAsset(ref: PictureRef): string | null {
@@ -242,6 +252,7 @@ export class RunSession implements Host, FormSession {
     this.queue.stop();
     this.modalStack = [];
     for (const f of this.forms.values()) if (f.loaded || f.hasWindow()) f.teardown();
+    this.netSession?.shutdown();   // every socket closed, every Inet request aborted
     this.cb.onEnded();
   }
 }

@@ -45,5 +45,11 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
   MonthView: svg(box(1, 1, 14, 14) + '<rect x="2" y="2" width="12" height="3" fill="#000080"/><path d="M3 7h2M6 7h2M9 7h2M3 9h2M6 9h2M9 9h2M3 11h2M6 11h2M9 11h2M12 7h1M12 9h1" stroke="#808080"/>'
     + '<circle cx="7" cy="10" r="1.800" fill="none" stroke="#c00000"/>'),
   MaskedEdit: svg(box(1, 4, 14, 8) + '<path d="M3 9.500h2M6 9.500h2" stroke="#000"/><path d="M10 9.500h3" stroke="#808080"/><path d="M9.500 5.500h0M9 6v2M11 6v2M8.500 6.800h3M8.500 7.800h3" stroke="#000080" fill="none"/>'),
+  WebBrowser: svg(box(1, 1, 14, 14) + '<rect x="2" y="2" width="12" height="2" fill="#000080"/><circle cx="8" cy="9.500" r="4" fill="#00a0e0" stroke="#000080"/>'
+    + '<path d="M4 9.500h8M8 5.500v8M6 6.500c-1 2-1 4 0 6M10 6.500c1 2 1 4 0 6" stroke="#000080" fill="none"/>'),
+  Inet: svg('<circle cx="7" cy="7" r="5.500" fill="#00a0e0" stroke="#000080"/><path d="M1.500 7h11M7 1.500v11M4.500 2.500c-1.500 3-1.500 6 0 9M9.500 2.500c1.500 3 1.500 6 0 9" stroke="#000080" fill="none"/>'
+    + '<path d="M12 9v4M10 11.500l2 2.500 2-2.500" stroke="#008000" fill="none" stroke-width="1.500"/>'),
+  Winsock: svg(box(0, 2, 6, 5, '#c0c0c0') + '<rect x="1" y="3" width="4" height="3" fill="#008080"/>' + box(10, 9, 6, 5, '#c0c0c0') + '<rect x="11" y="10" width="4" height="3" fill="#008080"/>'
+    + '<path d="M3 7v4h7M6 4.500h4v4.500" stroke="#000" fill="none"/><path d="M1 8h4M11 15h4" stroke="#000"/>'),
   Form: svg(box(1, 2, 14, 12, '#c0c0c0') + '<rect x="2" y="3" width="12" height="3" fill="#000080"/>'),
 };

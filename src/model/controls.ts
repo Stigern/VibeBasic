@@ -574,6 +574,73 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       else if (name === 'Text') props.Text = fitText(String(props.Mask ?? ''), String(props.PromptChar ?? '_'), String(props.Text ?? ''));
     },
   }),
+
+  // SHDOCVW.DLL. An iframe in the form window; LocationURL / LocationName / Busy are kept by the run session (sites that forbid framing
+  // with X-Frame-Options or a CSP show an empty page). Navigate accepts http, https and about:blank.
+  WebBrowser: def({
+    type: 'WebBrowser', component: 'SHDOCVW.DLL', namePrefix: 'WebBrowser', defaultWidth: 4815, defaultHeight: 3615, toolboxTooltip: 'WebBrowser',
+    defaultEvent: 'StatusTextChange', defaultMember: null,
+    props: [
+      ...common(),
+      rt('LocationURL', 'string', '', 'ro'), rt('LocationName', 'string', '', 'ro'), rt('Busy', 'bool', false, 'ro'),
+    ],
+    events: [
+      ev('BeforeNavigate2', 'ByVal pDisp As Object, URL As Variant, Flags As Variant, TargetFrameName As Variant, PostData As Variant, Headers As Variant, Cancel As Boolean'),
+      ev('NavigateComplete2', 'ByVal pDisp As Object, URL As Variant'), ev('DocumentComplete', 'ByVal pDisp As Object, URL As Variant'),
+      ev('TitleChange', 'ByVal Text As String'), ev('StatusTextChange', 'ByVal Text As String'), ...evFocus(),
+    ],
+    methods: [
+      ...baseMethods(),
+      { name: 'Navigate', params: 'URL As String, [Flags], [TargetFrameName], [PostData], [Headers]' },
+      { name: 'Navigate2', params: 'URL, [Flags], [TargetFrameName], [PostData], [Headers]' },
+      { name: 'GoBack', params: '' }, { name: 'GoForward', params: '' }, { name: 'GoHome', params: '' }, { name: 'Stop', params: '' },
+    ],
+  }),
+
+  // MSINET.OCX. Invisible at run time. The requests are made by the Rust side (reqwest): http and https only. OpenURL waits for the answer;
+  // Execute returns at once and raises StateChanged with icResponseCompleted (12) or icError (11, ResponseCode / ResponseInfo).
+  Inet: def({
+    type: 'Inet', component: 'MSINET.OCX', namePrefix: 'Inet', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true, toolboxTooltip: 'Inet',
+    defaultEvent: 'StateChanged', defaultMember: 'URL',
+    props: [
+      int('Left', 0), int('Top', 0), str('Tag'),
+      en('AccessType', 0, ['icUseDefault', 'icDirect', 'icNamedProxy']),
+      en('Protocol', 4, ['icUnknown', 'icDefault', 'icFTP', 'icReserved', 'icHTTP', 'icHTTPS']),
+      str('URL'), str('RemoteHost'), int('RemotePort', 80, { min: 0, max: 65535 }), str('Document'),
+      str('UserName'), str('Password'), str('Proxy'),
+      int('RequestTimeout', 60, { min: 0 }),
+      rt('ResponseCode', 'int', 0, 'ro'), rt('ResponseInfo', 'string', '', 'ro'), rt('StillExecuting', 'bool', false, 'ro'), rt('hInternet', 'int', 0, 'ro'),
+    ],
+    events: [ev('StateChanged', 'ByVal State As Integer')],
+    methods: [
+      { name: 'OpenURL', params: '[URL], [DataType]' }, { name: 'Execute', params: '[URL], [Operation], [InputData], [InputHdrs]' },
+      { name: 'GetChunk', params: 'Size As Long, [DataType]' }, { name: 'GetHeader', params: '[HdrName]' }, { name: 'Cancel', params: '' },
+    ],
+  }),
+
+  // MSWINSCK.OCX. Invisible at run time. TCP (client and server) and UDP sockets of the Rust side (tokio); State has the sck* values.
+  // Strings are sent and received one byte per character (characters above 255 become "?").
+  Winsock: def({
+    type: 'Winsock', component: 'MSWINSCK.OCX', namePrefix: 'Winsock', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true, toolboxTooltip: 'Winsock',
+    defaultEvent: 'Error', defaultMember: null,
+    props: [
+      int('Left', 0), int('Top', 0), str('Tag'),
+      en('Protocol', 0, ['sckTCPProtocol', 'sckUDPProtocol']),
+      str('RemoteHost'), int('RemotePort', 0, { min: 0, max: 65535 }), int('LocalPort', 0, { min: 0, max: 65535 }),
+      rt('LocalIP', 'string', '127.0.0.1', 'ro'), rt('RemoteHostIP', 'string', '', 'ro'),
+      rt('State', 'int', 0, 'ro'), rt('BytesReceived', 'int', 0, 'ro'), rt('SocketHandle', 'int', -1, 'ro'),
+    ],
+    events: [
+      ev('Close'), ev('Connect'), ev('ConnectionRequest', 'ByVal requestID As Long'), ev('DataArrival', 'ByVal bytesTotal As Long'),
+      ev('Error', 'ByVal Number As Integer, Description As String, ByVal Scode As Long, ByVal Source As String, ByVal HelpFile As String, ByVal HelpContext As Long, CancelDisplay As Boolean'),
+      ev('SendComplete'), ev('SendProgress', 'ByVal bytesSent As Long, ByVal bytesRemaining As Long'),
+    ],
+    methods: [
+      { name: 'Accept', params: 'requestID As Long' }, { name: 'Bind', params: '[LocalPort], [LocalIP]' }, { name: 'Close', params: '' },
+      { name: 'Connect', params: '[RemoteHost], [RemotePort]' }, { name: 'GetData', params: 'data, [type], [maxLen]' }, { name: 'Listen', params: '' },
+      { name: 'PeekData', params: 'data, [type], [maxLen]' }, { name: 'SendData', params: 'data' },
+    ],
+  }),
 };
 
 /** VB6 toolbox order: every control type. The Toolbox shows the intrinsic ones, then the checked components' ones
@@ -582,6 +649,7 @@ export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
   'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar',
   'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit',
+  'WebBrowser', 'Inet', 'Winsock',
 ];
 
 // ---------------------------------------------------------------------------------------------------------------

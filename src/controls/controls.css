@@ -370,3 +370,10 @@
 .vb-MaskedEdit { background-color: #fff; }
 .vb-MaskedEdit.vb-bordered { box-shadow: var(--w98-sunken); padding: 2px; }
 .vb-MaskedEdit input.keep-sel::selection { background: #000080; color: #fff; }
+
+/* ---------- WebBrowser, Inet, Winsock ---------- */
+.vb-WebBrowser { background: #fff; box-shadow: var(--w98-sunken); padding: 2px; box-sizing: border-box; }
+.vb-web-design { width: 100%; height: 100%; background: #fff; }
+.vb-web-frame { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+.vb-Inet, .vb-Winsock { background: #c0c0c0; box-shadow: var(--w98-raised); }
+.vb-Inet svg, .vb-Winsock svg { display: block; }
