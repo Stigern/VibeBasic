@@ -209,3 +209,22 @@
 .vb-form > .title-bar .title-bar-text { margin-right: 6px; }
 .vb-form-client { position: relative; overflow: hidden; background-color: #c0c0c0; background-repeat: no-repeat; font-family: "Pixelated MS Sans Serif", Tahoma, Geneva, sans-serif; font-size: 11px; }
 .vb-grid { position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none; image-rendering: pixelated; }
+
+/* ---------- StatusBar ---------- */
+.vb-StatusBar { background: #c0c0c0; }
+.vb-stb { position: absolute; left: 0; top: 0; right: 0; bottom: 0; display: flex; gap: 2px; padding: 3px 0 0; box-sizing: border-box; outline: none; }
+.stb-panel { min-width: 0; box-sizing: border-box; padding: 0 3px; box-shadow: inset 1px 1px #808080, inset -1px -1px #fff;
+  white-space: pre; overflow: hidden; display: flex; align-items: center; }
+.stb-panel > span { flex: 1; min-width: 0; overflow: hidden; }
+.stb-grip { flex: none; width: 13px; background:
+  repeating-linear-gradient(135deg, transparent 0 2px, #808080 2px 3px, #fff 3px 4px) 0 0 / 100% 100%; clip-path: polygon(100% 0, 100% 100%, 0 100%); }
+
+/* ---------- TabStrip ---------- */
+.vb-ts { position: absolute; left: 0; top: 0; right: 0; bottom: 0; outline: none; }
+.ts-body { position: absolute; left: 0; right: 0; top: 21px; bottom: 0; box-sizing: border-box; box-shadow: var(--w98-raised); background: #c0c0c0; }
+.ts-tabs { position: absolute; left: 0; top: 0; right: 0; height: 22px; display: flex; align-items: flex-end; padding-left: 2px; overflow: hidden; }
+.ts-tab { position: relative; flex: none; box-sizing: border-box; height: 19px; margin: 0 -1px 0 0; padding: 0 8px; background: #c0c0c0;
+  box-shadow: inset 1px 1px #fff, inset -1px 0 #000, inset -2px 0 #808080; border-radius: 2px 2px 0 0; display: flex; align-items: center; white-space: pre; }
+.ts-tab.selected { height: 22px; margin-top: 0; z-index: 1; padding-bottom: 2px; box-shadow: inset 1px 1px #fff, inset -1px 0 #000, inset -2px 0 #808080; }
+.vb-TabStrip:focus-within .ts-tab.selected span { outline: 1px dotted #000; outline-offset: 1px; }
+.ts-tab u { border-bottom: 1px solid currentColor; }

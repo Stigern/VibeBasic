@@ -11,7 +11,7 @@ import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 type Props = Record<string, PropValue>;
 type Target = { id: string; def: ControlDef | null };
 
-const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame']);
+const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar']);
 const KEY_CODES: Record<string, number> = {
   Backspace: 8, Tab: 9, Enter: 13, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34, End: 35, Home: 36,
   ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46,
@@ -177,6 +177,18 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
       emit(tg.id, event, [], { Value: Number((e.target as HTMLElement).dataset.value) || 0 });
     });
   }
+  // StatusBar panel click (PanelClick gets the panel's 1-based index; the run session turns it into the Panel object)
+  on<CustomEvent>('vbpanelclick', e => {
+    const tg = targetOf(e.target);
+    if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl || !usable(tg.id)) return;
+    emit(tg.id, 'PanelClick', [Number(e.detail.index)]);
+  });
+  // TabStrip: a click on a tab selects it, then Click
+  on<CustomEvent>('vbtabclick', e => {
+    const tg = targetOf(e.target);
+    if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl || !usable(tg.id)) return;
+    emit(tg.id, 'Click', [], { SelectedTab: Number(e.detail.index) });
+  });
   on<CustomEvent>('vbselect', e => {
     const tg = targetOf(e.target);
     const ie = tg && viewOf(tg.id)?.inputEl as HTMLInputElement | undefined;

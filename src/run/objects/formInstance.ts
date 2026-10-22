@@ -241,7 +241,7 @@ export class FormInstance implements VBObject {
         const target = m.id === 'form' ? st.form : st.byId.get(m.id);
         if (!target) return;
         if (m.state) target.applyState(m.state);
-        const args = m.args.map(a => new VBRef(a));
+        const args = (m.id === 'form' ? m.args : target.eventArgs(m.event, m.args)).map(a => new VBRef(a));
         const done = m.id === 'form' ? this.s.fire(this.name, `Form_${m.event}`, args) : this.fireControl(target, m.event, args);
         if (m.requestId !== undefined) {
           const requestId = m.requestId, ref = args[args.length - 1];
@@ -275,6 +275,7 @@ export class FormInstance implements VBObject {
         break;
       case 'ListBox': if (prop === 'ListIndex' && changed) ev = 'Click'; break;
       case 'HScrollBar': case 'VScrollBar': if (prop === 'Value' && changed) ev = 'Change'; break;
+      case 'TabStrip': if (prop === 'SelectedTab' && changed) ev = 'Click'; break;
       case 'CheckBox': if (prop === 'Value' && changed) ev = 'Click'; break;
       case 'Label': if (prop === 'Caption' && changed) ev = 'Change'; break;
       case 'OptionButton':

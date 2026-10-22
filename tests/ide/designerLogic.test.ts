@@ -62,3 +62,15 @@ test('Line: bounding box from X1..Y2, hit-testing by distance to the segment, mo
   expect(hitTest(f, 600, 620)).toBe('ln');
   expect(hitTest(f, 200, 200)).toBe('b');
 });
+
+test('a StatusBar is docked to the bottom of the form, full width (hit test and rect ignore Left/Top/Width)', () => {
+  // default form 4800 x 3600 twips outer (320 x 240 px), sizable: client 312 x 214 px = 4680 x 3210 twips
+  const f = form([ctl('b', 'CommandButton', null, 100, 100, 1000, 500), ctl('s', 'StatusBar', null, 700, 50, 999, 315)]);
+  const r = absoluteRect(f, 's');
+  expect(r.left).toBe(0); expect(r.height).toBe(315); expect(r.width).toBe(4680);
+  expect(r.top + r.height).toBe(3210);
+  expect(hitTest(f, 100, r.top + 100)).toBe('s');
+  expect(hitTest(f, 150, 150)).toBe('b');
+  f.props.Height = 5000;   // moves with the form size
+  expect(absoluteRect(f, 's').top + 315).toBe(4605);
+});

@@ -26,5 +26,7 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
   Line: svg('<path d="M2 14L14 2" stroke="#000" stroke-width="1.5" fill="none" shape-rendering="auto"/>'),
   Slider: svg('<rect x="1.5" y="7" width="13" height="3" fill="#808080" stroke="#000"/><path d="M6 3.5h4v6l-2 2.5-2-2.5z" fill="#c0c0c0" stroke="#000"/><path d="M2 13v2M5 13v2M8 13v2M11 13v2M14 13v2" stroke="#000"/>'),
   UpDown: svg(box(4, 1, 8, 7, '#c0c0c0') + box(4, 8, 8, 7, '#c0c0c0') + '<path d="M6 6l2-3 2 3zM6 10l2 3 2-3z" fill="#000"/>'),
+  StatusBar: svg(box(1, 5, 14, 6, '#c0c0c0') + '<path d="M2.5 6.5h6v3h-6zM9.5 6.5h4v3h-4z" fill="#fff" stroke="#808080"/>'),
+  TabStrip: svg('<path d="M1.5 14.5v-9h13v9z" fill="#c0c0c0" stroke="#000"/><path d="M1.5 5.5v-2.5h5v2.5M7.5 5.5v-1.5h4v1.5" fill="#fff" stroke="#000"/>'),
   Form: svg(box(1, 2, 14, 12, '#c0c0c0') + '<rect x="2" y="3" width="12" height="3" fill="#000080"/>'),
 };

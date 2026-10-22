@@ -8,6 +8,8 @@ import { CONTROL_TYPES, getPropDef, type PropDef } from '../../model/controls';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../../model/types';
 import type { PatchQueue } from '../patchQueue';
 import { PictureObject, type HasPictureRef } from './appObjects';
+import type { ChangeKind, CollectionObject, ItemObject } from './collectionObject';
+import { makePanels, makeTabs, panelLine, tabLine } from './commonCollections';
 
 export interface RunContext {
   resolveAsset(ref: PictureRef): string | null;
@@ -52,6 +54,8 @@ export class ControlObject implements VBObject {
   readonly vbTypeName: string;
   readonly defaultMember?: string;
   readonly props: Record<string, PropValue> = {};
+  /** Item collections (lower-case property name): StatusBar.Panels, TabStrip.Tabs. */
+  private readonly collections = new Map<string, CollectionObject<ItemObject>>();
 
   constructor(readonly def: ControlDef, private formKey: string, private queue: PatchQueue, private ctx: RunContext) {
     const td = CONTROL_TYPES[def.type];
@@ -65,6 +69,51 @@ export class ControlObject implements VBObject {
     if (isListType(def.type)) {
       this.props.ListIndex = -1; this.props.NewIndex = -1;
     }
+    if (def.type === 'StatusBar') {
+      this.collections.set('panels', makePanels(this.lines('Panels'), (k, _i, at) => this.collectionChanged(k, at)));
+    } else if (def.type === 'TabStrip') {
+      const tabs = makeTabs(this.lines('Tabs'), (k, _i, at) => this.collectionChanged(k, at),
+        { get: () => Number(this.props.SelectedTab), set: i => this.selectTab(i) });
+      this.collections.set('tabs', tabs);
+      const sel = Number(this.props.SelectedTab);
+      this.props.SelectedTab = tabs.count === 0 ? 0 : Math.min(tabs.count, Math.max(1, sel || 1));
+    }
+  }
+
+  private lines(prop: string): string[] { return Array.isArray(this.props[prop]) ? [...(this.props[prop] as string[])] : []; }
+
+  /** A Panels/Tabs collection changed: keep the selected tab on the same tab, then send the lines to the window. */
+  private collectionChanged(kind: ChangeKind, at: number): void {
+    if (this.def.type === 'StatusBar') {
+      const lines = this.collections.get('panels')!.items().map(panelLine);
+      this.props.Panels = lines;
+      this.send({ Panels: lines });
+      return;
+    }
+    const tabs = this.collections.get('tabs')!;
+    let sel = Number(this.props.SelectedTab);
+    if (kind === 'clear') sel = 0;
+    else if (kind === 'add') sel = tabs.count === 1 ? 1 : at <= sel ? sel + 1 : sel;
+    else if (kind === 'remove') sel = at < sel ? sel - 1 : Math.min(sel, tabs.count);
+    const lines = tabs.items().map(tabLine);
+    this.props.Tabs = lines;
+    this.props.SelectedTab = sel;
+    this.send({ Tabs: lines, SelectedTab: sel });
+  }
+
+  /** TabStrip: select tab `i` by code (Tab.Selected = True, SelectedItem = …); raises Click like a click on the tab. */
+  private selectTab(i: number): void {
+    const old = this.props.SelectedTab;
+    if (i === old) return;
+    this.props.SelectedTab = i;
+    this.send({ SelectedTab: i });
+    this.ctx.propChanged?.(this, 'SelectedTab', old);
+  }
+
+  /** The arguments an event handler receives: object arguments (PanelClick's Panel) replace the index the window sent. */
+  eventArgs(event: string, args: (number | string)[]): VBValue[] {
+    if (event === 'PanelClick') return [this.collections.get('panels')?.find(args[0]) ?? Nothing];
+    return args;
   }
 
   get name(): string { return this.def.name; }
@@ -94,6 +143,12 @@ export class ControlObject implements VBObject {
       return this.def.index;
     }
     const pd = this.propDef(name);
+    const col = this.collections.get(l);
+    if (col) return args.length ? col.getMember('Item', args) : col;
+    if (pd.name === 'SelectedItem') {
+      if (args.length) throw new VBRuntimeError(450);
+      return this.collections.get('tabs')?.find(Number(this.props.SelectedTab)) ?? Nothing;
+    }
     if (pd.kind === 'list') return this.getListItem(args);
     if (pd.name === 'Selected') return this.selected(args);
     if (args.length) throw new VBRuntimeError(450);
@@ -106,6 +161,14 @@ export class ControlObject implements VBObject {
   setMember(name: string, args: VBValue[], value: VBValue): void {
     const pd = this.propDef(name);
     if (pd.runtime === 'ro' || name.toLowerCase() === 'name' || name.toLowerCase() === 'index') throw new VBRuntimeError(383);
+    if (pd.name === 'SelectedItem') {
+      if (args.length) throw new VBRuntimeError(450);
+      if (value === Nothing) throw new VBRuntimeError(91);
+      const tab = this.collections.get('tabs')?.items().find(t => t === value);
+      if (!tab) throw new VBRuntimeError(5);
+      this.selectTab(tab.index);
+      return;
+    }
     if (pd.kind === 'list') {
       if (args.length !== 1) throw new VBRuntimeError(450);
       const i = num(args[0]);

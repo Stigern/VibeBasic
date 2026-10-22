@@ -10,6 +10,8 @@
 import './controls.css';
 import { vbColorToCss } from '../model/colors';
 import { CONTROL_TYPES } from '../model/controls';
+import { splitFields } from '../model/fieldLines';
+import { isDocked } from '../model/geometry';
 import { twipsToPx } from '../model/twips';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../model/types';
 import { h, mnemonicNodes } from '../ui98/dom';
@@ -100,7 +102,7 @@ interface Ctx {
   setHost(e: HTMLElement | undefined): void;
   applySize(): void;
   /** Dispatches a bubbling event on the current inputEl. */
-  fire(type: string): void;
+  fire(type: string, detail?: unknown): void;
 }
 
 interface Renderer {
@@ -759,6 +761,86 @@ function upDown(c: Ctx): Renderer {
   };
 }
 
+/** StatusBar: sunken panels ('Text|Key|Width|Alignment' lines; Width 0 shares the space left over) or, with Style
+ *  sbrSimple, one panel with SimpleText. A click on a panel dispatches `vbpanelclick` ({ index }, 1-based) on inputEl. */
+function statusBar(c: Ctx): Renderer {
+  let root: HTMLElement;
+  const ALIGN = ['left', 'center', 'right'];
+  return {
+    build() {
+      root = h('div', { class: 'vb-stb' });
+      c.el.replaceChildren(root);
+      c.setInput(root);
+      if (c.mode === 'run') {
+        root.addEventListener('click', e => {
+          const p = (e.target as Element).closest<HTMLElement>('.stb-panel');
+          if (p && root.contains(p)) c.fire('vbpanelclick', { index: Number(p.dataset.index) });
+        });
+      }
+    },
+    patch(k) {
+      if (!has(k, 'Panels', 'Style', 'SimpleText')) return;
+      const simple = c.num('Style') === 1;
+      const lines = simple ? [c.str('SimpleText')] : c.list('Panels');
+      const panels = lines.map((line, i) => {
+        const f = simple ? [line] : splitFields(line);
+        const w = simple ? 0 : Number(f[2]) || 0, a = simple ? 0 : Number(f[3]) || 0;
+        const p = h('div', { class: 'stb-panel', dataset: { index: String(i + 1) } }, h('span', {}, f[0] ?? ''));
+        p.style.textAlign = ALIGN[a] ?? 'left';
+        if (w > 0) { p.style.flex = 'none'; p.style.width = `${twipsToPx(w)}px`; } else p.style.flex = '1 1 0';
+        return p;
+      });
+      root.replaceChildren(...panels, h('div', { class: 'stb-grip' }));
+    },
+    bg: () => null,
+  };
+}
+
+/** TabStrip: tab headers over an empty body (not a container). The selected tab is `SelectedTab` (1-based); a click
+ *  on a header (run mode) selects it and dispatches `vbtabclick` ({ index }) on inputEl. */
+function tabStrip(c: Ctx): Renderer {
+  let root: HTMLElement, tabs: HTMLElement;
+  const select = (i: number) => {
+    c.props.SelectedTab = i;
+    paint();
+    c.fire('vbtabclick', { index: i });
+  };
+  function paint() {
+    const sel = c.num('SelectedTab');
+    Array.from(tabs.children).forEach((t, i) => t.classList.toggle('selected', i + 1 === sel));
+  }
+  return {
+    build() {
+      tabs = h('div', { class: 'ts-tabs' });
+      root = h('div', { class: 'vb-ts', tabindex: '0' }, h('div', { class: 'ts-body' }), tabs);
+      c.el.replaceChildren(root);
+      c.setInput(root);
+      if (c.mode !== 'run') return;
+      root.addEventListener('mousedown', e => {
+        const t = (e.target as Element).closest<HTMLElement>('.ts-tab');
+        if (!t || !tabs.contains(t) || e.button !== 0 || root.getAttribute('aria-disabled') === 'true') return;
+        const i = Number(t.dataset.index);
+        if (i !== c.num('SelectedTab')) select(i);
+      });
+      root.addEventListener('keydown', e => {
+        const n = c.list('Tabs').length, d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+        if (!d || !n) return;
+        e.preventDefault();
+        const next = Math.min(n, Math.max(1, c.num('SelectedTab') + d));
+        if (next !== c.num('SelectedTab')) select(next);
+      });
+    },
+    patch(k) {
+      if (has(k, 'Tabs')) {
+        tabs.replaceChildren(...c.list('Tabs').map((line, i) =>
+          h('div', { class: 'ts-tab', dataset: { index: String(i + 1) } }, h('span', {}, ...mnemonicNodes(splitFields(line)[0] ?? '')))));
+      }
+      if (has(k, 'Tabs', 'SelectedTab')) paint();
+    },
+    bg: () => null,
+  };
+}
+
 const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   CommandButton: commandButton,
   Label: label,
@@ -778,6 +860,8 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   Line: line,
   Slider: slider,
   UpDown: upDown,
+  StatusBar: statusBar,
+  TabStrip: tabStrip,
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -801,7 +885,9 @@ export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetRe
     pic: n => { const v = get(n); return isRef(v) ? assets(v) : null; },
     setInput: e => { view.inputEl = e; },
     setHost: e => { view.childHost = e; },
-    fire: type => { view.inputEl?.dispatchEvent(new Event(type, { bubbles: true })); },
+    fire: (type, detail) => {
+      view.inputEl?.dispatchEvent(detail === undefined ? new Event(type, { bubbles: true }) : new CustomEvent(type, { bubbles: true, detail }));
+    },
     applySize() {
       const w = typeof props.Width === 'number' ? props.Width : td.defaultWidth;
       const hh = typeof props.Height === 'number' ? props.Height : td.defaultHeight;
@@ -850,7 +936,7 @@ export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetRe
     if (ie) {
       if (mode === 'design') { ie.tabIndex = -1; ie.style.pointerEvents = 'none'; }
       else {
-        ie.tabIndex = props.TabStop === false ? -1 : 0;
+        ie.tabIndex = props.TabStop === false || def.type === 'StatusBar' ? -1 : 0;
         if ('disabled' in ie) (ie as HTMLButtonElement).disabled = disabled;
         else ie.setAttribute('aria-disabled', String(disabled));
       }
@@ -989,6 +1075,19 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
     gridEl.style.backgroundSize = `${gx}px ${gy}px`;
   }
 
+  /** A StatusBar sits at the bottom edge of the form, full width (it follows the form when it is resized). */
+  function dock(): void {
+    const m = formMetrics(props);
+    for (const [id, d] of defs) {
+      const v = views.get(id);
+      if (!v || !isDocked(d)) continue;
+      const hPx = parseFloat(v.el.style.height) || twipsToPx(CONTROL_TYPES.StatusBar.defaultHeight);
+      v.el.style.left = '0px';
+      v.el.style.width = `${m.clientWidth}px`;
+      v.el.style.top = `${Math.max(0, m.clientHeight - hPx)}px`;
+    }
+  }
+
   // --- controls: a flat z-ordered list rendered as a tree by parentId, whatever order the array has ---
   const views = new Map<string, ControlView>();
   const defs = new Map<string, ControlDef>();
@@ -1030,11 +1129,16 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
   const surface: FormSurface = {
     el, clientEl, drawLayer, views,
     update(id, changed) {
-      if (id !== 'form') { views.get(id)?.update(changed); return; }
+      if (id !== 'form') {
+        views.get(id)?.update(changed);
+        const d = defs.get(id);
+        if (d && isDocked(d)) dock();
+        return;
+      }
       const keys = new Set(Object.keys(changed));
       Object.assign(props, changed);
       const chrome = ['Width', 'Height', 'BorderStyle', 'ControlBox', 'MinButton', 'MaxButton', 'Icon'];
-      if (chrome.some(k => keys.has(k))) layoutChrome();
+      if (chrome.some(k => keys.has(k))) { layoutChrome(); dock(); }
       else if (keys.has('Caption')) { const t = el.querySelector('.title-bar-text'); if (t) t.textContent = str('Caption'); }
       patchClient(keys);
     },
@@ -1042,6 +1146,7 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
       add(def, index);
       place(def.id);
       for (const d of defs.values()) if (d.parentId === def.id) place(d.id);   // children that arrived before their parent
+      dock();
     },
     removeControl(id) {
       const doomed = new Set<string>([id]);
@@ -1056,6 +1161,7 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
       for (const d of controls) if (views.has(d.id)) defs.set(d.id, d);
       order = controls.map(d => d.id).filter(i => views.has(i));
       for (const i of order) hostOf(defs.get(i)!).appendChild(views.get(i)!.el);
+      dock();
     },
     setGrid(o) {
       Object.assign(grid, Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)));
@@ -1072,5 +1178,6 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
   applyGrid();
   for (const d of form.controls) add(d);
   for (const id of [...order]) place(id);
+  dock();
   return surface;
 }

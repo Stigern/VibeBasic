@@ -2,7 +2,7 @@
 // FormDef.controls is a flat z-ordered list where a child may precede its parent; siblings later in the array are on top,
 // and children of a container are above the container.
 import { CONTROL_TYPES } from '../model/controls';
-import { controlPos, isLine } from '../model/geometry';
+import { controlPos, dockedRect, isDocked, isLine } from '../model/geometry';
 import type { ControlDef, FormDef } from '../model/types';
 
 export type Handle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
@@ -48,6 +48,7 @@ export function absoluteRect(form: FormDef, id: string): Rect {
   const map = byId(form);
   let c = map.get(id);
   if (!c) return { left: 0, top: 0, width: 0, height: 0 };
+  if (isDocked(c)) return dockedRect(form, c);   // a StatusBar sits at the bottom edge, full width
   const { width, height } = sizeOf(c);
   let left = 0, top = 0;
   const seen = new Set<string>();

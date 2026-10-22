@@ -361,7 +361,7 @@ export class StatementParser extends Parser {
     switch (t.kind) {
       case 'number': case 'string': case 'date': case 'ident': return true;
       case 'keyword': return ARG_START_KEYWORDS.has(lower(t));
-      case 'op': return t.text === '(' || t.text === '.' || t.text === '-' || t.text === '+';
+      case 'op': return t.text === '(' || t.text === '.' || t.text === '-' || t.text === '+' || t.text === ',';   // ',': an omitted first argument (Panels.Add , "key", "text")
       default: return false;
     }
   }

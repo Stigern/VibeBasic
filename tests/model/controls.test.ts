@@ -18,7 +18,7 @@ const ALL = Object.keys(CONTROL_TYPES) as ControlType[];
 const NON_FORM = ALL.filter(t => t !== 'Form') as Exclude<ControlType, 'Form'>[];
 
 test('registry has every ControlType keyed by its own type', () => {
-  expect(ALL.sort()).toEqual(['CheckBox', 'ComboBox', 'CommandButton', 'Form', 'Frame', 'HScrollBar', 'Image', 'Label', 'ListBox', 'OptionButton', 'PictureBox', 'ProgressBar', 'TextBox', 'Timer', 'VScrollBar', 'Shape', 'Line', 'Slider', 'UpDown'].sort());
+  expect(ALL.sort()).toEqual(['CheckBox', 'ComboBox', 'CommandButton', 'Form', 'Frame', 'HScrollBar', 'Image', 'Label', 'ListBox', 'OptionButton', 'PictureBox', 'ProgressBar', 'TextBox', 'Timer', 'VScrollBar', 'Shape', 'Line', 'Slider', 'UpDown', 'StatusBar', 'TabStrip'].sort());
   for (const [k, d] of Object.entries(CONTROL_TYPES)) expect(d.type).toBe(k);
 });
 
@@ -47,7 +47,7 @@ test('event and method names are unique per type', () => {
 });
 
 test('common properties on every type except Timer; Timer has exactly its five', () => {
-  for (const t of NON_FORM.filter(x => x !== 'Timer' && x !== 'Shape' && x !== 'Line')) {
+  for (const t of NON_FORM.filter(x => x !== 'Timer' && x !== 'Shape' && x !== 'Line' && x !== 'StatusBar')) {   // StatusBar: no TabIndex/TabStop (VB6)
     for (const p of ['Left', 'Top', 'Width', 'Height', 'Visible', 'Enabled', 'TabIndex', 'TabStop', 'Tag', 'ToolTipText'])
       expect(getPropDef(t, p), `${t}.${p}`).toBeDefined();
   }
@@ -162,7 +162,7 @@ test('methods', () => {
 
 test('toolbox order follows VB6', () => {
   expect(TOOLBOX_ORDER).toEqual(['Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
-    'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown']);
+    'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip']);
 });
 
 test('getPropDef is case-insensitive and returns undefined for unknown', () => {
@@ -277,4 +277,20 @@ test('Shape, Line, Slider, UpDown: events, defaults, geometry', async () => {
   const p = newProject();
   for (const t of ['Shape', 'Line', 'Slider', 'UpDown'] as const) p.forms[0].controls.push(newControl(p.forms[0], t, { left: 0, top: 0 }, null));
   expect(parseProject(serializeProject(p)).forms[0].controls.map(c => c.type)).toEqual(['Shape', 'Line', 'Slider', 'UpDown']);
+});
+
+test('StatusBar and TabStrip: defaults, Panels/Tabs are list props that survive a save and load, no focus props on StatusBar', async () => {
+  const { serializeProject, parseProject } = await import('../../src/model/serialize');
+  const p = newProject();
+  const sb = newControl(p.forms[0], 'StatusBar', { left: 0, top: 0 }, null), ts = newControl(p.forms[0], 'TabStrip', { left: 0, top: 0 }, null);
+  expect(sb.name).toBe('StatusBar1'); expect(sb.props).toMatchObject({ Height: 315, Style: 0, Panels: [''] });
+  expect(ts.props).toMatchObject({ Tabs: ['Tab 1'] });
+  sb.props.Panels = ['Ready|main|0|0', 'a\\|b']; ts.props.Tabs = ['One|a', 'Two'];
+  p.forms[0].controls.push(sb, ts);
+  const back = parseProject(serializeProject(p)).forms[0].controls;
+  expect(back[0].props.Panels).toEqual(['Ready|main|0|0', 'a\\|b']);
+  expect(back[1].props.Tabs).toEqual(['One|a', 'Two']);
+  expect(CONTROL_TYPES.StatusBar.events.map(e => e.name)).toEqual(expect.arrayContaining(['PanelClick', 'Click']));
+  expect(CONTROL_TYPES.TabStrip.defaultEvent).toBe('Click');
+  expect(getPropDef('StatusBar', 'TabIndex')).toBeUndefined();
 });

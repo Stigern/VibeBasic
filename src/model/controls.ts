@@ -317,12 +317,37 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
     events: [evChange(), ev('UpClick'), ev('DownClick'), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
+
+  // Panels / Tabs are one line per item, 'field|field|…' (see fieldLines.ts); at run time they seed the collections.
+  StatusBar: def({
+    type: 'StatusBar', namePrefix: 'StatusBar', defaultWidth: 4800, defaultHeight: 315, toolboxTooltip: 'StatusBar',
+    defaultEvent: 'PanelClick', defaultMember: null,
+    props: [
+      int('Left', 0), int('Top', 0), int('Width', 0), int('Height', 0), bool('Visible', true), bool('Enabled', true),
+      str('Tag'), str('ToolTipText'), font(),
+      en('Style', 0, ['sbrNormal', 'sbrSimple']), str('SimpleText'),
+      p('Panels', 'list', [''], { runtime: 'ro' }),
+    ],
+    events: [evClick(), evDbl(), ev('PanelClick', 'ByVal Panel As Panel'), ...evMouse()],
+  }),
+
+  TabStrip: def({
+    type: 'TabStrip', namePrefix: 'TabStrip', defaultWidth: 3600, defaultHeight: 2400, toolboxTooltip: 'TabStrip',
+    defaultEvent: 'Click', defaultMember: null,
+    props: [
+      ...common(), font(),
+      p('Tabs', 'list', ['Tab 1'], { runtime: 'ro' }),
+      rt('SelectedItem', 'string', ''),
+      p('SelectedTab', 'int', 1, { designTime: false, runtime: 'none' }),   // 1-based index of the selected tab (window state)
+    ],
+    events: [evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
 };
 
 /** VB6 toolbox order. */
 export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
-  'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown',
+  'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip',
 ];
 
 // ---------------------------------------------------------------------------------------------------------------
