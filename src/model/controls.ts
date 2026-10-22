@@ -389,13 +389,46 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
     events: [evClick(), evDbl(), ev('RowColChange'), ev('SelChange'), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
+  // Invisible at run time, like Timer (Left and Top only). ShowOpen / ShowSave / ShowColor / ShowFont are run by the run session;
+  // ShowPrinter and ShowHelp are not supported (438). FileTitle is run-time only.
+  CommonDialog: def({
+    type: 'CommonDialog', namePrefix: 'CommonDialog', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true, toolboxTooltip: 'CommonDialog',
+    defaultEvent: '', defaultMember: null,
+    props: [
+      int('Left', 0), int('Top', 0), str('Tag'),
+      str('FileName'), rt('FileTitle', 'string', ''), str('Filter'), int('FilterIndex', 1, { min: 0 }),
+      str('DialogTitle'), str('InitDir'), int('Flags', 0),
+      color('Color', 0), str('FontName', 'MS Sans Serif'), int('FontSize', 8, { min: 1, max: 999 }),
+      bool('FontBold', false), bool('FontItalic', false), bool('FontUnderline', false),
+      bool('CancelError', false),
+    ],
+    events: [],
+    methods: [
+      { name: 'ShowOpen', params: '' }, { name: 'ShowSave', params: '' }, { name: 'ShowColor', params: '' }, { name: 'ShowFont', params: '' },
+    ],
+  }),
+
+  // Text is plain text; the formatting of the selection is run-time only (SelBold ...). The window reports SelStart, SelLength and the Sel* format.
+  RichTextBox: def({
+    type: 'RichTextBox', namePrefix: 'RichTextBox', defaultWidth: 2415, defaultHeight: 975, toolboxTooltip: 'RichTextBox',
+    defaultEvent: 'Change', defaultMember: 'Text',
+    props: [
+      ...common(), txt('Text'), bool('Locked', false), bool('MultiLine', true, { runtime: 'ro' }),
+      en('ScrollBars', 0, ['rtfNone', 'rtfHorizontal', 'rtfVertical', 'rtfBoth'], { runtime: 'ro' }),
+      color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
+      rt('SelStart', 'int', 0), rt('SelLength', 'int', 0), rt('SelText', 'string', ''),
+      rt('SelBold', 'bool', false), rt('SelItalic', 'bool', false), rt('SelUnderline', 'bool', false),
+      rt('SelColor', 'color', WIN_TEXT), rt('SelFontName', 'string', 'MS Sans Serif'), rt('SelFontSize', 'int', 8),
+    ],
+    events: [evChange(), ev('SelChange'), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
 };
 
 /** VB6 toolbox order. */
 export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
   'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip',
-  'TreeView', 'ListView', 'MSFlexGrid',
+  'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox',
 ];
 
 // ---------------------------------------------------------------------------------------------------------------

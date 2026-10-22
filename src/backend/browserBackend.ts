@@ -161,6 +161,15 @@ export class BrowserBackend implements Backend {
     return this.ask(`Open file (file name${ext ? ', ' + ext : ''}):`, '');
   }
 
+  async showOpenDialog(filters: FileFilter[], title: string, initDir: string): Promise<string | null> {
+    const ext = filters.flatMap(f => f.extensions).map(x => '*.' + x).join(', ');
+    return this.ask(`${title || 'Open'} (file name${ext ? ', ' + ext : ''}):`, initDir ? `${initDir.replace(/\/+$/, '')}/` : '');
+  }
+
+  async showSaveDialog(_filters: FileFilter[], title: string, initDir: string, defaultName = ''): Promise<string | null> {
+    return this.ask(`${title || 'Save as'} (file name):`, initDir ? `${initDir.replace(/\/+$/, '')}/${defaultName}` : defaultName);
+  }
+
   async readTextFile(path: string): Promise<string> {
     const text = localStorage.getItem(FS_PREFIX + path);
     if (text === null) throw new Error(`${path}: No such file`);

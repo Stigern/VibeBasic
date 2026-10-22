@@ -6,6 +6,7 @@ import type { FontValue, PropValue } from '../model/types';
 import { showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
 import { createTabs } from '../ui98/tabs';
+import './pickers.css';
 
 export type ParseResult = { ok: true; value: PropValue } | { ok: false };
 const FAIL: ParseResult = { ok: false };
@@ -103,6 +104,22 @@ export function createColorPopup(onPick: (n: number) => void, close: () => void)
   }));
   const tabs = createTabs([{ label: 'Palette', content: grid }, { label: 'System', content: sys }]);
   return h('div', { class: 'pw98-popup' }, tabs.el);
+}
+
+/** The colour picker as a dialog (CommonDialog.ShowColor). Resolves with the chosen colour, or null when cancelled. */
+export async function showColorDialog(doc: Document, cur: number): Promise<number | null> {
+  let picked = cur;
+  const preview = h('span', { class: 'pw98-swatch', style: { background: vbColorToCss(cur) } });
+  const text = h('span', {}, formatColor(cur));
+  const popup = createColorPopup(n => {
+    picked = n;
+    preview.style.background = vbColorToCss(n);
+    text.textContent = formatColor(n);
+  }, () => {});
+  const content = h('div', { class: 'pw98-colordlg' }, popup, h('div', { class: 'pw98-colorpreview' }, 'Color:', preview, text));
+  const r = await showDialog98(doc, { title: 'Color', content, buttons: [
+    { label: 'OK', value: 'ok', default: true }, { label: 'Cancel', value: 'cancel', cancel: true }] });
+  return r === 'ok' ? picked : null;
 }
 
 // ---------------------------------------------------------------------------------------------------------------

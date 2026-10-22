@@ -13,6 +13,9 @@
 
 import { emitTo, listen } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { getBackend } from '../backend/backend';
+import type { FontValue } from '../model/types';
+import { runFileDialog, type FileDialogRequest } from './commonDialog';
 import type { DialogSpec } from './dialogSpec';
 import type { RuntimeErrorInfo } from './errorDialog';
 import type { FormHost, FormWindow } from './formHost';
@@ -196,7 +199,7 @@ export class TauriFormHost implements FormHost {
     const destroy = () => (destroying ??= this.destroy(label, handle));
     const cancel = async () => { done(cancelled); await destroy(); };
     this.closers.add(cancel);
-    const title = spec.kind === 'error' ? spec.info.title : spec.title;
+    const title = spec.kind === 'error' ? spec.info.title : spec.kind === 'color' ? 'Color' : spec.kind === 'font' ? 'Font' : spec.title;
     const handle = this.glue.createWindow(label, {
       url: `form.html#${key}`, title, width: 420, height: 160, center: true,
       resizable: false, minimizable: false, maximizable: false,
@@ -219,6 +222,26 @@ export class TauriFormHost implements FormHost {
 
   async inputBox(o: { prompt: string; title: string; defaultText: string }): Promise<string> {
     return String(await this.dialog({ kind: 'input', ...o }, ''));
+  }
+
+  /** ShowOpen / ShowSave: the Mac dialog opens from this (main) window; the form windows ignore input meanwhile. */
+  async fileDialog(o: FileDialogRequest): Promise<string | null> {
+    if (this.openDialogs++ === 0) for (const f of this.forms) f.apply();
+    try {
+      return await runFileDialog(getBackend(), o);
+    } finally {
+      if (--this.openDialogs === 0) for (const f of this.forms) f.apply();
+    }
+  }
+
+  async colorDialog(o: { color: number }): Promise<number | null> {
+    const r = String(await this.dialog({ kind: 'color', ...o }, ''));
+    return r === '' ? null : Number(r);
+  }
+
+  async fontDialog(o: { font: FontValue }): Promise<FontValue | null> {
+    const r = String(await this.dialog({ kind: 'font', ...o }, ''));
+    return r === '' ? null : JSON.parse(r) as FontValue;
   }
 
   async runtimeErrorBox(o: RuntimeErrorInfo): Promise<'end' | 'debug'> {

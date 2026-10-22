@@ -5,13 +5,14 @@
 // If `root.dataset.vbWindow` is set, root fills a native window: size changes of root resize the form and send `resized`.
 
 import { renderFormSurface, type ControlView } from '../controls/render';
+import { encodeRuns, readRuns } from '../controls/richText';
 import type { ControlDef, PropValue } from '../model/types';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 
 type Props = Record<string, PropValue>;
 type Target = { id: string; def: ControlDef | null };
 
-const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'TreeView', 'ListView', 'MSFlexGrid']);
+const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'TreeView', 'ListView', 'MSFlexGrid', 'RichTextBox']);
 const KEY_CODES: Record<string, number> = {
   Backspace: 8, Tab: 9, Enter: 13, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34, End: 35, Home: 36,
   ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46,
@@ -166,6 +167,8 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     const type = tg.def.type, el = e.target as HTMLElement;
     if (type === 'TextBox' || (type === 'ComboBox' && !(el as HTMLInputElement).readOnly)) {
       emit(tg.id, 'Change', [], { Text: (el as HTMLInputElement).value });
+    } else if (type === 'RichTextBox') {
+      emit(tg.id, 'Change', [], { Text: el.textContent ?? '', Runs: encodeRuns(readRuns(el)) });
     } else if (type === 'HScrollBar' || type === 'VScrollBar' || type === 'Slider') emit(tg.id, 'Scroll', [], { Value: Number(el.dataset.value) || 0 });
   });
   on<Event>('change', e => {
@@ -210,6 +213,14 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     if (cur.Row === d.row && cur.Col === d.col) return;
     emit(id, 'RowColChange', [], { Row: Number(d.row), Col: Number(d.col) });
     emit(id, 'SelChange');
+  });
+  // RichTextBox: the selection (and the format of it) changed; SelChange only when something differs from what the program knows
+  on<CustomEvent>('vbselchange', e => {
+    const tg = targetOf(e.target);
+    if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl) return;
+    const st = e.detail as Props, cur = propsOf(tg.id);
+    if (Object.keys(st).every(k => cur[k] === st[k])) return;
+    emit(tg.id, 'SelChange', [], st);
   });
   on<CustomEvent>('vbselect', e => {
     const tg = targetOf(e.target);
@@ -256,7 +267,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     const ascii = keyAscii(e);
     const pc = ascii === null ? [] : chain.filter(id => handles(id, 'KeyPress'));
     if (pc.length) { if (isTextField(e.target)) e.preventDefault(); sendKeyPress(pc, ascii!, e.target); }
-    if (e.key === 'Enter' && !prevented && tg.def?.type !== 'CommandButton' && !(e.target instanceof HTMLTextAreaElement)) clickButton('Default');
+    if (e.key === 'Enter' && !prevented && tg.def?.type !== 'CommandButton' && tg.def?.type !== 'RichTextBox' && !(e.target instanceof HTMLTextAreaElement)) clickButton('Default');
     else if (e.key === 'Escape' && !prevented) clickButton('Cancel');
   });
   on<KeyboardEvent>('keyup', e => {

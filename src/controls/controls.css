@@ -128,6 +128,14 @@
 .vb-Image.vb-design.vb-empty:not(.vb-bordered) { outline: 1px dotted #808080; outline-offset: -1px; }
 .vb-Timer { background: #c0c0c0; box-shadow: var(--w98-raised); }
 .vb-Timer svg { display: block; }
+.vb-CommonDialog { background: #c0c0c0; box-shadow: var(--w98-raised); }
+.vb-CommonDialog svg { display: block; }
+
+/* ---------- RichTextBox ---------- */
+.vb-RichTextBox { background-color: #fff; box-shadow: var(--w98-sunken); padding: 2px; }
+.vb-ctl.vb-ctl .vb-rtf { white-space: pre-wrap; overflow-wrap: break-word; overflow: hidden; padding: 0 1px; user-select: text; -webkit-user-select: text; }
+/* a final line break only shows its new line when something follows it */
+.vb-rtf::after { content: '\200b'; }
 
 /* ---------- ProgressBar ---------- */
 .vb-ProgressBar { background-color: #c0c0c0; padding: 2px; box-shadow: inset -1px -1px #fff, inset 1px 1px #808080; }

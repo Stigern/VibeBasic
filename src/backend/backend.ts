@@ -16,6 +16,10 @@ export interface Backend {
   /** Builds a standalone .app from the project (desktop only). Rejects with the error text. */
   makeApp(o: { targetPath: string; appName: string; projectJson: string; iconPngBase64: string | null; overwrite: boolean }): Promise<void>;
   openFileDialog(filters: FileFilter[]): Promise<string | null>;
+  /** Generic open dialog (CommonDialog.ShowOpen): `filters` in the order shown (the first is selected), `initDir` '' for the default folder. Null when cancelled. An extension `*` means every file. */
+  showOpenDialog(filters: FileFilter[], title: string, initDir: string): Promise<string | null>;
+  /** Generic save dialog (CommonDialog.ShowSave). `defaultName` is the file name suggested ('' for none). Null when cancelled. */
+  showSaveDialog(filters: FileFilter[], title: string, initDir: string, defaultName?: string): Promise<string | null>;
   readTextFile(path: string): Promise<string>;
   writeTextFile(path: string, text: string): Promise<void>;
   readBinaryFile(path: string): Promise<Uint8Array>;

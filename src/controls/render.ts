@@ -13,6 +13,7 @@ import { CONTROL_TYPES } from '../model/controls';
 import { joinFields, splitFields } from '../model/fieldLines';
 import { isDocked } from '../model/geometry';
 import { twipsToPx } from '../model/twips';
+import { decodeRuns, encodeRuns, formatAt, readRuns, replaceRange, selectionOffsets, setSelectionOffsets, writeRuns, type Run, type RtfFormat, type RtfPatch } from './richText';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../model/types';
 import { h, mnemonicNodes } from '../ui98/dom';
 
@@ -385,6 +386,138 @@ function timer(c: Ctx): Renderer {
   return {
     build() { c.el.innerHTML = TIMER_SVG; },
     patch() { /* nothing: the icon is fixed */ },
+  };
+}
+
+const COMMONDIALOG_SVG = '<svg viewBox="0 0 32 32" width="32" height="32" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges">'
+  + '<rect x="4.5" y="5.5" width="23" height="21" fill="#fff" stroke="#000"/><rect x="5" y="6" width="22" height="3" fill="#000080"/>'
+  + '<path d="M7 13h14M7 16h14M7 19h9" stroke="#000"/><rect x="19.500" y="19.500" width="6" height="5" fill="#ffff00" stroke="#000"/></svg>';
+
+/** Invisible at run time; in the designer an icon, like the Timer. */
+function commonDialog(c: Ctx): Renderer {
+  return {
+    build() { c.el.innerHTML = COMMONDIALOG_SVG; },
+    patch() { /* nothing: the icon is fixed */ },
+  };
+}
+
+/** Sel* property -> the format key it holds. */
+const RTF_PROPS: readonly [string, keyof RtfFormat][] = [
+  ['SelBold', 'bold'], ['SelItalic', 'italic'], ['SelUnderline', 'underline'], ['SelColor', 'color'], ['SelFontName', 'fontName'], ['SelFontSize', 'fontSize'],
+];
+
+/**
+ * RichTextBox: an editable div (content: see richText.ts). Text is the plain text. The selection and its format are reported with
+ * `vbselchange` ({ SelStart, SelLength, SelBold ... }) after the user moved or typed. Text with formats arrives as the prop `Runs` (see
+ * encodeRuns; the run session computes SelText and Sel<Format> on its own copy), the selection as SelStart / SelLength, and a format set at an
+ * insertion point as Sel<Format> (it waits for the next typing).
+ */
+function richTextBox(c: Ctx): Renderer {
+  let input: HTMLElement;
+  let cur = { start: 0, length: 0 };
+  let pending: RtfPatch | null = null;
+  let mouse = false;
+  const font = (): FontValue => { const f = c.props.Font; return isFont(f) ? f : DEFAULTS.RichTextBox.Font as FontValue; };
+  const base = (): RtfFormat => {
+    const f = font();
+    return { bold: f.bold, italic: f.italic, underline: f.underline, color: c.num('ForeColor'), fontName: f.name, fontSize: f.size };
+  };
+  const style = (el: HTMLElement, f: RtfPatch): void => {
+    if (f.bold !== undefined) el.style.fontWeight = f.bold ? '700' : '400';
+    if (f.italic !== undefined) el.style.fontStyle = f.italic ? 'italic' : 'normal';
+    if (f.underline !== undefined) el.style.textDecoration = f.underline ? 'underline' : 'none';
+    if (f.color !== undefined) el.style.color = vbColorToCss(f.color);
+    if (f.fontName !== undefined) el.style.fontFamily = fontFamily(f.fontName);
+    if (f.fontSize !== undefined) el.style.fontSize = `${Math.round(f.fontSize * 96 / 72)}px`;
+  };
+  const length = (): number => (input.textContent ?? '').length;
+  const clamp = (n: number): number => Math.min(Math.max(0, Math.round(n) || 0), length());
+  const focused = (): boolean => input.ownerDocument.activeElement === input;
+  const show = (): void => { if (focused()) setSelectionOffsets(input, cur.start, cur.length); };
+  /** The format at the selection: the control's own, what the text says there, and what waits for the next typing. */
+  const effective = (runs: Run[] = readRuns(input)): RtfFormat => ({ ...base(), ...formatAt(runs, cur.start, cur.length), ...(cur.length === 0 ? pending : null) });
+  const write = (runs: Run[]): void => writeRuns(input, runs, style);
+
+  /** The user moved the selection or typed. */
+  function report(): void {
+    const s = selectionOffsets(input);
+    if (!s) return;
+    if (s.start !== cur.start || s.length !== cur.length) pending = null;
+    cur = s;
+    const f = effective();
+    c.fire('vbselchange', { SelStart: s.start, SelLength: s.length, SelBold: f.bold, SelItalic: f.italic, SelUnderline: f.underline,
+      SelColor: f.color, SelFontName: f.fontName, SelFontSize: f.fontSize });
+  }
+  /** Typed text, Enter and paste go through the runs when a format is waiting (and always for Enter and paste: plain text only). */
+  function insert(text: string): void {
+    const s = selectionOffsets(input) ?? cur;
+    cur = s;
+    const runs = readRuns(input);
+    write(replaceRange(runs, s.start, s.length, text, pending ? { ...formatAt(runs, s.start, s.length), ...pending } : null));
+    cur = { start: s.start + text.length, length: 0 };
+    pending = null;
+    setSelectionOffsets(input, cur.start, 0);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  return {
+    build() {
+      input = h('div', { class: 'vb-input vb-rtf', contenteditable: 'true', spellcheck: false, role: 'textbox', 'aria-multiline': 'true' });
+      input.addEventListener('input', report);
+      input.addEventListener('keyup', report);
+      input.addEventListener('mouseup', () => { mouse = false; report(); });
+      input.addEventListener('mousedown', () => { mouse = true; });
+      input.addEventListener('focus', () => { if (!mouse) show(); });   // SelStart set before SetFocus; a click puts the caret where it hit
+      input.addEventListener('beforeinput', e => {
+        const ie = e as InputEvent;
+        let text: string | null = null;
+        if (ie.inputType === 'insertParagraph' || ie.inputType === 'insertLineBreak') text = '\n';
+        else if (ie.inputType === 'insertFromPaste' || ie.inputType === 'insertFromDrop') text = ie.dataTransfer?.getData('text/plain') ?? null;
+        else if (ie.inputType === 'insertText' && pending) text = ie.data;
+        if (text === null) return;
+        ie.preventDefault();
+        insert(text);
+      });
+      c.el.replaceChildren(input);
+      c.setInput(input);
+    },
+    patch(k) {
+      let rewrote = false;
+      if (has(k, 'Runs') && c.str('Runs') !== '' && encodeRuns(readRuns(input)) !== c.str('Runs')) {   // text with formats (set by code, or the echo of the user's own typing)
+        const runs = decodeRuns(c.str('Runs'));
+        if (runs) { write(runs); rewrote = true; }
+      }
+      if (has(k, 'Text') && (input.textContent ?? '') !== c.str('Text')) {
+        input.textContent = c.str('Text');
+        pending = null;
+        rewrote = true;
+      }
+      if (has(k, 'ScrollBars')) {
+        const sb = c.num('ScrollBars');
+        input.style.overflowX = sb === 1 || sb === 3 ? 'scroll' : 'hidden';
+        input.style.overflowY = sb === 2 || sb === 3 ? 'scroll' : 'hidden';
+        input.style.whiteSpace = sb === 1 || sb === 3 ? 'pre' : 'pre-wrap';
+      }
+      if (has(k, 'Locked', 'Enabled')) input.contentEditable = c.mode === 'run' && !c.bool('Locked') && c.bool('Enabled') ? 'true' : 'false';
+      if (k === null) return;
+      if (rewrote) { cur = { start: clamp(cur.start), length: 0 }; cur.length = clamp(cur.start + cur.length) - cur.start; }
+      if (k.has('SelStart') || k.has('SelLength')) {
+        const start = clamp(c.num('SelStart')), len = clamp(start + c.num('SelLength')) - start;
+        if (start !== cur.start || len !== cur.length) { cur = { start, length: len }; pending = null; rewrote = true; }
+      }
+      if (rewrote) show();
+      // a format set at an insertion point waits for the next typing (a format of a selection arrives as Runs)
+      if (cur.length === 0) {
+        const want: Record<string, string | number | boolean> = {};
+        const eff = effective();
+        for (const [prop, key] of RTF_PROPS) {
+          if (!k.has(prop)) continue;
+          const v = key === 'bold' || key === 'italic' || key === 'underline' ? c.bool(prop) : key === 'fontName' ? c.str(prop) : c.num(prop);
+          if (v !== eff[key]) want[key] = v;
+        }
+        if (Object.keys(want).length) pending = { ...pending, ...want as RtfPatch };
+      }
+    },
   };
 }
 
@@ -1014,6 +1147,8 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   TreeView: treeView,
   ListView: listView,
   MSFlexGrid: flexGrid,
+  CommonDialog: commonDialog,
+  RichTextBox: richTextBox,
 };
 
 // ---------------------------------------------------------------------------------------------------------------
