@@ -542,7 +542,7 @@ export class Program {
    * 'pause' at the innermost running statement; 'continue' goes on, 'end'
    * ends the program. With no code running, onBreak is called at once with
    * an empty location (`procName: ''`); the state is 'break' until it answers
-   * (a rejected onBreak counts as 'continue', here and during a run). Ignored
+   * (a rejected onBreak counts as 'continue', here and for a pause or Stop during a run; after an error it ends the program). Ignored
    * while only an Immediate command runs.
    */
   requestPause(): void {

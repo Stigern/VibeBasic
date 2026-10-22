@@ -302,8 +302,8 @@ function* unhandledError(f: Frame, err: VBRuntimeError): Gen<ErrorOutcome> {
  * Break mode at the current statement of `f` (an error with 'debug', Stop,
  * requestPause): state 'break', `f` is the frame the Immediate window sees,
  * and events are dropped (no event pump) until `host.onBreak` answers.
- * 'continue' (or a rejected onBreak) goes on; 'end' (or End meanwhile) ends
- * the program. A pending pause request is consumed. Ignored in an Immediate
+ * 'continue' goes on; 'end' (or End meanwhile) ends the program. A rejected
+ * or throwing onBreak ends the program for reason 'error' and goes on for 'pause'. A pending pause request is consumed. Ignored in an Immediate
  * command (Stop there does nothing).
  */
 export function* enterBreak(f: Frame, reason: 'error' | 'pause', error?: VBRuntimeError): Gen<void> {
@@ -325,7 +325,9 @@ export function* enterBreak(f: Frame, reason: 'error' | 'pause', error?: VBRunti
       answer = (yield asked) as 'continue' | 'end';
     } catch (e) {
       if (e instanceof EndSignal) throw e;
-      // a failing onBreak counts as 'continue': the program stays usable
+      // A failing onBreak: after an error, continuing would re-run the failing
+      // statement (and fail again), so the program ends; a pause/Stop goes on.
+      answer = reason === 'error' ? 'end' : 'continue';
     }
   } finally {
     rt.breakFrame = undefined;

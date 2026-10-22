@@ -527,3 +527,32 @@ describe('review fixes (round 1)', () => {
     expect(prog.state).toBe('idle');
   });
 });
+
+describe('review fixes (round 2)', () => {
+  test('a rejected onBreak after an error ends the program (no retry loop)', async () => {
+    const host = new TestHost();
+    host.errorChoice = 'debug';
+    const { prog } = program(lines('Sub Main()', '  x = 1 / 0', '  Debug.Print "no"', 'End Sub', 'Sub T()', '  Debug.Print "t"', 'End Sub'), host);
+    let calls = 0;
+    host.breakHook = () => { calls++; return Promise.reject(new Error('dialog failed')); };
+    await prog.runEvent('Module1', 'Main');
+    expect(calls).toBe(1);
+    expect(host.lines()).toEqual(['[Error 11 at Module1:2] Division by zero']);
+    expect(prog.state).toBe('ended');
+    expect(host.endCalls).toBe(1);
+    await prog.runEvent('Module1', 'T'); // dropped after the end
+    expect(host.lines()).toHaveLength(1);
+  });
+
+  test('a synchronously throwing onBreak after an error ends the program too', async () => {
+    const host = new TestHost();
+    host.errorChoice = 'debug';
+    const { prog } = program(lines('Sub Main()', '  x = 1 / 0', 'End Sub'), host);
+    let calls = 0;
+    host.onBreak = () => { calls++; throw new Error('sync'); };
+    await prog.runEvent('Module1', 'Main');
+    expect(calls).toBe(1);
+    expect(prog.state).toBe('ended');
+    expect(host.endCalls).toBe(1);
+  });
+});
