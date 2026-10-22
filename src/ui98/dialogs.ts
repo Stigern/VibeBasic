@@ -19,7 +19,7 @@ export interface DialogOptions {
   buttonsSide?: boolean;
 }
 
-const FOCUSABLE = 'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled)';
+const FOCUSABLE = 'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
 /**
  * Generic modal Win98 dialog. Resolves with the `value` of the pressed button.
@@ -70,34 +70,43 @@ export function showDialog98(doc: Document, o: DialogOptions): Promise<string> {
       return all[all.length - 1] === overlay;
     };
 
-    function onKey(e: KeyboardEvent) {
-      if (!isTopmost()) return;
+    /** Enter / Escape / Tab handling. Returns nothing; callers decide about propagation. */
+    function handleKey(e: KeyboardEvent) {
       const target = e.target as Element | null;
-      const inDialog = !!target && 'closest' in target && !!(target as Element).closest?.('.dlg98-overlay');
+      const inDialog = !!target && overlay.contains(target as Node);
       if (e.key === 'Enter') {
         // Enter on another focused button presses that button (native behaviour).
-        if (inDialog && target!.tagName === 'BUTTON' && !(target as HTMLElement).classList.contains('default')) {
-          e.stopPropagation();
-          return;
-        }
-        e.stopPropagation();
+        if (inDialog && target!.tagName === 'BUTTON' && !(target as HTMLElement).classList.contains('default')) return;
         e.preventDefault();
         if (defBtn) buttonEls.get(defBtn)!.click();
       } else if (e.key === 'Escape') {
-        e.stopPropagation();
         e.preventDefault();
         if (cancelBtn) buttonEls.get(cancelBtn)!.click();
       } else if (e.key === 'Tab') {
-        e.stopPropagation();
         e.preventDefault();
         const els = [...win.querySelectorAll<HTMLElement>(FOCUSABLE)];
         if (els.length === 0) return;
         const i = els.indexOf(doc.activeElement as HTMLElement);
         const next = e.shiftKey ? (i <= 0 ? els.length - 1 : i - 1) : (i + 1) % els.length;
         els[next].focus();
-      } else {
-        e.stopPropagation();
       }
+    }
+
+    // Keys whose target is outside the topmost dialog (focus left behind, or dispatched on the document):
+    // handled here and never reach IDE shortcut handlers.
+    function onKey(e: KeyboardEvent) {
+      if (!isTopmost()) return;
+      if (e.target && overlay.contains(e.target as Node)) return; // handled by onOverlayKey after widgets had their say
+      e.stopPropagation();
+      handleKey(e);
+    }
+
+    // Keys from inside the dialog bubble through its widgets first (tabs, combo ...). A widget that consumed
+    // the key calls preventDefault, which we respect. Nothing leaves the dialog afterwards.
+    function onOverlayKey(e: KeyboardEvent) {
+      if (!isTopmost()) return;
+      if (!e.defaultPrevented) handleKey(e);
+      e.stopPropagation();
     }
 
     function onFocusIn(e: FocusEvent) {
@@ -106,6 +115,7 @@ export function showDialog98(doc: Document, o: DialogOptions): Promise<string> {
       if (t && !overlay.contains(t)) (win.querySelector<HTMLElement>(FOCUSABLE))?.focus();
     }
 
+    overlay.addEventListener('keydown', onOverlayKey);
     doc.body.appendChild(overlay);
     doc.addEventListener('keydown', onKey, true);
     doc.addEventListener('focusin', onFocusIn, true);

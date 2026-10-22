@@ -51,7 +51,7 @@ export function createCombo(o: ComboOptions): Combo {
   arrow.addEventListener('click', () => (list ? closeList() : openList()));
   if (!o.editable) input.addEventListener('click', () => (list ? closeList() : openList()));
   input.addEventListener('change', () => set(input.value, true));
-  input.addEventListener('keydown', e => { if (e.key === 'Escape') closeList(); });
+  input.addEventListener('keydown', e => { if (e.key === 'Escape' && list) { e.preventDefault(); closeList(); } });
 
   return {
     el,

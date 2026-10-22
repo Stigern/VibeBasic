@@ -208,10 +208,12 @@ export function parseShortcut(s: string): ParsedShortcut {
   return sc;
 }
 
-export function shortcutMatches(sc: ParsedShortcut, e: KeyboardEvent): boolean {
+export function shortcutMatches(sc: ParsedShortcut, e: KeyboardEvent, backspaceAsDelete = false): boolean {
   const ctrlLike = e.ctrlKey || e.metaKey;
   if (sc.ctrl !== ctrlLike || sc.shift !== e.shiftKey || sc.alt !== e.altKey) return false;
   if (normKey(e.key) === sc.key) return true;
+  // Mac laptops have no Delete key: Backspace stands in for Del (callers only allow it outside text fields).
+  if (backspaceAsDelete && sc.key === 'delete' && e.key === 'Backspace') return true;
   // Cmd+. is how Ctrl+Break is typed on a Mac keyboard.
   return sc.key === 'break' && ctrlLike && e.key === '.';
 }
@@ -245,19 +247,22 @@ export function bindShortcuts(menus: MenuDef[], target: Window): () => void {
     const all: { sc: ParsedShortcut; item: MenuItem }[] = [];
     collect(menus, all);
     const editable = isEditable(e.target);
+    let owned = false;
     for (const { sc, item } of all) {
-      if (!shortcutMatches(sc, e)) continue;
+      if (!shortcutMatches(sc, e, !editable)) continue;
       if (editable) {
         const fkey = /^f\d+$/.test(sc.key);
         if (!sc.ctrl && !sc.alt && !fkey) continue;
         if (sc.ctrl && !sc.alt && !sc.shift && CLIPBOARD_KEYS.has(sc.key)) continue;
       }
-      if (item.enabled && !item.enabled()) continue;
       if (!item.action) continue;
+      // A disabled item still owns its key (so F5 does not reload the webview) but does nothing.
+      if (item.enabled && !item.enabled()) { owned = true; continue; }
       e.preventDefault();
       item.action();
       return;
     }
+    if (owned) e.preventDefault();
   };
   target.addEventListener('keydown', handler as EventListener);
   return () => target.removeEventListener('keydown', handler as EventListener);

@@ -1,5 +1,8 @@
 const PROPS = ['value', 'checked', 'disabled', 'readOnly', 'selected', 'textContent', 'innerHTML'];
 
+/** Enumerated attributes where `false` must be rendered as the string "false" (not omitted). */
+const ENUMERATED = ['draggable', 'spellcheck', 'contenteditable'];
+
 /**
  * Tiny DOM helper used by every ui98 widget.
  *
@@ -18,6 +21,7 @@ export function h<K extends keyof HTMLElementTagNameMap>(
 ): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs ?? {})) {
+    if (typeof v === 'boolean' && ENUMERATED.includes(k)) { el.setAttribute(k, String(v)); continue; }
     if (v === null || v === undefined || v === false) continue;
     if (k === 'class' || k === 'className') el.className = String(v);
     else if (k === 'style') {

@@ -165,11 +165,13 @@ describe('menubar', () => {
 });
 
 describe('bindShortcuts', () => {
+  const unbinders: (() => void)[] = [];
+  afterEach(() => { while (unbinders.length) unbinders.pop()!(); });
   const key = (init: KeyboardEventInit, target: EventTarget = window) =>
     target.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }));
   const mk = (shortcut: string, extra: Partial<MenuItem> = {}) => {
     const action = vi.fn();
-    bindShortcuts([{ label: 'M', items: [{ label: 'X', shortcut, action, ...extra }] }], window);
+    unbinders.push(bindShortcuts([{ label: 'M', items: [{ label: 'X', shortcut, action, ...extra }] }], window));
     return action;
   };
 
@@ -223,10 +225,10 @@ describe('bindShortcuts', () => {
   });
   test('submenu items and disabled items', () => {
     const inner = vi.fn(); const off = vi.fn();
-    bindShortcuts([{ label: 'M', items: [
+    unbinders.push(bindShortcuts([{ label: 'M', items: [
       { label: 'Sub', submenu: [{ label: 'In', shortcut: 'Ctrl+I', action: inner }] },
       { label: 'Off', shortcut: 'Ctrl+O', action: off, enabled: () => false },
-    ] }], window);
+    ] }], window));
     key({ key: 'i', ctrlKey: true });
     key({ key: 'o', ctrlKey: true });
     expect(inner).toHaveBeenCalledTimes(1);
@@ -249,5 +251,37 @@ describe('bindShortcuts', () => {
     unbind();
     key({ key: 'u', ctrlKey: true });
     expect(action).not.toHaveBeenCalled();
+  });
+  test('a matching shortcut of a disabled item does nothing but still prevents the browser default', () => {
+    const a = mk('F5', { enabled: () => false });
+    const ev = new KeyboardEvent('keydown', { key: 'F5', cancelable: true });
+    window.dispatchEvent(ev);
+    expect(a).not.toHaveBeenCalled();
+    expect(ev.defaultPrevented).toBe(true);
+  });
+  test('a disabled item does not shadow an enabled item with the same shortcut', () => {
+    const off = vi.fn(); const on = vi.fn();
+    unbinders.push(bindShortcuts([{ label: 'M', items: [
+      { label: 'A', shortcut: 'F6', action: off, enabled: () => false },
+      { label: 'B', shortcut: 'F6', action: on },
+    ] }], window));
+    key({ key: 'F6' });
+    expect(off).not.toHaveBeenCalled();
+    expect(on).toHaveBeenCalledTimes(1);
+  });
+  test('Del also matches Backspace outside text fields, but not inside them', () => {
+    const a = mk('Del');
+    key({ key: 'Backspace' });
+    expect(a).toHaveBeenCalledTimes(1);
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    key({ key: 'Backspace' }, input);
+    expect(a).toHaveBeenCalledTimes(1);
+  });
+  test('unrelated keys do not preventDefault', () => {
+    mk('Ctrl+S');
+    const ev = new KeyboardEvent('keydown', { key: 'a', cancelable: true });
+    window.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
   });
 });

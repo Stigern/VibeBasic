@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, test } from 'vitest';
+import { createCombo } from '../../src/ui98/combo';
+import { createTabs } from '../../src/ui98/tabs';
+import { h } from '../../src/ui98/dom';
 import { compileErrorBox, inputBox98, messageBox98, showDialog98 } from '../../src/ui98/dialogs';
 
 afterEach(() => { document.body.innerHTML = ''; });
@@ -289,5 +292,93 @@ describe('showDialog98', () => {
     expect(document.activeElement).toBe(btns()[0]);
     key('Enter');
     await p;
+  });
+});
+
+describe('widgets inside a dialog', () => {
+  function withWidgets() {
+    const tabs = createTabs([{ label: 'One', content: h('div', {}, '1') }, { label: 'Two', content: h('div', {}, '2') }]);
+    const combo = createCombo({ items: ['A', 'B'], value: 'A' });
+    const content = h('div', {}, tabs.el, combo.el);
+    const p = showDialog98(document, {
+      title: 'W', content,
+      buttons: [{ label: 'OK', value: 'ok', default: true }, { label: 'Cancel', value: 'cancel', cancel: true }],
+    });
+    return { tabs, combo, p };
+  }
+  const tabEls = () => [...document.querySelectorAll<HTMLElement>('.tabs98-tab')];
+
+  test('Enter on a tab switches the tab and does not press the default button', async () => {
+    const { tabs, p } = withWidgets();
+    key('Enter', tabEls()[1]);
+    expect(tabs.selected).toBe(1);
+    expect(await settled(p)).toBe('pending');
+    expect(document.querySelector('.dlg98')).not.toBeNull();
+    key('Escape'); await p;
+  });
+
+  test('Escape with the combo list open closes only the list', async () => {
+    const { p } = withWidgets();
+    (document.querySelector('.cb98-arrow') as HTMLElement).click();
+    expect(document.querySelector('.cb98-list')).not.toBeNull();
+    key('Escape', document.querySelector('.cb98 input')!);
+    expect(document.querySelector('.cb98-list')).toBeNull();
+    expect(await settled(p)).toBe('pending');
+    key('Escape', document.querySelector('.cb98 input')!);
+    expect(await p).toBe('cancel');
+  });
+
+  test('Tab reaches the tabs', async () => {
+    const { p } = withWidgets();
+    const seen = new Set<Element | null>();
+    for (let i = 0; i < 8; i++) { key('Tab'); seen.add(document.activeElement); }
+    expect(tabEls().every(t => seen.has(t))).toBe(true);
+    key('Escape'); await p;
+  });
+
+  test('Enter on a non-widget element inside the dialog still presses the default button', async () => {
+    const { p } = withWidgets();
+    key('Enter', document.querySelector('.cb98 input')!);
+    expect(await p).toBe('ok');
+  });
+
+  test('IDE window keydown listener gets nothing while open, from inside or outside the dialog', async () => {
+    const seen: string[] = [];
+    const spy = (e: KeyboardEvent) => seen.push(e.key);
+    window.addEventListener('keydown', spy);
+    const { p } = withWidgets();
+    key('F5');
+    key('s', tabEls()[0]);
+    key('Enter', tabEls()[1]);
+    key('Escape');
+    await p;
+    window.removeEventListener('keydown', spy);
+    expect(seen).toEqual([]);
+  });
+});
+
+describe('dialog lifecycle', () => {
+  test('focus is restored to the previously focused element after close', async () => {
+    const before = document.createElement('button');
+    document.body.appendChild(before);
+    before.focus();
+    const p = messageBox98(document, { prompt: 'x', title: 'T', buttons: 0 });
+    expect(document.activeElement).not.toBe(before);
+    key('Enter');
+    await p;
+    expect(document.activeElement).toBe(before);
+  });
+
+  test('after close, keys are no longer swallowed', async () => {
+    const p = messageBox98(document, { prompt: 'x', title: 'T', buttons: 0 });
+    key('Enter');
+    await p;
+    const seen: string[] = [];
+    const spy = (e: KeyboardEvent) => seen.push(e.key);
+    window.addEventListener('keydown', spy);
+    key('Enter');
+    key('Escape');
+    window.removeEventListener('keydown', spy);
+    expect(seen).toEqual(['Enter', 'Escape']);
   });
 });

@@ -22,6 +22,11 @@ describe('h()', () => {
     el.click();
     expect(fn).toHaveBeenCalledTimes(1);
   });
+  test('draggable=false is rendered as the string "false"', () => {
+    expect(h('img', { draggable: false }).getAttribute('draggable')).toBe('false');
+    expect(h('img', { draggable: true }).getAttribute('draggable')).toBe('true');
+    expect(h('img', {}).hasAttribute('draggable')).toBe(false);
+  });
   test('string style and input value property', () => {
     expect(h('div', { style: 'left:1px' }).style.left).toBe('1px');
     expect(h('input', { value: 'v' }).value).toBe('v');
@@ -29,6 +34,11 @@ describe('h()', () => {
 });
 
 describe('toolbar', () => {
+  test('icon images are not draggable', () => {
+    const root = document.createElement('div');
+    createToolbar(root, [{ icon: 'x.png', title: 'T' }]);
+    expect(root.querySelector('img')!.getAttribute('draggable')).toBe('false');
+  });
   test('buttons run action, honour enabled/checked, refresh, separators', () => {
     const root = document.createElement('div');
     const act = vi.fn(); let on = false; let en = true;
@@ -72,6 +82,19 @@ describe('combo', () => {
     c.setItems(['X', 'Y']); c.setValue('Y');
     expect(c.getValue()).toBe('Y');
     expect(c.el.querySelector('input')!.readOnly).toBe(true);
+  });
+  test('Escape closes an open list and is consumed; with the list closed it is not', () => {
+    const c = createCombo({ items: ['A'] });
+    document.body.appendChild(c.el);
+    const input = c.el.querySelector('input')!;
+    (c.el.querySelector('.cb98-arrow') as HTMLElement).click();
+    const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    input.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(c.el.querySelector('.cb98-list')).toBeNull();
+    const ev2 = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    input.dispatchEvent(ev2);
+    expect(ev2.defaultPrevented).toBe(false);
   });
   test('editable combo accepts typed text', () => {
     const onChange = vi.fn();
