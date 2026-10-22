@@ -244,6 +244,7 @@ function collect(menus: MenuDef[] | MenuItem[], out: { sc: ParsedShortcut; item:
  */
 export function bindShortcuts(menus: MenuDef[], target: Window): () => void {
   const handler = (e: KeyboardEvent) => {
+    if (e.defaultPrevented) return;   // a field or widget already consumed the key
     const all: { sc: ParsedShortcut; item: MenuItem }[] = [];
     collect(menus, all);
     const editable = isEditable(e.target);

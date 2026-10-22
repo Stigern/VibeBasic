@@ -28,3 +28,16 @@ test('non-object json', () => {
   expect(() => parseProject('null')).toThrow(NOT_PROJECT);
   expect(() => parseProject('[1]')).toThrow(NOT_PROJECT);
 });
+
+test('rejects files that would crash the IDE', () => {
+  const bad = (f: (p: ReturnType<typeof newProject>) => void) => {
+    const p = newProject(); f(p);
+    expect(() => parseProject(serializeProject(p))).toThrow(NOT_PROJECT);
+  };
+  bad(p => { p.forms = []; });
+  bad(p => { p.startupForm = 'Nope'; });
+  const ctl = (type: string) => ({ id: 'c', type, name: 'C', index: null, parentId: null, props: {} }) as never;
+  bad(p => { p.forms[0].controls.push(ctl('Bogus')); });
+  bad(p => { p.forms[0].controls.push(ctl('Form')); });
+  bad(p => { p.forms[0].controls.push(ctl('toString')); });
+});

@@ -210,7 +210,7 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
       else cell.textContent = v === undefined && multi ? '' : formatPropertyValue(d, v);
       row.addEventListener('click', () => { if (active !== d.name) { active = d.name; refresh(); (listEl.querySelector('.pw98-row.selected .pw98-editor, .pw98-row.selected input') as HTMLElement | null)?.focus(); } });
       row.addEventListener('keydown', e => {
-        if (e.key === 'Delete' && d.kind === 'picture' && e.target === row) { e.preventDefault(); void applyValue(form, ts, d, null); }
+        if (e.key === 'Delete' && d.kind === 'picture' && e.target === row) { e.preventDefault(); e.stopPropagation(); void applyValue(form, ts, d, null); }
       });
       return row;
     });

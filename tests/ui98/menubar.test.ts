@@ -285,3 +285,18 @@ describe('bindShortcuts', () => {
     expect(ev.defaultPrevented).toBe(false);
   });
 });
+
+describe('bindShortcuts and consumed keys', () => {
+  test('a key whose default was already prevented does not fire the shortcut', () => {
+    const action = vi.fn();
+    const un = bindShortcuts([{ label: 'M', items: [{ label: 'X', shortcut: 'Del', action }] }], window);
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    el.addEventListener('keydown', e => e.preventDefault());
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }));
+    expect(action).not.toHaveBeenCalled();
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }));
+    expect(action).toHaveBeenCalledTimes(1);
+    un();
+  });
+});

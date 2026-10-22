@@ -4,7 +4,7 @@ import { newProject } from '../model/controls';
 import { parseProject, serializeProject } from '../model/serialize';
 import { h } from '../ui98/dom';
 import { messageBox98, showDialog98 } from '../ui98/dialogs';
-import type { IdeState } from './ideState';
+import { OPTION_EXPLICIT, type IdeState } from './ideState';
 
 const VB_CRITICAL = 16;
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -24,7 +24,7 @@ export class FileController {
     return messageBox98(this.doc, { prompt: message, title: 'VibeBasic', buttons: VB_CRITICAL });
   }
 
-  /** Replaces the project; open windows close themselves on the 'project' event (their form/module is gone). */
+  /** Replaces the project; setProject first closes all open designer and code windows (no stale editors/snapshots). */
   private replace(project: ReturnType<typeof newProject>, filePath: string | null): void {
     this.ide.setProject(project, filePath);
     this.updateTitle();
@@ -32,7 +32,9 @@ export class FileController {
 
   async newProject(): Promise<void> {
     if (!(await this.confirmDiscard())) return;
-    this.replace(newProject(), null);
+    const p = newProject();
+    if (this.ide.options.requireVariableDeclaration) p.forms[0].code = OPTION_EXPLICIT;
+    this.replace(p, null);
     this.onProjectReplaced?.();
   }
 

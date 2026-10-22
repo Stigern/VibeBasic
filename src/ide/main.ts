@@ -5,7 +5,7 @@ import { bindShortcuts, createMenubar } from '../ui98/menubar';
 import { createToolbar, type ToolbarItem } from '../ui98/toolbar';
 import { messageBox98, vbOK } from '../ui98/dialogs';
 import { TOOLBAR_ICONS } from './icons/toolbarIcons';
-import { IdeState, type IdeOptions } from './ideState';
+import { IdeState, OPTION_EXPLICIT, type IdeOptions } from './ideState';
 import { buildLayout, type IdeLayout } from './layout';
 import { buildMenus, type IdeActions } from './menus';
 import { registerCodeActions } from './codeWindow';
@@ -47,7 +47,10 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   actions.projectProperties = () => { void showProjectProperties(state, doc); };
   actions.options = () => { void showOptions(state, backend, doc); };
   const fc = new FileController(state, backend, doc);
-  fc.onProjectReplaced = () => openDesigner(state, state.project.forms.find(f => f.name === state.project.startupForm)?.id ?? state.project.forms[0].id, env);
+  fc.onProjectReplaced = () => {
+    const id = state.project.forms.find(f => f.name === state.project.startupForm)?.id ?? state.project.forms[0]?.id;
+    if (id) openDesigner(state, id, env);
+  };
   actions.newProject = () => { void fc.newProject(); };
   actions.openProject = () => { void fc.open(); };
   actions.saveProject = () => { void fc.save(); };
@@ -81,7 +84,12 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   state.on('activeView', () => refresh());
   updateTitle();
   // Saved IDE options (async; the defaults apply until they arrive)
-  void backend.loadSettings<Partial<IdeOptions>>('ide').then(o => { if (o) state.setOptions(o); }).catch(() => {});
+  void backend.loadSettings<Partial<IdeOptions>>('ide').then(o => {
+    if (!o) return;
+    state.setOptions(o);
+    const f = state.project.forms[0];   // the untouched startup project follows the saved option too
+    if (o.requireVariableDeclaration && f && f.code === '' && !state.stack.isDirty) f.code = OPTION_EXPLICIT;
+  }).catch(() => {});
 
   openDesigner(state, state.project.forms[0].id, { mdiHost: layout.mdiHost, actions });
   return { state, layout, actions, menus, refresh };

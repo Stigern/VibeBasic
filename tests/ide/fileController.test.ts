@@ -2,6 +2,8 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 import type { Backend } from '../../src/backend/backend';
 import { FileController } from '../../src/ide/fileController';
+import { openCodeWindow } from '../../src/ide/codeWindow';
+import { openDesigner } from '../../src/ide/designer';
 import { IdeState } from '../../src/ide/ideState';
 import { setProjectFieldCmd } from '../../src/model/commands';
 import { newProject } from '../../src/model/controls';
@@ -112,4 +114,23 @@ test('exit closes the window only after confirmation', async () => {
 test('title', () => {
   fc.updateTitle();
   expect(backend.setWindowTitle).toHaveBeenCalledWith('Project1 - VibeBasic [design]');
+});
+
+test('New Project applies Require Variable Declaration to Form1', async () => {
+  ide.setOptions({ requireVariableDeclaration: true });
+  await fc.newProject();
+  expect(ide.project.forms[0].code).toBe('Option Explicit\n');
+});
+
+test('reopening a project closes open designer and code windows', async () => {
+  const host = document.body.appendChild(document.createElement('div'));
+  const env = { mdiHost: host };
+  openDesigner(ide, ide.project.forms[0].id, env);
+  openCodeWindow(ide, ide.project.forms[0].id, env);
+  expect(host.querySelectorAll('.mdi98').length).toBe(2);
+  backend.readTextFile.mockResolvedValue(serializeProject({ ...newProject(), forms: ide.project.forms.map(f => ({ ...f, code: 'new text' })) }));
+  await fc.open();
+  expect(host.querySelectorAll('.mdi98').length).toBe(0);
+  const w = openCodeWindow(ide, ide.project.forms[0].id, env);
+  expect((w as unknown as { view: { state: { doc: { toString(): string } } } }).view.state.doc.toString()).toBe('new text');
 });

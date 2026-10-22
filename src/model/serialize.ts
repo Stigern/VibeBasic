@@ -1,3 +1,4 @@
+import { CONTROL_TYPES } from './controls';
 import type { Project } from './types';
 
 export const PROJECT_FORMAT = 'vibebasic-project';
@@ -61,6 +62,11 @@ export function parseProject(text: string): Project {
   }
   if (raw.version > PROJECT_VERSION) throw new ProjectFormatError(TOO_NEW);
   if (!isProjectShape(raw)) throw new ProjectFormatError(NOT_A_PROJECT);
+  const forms = raw.forms as { name: string; controls: { type: string }[] }[];
+  if (!forms.length || !forms.some(f => f.name === raw.startupForm)
+    || !forms.every(f => f.controls.every(c => c.type !== 'Form' && Object.hasOwn(CONTROL_TYPES, c.type)))) {
+    throw new ProjectFormatError(NOT_A_PROJECT);
+  }
   const { format: _format, version: _version, ...rest } = raw;
   return rest as unknown as Project;
 }

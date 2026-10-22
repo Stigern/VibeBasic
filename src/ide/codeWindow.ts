@@ -315,7 +315,9 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
       });
     } else syncCombos();
   };
-  const unsub = ide.on('project', onProject);
+  const unsubProject = ide.on('project', onProject);
+  const unsubClose = ide.on('closeWindows', () => win.close());
+  const unsub = () => { unsubProject(); unsubClose(); };
   let closed = false;
   win.onClose = () => { closed = true; unsub(); reg!.delete(itemId); view.destroy(); return true; };
 

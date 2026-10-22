@@ -125,3 +125,11 @@ test('options: OK updates ide.options, emits and saves; Cancel changes nothing',
   expect(onOpt).toHaveBeenCalledTimes(1);
   expect(await be.loadSettings<{ gridWidth: number }>('ide')).toMatchObject({ gridWidth: 240 });
 });
+
+test('removing a form clears a selection pointing at it', () => {
+  addForm(ide);
+  const f2 = ide.project.forms[1].id;
+  ide.setSelection({ formId: f2, ids: [] });
+  removeItem(ide, f2);
+  expect(ide.selection).toBeNull();
+});

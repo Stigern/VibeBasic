@@ -37,6 +37,7 @@ export function completionsFor(lineBeforeCursor: string, form: FormDef | null): 
   const low = prefix.toLowerCase();
   const options = [...new Set(names)].filter(n => n.toLowerCase().startsWith(low))
     .sort((a, b) => { const x = a.toLowerCase(), y = b.toLowerCase(); return x < y ? -1 : x > y ? 1 : 0; });
+  if (options.length === 1 && options[0].toLowerCase() === low) return null;   // already typed in full: Enter inserts a newline
   return { from: lineBeforeCursor.length - prefix.length, options };
 }
 

@@ -5,11 +5,13 @@ import { newProject } from '../model/controls';
 import type { ControlType, Project } from '../model/types';
 
 export type ActiveView = { kind: 'designer'; formId: string } | { kind: 'code'; itemId: string } | { kind: 'none' };
-export type IdeEvent = 'project' | 'selection' | 'activeView' | 'mode' | 'options' | 'tool';
+export type IdeEvent = 'project' | 'selection' | 'activeView' | 'mode' | 'options' | 'tool' | 'closeWindows';
 export interface IdeOptions {
   autoSyntaxCheck: boolean; requireVariableDeclaration: boolean;
   showGrid: boolean; gridWidth: number; gridHeight: number; alignToGrid: boolean;
 }
+/** Code a new form/module starts with when "Require Variable Declaration" is on. */
+export const OPTION_EXPLICIT = 'Option Explicit\n';
 export const DEFAULT_OPTIONS: IdeOptions = {
   autoSyntaxCheck: true, requireVariableDeclaration: false, showGrid: true, gridWidth: 120, gridHeight: 120, alignToGrid: true,
 };
@@ -46,6 +48,7 @@ export class IdeState {
 
   /** Replaces the project (New / Open) with a fresh undo stack and clears selection and view. */
   setProject(project: Project, filePath: string | null = null): void {
+    this.emit('closeWindows');   // designer and code windows of the old project close before it is replaced
     this.project = project;
     this.filePath = filePath;
     this.stack = this.makeStack();

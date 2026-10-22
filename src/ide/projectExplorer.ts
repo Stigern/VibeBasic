@@ -6,11 +6,10 @@ import { h } from '../ui98/dom';
 import { messageBox98 } from '../ui98/dialogs';
 import { openCodeWindow } from './codeWindow';
 import { openDesigner, type DesignerEnv } from './designer';
-import type { IdeState } from './ideState';
+import { OPTION_EXPLICIT, type IdeState } from './ideState';
 import type { IdeActions } from './menus';
 
 const VB_OK_EXCL = 48;
-const OPTION_EXPLICIT = 'Option Explicit\n';
 
 export interface ProjectExplorer {
   el: HTMLElement;
@@ -56,6 +55,7 @@ export function removeItem(ide: IdeState, id: string): void {
   const replacement = form && form.name === p.startupForm ? p.forms.find(f => f.id !== id)!.name : undefined;
   ide.stack.execute(removeItemCmd(id, replacement));
   if (ide.explorerItemId === id) ide.explorerItemId = null;
+  if (ide.selection?.formId === id) ide.selection = null;
   const v = ide.activeView;
   if ((v.kind === 'designer' && v.formId === id) || (v.kind === 'code' && v.itemId === id)) ide.setActiveView({ kind: 'none' });
   ide.emit('selection');

@@ -47,7 +47,11 @@ export class CommandStack {
   }
   markSaved(): void { this.savedPos = this.done.length; this.externalDirty = false; this.onChange(); }
   /** Code edits have their own undo in CodeMirror; they just mark the project as modified. */
-  markDirtyExternal(): void { this.externalDirty = true; this.onChange(); }
+  markDirtyExternal(): void {
+    if (this.externalDirty) return;   // already dirty: nothing to refresh
+    this.externalDirty = true;
+    this.onChange();
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------------

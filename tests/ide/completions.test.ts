@@ -24,3 +24,9 @@ test('control array and Me.Control', () => {
 test('no form', () => {
   expect(completionsFor('Text1.', null)).toBeNull();
 });
+
+test('member already typed in full: no list (Enter inserts a newline)', () => {
+  expect(completionsFor('Text1.Text', form)).toBeNull();
+  expect(completionsFor('Text1.text', form)).toBeNull();
+  expect(completionsFor('Text1.Tex', form)!.options).toEqual(['Text']);
+});

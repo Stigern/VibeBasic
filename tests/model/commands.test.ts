@@ -461,3 +461,12 @@ test('inputs are copied at construction', () => {
   stack.execute(add);
   expect(project.forms[1].name).toBe('Form2');
 });
+
+test('markDirtyExternal notifies only on the clean to dirty transition', () => {
+  const { stack, changes } = setup();
+  stack.markDirtyExternal(); stack.markDirtyExternal(); stack.markDirtyExternal();
+  expect(changes()).toBe(1);
+  stack.markSaved();
+  stack.markDirtyExternal();
+  expect(changes()).toBe(3);
+});

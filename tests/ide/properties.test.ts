@@ -160,7 +160,12 @@ test('picture: file goes to assets and property set is one undo step; Delete cle
   const ref = form().controls[0].props.Picture as { asset: string };
   expect(ide.project.assets[ref.asset]).toEqual({ mime: 'image/png', dataBase64: 'AQID' });
   expect(rowEl('Picture').textContent).toContain('(Bitmap)');
-  rowEl('Picture').dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+  const del = new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true });
+  const seen = vi.fn(); document.addEventListener('keydown', seen);
+  rowEl('Picture').dispatchEvent(del);
+  document.removeEventListener('keydown', seen);
+  expect(del.defaultPrevented).toBe(true);   // consumed: global shortcuts ignore it
+  expect(seen).not.toHaveBeenCalled();       // and it does not bubble to the document
   await flush();
   expect(form().controls[0].props.Picture).toBeNull();
   ide.stack.undo(); ide.stack.undo();

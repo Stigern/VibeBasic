@@ -207,6 +207,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     const end = () => {
       doc.removeEventListener('pointermove', onMove, true);
       doc.removeEventListener('pointerup', onUp, true);
+      doc.removeEventListener('pointercancel', onCancel, true);
       doc.removeEventListener('keydown', onKey, true);
       cancel = null;
       ghosts = null; ghostForm = false;
@@ -220,9 +221,11 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     };
     const onUp = (ev: Event) => { end(); up(moved, ev as MouseEvent); drawOverlay(); };
     const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { end(); drawOverlay(); } };
+    const onCancel = () => { end(); drawOverlay(); };
     cancel = () => { end(); drawOverlay(); };
     doc.addEventListener('pointermove', onMove, true);
     doc.addEventListener('pointerup', onUp, true);
+    doc.addEventListener('pointercancel', onCancel, true);
     doc.addEventListener('keydown', onKey, true);
   }
 
@@ -293,7 +296,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
   }
 
   function startResize(e: MouseEvent, form: FormDef, hd: Handle, id: string): void {
-    if (ide.controlsLocked) return;
+    if (ide.controlsLocked && id !== 'form') return;
     if (id === 'form') {
       const fr: Rect = { left: 0, top: 0, width: Number(form.props.Width) || 0, height: Number(form.props.Height) || 0 };
       let nr = fr;
@@ -331,7 +334,9 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
 
   stage.addEventListener('pointerdown', ev => {
     const e = ev as PointerEvent;
-    if (e.button !== 0 || ide.mode !== 'design' || cancel) return;
+    if (e.button !== 0) return;
+    win.activate();   // preventDefault below suppresses the mousedown that normally raises the window
+    if (ide.mode !== 'design' || cancel) return;
     const form = getForm();
     if (!form) return;
     stage.focus({ preventScroll: true });
@@ -410,6 +415,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
   const isActive = () => ide.activeView.kind === 'designer' && ide.activeView.formId === formId;
   const unsubs = [
     ide.on('project', sync),
+    ide.on('closeWindows', () => { if (!closed) win.close(); }),
     ide.on('selection', () => { if (!closed) drawOverlay(); }),
     ide.on('activeView', () => { if (!closed) surface.setActive(isActive()); }),
     ide.on('options', () => { if (!closed) surface.setGrid(grid()); }),
@@ -422,6 +428,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     unsubs.forEach(u => u());
     reg.delete(formId);
     if (isActive()) ide.setActiveView({ kind: 'none' });
+    if (!getForm() && ide.selection?.formId === formId) ide.setSelection(null);
     return true;
   };
   reg.set(formId, { win, formId, placeCentered });
@@ -488,7 +495,13 @@ export async function pasteControls(ide: IdeState, formId: string, defs: Control
 // IDE actions (Edit and Format menus)
 
 export function registerDesignerActions(ide: IdeState, actions: IdeActions, refresh: () => void = () => {}): void {
+  /** Edit actions only act when focus is in a designer window or nowhere (menu / toolbar clicks leave it on body). */
+  const focusOk = () => {
+    const a = document.activeElement;
+    return !a || a === document.body || !!a.closest('.dsg-stage');
+  };
   const ctx = (): { form: FormDef; ids: string[] } | null => {
+    if (!focusOk()) return null;
     if (ide.mode !== 'design' || ide.activeView.kind !== 'designer') return null;
     const form = formOf(ide, ide.activeView.formId);
     if (!form || ide.selection?.formId !== form.id) return null;

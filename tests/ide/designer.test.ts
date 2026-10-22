@@ -5,7 +5,7 @@ import { openDesigner, pasteControls, registerDesignerActions } from '../../src/
 import { IdeState } from '../../src/ide/ideState';
 import type { IdeActions } from '../../src/ide/menus';
 import { newControl } from '../../src/model/controls';
-import { addControlsCmd } from '../../src/model/commands';
+import { addControlsCmd, addFormCmd } from '../../src/model/commands';
 import type { ControlDef } from '../../src/model/types';
 import { messageBox98 } from '../../src/ui98/dialogs';
 
@@ -210,4 +210,59 @@ test('property changes through the stack re-sync the surface; closing the form w
   ide.stack.execute({ label: 'x', do: p => { p.forms[0].props.Width = 6000; }, undo: p => { p.forms[0].props.Width = 4800; } });
   expect((host.querySelector('.vb-form') as HTMLElement).style.width).toBe('400px');
   host.querySelector<HTMLElement>('.mdi98')!.remove();
+});
+
+test('pointerdown inside a background designer raises it', () => {
+  const f2 = { ...structuredClone(form()), id: 'f2', name: 'Form2', controls: [] };
+  ide.project.forms.push(f2);
+  openDesigner(ide, 'f2', { mdiHost: host, actions });
+  const wins = [...host.querySelectorAll('.mdi98')];
+  expect(wins[1].classList.contains('active')).toBe(true);
+  client.dispatchEvent(ev('pointerdown', px(10, OX), px(10, OY)));
+  document.dispatchEvent(ev('pointerup', px(10, OX), px(10, OY)));
+  expect(wins[0].classList.contains('active')).toBe(true);
+  expect(wins[1].classList.contains('active')).toBe(false);
+  expect(ide.activeView).toEqual({ kind: 'designer', formId: form().id });
+});
+
+test('Edit actions ignore focus outside the designer', () => {
+  const c = add('CommandButton', 240, 240, 1200, 480);
+  ide.setSelection({ formId: form().id, ids: [c.id] });
+  const row = document.body.appendChild(document.createElement('div'));
+  row.tabIndex = 0; row.focus();
+  actions.delete!(); actions.cut!(); actions.selectAll!();
+  expect(form().controls).toHaveLength(1);
+  row.remove();
+  (host.querySelector('.dsg-stage') as HTMLElement).focus();
+  actions.delete!();
+  expect(form().controls).toHaveLength(0);
+});
+
+test('Lock Controls still lets the form be resized', () => {
+  ide.setSelection({ formId: form().id, ids: [] });
+  actions.lockControls!();
+  const w = Number(form().props.Width);
+  const hd = host.querySelector('[data-handle="se"][data-id="form"]') as HTMLElement;
+  expect(hd).toBeTruthy();
+  drag([0, 0], [150, 0], hd);
+  expect(Number(form().props.Width)).toBeGreaterThan(w);
+});
+
+test('pointercancel ends a draw gesture without committing', () => {
+  ide.setTool('CommandButton');
+  client.dispatchEvent(ev('pointerdown', px(120, OX), px(120, OY)));
+  document.dispatchEvent(ev('pointermove', px(1320, OX), px(600, OY)));
+  document.dispatchEvent(ev('pointercancel', px(1320, OX), px(600, OY)));
+  document.dispatchEvent(ev('pointerup', px(1320, OX), px(600, OY)));
+  expect(form().controls).toHaveLength(0);
+  expect(host.querySelectorAll('.dsg-ghost')).toHaveLength(0);
+});
+
+test('undoing the add of a form clears a selection that pointed at it', () => {
+  const f2 = { ...structuredClone(form()), id: 'f2', name: 'Form2', controls: [] };
+  ide.stack.execute(addFormCmd(f2));
+  openDesigner(ide, 'f2', { mdiHost: host, actions });
+  ide.setSelection({ formId: 'f2', ids: [] });
+  ide.stack.undo();
+  expect(ide.selection).toBeNull();
 });
