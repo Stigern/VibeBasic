@@ -35,7 +35,11 @@ export class IdeState {
 
   private makeStack(): CommandStack { return new CommandStack(() => this.project, () => this.emit('project')); }
 
-  on(event: IdeEvent, cb: () => void): void { (this.listeners[event] ??= []).push(cb); }
+  /** Returns a function that removes the listener again. */
+  on(event: IdeEvent, cb: () => void): () => void {
+    (this.listeners[event] ??= []).push(cb);
+    return () => { this.listeners[event] = (this.listeners[event] ?? []).filter(x => x !== cb); };
+  }
   emit(event: IdeEvent): void { for (const cb of [...(this.listeners[event] ?? [])]) cb(); }
 
   /** Replaces the project (New / Open) with a fresh undo stack and clears selection and view. */

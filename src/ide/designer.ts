@@ -408,15 +408,18 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
 
   // ---- wiring -------------------------------------------------------------------------------------------------
   const isActive = () => ide.activeView.kind === 'designer' && ide.activeView.formId === formId;
-  ide.on('project', sync);
-  ide.on('selection', () => { if (!closed) drawOverlay(); });
-  ide.on('activeView', () => { if (!closed) surface.setActive(isActive()); });
-  ide.on('options', () => { if (!closed) surface.setGrid(grid()); });
-  ide.on('tool', () => { if (!closed) stage.classList.toggle('dsg-draw', ide.currentTool !== 'Pointer'); });
+  const unsubs = [
+    ide.on('project', sync),
+    ide.on('selection', () => { if (!closed) drawOverlay(); }),
+    ide.on('activeView', () => { if (!closed) surface.setActive(isActive()); }),
+    ide.on('options', () => { if (!closed) surface.setGrid(grid()); }),
+    ide.on('tool', () => { if (!closed) stage.classList.toggle('dsg-draw', ide.currentTool !== 'Pointer'); }),
+  ];
   win.el.addEventListener('mousedown', activate, true);
   win.onClose = () => {
     cancel?.();
     closed = true;
+    unsubs.forEach(u => u());
     reg.delete(formId);
     if (isActive()) ide.setActiveView({ kind: 'none' });
     return true;

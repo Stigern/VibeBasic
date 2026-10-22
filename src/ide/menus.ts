@@ -55,8 +55,8 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
       mk('Exit', 'exit'),
     ] },
     { label: 'Edit', items: [
-      mk('Undo', 'undo', 'Ctrl+Z', () => state?.stack.canUndo ?? true),
-      mk('Redo', 'redo', 'Ctrl+Y', () => state?.stack.canRedo ?? true),
+      mk('Undo', 'undo', 'Ctrl+Z', () => state?.activeView.kind === 'code' || (state?.stack.canUndo ?? true)),
+      mk('Redo', 'redo', 'Ctrl+Y', () => state?.activeView.kind === 'code' || (state?.stack.canRedo ?? true)),
       sep(),
       mk('Cut', 'cut', 'Ctrl+X'),
       mk('Copy', 'copy', 'Ctrl+C'),

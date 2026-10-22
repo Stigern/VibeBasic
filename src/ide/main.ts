@@ -46,7 +46,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   const toolbar = createToolbar(layout.toolbarHost, [
     tb('new', 'New Project', 'newProject'), tb('open', 'Open Project', 'openProject'), tb('save', 'Save Project', 'saveProject'), sep,
     tb('cut', 'Cut', 'cut'), tb('copy', 'Copy', 'copy'), tb('paste', 'Paste', 'paste'), sep,
-    tb('undo', 'Undo', 'undo', () => state.stack.canUndo), tb('redo', 'Redo', 'redo', () => state.stack.canRedo), sep,
+    tb('undo', 'Undo', 'undo', () => state.activeView.kind === 'code' || state.stack.canUndo), tb('redo', 'Redo', 'redo', () => state.activeView.kind === 'code' || state.stack.canRedo), sep,
     tb('start', 'Start', 'start'), tb('break', 'Break', 'break'), tb('end', 'End', 'end'), sep,
     tb('projectExplorer', 'Project Explorer', 'viewProjectExplorer'), tb('properties', 'Properties Window', 'viewProperties'),
     tb('toolbox', 'Toolbox', 'viewToolbox'),

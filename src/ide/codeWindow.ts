@@ -3,7 +3,7 @@
 // marks it red and shows the compile error box. Edits write form.code / module.code and mark the project dirty.
 import { Annotation, EditorState, StateEffect, StateField, type Extension, type Transaction } from '@codemirror/state';
 import { Decoration, EditorView, GutterMarker, gutter, keymap, type DecorationSet } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap, insertNewlineKeepIndent, insertTab, indentLess } from '@codemirror/commands';
+import { defaultKeymap, history, historyKeymap, insertNewlineKeepIndent, insertTab, indentLess, undo, redo } from '@codemirror/commands';
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search';
 import { tokenize } from '../lang/lexer';
 import { checkLineSyntax } from '../lang/parser';
@@ -106,6 +106,13 @@ export function fixMemberCase(line: string, formName: string, controls: { name: 
   const forms = new Set([formName, ...formNames].map(n => n.toLowerCase()));
   const isDot = (i: number) => toks[i]?.kind === 'op' && toks[i].text === '.';
   const ownerAt = (i: number): { type: ControlType; viaForm: boolean } | null => {
+    if (toks[i]?.kind === 'op' && toks[i].text === ')') {   // `Text1(0)`: the owner is the name before the parentheses
+      for (let d = 0, k = i; k >= 0; k--) {
+        if (toks[k].kind === 'op' && toks[k].text === ')') d++;
+        else if (toks[k].kind === 'op' && toks[k].text === '(' && --d === 0) return k > 0 ? ownerAt(k - 1) : null;
+      }
+      return null;
+    }
     const t = toks[i];
     if (!t || (t.kind !== 'ident' && t.kind !== 'keyword') || t.suffix) return null;
     const low = t.text.toLowerCase();
@@ -304,9 +311,9 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
       });
     } else syncCombos();
   };
-  ide.on('project', onProject);
+  const unsub = ide.on('project', onProject);
   let closed = false;
-  win.onClose = () => { closed = true; reg!.delete(itemId); view.destroy(); return true; };
+  win.onClose = () => { closed = true; unsub(); reg!.delete(itemId); view.destroy(); return true; };
 
   // ---- API ---------------------------------------------------------------------------------------------------------
   const lineStart = (n: number) => view.state.doc.line(Math.max(1, Math.min(n, view.state.doc.lines))).from;
@@ -375,9 +382,18 @@ export function registerCodeActions(ide: IdeState, actions: IdeActions, env: Cod
     const id = v.kind === 'code' ? v.itemId : v.kind === 'designer' ? v.formId : null;
     if (id && ide.project.forms.some(f => f.id === id)) openDesigner(ide, id, env);
   };
-  actions.find = () => {
+  const viewOf = (): EditorView | null => {
     const v = ide.activeView;
     const w = v.kind === 'code' ? windows.get(ide)?.get(v.itemId) : undefined;
-    if (w) openSearchPanel((w as CodeWindow & { view: EditorView }).view);
+    return w ? (w as CodeWindow & { view: EditorView }).view : null;
+  };
+  // Undo / Redo belong to the text editor while a code window is active, else to the project command stack
+  for (const [name, cmd] of [['undo', undo], ['redo', redo]] as const) {
+    const prev = actions[name];
+    actions[name] = (...a: unknown[]) => { const v = viewOf(); if (v) cmd(v); else prev?.(...a); };
+  }
+  actions.find = () => {
+    const v = viewOf();
+    if (v) openSearchPanel(v);
   };
 }

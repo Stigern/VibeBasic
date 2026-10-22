@@ -36,3 +36,11 @@ test('stack changes emit project; setProject resets state', () => {
   expect(s.stack.canUndo).toBe(false);
   expect(s.selection).toBeNull();
 });
+
+test('on() returns an unsubscribe function', () => {
+  const s = new IdeState();
+  let n = 0;
+  const off = s.on('project', () => { n++; });
+  s.emit('project'); off(); s.emit('project');
+  expect(n).toBe(1);
+});

@@ -140,3 +140,36 @@ test('fixMemberCase uses registry for Me. and control types', () => {
   expect(fixMemberCase('Me.caption = text1.text', 'Form1', cs)).toBe('Me.Caption = text1.Text');
   expect(fixMemberCase('Me.text1.setfocus', 'Form1', cs)).toBe('Me.Text1.SetFocus');
 });
+
+const listenerCount = () => ((ide as unknown as { listeners: Record<string, unknown[]> }).listeners.project ?? []).length;
+
+test('closing unsubscribes the project listener; reopening registers one', () => {
+  const base = listenerCount() - 1;   // this window's listener
+  cw.win.close();
+  expect(listenerCount()).toBe(base);
+  expect(() => ide.emit('project')).not.toThrow();
+  open();
+  expect(listenerCount()).toBe(base + 1);
+});
+
+test('undo / redo go to the editor when a code window is active, else to the command stack', () => {
+  const actions: IdeActions = { undo: () => ide.stack.undo(), redo: () => ide.stack.redo() };
+  registerCodeActions(ide, actions, { mdiHost: host });
+  const n = form().controls.length;
+  set('abc');
+  ide.setActiveView({ kind: 'code', itemId: form().id });
+  actions.undo();
+  expect(cw.getSource()).toBe('');
+  actions.redo();
+  expect(cw.getSource()).toBe('abc');
+  expect(form().controls).toHaveLength(n);
+  ide.setActiveView({ kind: 'designer', formId: form().id });
+  actions.undo();   // command stack: removes the last added control
+  expect(form().controls).toHaveLength(n - 1);
+});
+
+test('fixMemberCase keeps the owner across an index', () => {
+  const cs = [{ name: 'Text1', type: 'TextBox' as const }];
+  expect(fixMemberCase('Text1(0).text = "a"', 'Form1', cs)).toBe('Text1(0).Text = "a"');
+  expect(fixMemberCase('Me.text1(i + 1).text = ""', 'Form1', cs)).toBe('Me.Text1(i + 1).Text = ""');
+});
