@@ -198,3 +198,4 @@ Merk: mottakere av appen må høyreklikke → Åpne første gang (Gatekeeper), f
 - Rydd i dette i oppgave 1 eller 2.
 - Fra plan 02: moduler kan ikke få nytt navn i Properties ennå. VB6 kan det, og det bør komme før Make app.
 - Fontlisens: pikselfonten er CC BY-SA 3.0 (lou, FontStruct). Krediteringen må følge med i appene man lager, for eksempel i en lisensfil i Resources.
+- Fra plan 03: `new RunSession(...)` kaster `VBSyntaxError` ved syntaksfeil. Runtime-modus må fange den, vise en feilboks og avslutte. Hovedvinduet i runtime-modus må ha `backgroundThrottling: "disabled"`, ellers strupes timere og løkker når vinduet er skjult.
