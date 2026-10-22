@@ -152,8 +152,9 @@ export type CaseTest =
   | { kind: 'is'; op: CompareOp; value: Expr };
 export interface CaseClause { tests: CaseTest[]; body: Stmt[]; line: number }
 export interface SelectStmt { kind: 'select'; subject: Expr; cases: CaseClause[]; elseBody?: Stmt[]; line: number }
-export interface ForStmt { kind: 'for'; variable: NameExpr; from: Expr; to: Expr; step?: Expr; body: Stmt[]; line: number }
-export interface ForEachStmt { kind: 'forEach'; variable: NameExpr; collection: Expr; body: Stmt[]; line: number }
+/** `nextLine`: the line of the loop's `Next` (the back-edge: increment and test stop there, as in VB6); `line` when on one line. */
+export interface ForStmt { kind: 'for'; variable: NameExpr; from: Expr; to: Expr; step?: Expr; body: Stmt[]; line: number; nextLine: number }
+export interface ForEachStmt { kind: 'forEach'; variable: NameExpr; collection: Expr; body: Stmt[]; line: number; nextLine: number }
 /** `test.atEnd` is true for `Loop While/Until`. No `test` means `Do ... Loop` forever. */
 export interface DoStmt {
   kind: 'do';

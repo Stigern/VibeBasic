@@ -825,10 +825,11 @@ function* execFor(f: Frame, s: ForStmt): Gen<Completion> {
     const c = yield* execBlock(f, s.body);
     if (c === 'exitFor') return;
     if (c !== undefined) return c;
-    if (atBoundary(f, s.line)) yield* boundary(f);
-    // the increment belongs to the For statement; a failure is retried on its own
+    // the back-edge (increment and test) is the Next line, as in VB6: a step stops there, not on the For line again
+    if (atBoundary(f, s.nextLine)) yield* boundary(f);
+    // the increment belongs to the Next statement; a failure is retried on its own
     for (;;) {
-      f.line = s.line;
+      f.line = s.nextLine;
       try {
         v.set(toNumber(v.value) + step);
         break;
@@ -862,7 +863,7 @@ function* execForEach(f: Frame, s: ForEachStmt): Gen<Completion> {
     const c = yield* execBlock(f, s.body);
     if (c === 'exitFor') return;
     if (c !== undefined) return c;
-    if (atBoundary(f, s.line)) yield* boundary(f);
+    if (atBoundary(f, s.nextLine)) yield* boundary(f);
   }
   return;
 }

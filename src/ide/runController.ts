@@ -198,14 +198,16 @@ export class RunController {
   private async onBreak(info: BreakInfo & { askAi?: boolean }): Promise<'continue' | 'end'> {
     this.ide.setMode('break');
     const id = info.at.moduleName ? this.itemId(info.at.moduleName) : undefined;
+    // VB6: the Immediate window is shown, but the keyboard focus goes to the code window with the caret on the yellow
+    // line (so F8 / Shift+F8 / F9 keep working from there); only a break outside any code item focuses the Immediate window.
+    this.opts.immediate?.show();
     if (id) {
       const w = this.openCode(id);
       this.breakWin = w;
+      w.gotoLine(info.at.line);
       w.setBreakLine(info.at.line);
       if (info.error?.compile) { w.markErrorLines([info.at.line]); this.errorWins.push(w); }
-    }
-    this.opts.immediate?.show();
-    this.opts.immediate?.focus();
+    } else this.opts.immediate?.focus();
     const e = info.error;
     this.breakError = info.reason === 'error' && e && id
       ? { itemId: id, error: { number: e.number, description: e.description, compile: e.compile, line: info.at.line, procName: info.at.procName || null } }

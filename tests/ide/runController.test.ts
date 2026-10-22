@@ -238,12 +238,15 @@ test('F8 in design starts and breaks in Form_Load; stepping stays armed for the 
   expect(ide.mode).toBe('break');
   const w = wins.get(ide.project.forms[0].id)!;
   expect(w.win.el.querySelector('.cm-line.cm-vb-break')!.textContent).toBe('  a = 1');
+  expect(w.win.el.contains(document.activeElement)).toBe(true);   // VB6: focus on the code window, not the Immediate window
+  expect(w.getCursorLine()).toBe(2);
   rc.step('over');   // last statement of Form_Load: runs, then the program waits for events with the step armed
   await until(() => ide.mode === 'run');
   expect(ide.mode).toBe('run');
   clickButton();
   await until(() => ide.mode === 'break');
   expect(w.win.el.querySelector('.cm-line.cm-vb-break')!.textContent).toBe('  b = 2');
+  expect(w.win.el.contains(document.activeElement)).toBe(true);
   await rc.start(false);   // F5: continue, stepping ends
   await until(() => ide.mode === 'run');
   w.toggleBreakpoint(6);   // F9 while running reaches the program

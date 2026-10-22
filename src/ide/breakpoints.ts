@@ -55,7 +55,8 @@ export function executableLines(source: string): Set<number> {
       switch (s.kind) {
         case 'if': s.branches.forEach(b => walk(b.body)); walk(s.elseBody); break;
         case 'select': s.cases.forEach(c => walk(c.body)); walk(s.elseBody); break;
-        case 'for': case 'forEach': case 'do': case 'while': case 'with': walk(s.body); break;
+        case 'for': case 'forEach': out.add(s.nextLine); walk(s.body); break;   // Next: the loop's back-edge
+        case 'do': case 'while': case 'with': walk(s.body); break;
       }
     }
   };

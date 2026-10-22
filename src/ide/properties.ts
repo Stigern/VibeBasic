@@ -11,7 +11,7 @@ import { h } from '../ui98/dom';
 import { showFloating } from '../ui98/floating';
 import { createTabs } from '../ui98/tabs';
 import type { IdeState } from './ideState';
-import { customPropEditor } from './imageListEditor';
+import { customPropEditor, imageListRenameCmds } from './imageListEditor';
 import { bytesToBase64, createColorPopup, formatPropertyValue, mimeFromPath, parsePropertyInput, showFontDialog } from './propertyEditors';
 import { CATEGORIES, categoryOf, describeProperty, type Category } from './propertyInfo';
 
@@ -102,7 +102,10 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     const others = form.controls.filter(c => c.id !== t.id && c.name.toLowerCase() === name.toLowerCase());
     if (!others.length) {
       // a member of an array that gets a new unique name leaves the array
-      ide.stack.execute(renameCmd(form.id, t.id, name, t.name.toLowerCase() === name.toLowerCase() ? t.index : null));
+      const rename = renameCmd(form.id, t.id, name, t.name.toLowerCase() === name.toLowerCase() ? t.index : null);
+      // an ImageList takes the references of the Toolbars, TreeViews, ... that use it along (one undo step)
+      const follow = t.type === 'ImageList' ? imageListRenameCmds(form, t.name, name) : [];
+      ide.stack.execute(follow.length ? compositeCmd('Rename', [rename, ...follow]) : rename);
       return;
     }
     if (others[0].type !== t.type) return invalid();
@@ -159,9 +162,23 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     const myEpoch = epoch;
     const mixed = value === undefined && ts.length > 1;   // differing values in a multi-selection: blank
     const shown = mixed ? '' : formatPropertyValue(def, value);
-    if (customPropEditor({ doc, backend: opts.backend ?? getBackend(), project: ide.project, form, type: ts[0].type, def, value, cell, apply: (v, extra) => setValue(form, ts, def, v, extra) })) return null;
     let done = false;
     const live = () => !done && myEpoch === epoch && ide.mode === 'design';
+    // ImageList family (imageListEditor.ts): its own dropdown / "(Custom)..." dialog, wired like the standard editors.
+    // A dialog's result arrives after the await, so it only needs design mode, not the same render.
+    const custom = customPropEditor({
+      doc, backend: opts.backend ?? getBackend(), project: ide.project, form, type: ts[0].type, def, value, cell,
+      apply: (v, extra) => {
+        if (ide.mode !== 'design') return;
+        wantFocus = true;
+        if (extra?.length) setValue(form, ts, def, v, extra); else void applyValue(form, ts, def, v);
+      },
+    });
+    if (custom) {
+      closers.push(() => custom.close());
+      openActive = () => { if (live()) custom.open(); };
+      return custom.focus;
+    }
     const commitText = (t: string) => { if (!live()) return; done = true; void applyText(form, ts, def, t); };
     const commitValue = (v: PropValue) => { if (!live()) return; done = true; void applyValue(form, ts, def, v); };
 
@@ -255,6 +272,7 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
         cell.replaceChildren(valText(), button('...', def.kind === 'font' ? 'Font' : 'Picture', () => void open()));
         return null;
       }
+      case 'date':   // typed as CDate reads it (parsePropertyInput); blank = no date
       default: {
         const el = inline(shown);
         cell.replaceChildren(el);

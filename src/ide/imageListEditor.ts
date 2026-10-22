@@ -3,7 +3,7 @@
 //    picker, given a Key and a Tag, reordered and removed. Pictures become project assets, like Picture properties;
 //  - the ImageList / Icons / SmallIcons row of a Toolbar, TreeView, ListView or TabStrip: a drop-down of the ImageList controls of the form.
 import type { Backend } from '../backend/backend';
-import { addAssetCmd, removeAssetCmd, type Command } from '../model/commands';
+import { addAssetCmd, removeAssetCmd, setPropertyCmd, type Command } from '../model/commands';
 import type { PropDef } from '../model/controls';
 import { newId } from '../model/controls';
 import { listImageLine, parseListImage } from '../model/imageList';
@@ -32,21 +32,43 @@ export interface CustomEditorEnv {
   apply(value: PropValue, extra?: Command[]): void;
 }
 
-/** Fills `cell` with this property's own editor; false when the Properties window should use its standard one. */
-export function customPropEditor(env: CustomEditorEnv): boolean {
+/** The editor a custom row put in its cell: what gets the keyboard focus, what Enter / double-click opens, and how a
+ *  re-render closes its open list. */
+export interface CustomEditor { focus: HTMLElement | null; open(): void; close(): void }
+
+/** Fills `cell` with this property's own editor; null when the Properties window should use its standard one. */
+export function customPropEditor(env: CustomEditorEnv): CustomEditor | null {
   if (env.type === 'ImageList' && env.def.name === 'ListImages') {
-    const btn = h('button', { type: 'button', class: 'pw98-btn pw98-wide', title: '(Custom)...', onclick: () => { void editListImages(env); } }, '(Custom)...');
-    env.cell.replaceChildren(btn);
-    return true;
+    const open = () => { void editListImages(env); };
+    const btn = h('button', { type: 'button', class: 'pw98-btn pw98-wide', title: '(Custom)...' }, '(Custom)...');
+    btn.addEventListener('mousedown', e => e.preventDefault());   // the row keeps the focus
+    btn.addEventListener('click', open);
+    env.cell.replaceChildren(h('span', { class: 'pw98-valtext' }, '(Collection)'), btn);
+    return { focus: null, open, close: () => {} };
   }
   if (IMAGE_USERS.has(env.type) && IMAGE_REF_PROPS.has(env.def.name) && env.def.kind === 'string') {
     const names = env.form.controls.filter(c => c.type === 'ImageList').map(c => c.name);
     const cur = typeof env.value === 'string' ? env.value : '';
-    const combo = createCombo({ items: [NONE, ...names], value: cur === '' ? NONE : cur, onChange: v => env.apply(v === NONE ? '' : v) });
+    const combo = createCombo({ items: [NONE, ...names], value: cur === '' ? NONE : cur, openOnClick: false, onChange: v => env.apply(v === NONE ? '' : v) });
     env.cell.replaceChildren(combo.el);
-    return true;
+    return { focus: combo.el.querySelector('input'), open: () => combo.open(), close: () => combo.close() };
   }
-  return false;
+  return null;
+}
+
+/** Renaming ImageList `oldName` to `newName`: the commands that make the controls naming it (ImageList, Icons,
+ *  SmallIcons) follow, for the same undo step as the rename. */
+export function imageListRenameCmds(form: FormDef, oldName: string, newName: string): Command[] {
+  const old = oldName.toLowerCase();
+  const out: Command[] = [];
+  for (const c of form.controls) {
+    if (!IMAGE_USERS.has(c.type)) continue;
+    for (const p of IMAGE_REF_PROPS) {
+      const v = c.props[p];
+      if (typeof v === 'string' && v.toLowerCase() === old) out.push(setPropertyCmd(form.id, c.id, p, newName));
+    }
+  }
+  return out;
 }
 
 interface Item { key: string; tag: string; asset: string; url: string; pending: Asset | null }

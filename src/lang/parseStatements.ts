@@ -79,6 +79,7 @@ export class StatementParser extends Parser {
 
   private singleLine = 0;
   private nextQueue: string[] = [];
+  private nextTokLine = 0;   // line of the last `Next` keyword (shared by the loops `Next j, i` closes)
   /** Set when a block opener reported a missing closer without throwing (collect mode). */
   private unclosed = false;
   private readonly userTypes = new Set<string>();
@@ -669,7 +670,7 @@ export class StatementParser extends Parser {
       this.expectKeyword('in');
       const collection = this.parseExpression();
       this.expectEnd();
-      const s: Stmt = { kind: 'forEach', variable, collection, body: [], line: forTok.line };
+      const s: Stmt = { kind: 'forEach', variable, collection, body: [], line: forTok.line, nextLine: forTok.line };
       if (!this.lineMode) this.forBody(s, forTok, variable.name);
       return s;
     }
@@ -679,25 +680,25 @@ export class StatementParser extends Parser {
     const from = this.parseExpression();
     this.expectKeyword('to', 'To');
     const to = this.parseExpression();
-    const s: Stmt = { kind: 'for', variable, from, to, body: [], line: forTok.line };
+    const s: Stmt = { kind: 'for', variable, from, to, body: [], line: forTok.line, nextLine: forTok.line };
     if (this.isKeyword('step')) { this.advance(); s.step = this.parseExpression(); }
     this.expectEnd();
     if (!this.lineMode) this.forBody(s, forTok, variable.name);
     return s;
   }
 
-  private forBody(s: Stmt & { body: Stmt[] }, forTok: Token, varName: string): void {
+  private forBody(s: Stmt & { body: Stmt[]; nextLine: number }, forTok: Token, varName: string): void {
     this.forDepth++;
     let result: { body: Stmt[]; closer: Closer | null };
     try { result = this.block(); } finally { this.forDepth--; }
     const { body, closer } = result;
     s.body = body;
-    if (closer === 'next') this.consumeNext(varName);
+    if (closer === 'next') s.nextLine = this.consumeNext(varName);
     else this.unclosedBlock('For without Next', forTok);
   }
 
-  /** Consumes `Next [i[, j ...]]` (or the next queued name of `Next j, i`), checking the loop variable. */
-  private consumeNext(varName: string | undefined): void {
+  /** Consumes `Next [i[, j ...]]` (or the next queued name of `Next j, i`), checking the loop variable; returns the Next's line. */
+  private consumeNext(varName: string | undefined): number {
     let name: string | undefined;
     let tok: Token;
     if (this.nextQueue.length > 0) {
@@ -705,6 +706,7 @@ export class StatementParser extends Parser {
       name = this.nextQueue.shift();
     } else {
       tok = this.advance(); // Next
+      this.nextTokLine = tok.line;
       const names: string[] = [];
       if (this.peek().kind === 'ident') {
         names.push(this.advance().text);
@@ -719,6 +721,7 @@ export class StatementParser extends Parser {
       this.nextQueue = [];
       this.fail('Next without For', tok);
     }
+    return this.nextTokLine;
   }
 
   private loopCondition(): { mode: 'while' | 'until'; expr: Expr } | undefined {

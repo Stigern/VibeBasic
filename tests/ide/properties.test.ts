@@ -203,10 +203,30 @@ test('a property dropdown list renders in the body layer, not inside the value c
   expect(document.querySelector('.cb98-list')).toBeNull();
 });
 
+const IMAGE_REFS = ['ImageList', 'Icons', 'SmallIcons'];
+
 /** Sets a new value through the row's editor, as a user would; returns the expected stored value. */
 async function setThroughEditor(d: PropDef, cur: PropValue, where: string): Promise<unknown> {
   rowEl(d.name).click();
   const btn = () => rowEl(d.name).querySelector('.pw98-btn') as HTMLElement;
+  // custom editors (imageListEditor.ts): the ImageList dropdown and the ListImages "(Custom)..." property pages
+  if (IMAGE_REFS.includes(d.name)) {
+    expect(document.activeElement, where).toBe(rowEl(d.name).querySelector('.cb98-input'));
+    (rowEl(d.name).querySelector('.cb98-arrow') as HTMLElement).click();
+    expect(items().map(i => i.textContent), where).toEqual(['(None)', 'ImageList1']);
+    mousedown(items()[1]);
+    return 'ImageList1';
+  }
+  if (d.name === 'ListImages') {
+    expect(btn().textContent, where).toBe('(Custom)...');
+    btn().click();
+    vi.mocked(backend.openFileDialog).mockResolvedValueOnce('/x/a.png');
+    vi.mocked(backend.readBinaryFile).mockResolvedValueOnce(new Uint8Array([1]));
+    const dlgBtn = (label: string) => [...document.querySelectorAll<HTMLElement>('.dlg98 button')].find(b => b.textContent === label)!;
+    dlgBtn('Insert Picture...').click(); await flush();
+    dlgBtn('OK').click(); await flush();
+    return [expect.stringMatching(/\|asset-/)];
+  }
   switch (d.kind) {
     case 'string': case 'text': case 'int': case 'color': {
       if (d.kind === 'text' && !rowEl(d.name).querySelector('.pw98-editor') && btn()) {
@@ -255,6 +275,11 @@ async function setThroughEditor(d: PropDef, cur: PropValue, where: string): Prom
       await flush();
       return { asset: expect.stringMatching(/^asset-/) };
     }
+    case 'date': {
+      expect(rowEl(d.name).querySelector('.pw98-editor'), where).toBeTruthy();
+      edit(d.name, '2000-01-15');
+      return 36540;
+    }
     case 'list': {
       expect(btn(), where).toBeTruthy();
       btn().click();
@@ -268,6 +293,8 @@ async function setThroughEditor(d: PropDef, cur: PropValue, where: string): Prom
 }
 
 test.each(Object.keys(CONTROL_TYPES) as ControlType[])('%s: every design-time property is editable, updates the model, one undo restores', async type => {
+  const defs0 = CONTROL_TYPES[type].props.filter(d => d.designTime);
+  if (defs0.some(d => IMAGE_REFS.includes(d.name))) add('ImageList', 3000);   // something for its ImageList dropdown
   const id = type === 'Form' ? 'form' : add(type).id;
   ide.setSelection({ formId: form().id, ids: id === 'form' ? [] : [id] });
   const target = () => (id === 'form' ? form() : form().controls.find(c => c.id === id)!);

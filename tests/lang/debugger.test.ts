@@ -70,3 +70,19 @@ test('no breaks inside an Immediate command', async () => {
   expect(host.breaks).toEqual([]);
   expect(host.lines()).toEqual(['f']);
 });
+
+test('For loop: stepping stops on Next for later iterations (not on For again); a For breakpoint hits once', async () => {
+  const src = ['Sub Main()', '  For i = 1 To 2', '    Debug.Print i', '  Next i', '  Debug.Print "x"', 'End Sub'].join('\n');
+  const go = async (setup: (p: Program) => void, stepping: boolean) => {
+    const host = new TestHost();
+    const prog = new Program([{ name: 'Module1', kind: 'module', source: src }], host, TEST_OPTIONS);
+    const stops: number[] = [];
+    host.breakHook = info => { stops.push(info.at.line); if (stepping) prog.step('into'); return 'continue'; };
+    setup(prog);
+    await prog.runEvent('Module1', 'Main');
+    return stops;
+  };
+  expect(await go(p => p.step('into'), true)).toEqual([2, 3, 4, 3, 4, 5]);
+  expect(await go(p => p.setBreakpoints('Module1', [2]), false)).toEqual([2]);
+  expect(await go(p => p.setBreakpoints('Module1', [4]), false)).toEqual([4, 4]);
+});

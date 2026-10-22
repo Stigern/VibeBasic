@@ -64,3 +64,19 @@ test('a Toolbar picks its ImageList from a drop-down (shows (None) until one is 
   expect(input().value).toBe('(None)');
   expect(rowEl('ImageList').querySelector('.cb98')).not.toBeNull();
 });
+
+test('renaming an ImageList updates the controls that use it, in the same undo step', () => {
+  const il = add('ImageList', 'imlA');
+  add('Toolbar'); add('ListView');
+  const [, tb, lv] = form().controls;
+  tb.props.ImageList = 'imlA'; lv.props.Icons = 'IMLA'; lv.props.SmallIcons = 'other';
+  ide.setSelection({ formId: form().id, ids: [il.id] });
+  rowEl('(Name)').click();
+  const input = rowEl('(Name)').querySelector('.pw98-editor') as HTMLInputElement;
+  input.value = 'imlB';
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  const props = () => form().controls.map(c => [c.name, c.props.ImageList, c.props.Icons, c.props.SmallIcons]);
+  expect(props()).toEqual([['imlB', undefined, undefined, undefined], ['Toolbar1', 'imlB', undefined, undefined], ['ListView1', undefined, 'imlB', 'other']]);
+  ide.stack.undo();
+  expect(props()).toEqual([['imlA', undefined, undefined, undefined], ['Toolbar1', 'imlA', undefined, undefined], ['ListView1', undefined, 'IMLA', 'other']]);
+});
