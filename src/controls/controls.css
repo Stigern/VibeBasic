@@ -1,0 +1,174 @@
+/*
+ * VB6 controls under Windows 98. Shared by the form designer (design mode) and running programs (run mode).
+ * Builds on theme.css (98.css + the --w98-* variables); import theme.css first on every page.
+ * The radio/check glyphs are the 98.css ones (MIT).
+ */
+
+/* ---------- base ---------- */
+.vb-ctl {
+  position: absolute; box-sizing: border-box; margin: 0; padding: 0; overflow: hidden;
+  font-family: "Pixelated MS Sans Serif", Tahoma, Geneva, sans-serif; font-size: 11px; line-height: 13px; color: #000;
+  -webkit-font-smoothing: none;
+}
+.vb-ctl.vb-design, .vb-form.vb-design { user-select: none; -webkit-user-select: none; }
+.vb-ctl.vb-design img { pointer-events: none; -webkit-user-drag: none; }
+.vb-ctl button, .vb-ctl input, .vb-ctl select, .vb-ctl textarea {
+  font: inherit; color: inherit; text-decoration: inherit; letter-spacing: inherit;
+}
+.vb-ctl.vb-disabled, .vb-ctl.vb-disabled * { color: #808080 !important; }
+.vb-ctl.vb-disabled .vb-text, .vb-ctl.vb-disabled .vb-opt-text, .vb-ctl.vb-disabled .vb-frame-legend,
+.vb-ctl.vb-disabled .vb-btn { text-shadow: 1px 1px 0 #fff; }
+.draw-layer { position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none; }
+
+/* ---------- CommandButton (98.css button + overrides) ---------- */
+.vb-ctl.vb-ctl .vb-btn {
+  display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; margin: 0; padding: 0 2px;
+  color: inherit; text-shadow: none; background-color: #c0c0c0; background-repeat: no-repeat; background-position: center;
+  overflow: hidden; white-space: nowrap; text-align: center;
+}
+.vb-ctl.vb-ctl .vb-btn:not(:disabled):active { padding: 1px 1px 0 3px; background-position: 51% 51%; text-shadow: none; }
+.vb-ctl.vb-ctl .vb-btn:focus { outline-offset: -4px; }
+.vb-CommandButton .vb-btn u { border-bottom: 1px solid currentColor; }
+
+/* ---------- Label ---------- */
+.vb-Label .vb-text { display: block; white-space: pre; }
+.vb-Label.vb-wrap .vb-text { white-space: pre-wrap; overflow-wrap: break-word; }
+.vb-Label.vb-bordered { box-shadow: var(--w98-sunken); padding: 2px; }
+.vb-Label u, .vb-CheckBox u, .vb-OptionButton u, .vb-Frame u { border-bottom: 1px solid currentColor; }
+
+/* ---------- TextBox (and the input inside a ComboBox) ---------- */
+.vb-TextBox { background-color: #fff; }
+.vb-TextBox.vb-bordered { box-shadow: var(--w98-sunken); padding: 2px; }
+.vb-ctl.vb-ctl .vb-input {
+  display: block; width: 100%; height: 100%; margin: 0; padding: 0 1px; border: 0; border-radius: 0; box-sizing: border-box;
+  box-shadow: none; background: transparent; outline: none; line-height: 13px; min-width: 0; cursor: text;
+}
+.vb-ctl.vb-ctl .vb-input.vb-single { height: 15px; padding: 1px 1px; }
+.vb-ctl.vb-ctl textarea.vb-input { resize: none; white-space: pre-wrap; overflow-wrap: break-word; padding: 1px 1px; }
+.vb-ctl.vb-ctl textarea.vb-input[wrap=off] { white-space: pre; overflow-wrap: normal; }
+
+/* ---------- CheckBox / OptionButton ---------- */
+.vb-opt { position: absolute; left: 0; top: 0; right: 0; bottom: 0; display: flex; align-items: center; }
+.vb-ctl.vb-ctl input.vb-hidden {
+  position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; opacity: 0; z-index: 1;
+  -webkit-appearance: none; appearance: none; background: none;
+}
+.vb-box { position: relative; flex: none; width: 13px; height: 13px; background-color: #fff; box-shadow: var(--w98-sunken); }
+.vb-opt-text { margin-left: 4px; padding: 1px 2px; white-space: pre; }
+.vb-CheckBox input:checked + .vb-box::after, .vb-CheckBox input:indeterminate + .vb-box::after {
+  content: ""; position: absolute; left: 3px; top: 3px; width: 7px; height: 7px; background: url("data:image/svg+xml;charset=utf-8,%3Csvg width='7' height='7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M7 0H6v1H5v1H4v1H3v1H2V3H1V2H0v3h1v1h1v1h1V6h1V5h1V4h1V3h1V0z' fill='%23000'/%3E%3C/svg%3E");
+}
+.vb-CheckBox input:indeterminate + .vb-box {
+  background: repeating-conic-gradient(#fff 0% 25%, #c0c0c0 0% 50%) 0 0 / 2px 2px;
+}
+.vb-CheckBox input:indeterminate + .vb-box::after { background: url("data:image/svg+xml;charset=utf-8,%3Csvg width='7' height='7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M7 0H6v1H5v1H4v1H3v1H2V3H1V2H0v3h1v1h1v1h1V6h1V5h1V4h1V3h1V0z' fill='gray'/%3E%3C/svg%3E"); }
+.vb-CheckBox.vb-disabled .vb-box { background-color: #c0c0c0; }
+.vb-CheckBox.vb-disabled input:checked + .vb-box::after { background: url("data:image/svg+xml;charset=utf-8,%3Csvg width='7' height='7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M7 0H6v1H5v1H4v1H3v1H2V3H1V2H0v3h1v1h1v1h1V6h1V5h1V4h1V3h1V0z' fill='gray'/%3E%3C/svg%3E"); }
+.vb-OptionButton .vb-box { width: 12px; height: 12px; margin-top: 0; background: url("data:image/svg+xml;charset=utf-8,%3Csvg width='12' height='12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M8 0H4v1H2v1H1v2H0v4h1v2h1V8H1V4h1V2h2V1h4v1h2V1H8V0z' fill='gray'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M8 1H4v1H2v2H1v4h1v1h1V8H2V4h1V3h1V2h4v1h2V2H8V1z' fill='%23000'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M9 3h1v1H9V3zm1 5V4h1v4h-1zm-2 2V9h1V8h1v2H8zm-4 0v1h4v-1H4zm0 0V9H2v1h2z' fill='%23DFDFDF'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M11 2h-1v2h1v4h-1v2H8v1H4v-1H2v1h2v1h4v-1h2v-1h1V8h1V4h-1V2z' fill='%23fff'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M4 2h4v1h1v1h1v4H9v1H8v1H4V9H3V8H2V4h1V3h1V2z' fill='%23fff'/%3E%3C/svg%3E") no-repeat; box-shadow: none; }
+.vb-OptionButton input:checked + .vb-box::after {
+  content: ""; position: absolute; left: 4px; top: 4px; width: 4px; height: 4px; background: url("data:image/svg+xml;charset=utf-8,%3Csvg width='4' height='4' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M3 0H1v1H0v2h1v1h2V3h1V1H3V0z' fill='%23000'/%3E%3C/svg%3E");
+}
+.vb-OptionButton.vb-disabled .vb-box { background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg width='12' height='12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M8 0H4v1H2v1H1v2H0v4h1v2h1V8H1V4h1V2h2V1h4v1h2V1H8V0z' fill='gray'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M8 1H4v1H2v2H1v4h1v1h1V8H2V4h1V3h1V2h4v1h2V2H8V1z' fill='%23000'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M9 3h1v1H9V3zm1 5V4h1v4h-1zm-2 2V9h1V8h1v2H8zm-4 0v1h4v-1H4zm0 0V9H2v1h2z' fill='%23DFDFDF'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M11 2h-1v2h1v4h-1v2H8v1H4v-1H2v1h2v1h4v-1h2v-1h1V8h1V4h-1V2z' fill='%23fff'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M4 2h4v1h1v1h1v4H9v1H8v1H4V9H3V8H2V4h1V3h1V2z' fill='silver'/%3E%3C/svg%3E"); }
+.vb-OptionButton.vb-disabled input:checked + .vb-box::after { background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg width='4' height='4' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M3 0H1v1H0v2h1v1h2V3h1V1H3V0z' fill='gray'/%3E%3C/svg%3E"); }
+.vb-ctl input:focus ~ .vb-opt-text { outline: 1px dotted #000; outline-offset: 0; }
+.vb-right .vb-box { order: 2; margin-left: auto; margin-right: 2px; }
+.vb-right .vb-opt-text { order: 1; margin-left: 0; }
+
+/* ---------- Frame ---------- */
+.vb-frame-box {
+  position: absolute; left: 0; top: 6px; right: 1px; bottom: 1px;
+  border: 1px solid #808080; box-shadow: 1px 1px 0 #fff, inset 1px 1px 0 #fff;
+}
+.vb-frame-legend { position: absolute; left: 8px; top: 0; padding: 0 2px; line-height: 13px; white-space: pre; z-index: 1; background: #c0c0c0; }
+.vb-frame-legend.vb-empty { display: none; }
+.vb-noborder .vb-frame-box, .vb-noborder .vb-frame-legend { display: none; }
+.vb-host { position: absolute; left: 0; top: 0; right: 0; bottom: 0; overflow: hidden; }
+
+/* ---------- ListBox ---------- */
+.vb-ListBox { background-color: #fff; box-shadow: var(--w98-sunken); padding: 2px; }
+.vb-ctl.vb-ctl .vb-listbox {
+  display: block; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none;
+  background: transparent; outline: none; overflow-x: hidden; overflow-y: auto; -webkit-appearance: none; appearance: none;
+}
+.vb-listbox option { padding: 0 1px; line-height: 13px; white-space: pre; }
+.vb-listbox option:checked { background: #000080 linear-gradient(#000080, #000080); color: #fff; }
+
+/* ---------- ComboBox ---------- */
+.vb-ComboBox { overflow: visible; }
+.vb-combo-field {
+  position: absolute; left: 0; top: 0; right: 0; bottom: 0; display: flex; align-items: stretch; padding: 2px;
+  background-color: #fff; box-shadow: var(--w98-sunken); box-sizing: border-box;
+}
+.vb-combo-simple .vb-combo-field { bottom: auto; height: 21px; }
+.vb-combo-btn {
+  flex: none; box-sizing: border-box; width: 16px; margin: -2px -2px -2px 0; background: #c0c0c0; box-shadow: var(--w98-raised);
+  display: flex; align-items: center; justify-content: center;
+}
+.vb-combo-btn:active { box-shadow: var(--w98-pressed); }
+.vb-glyph { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 4px solid #000; }
+.vb-ComboBox.vb-disabled .vb-glyph { border-top-color: #808080; }
+.vb-combo-list {
+  position: absolute; left: 0; right: 0; top: 21px; z-index: 9999; box-sizing: border-box; display: none;
+  max-height: 134px; overflow-x: hidden; overflow-y: auto; background-color: #fff; border: 1px solid #000;
+}
+.vb-combo-list.open { display: block; }
+.vb-combo-simple .vb-combo-list {
+  display: block; top: 20px; bottom: 0; max-height: none; border: 0; padding: 2px; box-shadow: var(--w98-sunken);
+}
+.vb-item { padding: 0 2px; line-height: 13px; white-space: pre; }
+.vb-item.sel, .vb-combo-list.open .vb-item:hover { background: #000080; color: #fff; }
+
+/* ---------- PictureBox / Image / Timer ---------- */
+.vb-PictureBox { background-color: #c0c0c0; }
+.vb-PictureBox.vb-bordered { box-shadow: var(--w98-sunken); padding: 2px; }
+.vb-pic-host { position: relative; width: 100%; height: 100%; overflow: hidden; background-repeat: no-repeat; background-position: 0 0; }
+.vb-Image .vb-img { display: block; max-width: none; }
+.vb-Image.vb-stretch .vb-img { width: 100%; height: 100%; }
+.vb-Image.vb-bordered { border: 1px solid #000; }
+.vb-Image.vb-design.vb-empty:not(.vb-bordered) { outline: 1px dotted #808080; outline-offset: -1px; }
+.vb-Timer { background: #c0c0c0; box-shadow: var(--w98-raised); }
+.vb-Timer svg { display: block; }
+
+/* ---------- ProgressBar ---------- */
+.vb-ProgressBar { background-color: #c0c0c0; padding: 2px; box-shadow: inset -1px -1px #fff, inset 1px 1px #808080; }
+.vb-ProgressBar.pb-flat { box-shadow: none; padding: 0; }
+.vb-ProgressBar.pb-bordered { border: 1px solid #000; }
+.pb-fill {
+  height: 100%; width: 0; background-color: transparent;
+  background-image: repeating-linear-gradient(90deg, #000080 0 8px, transparent 8px 10px);
+}
+.pb-smooth .pb-fill { background-image: none; background-color: #000080; }
+.pb-vertical { display: flex; align-items: flex-end; }
+.pb-vertical .pb-fill { width: 100%; height: 0; background-image: repeating-linear-gradient(0deg, #000080 0 8px, transparent 8px 10px); }
+.pb-vertical.pb-smooth .pb-fill { background-image: none; }
+
+/* ---------- scroll bars ---------- */
+.vb-sb { position: absolute; left: 0; top: 0; right: 0; bottom: 0; display: flex; outline: none; background: #c0c0c0; }
+.vb-vertical .vb-sb { flex-direction: column; }
+.vb-sb-btn {
+  flex: none; box-sizing: border-box; width: 16px; height: 16px; background: #c0c0c0; box-shadow: var(--w98-raised);
+  display: flex; align-items: center; justify-content: center;
+}
+.vb-sb-btn:active { box-shadow: var(--w98-pressed); }
+.vb-sb-btn::before { content: ""; width: 0; height: 0; border: 4px solid transparent; }
+.vb-horizontal .vb-sb-btn.dec::before { border-left: 0; border-right: 4px solid #000; }
+.vb-horizontal .vb-sb-btn.inc::before { border-right: 0; border-left: 4px solid #000; }
+.vb-vertical .vb-sb-btn.dec::before { border-top: 0; border-bottom: 4px solid #000; }
+.vb-vertical .vb-sb-btn.inc::before { border-bottom: 0; border-top: 4px solid #000; }
+.vb-disabled .vb-sb-btn.dec::before, .vb-disabled .vb-sb-btn.inc::before { border-color: transparent; }
+.vb-disabled.vb-horizontal .vb-sb-btn.dec::before { border-right-color: #808080; }
+.vb-disabled.vb-horizontal .vb-sb-btn.inc::before { border-left-color: #808080; }
+.vb-disabled.vb-vertical .vb-sb-btn.dec::before { border-bottom-color: #808080; }
+.vb-disabled.vb-vertical .vb-sb-btn.inc::before { border-top-color: #808080; }
+.vb-sb-track { position: relative; flex: 1; min-width: 0; min-height: 0; background: repeating-conic-gradient(#fff 0% 25%, #c0c0c0 0% 50%) 0 0 / 2px 2px; }
+.vb-sb-thumb { position: absolute; box-sizing: border-box; background: #c0c0c0; box-shadow: var(--w98-raised); min-width: 8px; min-height: 8px; }
+.vb-horizontal .vb-sb-thumb { top: 0; bottom: 0; }
+.vb-vertical .vb-sb-thumb { left: 0; right: 0; }
+
+/* ---------- form window ---------- */
+.vb-form { position: relative; display: block; box-sizing: border-box; background: #c0c0c0; box-shadow: var(--w98-window); overflow: hidden; }
+.vb-form.vb-noframe { box-shadow: none; }
+.vb-form > .title-bar { height: 18px; padding: 2px 2px 2px 3px; box-sizing: border-box; }
+.vb-form > .title-bar .title-bar-text { margin-right: 6px; }
+.vb-form-client { position: relative; overflow: hidden; background-color: #c0c0c0; background-repeat: no-repeat; font-family: "Pixelated MS Sans Serif", Tahoma, Geneva, sans-serif; font-size: 11px; }
+.vb-grid { position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none; image-rendering: pixelated; }
