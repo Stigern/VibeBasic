@@ -12,7 +12,7 @@ import { buildCodeRequest, buildFormRequest } from './context';
 import { NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
 import { showCodePreview, showFormPreview } from './previewDialogs';
 import { loadAiSettings } from './settings';
-import type { AiChatOptions } from './sse';
+import type { AiChatOptions, AiUsage } from './sse';
 import { StreamLog } from './streamLog';
 import type { ChatMessage } from './types';
 import { autoFixEventNames, validateCode } from './validate';
@@ -55,11 +55,20 @@ async function promptDialog(doc: Document, title: string): Promise<string | null
   return v === 'ok' && text ? text : null;
 }
 
-type Waited = { kind: 'reply'; text: string } | { kind: 'error'; message: string } | { kind: 'cancel' };
+/** "3,210 prompt tokens (2,900 cached) · 41 s"; only "41 s" when the server sent no token counts. */
+export function formatMetrics(usage: AiUsage | undefined, ms: number): string {
+  const secs = `${Math.round(ms / 1000)} s`;
+  if (!usage) return secs;
+  const n = (v: number) => v.toLocaleString('en-US');
+  return `${n(usage.promptTokens)} prompt tokens${usage.cachedTokens === undefined ? '' : ` (${n(usage.cachedTokens)} cached)`} · ${secs}`;
+}
+
+type Waited = { kind: 'reply'; text: string; metrics: string } | { kind: 'error'; message: string } | { kind: 'cancel' };
 
 /**
  * Waiting dialog with a back-and-forth progress bar and a box that shows the reply as it streams in.
  * Cancel closes it and aborts the request (`signal`); a reply arriving afterwards is discarded.
+ * A reply carries the measurement line (token counts from the server, and the time taken).
  */
 async function waitForReply(doc: Document, model: string, start: (o: AiChatOptions) => Promise<string>, log: StreamLog, label = `Waiting for ${model}...`): Promise<Waited> {
   const block = h('div', { style: 'position:absolute;top:1px;bottom:1px;left:0;width:40px;background:#000080' });
@@ -80,10 +89,12 @@ async function waitForReply(doc: Document, model: string, start: (o: AiChatOptio
     block.style.left = `${pos}px`;
   }, 40);
   const ctrl = new AbortController();
+  const t0 = Date.now();
+  let usage: AiUsage | undefined;
   let request: Promise<string>;
-  try { request = start({ signal: ctrl.signal, onDelta: (kind, text) => log.add(kind, text) }); }
+  try { request = start({ signal: ctrl.signal, onDelta: (kind, text) => log.add(kind, text), onUsage: u => { usage = u; } }); }
   catch (e) { request = Promise.reject(e); }
-  const answered = request.then<Waited, Waited>(text => ({ kind: 'reply', text }), e => ({ kind: 'error', message: e instanceof Error ? e.message : String(e) }));
+  const answered = request.then<Waited, Waited>(text => ({ kind: 'reply', text, metrics: formatMetrics(usage, Date.now() - t0) }), e => ({ kind: 'error', message: e instanceof Error ? e.message : String(e) }));
   const cancelled = showDialog98(doc, { title: TITLE, content, buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }] })
     .then<Waited>(() => ({ kind: 'cancel' }));
   try {
@@ -160,6 +171,7 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   if (ide.project !== project) return;   // a different project was opened meanwhile
 
   let reply = res.text;
+  let metrics = res.metrics;
   let result = analyse(reply);
   if (result && result.problems.length && messages) {
     // One retry: tell the model what is wrong and keep the first answer if the second is no better understood.
@@ -171,7 +183,7 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
     if (ide.project !== project) return;
     if (again.kind === 'reply') {
       const second = analyse(again.text);
-      if (second) { result = second; reply = again.text; }
+      if (second) { result = second; reply = again.text; metrics = again.metrics; }
     }
   }
   if (!result) { await showNotUnderstood(doc, reply); return; }
@@ -181,7 +193,7 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
     const win = codeWin!;
     const before = win.getSource();
     const { applied } = result;
-    if (!await showCodePreview(doc, before.replace(/\r\n?/g, '\n'), applied.source, applied.changes, warnings)) return;
+    if (!await showCodePreview(doc, before.replace(/\r\n?/g, '\n'), applied.source, applied.changes, warnings, metrics)) return;
     win.applyChange(0, win.getSource().length, applied.source);
     return;
   }
@@ -192,7 +204,7 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   try {
     const code = parsed.code === null ? undefined
       : { before: form.code.replace(/\r\n?/g, '\n'), after: parsed.code, changes: parsed.codeChanges ?? [] };
-    ok = await showFormPreview(doc, applyFormOpsToClone(form, parsed), describeOps(parsed), [...parsed.warnings, ...warnings], project.assets, code);
+    ok = await showFormPreview(doc, applyFormOpsToClone(form, parsed), describeOps(parsed), [...parsed.warnings, ...warnings], project.assets, code, metrics);
   } catch (e) {
     await showNotUnderstood(doc, `${reply}\n\nError: ${e instanceof Error ? e.message : String(e)}`);
     return;

@@ -185,6 +185,25 @@ impl SseParser {
   }
 }
 
+/// Token counts the server reports in the last streamed chunk (`stream_options.include_usage`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Usage {
+  pub prompt_tokens: u64,
+  pub completion_tokens: u64,
+  pub cached_tokens: Option<u64>,
+}
+
+/// The `usage` object of a chunk, if it has one with a prompt token count.
+fn read_usage(v: &Value) -> Option<Usage> {
+  let u = v.get("usage").filter(|u| u.is_object())?;
+  let n = |p: &str| u.pointer(p).and_then(Value::as_u64);
+  Some(Usage {
+    prompt_tokens: n("/prompt_tokens")?,
+    completion_tokens: n("/completion_tokens").unwrap_or(0),
+    cached_tokens: n("/prompt_tokens_details/cached_tokens"),
+  })
+}
+
 /// Like `chat`, but asks for `"stream": true` and calls `on_delta(kind, text)` ("reasoning" | "content") for every
 /// piece as it arrives. Returns the same text as `chat`. A server that answers with plain JSON is read as usual.
 pub async fn chat_stream(
@@ -194,10 +213,11 @@ pub async fn chat_stream(
   messages: &[ChatMessage],
   reasoning_effort: &Option<String>,
   on_delta: &(dyn Fn(&str, &str) + Send + Sync),
+  on_usage: &(dyn Fn(Usage) + Send + Sync),
 ) -> Result<String, String> {
   let idle = Duration::from_secs(STREAM_IDLE_SECS);
   let total = Duration::from_secs(STREAM_TOTAL_SECS);
-  chat_stream_with(base_url, api_key, model, messages, reasoning_effort, on_delta, idle, total).await
+  chat_stream_with(base_url, api_key, model, messages, reasoning_effort, on_delta, on_usage, idle, total).await
 }
 
 fn idle_error(idle: Duration) -> String {
@@ -212,6 +232,7 @@ async fn chat_stream_with(
   messages: &[ChatMessage],
   reasoning_effort: &Option<String>,
   on_delta: &(dyn Fn(&str, &str) + Send + Sync),
+  on_usage: &(dyn Fn(Usage) + Send + Sync),
   idle: Duration,
   total: Duration,
 ) -> Result<String, String> {
@@ -222,7 +243,7 @@ async fn chat_stream_with(
     .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
     .build()
     .map_err(|e| format!("Could not start the AI request: {e}"))?;
-  let mut body = json!({ "model": model, "messages": messages, "temperature": 0.2, "stream": true });
+  let mut body = json!({ "model": model, "messages": messages, "temperature": 0.2, "stream": true, "stream_options": { "include_usage": true } });
   if let Some(e) = reasoning_effort.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
     body["chat_template_kwargs"] = json!({ "reasoning_effort": e });
   }
@@ -264,6 +285,9 @@ async fn chat_stream_with(
     let Ok(v) = serde_json::from_str::<Value>(payload) else { return Ok(false) };
     if v.get("error").is_some() {
       return Err(body_message(payload).unwrap_or_else(unreadable));
+    }
+    if let Some(u) = read_usage(&v) {
+      on_usage(u);
     }
     if let Some(f) = v.pointer("/choices/0/finish_reason").and_then(Value::as_str) {
       finish = Some(f.to_string());
@@ -364,11 +388,17 @@ pub async fn ai_chat(
     return chat(&base_url, &api_key, &model, &messages, &reasoning_effort).await;
   };
   let emit_id = id.clone();
+  let id_for_usage = id.clone();
+  let app2 = app.clone();
   let task = tokio::spawn(async move {
     let on_delta = move |kind: &str, text: &str| {
       let _ = app.emit("ai:delta", json!({ "id": emit_id, "kind": kind, "text": text }));
     };
-    chat_stream(&base_url, &api_key, &model, &messages, &reasoning_effort, &on_delta).await
+    let emit_id = id_for_usage;
+    let on_usage = move |u: Usage| {
+      let _ = app2.emit("ai:usage", json!({ "id": emit_id, "prompt_tokens": u.prompt_tokens, "completion_tokens": u.completion_tokens, "cached_tokens": u.cached_tokens }));
+    };
+    chat_stream(&base_url, &api_key, &model, &messages, &reasoning_effort, &on_delta, &on_usage).await
   });
   streams.0.lock().unwrap().insert(id.clone(), task.abort_handle());
   let res = task.await;
@@ -581,6 +611,8 @@ mod tests {
     assert_eq!(p.finish(), vec!["{\"t\":\"\u{f8}\"}"]);
   }
 
+  fn no_usage(_: Usage) {}
+
   fn delta(field: &str, text: &str) -> String {
     format!("data: {}\n\n", json!({"choices":[{"delta":{ field: text }}]}))
   }
@@ -603,12 +635,34 @@ mod tests {
       then.status(200).header("content-type", "text/event-stream").body(body);
     });
     let (got, cb) = collect();
-    let r = chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &cb).await;
+    let r = chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage).await;
     assert_eq!(r.unwrap(), "Hello");
     m.assert();
     let got = got.lock().unwrap().clone();
     let pairs: Vec<(&str, &str)> = got.iter().map(|(k, t)| (k.as_str(), t.as_str())).collect();
     assert_eq!(pairs, vec![("reasoning", "Think"), ("reasoning", "ing..."), ("content", "Hel"), ("content", "lo")]);
+  }
+
+  #[tokio::test]
+  async fn stream_requests_and_reads_usage() {
+    let usage = json!({"choices":[],"usage":{"prompt_tokens":3210,"completion_tokens":41,"prompt_tokens_details":{"cached_tokens":2900}}});
+    let usage2 = json!({"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":1}});
+    assert_eq!(read_usage(&usage), Some(Usage { prompt_tokens: 3210, completion_tokens: 41, cached_tokens: Some(2900) }));
+    assert_eq!(read_usage(&usage2), Some(Usage { prompt_tokens: 5, completion_tokens: 1, cached_tokens: None }));
+    assert_eq!(read_usage(&json!({"choices":[{"delta":{}}],"usage":null})), None);
+    let server = MockServer::start();
+    let m = server.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions").json_body_partial(r#"{"stream_options":{"include_usage":true}}"#);
+      then.status(200).header("content-type", "text/event-stream")
+        .body(sse(&[&delta("content", "ok"), &format!("data: {usage}\n\n"), "data: [DONE]\n\n"]));
+    });
+    let (_, cb) = collect();
+    let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let s2 = seen.clone();
+    let on_usage = move |u: Usage| s2.lock().unwrap().push(u);
+    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, &on_usage).await.unwrap(), "ok");
+    m.assert();
+    assert_eq!(seen.lock().unwrap().clone(), vec![Usage { prompt_tokens: 3210, completion_tokens: 41, cached_tokens: Some(2900) }]);
   }
 
   #[tokio::test]
@@ -619,7 +673,7 @@ mod tests {
       then.status(200).header("content-type", "text/event-stream").body(sse(&[&delta("reasoning", "only thoughts"), "data: [DONE]\n\n"]));
     });
     let (_, cb) = collect();
-    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &cb).await.unwrap(), "only thoughts");
+    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage).await.unwrap(), "only thoughts");
 
     let server2 = MockServer::start();
     server2.mock(|when, then| {
@@ -627,7 +681,7 @@ mod tests {
       then.status(200).header("content-type", "text/event-stream")
         .body(format!("data: {}\n\n", json!({"choices":[{"delta":{},"finish_reason":"length"}]})));
     });
-    let e = chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &cb).await.unwrap_err();
+    let e = chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage).await.unwrap_err();
     assert!(e.starts_with("The AI server sent an answer VibeBasic could not read."), "{e}");
     assert!(e.contains("finish_reason = length"), "{e}");
   }
@@ -640,7 +694,7 @@ mod tests {
       then.status(200).header("content-type", "text/event-stream").body(delta("content", "abc").trim_end());
     });
     let (got, cb) = collect();
-    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &cb).await.unwrap(), "abc");
+    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage).await.unwrap(), "abc");
     assert_eq!(got.lock().unwrap().len(), 1);
 
     let server2 = MockServer::start();
@@ -649,7 +703,7 @@ mod tests {
       then.status(200).json_body(json!({"choices":[{"message":{"content":"plain"}}]}));
     });
     let (got2, cb2) = collect();
-    assert_eq!(chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &cb2).await.unwrap(), "plain");
+    assert_eq!(chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &cb2, &no_usage).await.unwrap(), "plain");
     m.assert();
     assert!(got2.lock().unwrap().is_empty());
   }
@@ -662,12 +716,12 @@ mod tests {
       then.status(200).header("content-type", "text/event-stream").delay(Duration::from_millis(1500)).body(delta("content", "late"));
     });
     let (_, cb) = collect();
-    let e = chat_stream_with(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, Duration::from_millis(200), Duration::from_secs(60))
+    let e = chat_stream_with(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage, Duration::from_millis(200), Duration::from_secs(60))
       .await
       .unwrap_err();
     assert!(e.starts_with("The AI server stopped sending for"), "{e}");
     // a patient idle limit gets the answer
-    let r = chat_stream_with(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, Duration::from_secs(10), Duration::from_secs(60)).await;
+    let r = chat_stream_with(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage, Duration::from_secs(10), Duration::from_secs(60)).await;
     assert_eq!(r.unwrap(), "late");
     // the real limits
     assert_eq!(idle_error(Duration::from_secs(STREAM_IDLE_SECS)), "The AI server stopped sending for 90 seconds.");
@@ -683,13 +737,13 @@ mod tests {
       then.status(404).json_body(json!({"error":{"message":"no such model"}}));
     });
     let (_, cb) = collect();
-    let e = chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &cb).await.unwrap_err();
+    let e = chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage).await.unwrap_err();
     assert_eq!(e, "The AI server answered 404 Not Found: no such model");
     let server2 = MockServer::start();
     server2.mock(|when, then| {
       when.any_request();
       then.status(200).header("content-type", "text/event-stream").body("data: {\"error\":{\"message\":\"boom\"}}\n\n");
     });
-    assert_eq!(chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &cb).await.unwrap_err(), "boom");
+    assert_eq!(chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage).await.unwrap_err(), "boom");
   }
 }

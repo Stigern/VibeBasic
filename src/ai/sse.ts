@@ -2,11 +2,28 @@
 
 export type AiDeltaKind = 'reasoning' | 'content';
 
+/** Token counts the server reports for a request. `cachedTokens` is how much of the prompt it reused. */
+export interface AiUsage { promptTokens: number; completionTokens: number; cachedTokens?: number }
+
 export interface AiChatOptions {
   /** Called for every piece of the reply as it arrives: the model's thinking, then its answer. */
   onDelta?: (kind: AiDeltaKind, text: string) => void;
   /** Aborting stops the request; aiChat then rejects with "cancelled". */
   signal?: AbortSignal;
+  /** Called once when the server reports token counts (streaming requests only). Never called if it sends none. */
+  onUsage?: (u: AiUsage) => void;
+}
+
+/** The `usage` object of a response or chunk, if it has a prompt token count. */
+export function readUsage(v: any): AiUsage | undefined {
+  const u = v?.usage;
+  if (!u || typeof u.prompt_tokens !== 'number') return undefined;
+  const cached = u.prompt_tokens_details?.cached_tokens;
+  return {
+    promptTokens: u.prompt_tokens,
+    completionTokens: typeof u.completion_tokens === 'number' ? u.completion_tokens : 0,
+    ...(typeof cached === 'number' ? { cachedTokens: cached } : {}),
+  };
 }
 
 /**
@@ -31,7 +48,7 @@ export function parseSseChunk(buffer: string): { events: string[]; rest: string 
 export const SSE_DONE = '[DONE]';
 
 /** The pieces carried by one event payload, the finish reason, or an error message from the server. */
-export function readSseEvent(payload: string): { deltas: { kind: AiDeltaKind; text: string }[]; finish?: string; error?: string; done?: boolean } {
+export function readSseEvent(payload: string): { deltas: { kind: AiDeltaKind; text: string }[]; finish?: string; error?: string; done?: boolean; usage?: AiUsage } {
   const p = payload.trim();
   if (p === SSE_DONE) return { deltas: [], done: true };
   let v: any;
@@ -46,5 +63,5 @@ export function readSseEvent(payload: string): { deltas: { kind: AiDeltaKind; te
   const thinking = [d?.reasoning, d?.reasoning_content].find(t => typeof t === 'string' && t);
   if (thinking) deltas.push({ kind: 'reasoning', text: thinking });
   if (typeof d?.content === 'string' && d.content) deltas.push({ kind: 'content', text: d.content });
-  return { deltas, finish: typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined };
+  return { deltas, finish: typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined, usage: readUsage(v) };
 }
