@@ -8,7 +8,7 @@ import { generalDateText, localeDateParser } from '../builtins/format';
 import { newRndState } from '../builtins/util';
 import { parseModule } from '../parser';
 import {
-  VBArray, VBRecord, VBRef, defaultValue, setDateTextFormatter, setDateTextParser, toNumber, type DateTextFormatter,
+  Empty, VBArray, VBRecord, VBRef, defaultValue, setDateTextFormatter, setDateTextParser, toNumber, type DateTextFormatter,
   type DateTextParser, type VBValue,
 } from '../values';
 import { EndSignal, SubCall, runGenerator, type ExecScope, type Gen } from './driver';
@@ -513,6 +513,60 @@ export class Program {
     } finally {
       finish();
     }
+  }
+
+  /**
+   * A Public member of a module as other code sees it (`Form2.Greet`, `Form2.Counter`): `'proc'` for a
+   * Sub/Function that is not Private (procedures are Public by default), `'var'` for a `Public` variable,
+   * else null.
+   */
+  hasPublicMember(moduleName: string, name: string): 'proc' | 'var' | null {
+    const m = this.rt.modules.get(lc(moduleName));
+    if (!m) return null;
+    const key = lc(name);
+    if (m.procs.get(key)?.proc.visibility === 'public') return 'proc';
+    if (m.ast.variables.some(d => d.scope === 'public' && lc(d.name) === key)) return 'var';
+    return null;
+  }
+
+  /**
+   * Calls a Public Sub/Function of a module from host code (`Form2.MyFunc(1)` on a form object) and resolves
+   * with its result (Empty for a Sub). Runs like `runEvent`: started at once, nested in the statement that
+   * asked (it awaits this promise), so it may be used inside an expression. Arguments are passed by value.
+   * Unhandled errors in the procedure are reported as in an event handler (the promise resolves with Empty).
+   * Throws 438 for a member that is not a Public procedure.
+   */
+  async callPublic(moduleName: string, name: string, args: VBValue[]): Promise<VBValue> {
+    const rt = this.rt;
+    if (this.hasPublicMember(moduleName, name) !== 'proc') throw new VBRuntimeError(438);
+    const ref = rt.modules.get(lc(moduleName))!.procs.get(lc(name))!;
+    if (rt.state === 'ended') return Empty;
+    if (rt.runs.size >= MAX_EVENT_NESTING) throw new VBRuntimeError(28);
+    const run = new Run(rt);
+    const finish = rt.beginRun(run);
+    rt.state = 'running';
+    try {
+      return await runGenerator(rt.entry(run, ref, args.map(a => new VBRef(a))), rt.runScope(run));
+    } catch (e) {
+      if (!(e instanceof EndSignal)) await this.entryError(ref, e);
+      return Empty;
+    } finally {
+      finish();
+    }
+  }
+
+  /** The value of a Public module-level variable (Empty before the program has started). */
+  getPublicVar(moduleName: string, name: string): VBValue {
+    if (this.hasPublicMember(moduleName, name) !== 'var') throw new VBRuntimeError(438);
+    return this.rt.modules.get(lc(moduleName))!.vars.get(lc(name))?.value ?? Empty;
+  }
+
+  /** Assigns a Public module-level variable, converted to its declared type. */
+  setPublicVar(moduleName: string, name: string, value: VBValue): void {
+    if (this.hasPublicMember(moduleName, name) !== 'var') throw new VBRuntimeError(438);
+    const v = this.rt.modules.get(lc(moduleName))!.vars.get(lc(name));
+    if (!v) throw new VBRuntimeError(91);
+    v.set(value);
   }
 
   /**

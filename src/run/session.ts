@@ -187,7 +187,8 @@ export class RunSession implements Host, FormSession {
 
   async loadPicture(path: string): Promise<VBValue> {
     if (path === '') return new PictureObject(null);
-    const full = path.startsWith('/') ? path : `${this.cb.appPath.replace(/\/+$/, '')}/${path}`;
+    const p = path.replace(/\\/g, '/');   // VB code builds Windows paths: App.Path & "\pic.bmp"
+    const full = p.startsWith('/') || /^[A-Za-z]:\//.test(p) ? p : `${this.cb.appPath.replace(/\\/g, '/').replace(/\/+$/, '')}/${p}`;
     let bytes: Uint8Array;
     try {
       bytes = await this.cb.readFile(full);

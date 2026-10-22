@@ -176,4 +176,31 @@ describe('RunSession', () => {
     click('Command1'); await settle(s);
     expect(out).toEqual(['change', 'check', 'done']);
   });
+  test('loadpicture: backslash paths from App.Path', async () => {
+    const readFile = vi.fn(async (_p: string) => new Uint8Array([66, 77]));
+    await start(project([{ name: 'Form1', controls: [['PictureBox', 'Picture1']],
+      code: 'Private Sub Form_Load()\n    Picture1.Picture = LoadPicture(App.Path & "\\pic.bmp")\n    Picture1.Picture = LoadPicture("sub\\a.png")\n    Debug.Print Err.Number\nEnd Sub\n' }]), { readFile });
+    await settle(session!);
+    expect(out).toEqual([' 0 ']);
+    expect(readFile.mock.calls.map(c => c[0])).toEqual(['/app/pic.bmp', '/app/sub/a.png']);
+  });
+
+  test('public members of another form: Sub, Function, variable; Private hidden', async () => {
+    const s = await start(project([
+      { name: 'Form1', controls: [['CommandButton', 'Command1']],
+        code: 'Private Sub Command1_Click()\n    Form2.Greet "x"\n    Debug.Print Form2.Twice(3)\n    Form2.Counter = 5\n    Debug.Print Form2.Counter\n'
+          + '    On Error Resume Next\n    Form2.Hidden\n    Debug.Print Err.Number\nEnd Sub\n' },
+      { name: 'Form2', code: 'Public Counter As Integer\nSub Greet(s As String)\n    Debug.Print "hei " & s\nEnd Sub\n'
+          + 'Public Function Twice(n As Integer) As Integer\n    Twice = n * 2\nEnd Function\nPrivate Sub Hidden()\nEnd Sub\n' },
+    ]));
+    click('Command1'); await settle(s);
+    expect(out).toEqual(['hei x', ' 6 ', ' 5 ', ' 438 ']);
+  });
+
+  test('Form_Load waits for an Initialize that calls DoEvents', async () => {
+    const s = await start(project([{ name: 'Form1', code: 'Private Sub Form_Initialize()\n    Debug.Print "i1"\n    DoEvents\n    Debug.Print "i2"\nEnd Sub\n'
+      + 'Private Sub Form_Load()\n    Debug.Print "load"\nEnd Sub\n' }]));
+    await settle(s);
+    expect(out).toEqual(['i1', 'i2', 'load']);
+  });
 });

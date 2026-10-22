@@ -4,7 +4,7 @@
 import type { VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
 import type { Program } from '../../lang/interp/program';
-import { Empty, VBRef, coerce, toBool, type VBValue } from '../../lang/values';
+import { Empty, VBArray, VBRef, coerce, toBool, type VBValue } from '../../lang/values';
 import { formScaleSize } from '../../controls/render';
 import { CONTROL_TYPES, getPropDef } from '../../model/controls';
 import type { ControlDef, FormDef, PictureRef, PropValue } from '../../model/types';
@@ -100,16 +100,19 @@ export class FormInstance implements VBObject {
 
   // -- life cycle ---------------------------------------------------------------------------------------------
 
-  /** Load: Form_Initialize then Form_Load (started at once, so they run nested in a caller's statement). */
+  /** Load: Form_Initialize then Form_Load. */
   load(): Promise<void> {
     if (this.loaded) return this.loadDone ?? Promise.resolve();
     this.loaded = true;
     const st = this.state();
     st.form.props.Visible = false;
     for (const t of this.timers()) this.s.syncTimer(this, t);
-    const init = this.s.fire(this.name, 'Form_Initialize', []);
-    const load = this.s.fire(this.name, 'Form_Load', []);
-    return this.loadDone = Promise.all([init, load]).then(() => {});
+    // Form_Load starts once Form_Initialize has finished; without an Initialize handler it starts at once,
+    // so a member access that loads the form runs Load nested in the accessing statement.
+    const runLoad = (): Promise<void> => (this.loaded && !this.s.ended ? this.s.fire(this.name, 'Form_Load', []) : Promise.resolve());
+    return this.loadDone = this.s.program.hasProcedure(this.name, 'Form_Initialize')
+      ? this.s.fire(this.name, 'Form_Initialize', []).then(runLoad)
+      : runLoad();
   }
 
   private autoLoad(): void {
@@ -295,7 +298,19 @@ export class FormInstance implements VBObject {
     const l = lc(name);
     if (this.controlNames.has(l) || l === 'scalewidth' || l === 'scaleheight' || l === 'name' || FORM_METHODS.has(l)) return true;
     const pd = getPropDef('Form', name);
-    return !!pd && pd.runtime !== 'none';
+    if (pd) return pd.runtime !== 'none';
+    // Public variables are properties; Public Subs/Functions go through callMethod (they may wait)
+    return this.publicMember(name) === 'var';
+  }
+
+  /** A Public variable or procedure of the form's code (not hiding the form's own properties and controls). */
+  private publicMember(name: string): 'proc' | 'var' | null {
+    return this.s.program.hasPublicMember(this.name, name);
+  }
+
+  private callPublic(name: string, args: VBValue[]): Promise<VBValue> {
+    this.autoLoad();
+    return this.s.program.callPublic(this.name, name, args);
   }
 
   getMember(name: string, args: VBValue[]): VBValue {
@@ -316,6 +331,15 @@ export class FormInstance implements VBObject {
     }
     if (l === 'visible') return this.visible;
     if (FORM_METHODS.has(l)) return this.callSync(l, args);
+    if (!getPropDef('Form', name)) {
+      const pm = this.publicMember(name);
+      if (pm === 'var') {
+        const v = this.s.program.getPublicVar(this.name, name);
+        return args.length && v instanceof VBArray ? v.get(args.map(a => Number(coerce(a, 'Long')))) : v;
+      }
+      // `x = Form2.GetCount` (no parentheses): the interpreter awaits a Promise from getMember
+      if (pm === 'proc') return this.callPublic(name, args) as unknown as VBValue;
+    }
     return st.form.getMember(name, args);
   }
 
@@ -335,6 +359,14 @@ export class FormInstance implements VBObject {
       if (toBool(value)) void this.show(false); else this.hide();
       return;
     }
+    if (!getPropDef('Form', name) && this.publicMember(name) === 'var') {
+      if (args.length) {
+        const arr = this.s.program.getPublicVar(this.name, name);
+        if (!(arr instanceof VBArray)) throw new VBRuntimeError(13);
+        arr.set(args.map(a => Number(coerce(a, 'Long'))), value);
+      } else this.s.program.setPublicVar(this.name, name, value);
+      return;
+    }
     st.form.setMember(name, args, value);
   }
 
@@ -348,6 +380,7 @@ export class FormInstance implements VBObject {
       case 'load': return this.load().then(() => Empty);
       case 'unload': return this.unload(1).then(() => Empty);
     }
+    if (!FORM_METHODS.has(l) && !getPropDef('Form', name) && this.publicMember(name) === 'proc') return this.callPublic(name, args);
     return this.callSync(l, args);
   }
 
