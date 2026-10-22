@@ -12,6 +12,8 @@ import { buildCodeRequest, buildFormRequest } from './context';
 import { NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
 import { showCodePreview, showFormPreview } from './previewDialogs';
 import { loadAiSettings } from './settings';
+import type { AiChatOptions } from './sse';
+import { StreamLog } from './streamLog';
 import type { ChatMessage } from './types';
 import { autoFixEventNames, validateCode } from './validate';
 
@@ -55,11 +57,21 @@ async function promptDialog(doc: Document, title: string): Promise<string | null
 
 type Waited = { kind: 'reply'; text: string } | { kind: 'error'; message: string } | { kind: 'cancel' };
 
-/** Waiting dialog with a back-and-forth progress bar. Cancel closes it; a reply arriving afterwards is discarded. */
-async function waitForReply(doc: Document, model: string, request: Promise<string>, label = `Waiting for ${model}...`): Promise<Waited> {
+/**
+ * Waiting dialog with a back-and-forth progress bar and a box that shows the reply as it streams in.
+ * Cancel closes it and aborts the request (`signal`); a reply arriving afterwards is discarded.
+ */
+async function waitForReply(doc: Document, model: string, start: (o: AiChatOptions) => Promise<string>, log: StreamLog, label = `Waiting for ${model}...`): Promise<Waited> {
   const block = h('div', { style: 'position:absolute;top:1px;bottom:1px;left:0;width:40px;background:#000080' });
   const bar = h('div', { class: 'ai-progress', style: 'position:relative;height:16px;margin-top:8px;overflow:hidden;box-shadow:inset -1px -1px #fff,inset 1px 1px #808080' }, block);
-  const content = h('div', { style: 'min-width:260px' }, h('div', {}, label), bar);
+  const box = h('div', {
+    class: 'ai-stream', 'aria-readonly': 'true',
+    style: 'box-sizing:border-box;width:420px;height:92px;margin-top:8px;padding:2px 4px;overflow-y:auto;background:#fff;color:#000;'
+      + 'font:12px/14px "Courier New",monospace;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;'
+      + 'box-shadow:inset -1px -1px #fff,inset 1px 1px #808080,inset -2px -2px #dfdfdf,inset 2px 2px #000',
+  });
+  const content = h('div', { style: 'min-width:420px' }, h('div', {}, label), bar, box);
+  log.attach(box);
   let pos = 0, dir = 1;
   const timer = setInterval(() => {
     const max = Math.max(0, bar.clientWidth - 40);
@@ -67,14 +79,19 @@ async function waitForReply(doc: Document, model: string, request: Promise<strin
     if (pos >= max) { pos = max; dir = -1; } else if (pos <= 0) { pos = 0; dir = 1; }
     block.style.left = `${pos}px`;
   }, 40);
+  const ctrl = new AbortController();
+  let request: Promise<string>;
+  try { request = start({ signal: ctrl.signal, onDelta: (kind, text) => log.add(kind, text) }); }
+  catch (e) { request = Promise.reject(e); }
   const answered = request.then<Waited, Waited>(text => ({ kind: 'reply', text }), e => ({ kind: 'error', message: e instanceof Error ? e.message : String(e) }));
   const cancelled = showDialog98(doc, { title: TITLE, content, buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }] })
     .then<Waited>(() => ({ kind: 'cancel' }));
   try {
     const res = await Promise.race([answered, cancelled]);
     if (res.kind !== 'cancel') content.closest('.dlg98-overlay')?.dispatchEvent(new Event('dlg98-abort'));
+    else ctrl.abort();
     return res;
-  } finally { clearInterval(timer); }
+  } finally { clearInterval(timer); log.detach(); }
 }
 
 export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor(itemId: string): CodeWindow | null }, doc: Document = document): Promise<void> {
@@ -98,10 +115,11 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   if (prompt === null) return;
 
   const effort = settings.thinking === 'server' ? undefined : settings.thinking;
-  const send = (build: () => ChatMessage[]): Promise<string> => {
-    try { return backend.aiChat(settings.baseUrl, settings.apiKey, settings.model, build(), effort); }
+  const send = (build: () => ChatMessage[]) => (o: AiChatOptions): Promise<string> => {
+    try { return backend.aiChat(settings.baseUrl, settings.apiKey, settings.model, build(), effort, o); }
     catch (e) { return Promise.reject(e); }
   };
+  const log = new StreamLog();
   const form = project.forms.find(f => f.id === itemId) ?? null;
   const moduleName = item.name;
 
@@ -136,7 +154,7 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   };
 
   const messages = (() => { try { return codeMode ? buildCodeRequest(project, itemId, codeWin!.getCursorLine(), prompt) : buildFormRequest(project, itemId, prompt); } catch { return null; } })();
-  const res = await waitForReply(doc, settings.model, send(() => { if (!messages) throw new Error('Could not build the request.'); return messages; }));
+  const res = await waitForReply(doc, settings.model, send(() => { if (!messages) throw new Error('Could not build the request.'); return messages; }), log);
   if (res.kind === 'cancel') return;
   if (res.kind === 'error') { await warn(doc, res.message); return; }
   if (ide.project !== project) return;   // a different project was opened meanwhile
@@ -147,7 +165,8 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
     // One retry: tell the model what is wrong and keep the first answer if the second is no better understood.
     const followUp: ChatMessage[] = [...messages, { role: 'assistant', content: reply },
       { role: 'user', content: `Your answer has these problems:\n${result.problems.map(p => `- ${p}`).join('\n')}\nFix them and answer again in exactly the same format.` }];
-    const again = await waitForReply(doc, settings.model, send(() => followUp), 'Checking and fixing...');
+    log.separator();
+    const again = await waitForReply(doc, settings.model, send(() => followUp), log, 'Checking and fixing...');
     if (again.kind === 'cancel') return;
     if (ide.project !== project) return;
     if (again.kind === 'reply') {
