@@ -1,9 +1,9 @@
-// Built-in constants (vbCrLf, vbYes, vbRed, vbKeyA, ...). Names are lower-case keys.
+// Built-in constants (vbCrLf, vbYes, vbRed, vbKeyA, ...). Registry keys are lower-case; the written (canonical) name goes to CANONICAL_NAMES.
 
 import type { VBValue } from '../values';
-import { CONSTANTS } from './util';
+import { CANONICAL_NAMES, CONSTANTS } from './util';
 
-const c = (name: string, v: VBValue) => CONSTANTS.set(name.toLowerCase(), v);
+const c = (name: string, v: VBValue) => { CONSTANTS.set(name.toLowerCase(), v); CANONICAL_NAMES.set(name.toLowerCase(), name); };
 const group = (values: Record<string, VBValue>) => { for (const [k, v] of Object.entries(values)) c(k, v); };
 
 // MsgBox

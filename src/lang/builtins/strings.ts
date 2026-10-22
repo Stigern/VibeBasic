@@ -32,16 +32,16 @@ export function asc1252(c: string): number {
 
 // ---- length, slicing ----
 
-def('len', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).length));
+def('Len', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).length));
 
-def('left', 2, 2, a => {
+def('Left', 2, 2, a => {
   if (isNullV(a[0])) return Null;
   const n = intArg(a[1]);
   if (n < 0) throw new VBRuntimeError(5);
   return toStr(a[0]).slice(0, n);
 });
 
-def('right', 2, 2, a => {
+def('Right', 2, 2, a => {
   if (isNullV(a[0])) return Null;
   const n = intArg(a[1]);
   if (n < 0) throw new VBRuntimeError(5);
@@ -49,7 +49,7 @@ def('right', 2, 2, a => {
   return n === 0 ? '' : s.slice(Math.max(0, s.length - n));
 });
 
-def('mid', 2, 3, a => {
+def('Mid', 2, 3, a => {
   if (isNullV(a[0])) return Null;
   const s = toStr(a[0]);
   const start = intArg(a[1]);
@@ -59,15 +59,15 @@ def('mid', 2, 3, a => {
   return a[2] === undefined ? s.slice(start - 1) : s.slice(start - 1, start - 1 + len);
 });
 
-def('ucase', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).toUpperCase()));
-def('lcase', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).toLowerCase()));
-def('trim', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).replace(/^ +| +$/g, '')));
-def('ltrim', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).replace(/^ +/, '')));
-def('rtrim', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).replace(/ +$/, '')));
+def('UCase', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).toUpperCase()));
+def('LCase', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).toLowerCase()));
+def('Trim', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).replace(/^ +| +$/g, '')));
+def('LTrim', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).replace(/^ +/, '')));
+def('RTrim', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).replace(/ +$/, '')));
 
-def('space', 1, 1, a => repeat(' ', intArg(a[0])));
+def('Space', 1, 1, a => repeat(' ', intArg(a[0])));
 
-def('string', 2, 2, a => {
+def('String', 2, 2, a => {
   const n = intArg(a[0]);
   if (n < 0) throw new VBRuntimeError(5);
   const c = a[1];
@@ -81,23 +81,23 @@ def('string', 2, 2, a => {
   return repeat(ch, n);
 });
 
-def('strreverse', 1, 1, a => Array.from(toStr(a[0])).reverse().join(''));
+def('StrReverse', 1, 1, a => Array.from(toStr(a[0])).reverse().join(''));
 
 // ---- chars ----
 
-def('chr', 1, 1, a => chr1252(intArg(a[0])));
-def('chrw', 1, 1, a => {
+def('Chr', 1, 1, a => chr1252(intArg(a[0])));
+def('ChrW', 1, 1, a => {
   let n = intArg(a[0]);
   if (n < -32768 || n > 65535) throw new VBRuntimeError(5);
   if (n < 0) n += 65536;
   return String.fromCharCode(n);
 });
-def('asc', 1, 1, a => {
+def('Asc', 1, 1, a => {
   const s = toStr(a[0]);
   if (s === '') throw new VBRuntimeError(5);
   return asc1252(s);
 });
-def('ascw', 1, 1, a => {
+def('AscW', 1, 1, a => {
   const s = toStr(a[0]);
   if (s === '') throw new VBRuntimeError(5);
   return s.charCodeAt(0);
@@ -107,7 +107,7 @@ def('ascw', 1, 1, a => {
 
 const fold = (s: string, text: boolean) => (text ? s.toLowerCase() : s);
 
-def('instr', 2, 4, a => {
+def('InStr', 2, 4, a => {
   let start = 1;
   let rest = a;
   if (a.length === 4 || (a.length === 3 && typeof a[0] === 'number')) {
@@ -125,7 +125,7 @@ def('instr', 2, 4, a => {
   return hay.indexOf(needle, start - 1) + 1;
 });
 
-def('instrrev', 2, 4, a => {
+def('InStrRev', 2, 4, a => {
   if (isNullV(a[0]) || isNullV(a[1])) return Null;
   const text = isTextCompare(a[3]);
   const hay = fold(toStr(a[0]), text);
@@ -140,7 +140,7 @@ def('instrrev', 2, 4, a => {
   return hay.lastIndexOf(needle, start - needle.length) + 1;
 });
 
-def('strcomp', 2, 3, a => {
+def('StrComp', 2, 3, a => {
   if (isNullV(a[0]) || isNullV(a[1])) return Null;
   const text = isTextCompare(a[2]);
   const x = fold(toStr(a[0]), text);
@@ -148,7 +148,7 @@ def('strcomp', 2, 3, a => {
   return x < y ? -1 : x > y ? 1 : 0;
 });
 
-def('replace', 3, 6, a => {
+def('Replace', 3, 6, a => {
   if (isNullV(a[0])) return Null;
   const text = isTextCompare(a[5]);
   let s = toStr(a[0]);
@@ -178,7 +178,7 @@ def('replace', 3, 6, a => {
 
 // ---- Split / Join ----
 
-def('split', 1, 4, a => {
+def('Split', 1, 4, a => {
   if (isNullV(a[0])) throw new VBRuntimeError(94);
   const s = toStr(a[0]);
   const delim = a[1] === undefined ? ' ' : toStr(a[1]);
@@ -205,7 +205,7 @@ def('split', 1, 4, a => {
   return arr;
 });
 
-def('join', 1, 2, a => {
+def('Join', 1, 2, a => {
   const arr = a[0];
   if (!(arr instanceof VBArray) || arr.bounds.length !== 1) throw new VBRuntimeError(5);
   const delim = a[1] === undefined ? ' ' : toStr(a[1]);

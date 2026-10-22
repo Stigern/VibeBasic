@@ -12,19 +12,19 @@ import { def, intArg, isNullV, optInt } from './util';
 const date = (serial: number): VBDate => ({ kind: 'date', serial });
 const serialOf = (v: VBValue): number => (coerce(plain(v), 'Date') as VBDate).serial;
 
-def('now', 0, 0, () => {
+def('Now', 0, 0, () => {
   const d = new Date();
   return dateFrom(d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds());
 });
-def('date', 0, 0, () => {
+def('Date', 0, 0, () => {
   const d = new Date();
   return dateFrom(d.getFullYear(), d.getMonth() + 1, d.getDate());
 });
-def('time', 0, 0, () => {
+def('Time', 0, 0, () => {
   const d = new Date();
   return date((d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()) / 86400);
 });
-def('timer', 0, 0, () => {
+def('Timer', 0, 0, () => {
   const d = new Date();
   return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() + d.getMilliseconds() / 1000;
 });
@@ -34,12 +34,12 @@ def('timer', 0, 0, () => {
 function part(name: string, pick: (p: ReturnType<typeof dateParts>) => number): void {
   def(name, 1, 1, a => (isNullV(plain(a[0])) ? Null : pick(dateParts(serialOf(a[0])))));
 }
-part('year', p => p.y);
-part('month', p => p.m);
-part('day', p => p.d);
-part('hour', p => p.h);
-part('minute', p => p.n);
-part('second', p => p.s);
+part('Year', p => p.y);
+part('Month', p => p.m);
+part('Day', p => p.d);
+part('Hour', p => p.h);
+part('Minute', p => p.n);
+part('Second', p => p.s);
 
 /** Weekday of a serial, 1 = Sunday (1899-12-30 was a Saturday). */
 const weekdayOf = (serial: number): number => ((((Math.floor(serial) + 6) % 7) + 7) % 7) + 1;
@@ -50,7 +50,7 @@ const firstDay = (v: VBValue | undefined): number => {
   return f === 0 ? 1 : f;
 };
 
-def('weekday', 1, 2, a => {
+def('Weekday', 1, 2, a => {
   if (isNullV(plain(a[0]))) return Null;
   return ((weekdayOf(serialOf(a[0])) - firstDay(a[1]) + 7) % 7) + 1;
 });
@@ -64,10 +64,10 @@ function fullYear(y: number): number {
   return y;
 }
 
-def('dateserial', 3, 3, a => dateFrom(fullYear(intArg(a[0])), intArg(a[1]), intArg(a[2])));
-def('timeserial', 3, 3, a => date(dateFrom(1899, 12, 30, intArg(a[0]), intArg(a[1]), intArg(a[2])).serial));
-def('datevalue', 1, 1, a => date(Math.floor(serialOf(a[0]))));
-def('timevalue', 1, 1, a => {
+def('DateSerial', 3, 3, a => dateFrom(fullYear(intArg(a[0])), intArg(a[1]), intArg(a[2])));
+def('TimeSerial', 3, 3, a => date(dateFrom(1899, 12, 30, intArg(a[0]), intArg(a[1]), intArg(a[2])).serial));
+def('DateValue', 1, 1, a => date(Math.floor(serialOf(a[0]))));
+def('TimeValue', 1, 1, a => {
   const s = serialOf(a[0]);
   return date(s - Math.floor(s));
 });
@@ -96,7 +96,7 @@ function addMonths(serial: number, months: number): VBDate {
   return dateFrom(y, m, Math.min(p.d, daysInMonth(y, m)), p.h, p.n, p.s);
 }
 
-def('dateadd', 3, 3, a => {
+def('DateAdd', 3, 3, a => {
   const iv = interval(a[0]);
   if (isNullV(plain(a[2]))) return Null;
   const n = intArg(plain(a[1])); // VB rounds the number argument
@@ -116,7 +116,7 @@ def('dateadd', 3, 3, a => {
 /** Whole seconds since the epoch day, so boundary counts are exact. */
 const secondsOf = (serial: number): number => Math.round(serial * 86400);
 
-def('datediff', 3, 5, a => {
+def('DateDiff', 3, 5, a => {
   const iv = interval(a[0]);
   if (isNullV(plain(a[1])) || isNullV(plain(a[2]))) return Null;
   const s1 = serialOf(a[1]);
@@ -137,7 +137,7 @@ def('datediff', 3, 5, a => {
   }
 });
 
-def('datepart', 2, 4, a => {
+def('DatePart', 2, 4, a => {
   const iv = interval(a[0]);
   if (isNullV(plain(a[1]))) return Null;
   const s = serialOf(a[1]);
@@ -161,13 +161,13 @@ def('datepart', 2, 4, a => {
 
 // ---- names ----
 
-def('monthname', 1, 2, (a, ctx) => {
+def('MonthName', 1, 2, (a, ctx) => {
   const m = intArg(a[0]);
   if (m < 1 || m > 12) throw new VBRuntimeError(5);
   return monthName(m, !(a[1] !== undefined && coerce(a[1], 'Boolean')), ctx.locale);
 });
 
-def('weekdayname', 1, 3, (a, ctx) => {
+def('WeekdayName', 1, 3, (a, ctx) => {
   const w = intArg(a[0]);
   if (w < 1 || w > 7) throw new VBRuntimeError(5);
   const dow = (w - 1 + firstDay(a[2]) - 1) % 7; // 0 = Sunday

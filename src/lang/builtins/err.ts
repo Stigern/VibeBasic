@@ -96,10 +96,10 @@ export function errOf(ctx: BuiltinCtx): ErrObject {
   return (ctx.err ??= new ErrObject(ctx.appTitle));
 }
 
-def('err', 0, 0, (_a, ctx) => errOf(ctx));
+def('Err', 0, 0, (_a, ctx) => errOf(ctx));
 
 /** `Error(n)`: VB's text for error n (`''` for 0); `Error` alone: the current Err.Description. */
-def('error', 0, 1, (a, ctx) => {
+def('Error', 0, 1, (a, ctx) => {
   if (a[0] === undefined) return errOf(ctx).description;
   const n = intArg(a[0]);
   return n === 0 ? '' : vbErrorText(n);

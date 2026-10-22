@@ -479,13 +479,13 @@ export function formatValue(v: VBValue, fmt: string, locale: string): string {
   return n === undefined ? toStr(v) : formatNumber(n, fmt);
 }
 
-def('format', 1, 4, (a, ctx) => {
+def('Format', 1, 4, (a, ctx) => {
   const v = plain(a[0]);
   if (v instanceof NullT) return Null;
   return a[1] === undefined ? toStr(v) : formatValue(v, toStr(a[1]), ctx.locale);
 });
 
-def('formatdatetime', 1, 2, (a, ctx) => {
+def('FormatDateTime', 1, 2, (a, ctx) => {
   const kinds: DateKind[] = ['general', 'long date', 'short date', 'long time', 'short time'];
   const k = a[1] === undefined ? 0 : toNumber(a[1]);
   if (!Number.isInteger(k) || k < 0 || k > 4) throw new VBRuntimeError(5);

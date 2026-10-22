@@ -13,7 +13,7 @@ import { def } from './util';
 
 // ---- Str / Val ----
 
-def('str', 1, 1, a => printNumber(toNumber(a[0])));
+def('Str', 1, 1, a => printNumber(toNumber(a[0])));
 
 /** `Val`: the leading number in `text`, ignoring spaces; `&H`/`&O` prefixes; 0 if there is none. */
 export function val(text: string): number {
@@ -36,44 +36,44 @@ export function val(text: string): number {
   return n;
 }
 
-def('val', 1, 1, a => val(toStr(a[0])));
+def('Val', 1, 1, a => val(toStr(a[0])));
 
 // ---- C-conversions ----
 
 const conv = (name: string, type: Parameters<typeof coerce>[1]) => def(name, 1, 1, a => coerce(plain(a[0]), type));
-conv('cint', 'Integer');
-conv('clng', 'Long');
-conv('cdbl', 'Double');
-conv('csng', 'Single');
-conv('ccur', 'Currency');
-conv('cbyte', 'Byte');
-conv('cbool', 'Boolean');
-conv('cdate', 'Date');
-conv('cstr', 'String');
-def('cvar', 1, 1, a => plain(a[0]));
+conv('CInt', 'Integer');
+conv('CLng', 'Long');
+conv('CDbl', 'Double');
+conv('CSng', 'Single');
+conv('CCur', 'Currency');
+conv('CByte', 'Byte');
+conv('CBool', 'Boolean');
+conv('CDate', 'Date');
+conv('CStr', 'String');
+def('CVar', 1, 1, a => plain(a[0]));
 
 // ---- type checks ----
 
-def('isnull', 1, 1, a => plain(a[0]) instanceof NullT);
-def('isempty', 1, 1, a => plain(a[0]) instanceof EmptyT);
-def('isarray', 1, 1, a => a[0] instanceof VBArray);
-def('isobject', 1, 1, a => a[0] instanceof NothingT || isObject(a[0]));
+def('IsNull', 1, 1, a => plain(a[0]) instanceof NullT);
+def('IsEmpty', 1, 1, a => plain(a[0]) instanceof EmptyT);
+def('IsArray', 1, 1, a => a[0] instanceof VBArray);
+def('IsObject', 1, 1, a => a[0] instanceof NothingT || isObject(a[0]));
 
-def('isnumeric', 1, 1, a => {
+def('IsNumeric', 1, 1, a => {
   const v = plain(a[0]);
   if (typeof v === 'number' || typeof v === 'boolean' || v instanceof EmptyT) return true;
   if (typeof v !== 'string') return false;
   try { toNumber(v); return true; } catch { return false; }
 });
 
-def('isdate', 1, 1, a => {
+def('IsDate', 1, 1, a => {
   const v = plain(a[0]);
   if (isDate(v)) return true;
   if (typeof v !== 'string') return false;
   try { coerce(v, 'Date'); return true; } catch { return false; }
 });
 
-def('typename', 1, 1, a => vbTypeName(a[0]));
+def('TypeName', 1, 1, a => vbTypeName(a[0]));
 
 /** VarType code (vbEmpty 0 ... vbArray 8192). Numbers without a declared type: Integer, Long or Double. */
 export function varType(v: VBValue): number {
@@ -98,4 +98,4 @@ export function varType(v: VBValue): number {
   return 9;
 }
 
-def('vartype', 1, 1, a => varType(a[0]));
+def('VarType', 1, 1, a => varType(a[0]));

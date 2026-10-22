@@ -41,9 +41,16 @@ export const BUILTINS = new Map<string, Builtin>();
 export const CONSTANTS = new Map<string, VBValue>();
 
 /**
+ * Canonical VB6 spelling (`MsgBox`, `vbCrLf`) of every built-in function and
+ * constant by lower-case name. Filled by `def` and by constants.ts, so the
+ * spelling is written once, at the definition. Used by prettify.ts.
+ */
+export const CANONICAL_NAMES = new Map<string, string>();
+
+/**
  * Registers a built-in under one or more names (`$` variants need no extra
- * name: `Left$` looks up `left`). Wrong argument counts, and an omitted
- * required argument, are error 450.
+ * name: `Left$` looks up `left`). Give the name in its canonical VB6 casing
+ * (`MsgBox`). Wrong argument counts, and an omitted required argument, are error 450.
  */
 export function def(
   names: string | string[], minArgs: number, maxArgs: number,
@@ -56,6 +63,7 @@ export function def(
   };
   for (const n of Array.isArray(names) ? names : [names]) {
     BUILTINS.set(n.toLowerCase(), { minArgs, maxArgs, fn: impl });
+    CANONICAL_NAMES.set(n.toLowerCase(), n);
   }
 }
 

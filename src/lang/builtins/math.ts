@@ -15,8 +15,8 @@ function num1(name: string, fn: (n: number) => number): void {
   def(name, 1, 1, a => (isNullV(plain(a[0])) ? Null : finite(fn(toNumber(a[0])))));
 }
 
-num1('abs', Math.abs);
-num1('sgn', Math.sign);
+num1('Abs', Math.abs);
+num1('Sgn', Math.sign);
 
 /** Int/Fix keep a Date a Date. */
 function intLike(name: string, fn: (n: number) => number): void {
@@ -27,27 +27,27 @@ function intLike(name: string, fn: (n: number) => number): void {
     return isDate(v) ? { kind: 'date', serial: r } : r;
   });
 }
-intLike('int', Math.floor);
-intLike('fix', Math.trunc);
+intLike('Int', Math.floor);
+intLike('Fix', Math.trunc);
 
-def('sqr', 1, 1, a => {
+def('Sqr', 1, 1, a => {
   const n = toNumber(a[0]);
   if (n < 0) throw new VBRuntimeError(5);
   return Math.sqrt(n);
 });
-def('log', 1, 1, a => {
+def('Log', 1, 1, a => {
   const n = toNumber(a[0]);
   if (n <= 0) throw new VBRuntimeError(5);
   return finite(Math.log(n));
 });
-def('exp', 1, 1, a => finite(Math.exp(toNumber(a[0]))));
-def('sin', 1, 1, a => finite(Math.sin(toNumber(a[0]))));
-def('cos', 1, 1, a => finite(Math.cos(toNumber(a[0]))));
-def('tan', 1, 1, a => finite(Math.tan(toNumber(a[0]))));
-def('atn', 1, 1, a => finite(Math.atan(toNumber(a[0]))));
+def('Exp', 1, 1, a => finite(Math.exp(toNumber(a[0]))));
+def('Sin', 1, 1, a => finite(Math.sin(toNumber(a[0]))));
+def('Cos', 1, 1, a => finite(Math.cos(toNumber(a[0]))));
+def('Tan', 1, 1, a => finite(Math.tan(toNumber(a[0]))));
+def('Atn', 1, 1, a => finite(Math.atan(toNumber(a[0]))));
 
 /** Round half to even at `digits` decimals (VB6 `Round`). */
-def('round', 1, 2, a => {
+def('Round', 1, 2, a => {
   const n = toNumber(a[0]);
   const d = a[1] === undefined ? 0 : intArg(a[1]);
   if (d < 0 || d > 15) throw new VBRuntimeError(5);
@@ -69,8 +69,8 @@ function radix(name: string, base: 8 | 16): void {
     return u.toString(base).toUpperCase();
   });
 }
-radix('hex', 16);
-radix('oct', 8);
+radix('Hex', 16);
+radix('Oct', 8);
 
 // ---- Rnd / Randomize ----
 
@@ -93,7 +93,7 @@ function seedFrom(r: RndState, n: number): void {
 
 const rndOf = (ctx: BuiltinCtx): RndState => (ctx.rnd ??= newRndState());
 
-def('rnd', 0, 1, (a, ctx) => {
+def('Rnd', 0, 1, (a, ctx) => {
   const r = rndOf(ctx);
   const x = a[0] === undefined ? 1 : toNumber(a[0]);
   if (x === 0) return r.last;
@@ -103,7 +103,7 @@ def('rnd', 0, 1, (a, ctx) => {
   return r.last;
 });
 
-def('randomize', 0, 1, (a, ctx) => {
+def('Randomize', 0, 1, (a, ctx) => {
   seedFrom(rndOf(ctx), a[0] === undefined ? Date.now() : toNumber(a[0]));
   return 0 as VBValue;
 });

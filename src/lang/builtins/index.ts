@@ -8,7 +8,7 @@ import { VBRuntimeError } from '../errors';
 import { VBArray, toNumber, type VBValue } from '../values';
 import { def } from './util';
 
-export { BUILTINS, CONSTANTS, def } from './util';
+export { BUILTINS, CANONICAL_NAMES, CONSTANTS, def } from './util';
 export type { Builtin, BuiltinCtx } from './util';
 export { formatValue } from './format';
 export { ErrObject } from './err';
@@ -23,8 +23,8 @@ function arrayBound(which: 0 | 1) {
   };
 }
 
-def('lbound', 1, 2, arrayBound(0));
-def('ubound', 1, 2, arrayBound(1));
+def('LBound', 1, 2, arrayBound(0));
+def('UBound', 1, 2, arrayBound(1));
 
 import './strings';
 import './convert';
