@@ -1,5 +1,6 @@
 import { BrowserBackend } from './browserBackend';
 import { TauriBackend } from './tauriBackend';
+import type { ChatMessage } from '../ai/types';
 
 export interface FileFilter { name: string; extensions: string[] }
 
@@ -35,6 +36,10 @@ export interface Backend {
   getAppName(): Promise<string>;
   /** Rejects with the reason text when Make can't work here (browser, or desktop not run as a built .app). */
   canMakeApp(): Promise<void>;
+  /** Model ids from `GET {baseUrl}/models`. Rejects with a readable error text. */
+  aiListModels(baseUrl: string, apiKey: string): Promise<string[]>;
+  /** `POST {baseUrl}/chat/completions`; resolves to choices[0].message.content. Rejects with a readable error text. */
+  aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[]): Promise<string>;
   /** Made apps: the runtime menu's Quit (Cmd+Q) was chosen. */
   onQuitRequested(handler: () => void): void;
 }

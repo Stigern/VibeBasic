@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import type { Backend, FileFilter } from './backend';
+import type { ChatMessage } from '../ai/types';
 
 const PROJECT_FILTER: FileFilter = { name: 'VibeBasic Project', extensions: ['vbb'] };
 
@@ -95,6 +96,14 @@ export class TauriBackend implements Backend {
 
   canMakeApp(): Promise<void> {
     return call<void>('can_make_app', {});
+  }
+
+  aiListModels(baseUrl: string, apiKey: string): Promise<string[]> {
+    return call<string[]>('ai_list_models', { baseUrl, apiKey });
+  }
+
+  aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[]): Promise<string> {
+    return call<string>('ai_chat', { baseUrl, apiKey, model, messages });
   }
 
   onQuitRequested(handler: () => void): void {
