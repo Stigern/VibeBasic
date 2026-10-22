@@ -50,6 +50,7 @@ function topLevelOf(form: FormDef, ids: string[]): string[] {
 }
 
 export function placeControlCentered(ide: IdeState, tool: ControlType | 'Pointer'): void {
+  if (ide.mode !== 'design') return;
   if (tool === 'Pointer' || ide.activeView.kind !== 'designer') return;
   registryOf(ide).get(ide.activeView.formId)?.placeCentered(tool);
 }

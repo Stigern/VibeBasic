@@ -8,7 +8,7 @@ import { TOOLBAR_ICONS } from './icons/toolbarIcons';
 import { IdeState, OPTION_EXPLICIT, type IdeOptions } from './ideState';
 import { buildLayout, type IdeLayout } from './layout';
 import { buildMenus, type IdeActions } from './menus';
-import { registerCodeActions } from './codeWindow';
+import { openCodeWindow, registerCodeActions } from './codeWindow';
 import { openDesigner, registerDesignerActions } from './designer';
 import { createPropertiesWindow, type PropertiesWindow } from './properties';
 import { createToolbox } from './toolbox';
@@ -16,8 +16,14 @@ import { createProjectExplorer, registerProjectActions, type ProjectExplorer } f
 import { showProjectProperties } from './projectDialogs';
 import { showOptions } from './optionsDialog';
 import { FileController } from './fileController';
+import { RunController } from './runController';
+import { createImmediateWindow } from './immediate';
+import { InlineFormHost } from '../run/inlineFormHost';
+import { TauriFormHost } from '../run/tauriFormHost';
+import type { FormHost } from '../run/formHost';
+import { h } from '../ui98/dom';
 
-export interface Ide { state: IdeState; layout: IdeLayout; actions: IdeActions; menus: ReturnType<typeof buildMenus>; refresh(): void }
+export interface Ide { state: IdeState; layout: IdeLayout; actions: IdeActions; menus: ReturnType<typeof buildMenus>; run: RunController; refresh(): void }
 
 export const ABOUT_TEXT = 'VibeBasic\nA Visual Basic 6 style programming environment for macOS.\n\n'
   + "Pixel font 'MS Sans Serif' by lou (FontStruct), CC BY-SA 3.0\nWin98 look based on 98.css (MIT).";
@@ -27,12 +33,14 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   const layout = buildLayout(root);
   const doc = root.ownerDocument;
 
+  const run: { rc?: RunController } = {};
+  const immediate = createImmediateWindow(layout.immediateHost, () => run.rc?.session ?? null, () => state.project);
   let propsWin: PropertiesWindow | undefined;
   let explorer: ProjectExplorer | undefined;
   const actions: IdeActions = {
     undo: () => state.stack.undo(),
     redo: () => state.stack.redo(),
-    viewImmediate: () => layout.setPaneVisible('immediate', !layout.isPaneVisible('immediate')),
+    viewImmediate: () => { immediate.show(); immediate.focus(); },
     viewProjectExplorer: () => { layout.setPaneVisible('project', true); explorer?.focus(); },
     viewProperties: () => { layout.setPaneVisible('properties', true); propsWin?.focus(); },
     viewToolbox: () => layout.setPaneVisible('toolbox', true),
@@ -57,6 +65,22 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   actions.saveProjectAs = () => { void fc.saveAs(); };
   actions.exit = () => { void fc.exit(); };
   backend.onCloseRequested(() => fc.confirmDiscard());
+  // Form windows: real Tauri windows in the app, a floating layer over the MDI area in the browser
+  const hostFactory = (): FormHost => {
+    if (backend.kind === 'tauri') return new TauriFormHost();
+    const layer = h('div', { class: 'ide98-runlayer' });
+    layout.mdiHost.appendChild(layer);
+    return Object.assign(new InlineFormHost(layer), { dispose: () => { layer.remove(); } });
+  };
+  const rc = new RunController(state, hostFactory, id => openCodeWindow(state, id, env), {
+    immediate, doc, readFile: p => backend.readBinaryFile(p),
+  });
+  run.rc = rc;
+  actions.start = () => { void rc.start(false); };
+  actions.startFullCompile = () => { void rc.start(true); };
+  actions.break = () => rc.breakNow();
+  actions.end = () => rc.end();
+  actions.restart = () => { void rc.restart(); };
   const menubar = createMenubar(layout.menubarHost, menus);
 
   const tb = (icon: string, title: string, name: string, pred?: () => boolean): ToolbarItem => ({
@@ -67,7 +91,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     tb('new', 'New Project', 'newProject'), tb('open', 'Open Project', 'openProject'), tb('save', 'Save Project', 'saveProject'), sep,
     tb('cut', 'Cut', 'cut'), tb('copy', 'Copy', 'copy'), tb('paste', 'Paste', 'paste'), sep,
     tb('undo', 'Undo', 'undo', () => state.activeView.kind === 'code' || state.stack.canUndo), tb('redo', 'Redo', 'redo', () => state.activeView.kind === 'code' || state.stack.canRedo), sep,
-    tb('start', 'Start', 'start'), tb('break', 'Break', 'break'), tb('end', 'End', 'end'), sep,
+    tb('start', 'Start', 'start', () => state.mode !== 'run'), tb('break', 'Break', 'break', () => state.mode === 'run'), tb('end', 'End', 'end', () => state.mode !== 'design'), sep,
     tb('projectExplorer', 'Project Explorer', 'viewProjectExplorer'), tb('properties', 'Properties Window', 'viewProperties'),
     tb('toolbox', 'Toolbox', 'viewToolbox'),
   ]);
@@ -92,5 +116,5 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   }).catch(() => {});
 
   openDesigner(state, state.project.forms[0].id, { mdiHost: layout.mdiHost, actions });
-  return { state, layout, actions, menus, refresh };
+  return { state, layout, actions, menus, run: rc, refresh };
 }

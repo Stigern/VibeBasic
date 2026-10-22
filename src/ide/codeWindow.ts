@@ -1,7 +1,7 @@
 // The code window: one CodeMirror 6 editor per form/module (Full Module View) with Object/Procedure dropdowns.
 // Leaving a line prettifies it (plan 01 prettifyLine + control property spelling) and, when Auto Syntax Check is on,
 // marks it red and shows the compile error box. Edits write form.code / module.code and mark the project dirty.
-import { Annotation, EditorState, StateEffect, StateField, type Extension, type Transaction } from '@codemirror/state';
+import { Annotation, Compartment, EditorState, StateEffect, StateField, type Extension, type Transaction } from '@codemirror/state';
 import { Decoration, EditorView, GutterMarker, gutter, keymap, type DecorationSet } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, insertNewlineKeepIndent, insertTab, indentLess, undo, redo } from '@codemirror/commands';
 import { acceptCompletion, autocompletion } from '@codemirror/autocomplete';
@@ -276,9 +276,13 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     syncCombos();
   }
 
+  // Read-only in run and break mode (edit-and-continue comes in phase 6)
+  const lockExt = (): Extension => [EditorState.readOnly.of(ide.mode !== 'design'), EditorView.editable.of(ide.mode === 'design')];
+  const lock = new Compartment();
   const state = EditorState.create({
     doc: norm(item0.code),
     extensions: [
+      lock.of(lockExt()),
       history(), search({ top: true }),
       autocompletion({ override: [memberCompletion(() => form() ?? null)], icons: false }),
       vbHighlight, vbTheme, errField, breakExt, procEndExt,
@@ -317,7 +321,8 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   };
   const unsubProject = ide.on('project', onProject);
   const unsubClose = ide.on('closeWindows', () => win.close());
-  const unsub = () => { unsubProject(); unsubClose(); };
+  const unsubMode = ide.on('mode', () => { if (!closed) view.dispatch({ effects: lock.reconfigure(lockExt()) }); });
+  const unsub = () => { unsubProject(); unsubClose(); unsubMode(); };
   let closed = false;
   win.onClose = () => { closed = true; unsub(); reg!.delete(itemId); view.destroy(); return true; };
 

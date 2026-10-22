@@ -95,11 +95,11 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
       mk('Toggle Breakpoint', 'toggleBreakpoint', 'F9', never),
     ] },
     { label: 'Run', items: [
-      mk('Start', 'start', 'F5'),
-      mk('Start With Full Compile', 'startFullCompile', 'Ctrl+F5'),
-      mk('Break', 'break', 'Ctrl+Break'),
-      mk('End', 'end'),
-      mk('Restart', 'restart', 'Shift+F5'),
+      mk(() => (state?.mode === 'break' ? 'Continue' : 'Start'), 'start', 'F5', () => (state?.mode ?? 'design') !== 'run'),
+      mk('Start With Full Compile', 'startFullCompile', 'Ctrl+F5', () => (state?.mode ?? 'design') === 'design'),
+      mk('Break', 'break', 'Ctrl+Break', () => state?.mode === 'run'),
+      mk('End', 'end', undefined, () => (state?.mode ?? 'design') !== 'design'),
+      mk('Restart', 'restart', 'Shift+F5', () => (state?.mode ?? 'design') !== 'design'),
     ] },
     { label: 'Tools', items: [
       mk('Ask AI...', 'askAi', 'Ctrl+I'),

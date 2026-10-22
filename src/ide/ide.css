@@ -18,6 +18,7 @@
 .tbx98-btn { box-sizing: border-box; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border: 1px solid transparent; }
 .tbx98-btn:hover { border-color: #fff #808080 #808080 #fff; }
 .tbx98-btn.checked { border-color: #808080 #fff #fff #808080; background: repeating-conic-gradient(#fff 0% 25%, var(--w98-face) 0% 50%) 0 0 / 2px 2px; }
+.tbx98-locked .tbx98-btn { opacity: .6; pointer-events: none; }
 .tbx98-btn svg { display: block; width: 16px; height: 16px; }
 
 /* Properties window */
@@ -62,3 +63,8 @@
 .dlgform98-row > input, .dlgform98-row > .cb98 { flex: 1; min-width: 0; }
 .dlgform98-row > input.dlgform98-num { flex: 0 0 70px; }
 .dlgform98-check { display: flex; align-items: center; gap: 6px; }
+
+/* Run mode: form windows float above the MDI area */
+.ide98-runlayer { position: absolute; inset: 0; z-index: 1000; pointer-events: none; overflow: hidden; }
+.ide98-runlayer > * { pointer-events: auto; }
+.imm98 { box-sizing: border-box; width: 100%; height: 100%; display: block; resize: none; border: 0; outline: 0; margin: 0; padding: 2px 4px; background: #fff; color: #000; font: 13px "Courier New", monospace; }

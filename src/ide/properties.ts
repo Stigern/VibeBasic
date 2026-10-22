@@ -114,7 +114,7 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     const shown = mixed ? '' : formatPropertyValue(def, value);
     const text = mixed ? '' : def.kind === 'text' ? String(value ?? '') : def.kind === 'list' ? (Array.isArray(value) ? value.join('\n') : '') : shown;
     let done = false;
-    const commit = (t: string) => { if (done) return; done = true; void applyText(form, ts, def, t); };
+    const commit = (t: string) => { if (done || ide.mode !== 'design') return; done = true; void applyText(form, ts, def, t); };
     const mkInput = (multi: boolean) => {
       const el: HTMLInputElement | HTMLTextAreaElement = multi ? h('textarea', { class: 'pw98-editor', rows: '4' }) : h('input', { type: 'text', class: 'pw98-editor' });
       el.value = text;
@@ -208,7 +208,7 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
         h('div', { class: 'pw98-name' }, d.name), cell);
       if (active === d.name) editorFor(form, ts, d, cell, v);
       else cell.textContent = v === undefined && multi ? '' : formatPropertyValue(d, v);
-      row.addEventListener('click', () => { if (active !== d.name) { active = d.name; refresh(); (listEl.querySelector('.pw98-row.selected .pw98-editor, .pw98-row.selected input') as HTMLElement | null)?.focus(); } });
+      row.addEventListener('click', () => { if (ide.mode === 'design' && active !== d.name) { active = d.name; refresh(); (listEl.querySelector('.pw98-row.selected .pw98-editor, .pw98-row.selected input') as HTMLElement | null)?.focus(); } });
       row.addEventListener('keydown', e => {
         if (e.key === 'Delete' && d.kind === 'picture' && e.target === row) { e.preventDefault(); e.stopPropagation(); void applyValue(form, ts, d, null); }
       });
@@ -217,11 +217,15 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     listEl.replaceChildren(...rowEls);
     const tabs = createTabs([{ label: 'Alphabetic', content: listEl }]);
     root.replaceChildren(objectCombo.el, tabs.el);
+    // Read-only while a program runs or is in break mode (edit-and-continue comes in phase 6)
+    if (ide.mode !== 'design') for (const el of root.querySelectorAll<HTMLElement>('input, textarea, select, button')) el.setAttribute('disabled', '');
+    root.classList.toggle('pw98-readonly', ide.mode !== 'design');
   }
 
   ide.on('selection', refresh);
   ide.on('project', refresh);
   ide.on('activeView', refresh);
+  ide.on('mode', refresh);
   refresh();
   return {
     refresh,
