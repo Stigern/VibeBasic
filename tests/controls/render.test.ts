@@ -228,6 +228,13 @@ describe('Label', () => {
     v.update({ AutoSize: false });
     expect(v.el.style.width).toBe('81px');
   });
+  test('moving an AutoSize label keeps it auto-sized', () => {
+    const v = renderControl(lbl({ AutoSize: true, Width: 1215, Height: 255 }), 'run', none);
+    v.update({ Left: 300, Top: 150 });
+    expect(v.el.style.left).toBe('20px');
+    expect(v.el.style.width).toBe('auto');
+    expect(v.el.style.height).toBe('auto');
+  });
   test('"&&" renders a literal ampersand', () => {
     expect(renderControl(lbl({ Caption: 'a && b' }), 'run', none).el.textContent).toBe('a & b');
   });

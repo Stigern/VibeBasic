@@ -149,11 +149,7 @@ function label(c: Ctx): Renderer {
       if (has(k, 'BorderStyle')) c.el.classList.toggle('vb-bordered', c.num('BorderStyle') === 1);
       if (has(k, 'WordWrap')) c.el.classList.toggle('vb-wrap', c.bool('WordWrap'));
       if (has(k, 'AutoSize', 'WordWrap', 'Width', 'Height')) {
-        c.applySize();
-        if (c.bool('AutoSize')) {                      // the browser sizes the label to its text
-          if (!c.bool('WordWrap')) c.el.style.width = 'auto';
-          c.el.style.height = 'auto';
-        }
+        c.applySize();                                  // honours AutoSize for Labels
       }
     },
     bg: () => (c.num('BackStyle') === 0 ? 'transparent' : c.color('BackColor')),
@@ -571,6 +567,10 @@ export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetRe
       const hh = typeof props.Height === 'number' ? props.Height : td.defaultHeight;
       el.style.width = `${twipsToPx(w)}px`;
       el.style.height = `${twipsToPx(hh)}px`;
+      if (def.type === 'Label' && ctx.bool('AutoSize')) {   // the browser sizes the label to its text
+        if (!ctx.bool('WordWrap')) el.style.width = 'auto';
+        el.style.height = 'auto';
+      }
     },
   };
   // `props` is reassigned by Object.assign below, never replaced, so the closures above stay valid.
