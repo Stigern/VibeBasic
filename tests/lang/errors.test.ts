@@ -195,7 +195,7 @@ describe('Resume', () => {
 });
 
 describe('Err object', () => {
-  test('Err is cleared by Exit Sub, Resume, On Error and when a procedure with a handler returns', async () => {
+  test('Err is cleared by On Error, by a procedure with a handler returning, not by a handler-less Exit Sub', async () => {
     const out = await run(lines(
       'Sub Main()',
       '  On Error Resume Next',
@@ -208,7 +208,21 @@ describe('Err object', () => {
       'Sub WithHandler()', '  On Error Resume Next', '  Err.Raise 7', 'End Sub',
       'Sub NoHandler()', '  Dim z', 'End Sub',
     ));
-    expect(out).toEqual(['exit sub 0 ', 'on error 0 ', 'handler proc 0 ', 'plain proc 5 ']);
+    expect(out).toEqual(['exit sub 5 ', 'on error 0 ', 'handler proc 0 ', 'plain proc 5 ']);
+  });
+
+  test('Exit Sub/Function in a procedure with a handler clears Err; without one it does not', async () => {
+    const out = await run(lines(
+      'Sub Main()', '  On Error Resume Next',
+      '  Debug.Print 1 / 0', '  Call Helper', '  If Err.Number <> 0 Then Debug.Print "still"; Err.Number',
+      '  Err.Raise 5', '  Handled', '  Debug.Print "handled"; Err.Number',
+      '  Err.Raise 5', '  Debug.Print "fn"; F(); Err.Number',
+      'End Sub',
+      'Sub Helper()', '  If True Then Exit Sub', '  Debug.Print "no"', 'End Sub',
+      'Sub Handled()', '  On Error Resume Next', '  Err.Raise 7', '  Exit Sub', 'End Sub',
+      'Function F()', '  On Error GoTo H', '  Err.Raise 9', '  Exit Function', 'H:', '  F = "f"', '  Exit Function', 'End Function',
+    ));
+    expect(out).toEqual(['still 11 ', 'handled 0 ', 'fnf 0 ']);
   });
 
   test('Err stays set after Resume Next until cleared; Err.Clear clears', async () => {

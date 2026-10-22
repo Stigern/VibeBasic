@@ -1,13 +1,13 @@
 // The Immediate window: one command, run in the frame stopped in break mode
 // or in a global context. See Program.immediate for the contract.
 
-import type { ProcDecl } from '../ast';
+import type { ProcDecl, Stmt } from '../ast';
 import { VBRuntimeError, VBSyntaxError } from '../errors';
 import { parseModule } from '../parser';
 import { PrintLine } from '../printFormat';
 import { EndSignal, runGenerator, type Gen } from './driver';
 import { evalExpr } from './eval';
-import { execBlock, hasDeclarations, isStackOverflow } from './exec';
+import { execBlock, isStackOverflow } from './exec';
 import type { Runtime } from './program';
 import { Frame, ModuleScope, Run } from './scope';
 
@@ -15,6 +15,26 @@ import { Frame, ModuleScope, Run } from './scope';
 const PRINT = /^(\?|print(?=\s|$))/i;
 
 const INVALID = 'Compile error: Invalid in Immediate window';
+
+/**
+ * Statements the Immediate window does not allow, anywhere in the command:
+ * declarations, and error handling / jumps (they would act on the paused
+ * procedure's handler state and labels).
+ */
+const NOT_IMMEDIATE = new Set<Stmt['kind']>(['dim', 'const', 'onError', 'resume', 'goto', 'label']);
+
+function hasInvalidStatement(body: Stmt[] | undefined): boolean {
+  if (!body) return false;
+  return body.some(s => {
+    if (NOT_IMMEDIATE.has(s.kind)) return true;
+    switch (s.kind) {
+      case 'if': return s.branches.some(b => hasInvalidStatement(b.body)) || hasInvalidStatement(s.elseBody);
+      case 'select': return s.cases.some(c => hasInvalidStatement(c.body)) || hasInvalidStatement(s.elseBody);
+      case 'for': case 'forEach': case 'do': case 'while': case 'with': return hasInvalidStatement(s.body);
+      default: return false;
+    }
+  });
+}
 
 /** An empty module: the global context's own scope (globals and host names only, no Private module variables). */
 const globalContext = new WeakMap<Runtime, ModuleScope>();
@@ -58,7 +78,7 @@ export async function runImmediate(rt: Runtime, text: string): Promise<string> {
   const print = PRINT.exec(src);
   const proc = parseCommand(print ? `Debug.Print ${src.slice(print[0].length)}` : src);
   if (typeof proc === 'string') return proc;
-  if (hasDeclarations(proc)) return INVALID;
+  if (hasInvalidStatement(proc.body)) return INVALID;
 
   const body = proc.body;
   const run = new Run(rt);
@@ -86,6 +106,7 @@ export async function runImmediate(rt: Runtime, text: string): Promise<string> {
     return out;
   }
 
+  rt.immediateRuns++;
   try {
     return await runGenerator(command(), rt.scope);
   } catch (e) {
@@ -96,6 +117,7 @@ export async function runImmediate(rt: Runtime, text: string): Promise<string> {
     }
     throw e;
   } finally {
+    rt.immediateRuns--;
     // events queued while the command was in a time slice
     if (rt.slicing === 0 && rt.eventsSuspended === 0 && rt.state !== 'break') rt.drainEvents();
   }

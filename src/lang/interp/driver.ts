@@ -67,15 +67,15 @@ export async function runGenerator<T>(root: Gen<T>, scope?: ExecScope): Promise<
       restore = undefined;
       scope?.beforeAwait?.();
       // The end of the program (End, Program.end) cancels the wait: EndSignal is thrown in.
-      const abort = scope?.abort;
+      const cancellable = scope?.cancellable;
       try {
-        input = { ok: true, value: await (abort ? Promise.race([y, abort]) : y) };
+        input = { ok: true, value: await (cancellable ? cancellable(y) : y) };
       } catch (e) {
         input = { ok: false, error: e };
       }
       // Event handlers that started while we waited run to completion first.
       for (let nested = scope?.afterAwait?.(); nested; nested = scope?.afterAwait?.()) {
-        await (abort ? Promise.race([nested, abort]).catch(() => {}) : nested);
+        await (cancellable ? cancellable(nested).catch(() => {}) : nested);
       }
       restore = scope?.activate();
     }
@@ -99,11 +99,12 @@ export interface ExecScope {
    */
   afterAwait?(): Promise<void> | undefined;
   /**
-   * Rejects with an EndSignal when the program ends. Every await is raced
-   * against it, so a host promise that never settles (a dialog, onBreak)
-   * cannot keep a run alive after End.
+   * Wraps an awaited promise so that it also rejects with an EndSignal when
+   * the program ends: a host promise that never settles (a dialog, onBreak)
+   * cannot keep a run alive after End. The wrapper registers a cancel
+   * listener only until `p` settles (no long-lived promise reactions).
    */
-  readonly abort?: Promise<never>;
+  readonly cancellable?: <T>(p: Promise<T>) => Promise<T>;
 }
 
 /**

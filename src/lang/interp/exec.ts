@@ -302,28 +302,41 @@ function* unhandledError(f: Frame, err: VBRuntimeError): Gen<ErrorOutcome> {
  * Break mode at the current statement of `f` (an error with 'debug', Stop,
  * requestPause): state 'break', `f` is the frame the Immediate window sees,
  * and events are dropped (no event pump) until `host.onBreak` answers.
- * 'continue' goes on; 'end' (or End meanwhile) ends the program. Ignored in
- * an Immediate command (Stop there does nothing).
+ * 'continue' (or a rejected onBreak) goes on; 'end' (or End meanwhile) ends
+ * the program. A pending pause request is consumed. Ignored in an Immediate
+ * command (Stop there does nothing).
  */
 export function* enterBreak(f: Frame, reason: 'error' | 'pause', error?: VBRuntimeError): Gen<void> {
   const rt = f.run.rt;
   if (f.run.immediate) return;
+  rt.pauseRequested = false; // this break answers a pending pause request too
   rt.state = 'break';
   rt.breakFrame = f;
   rt.eventsSuspended++;
-  let answer: 'continue' | 'end';
+  let answer: 'continue' | 'end' = 'continue';
   try {
-    answer = (yield rt.host.onBreak({ reason, at: f.location(), error })) as 'continue' | 'end';
+    let asked: Promise<'continue' | 'end'>;
+    try {
+      asked = Promise.resolve(rt.host.onBreak({ reason, at: f.location(), error }));
+    } catch (e) {
+      asked = Promise.reject(e);
+    }
+    try {
+      answer = (yield asked) as 'continue' | 'end';
+    } catch (e) {
+      if (e instanceof EndSignal) throw e;
+      // a failing onBreak counts as 'continue': the program stays usable
+    }
   } finally {
     rt.breakFrame = undefined;
     rt.eventsSuspended--;
+    if (rt.state === 'break') rt.state = 'running';
   }
   if (rt.stopping) throw END;
   if (answer === 'end') {
     rt.endProgram();
     throw END;
   }
-  rt.state = 'running';
 }
 
 function* pauseHere(f: Frame): Gen<void> {
@@ -513,10 +526,6 @@ function* declareLocals(f: Frame): Gen<void> {
   f.line = proc.line;
 }
 
-/** Every Dim/Static/Const anywhere in a statement list (the Immediate window rejects them). */
-export function hasDeclarations(p: ProcDecl): boolean {
-  return localDecls(p).length > 0;
-}
 
 // ---------------------------------------------------------------------------
 // Statements
@@ -576,7 +585,8 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
     case 'exit':
       if (s.what === 'for') return 'exitFor';
       if (s.what === 'do') return 'exitDo';
-      rt.err.clear(); // Exit Sub/Function clears Err (VB6)
+      // VB6 resets Err when an error-handling procedure exits (as when it reaches End Sub)
+      if (f.onError !== 'none' || f.inHandler) rt.err.clear();
       return 'exitProc';
     case 'dim': case 'const': return; // declared at procedure entry (declareLocals)
     case 'redim': {

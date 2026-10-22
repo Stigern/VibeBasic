@@ -47,6 +47,8 @@ export class Runtime {
   printColumn = 0;
   /** Event handlers currently running (nested ones count too). */
   activeRuns = 0;
+  /** Immediate commands currently running (a pause request then has nothing to break into). */
+  immediateRuns = 0;
   /** The runs behind `activeRuns`, each with its call stack (for End and break mode). */
   readonly runs = new Set<Run>();
   /** The frame that is stopped in break mode (the Immediate window evaluates there). */
@@ -66,11 +68,11 @@ export class Runtime {
   /** VB's `Err` object (also `builtinCtx.err`). */
   readonly err: ErrObject;
   /**
-   * Rejects with an EndSignal when the program ends. The driver races every
-   * await against it, so End cancels waits on host promises that never settle.
+   * Cancel listeners of the waits in progress (`cancellable`): each rejects
+   * its wait with an EndSignal when the program ends, and removes itself when
+   * the wait settles, so a long DoEvents loop does not accumulate them.
    */
-  readonly aborted: Promise<never>;
-  private abortRuns!: (e: EndSignal) => void;
+  readonly abortListeners = new Set<(e: EndSignal) => void>();
   /** Set when an event was refused for nesting too deep; the running statement raises error 28. */
   overflow = false;
   readonly sliceSize: number;
@@ -96,14 +98,12 @@ export class Runtime {
     this.err = new ErrObject(appTitle);
     this.builtinCtx = { host, locale: this.locale, appTitle, rnd: newRndState(), err: this.err };
     this.dateText = v => generalDateText(v.serial, this.locale);
-    this.aborted = new Promise<never>((_resolve, reject) => { this.abortRuns = reject; });
-    this.aborted.catch(() => {}); // only ever observed through Promise.race
     this.scope = {
       activate: () => {
         const prev = setDateTextFormatter(this.dateText);
         return () => { setDateTextFormatter(prev); };
       },
-      abort: this.aborted,
+      cancellable: p => this.cancellable(p),
     };
     this.declRun = new Run(this);
     for (const src of sources) {
@@ -244,7 +244,7 @@ export class Runtime {
    * Ends the program once (End, Program.end, an unhandled error answered
    * 'end'): state 'ended'; every run stops — code at its next statement
    * boundary, waits (host promises, onBreak, onRuntimeError, nested runs)
-   * at once through `aborted`; queued events are released without running;
+   * at once through `cancellable`; queued events are released without running;
    * host.onEnd() is called.
    */
   endProgram(): void {
@@ -256,7 +256,9 @@ export class Runtime {
     const waiters = [...this.endWaiters];
     this.endWaiters.clear();
     for (const w of waiters) w();
-    this.abortRuns(new EndSignal());
+    const cancels = [...this.abortListeners];
+    this.abortListeners.clear();
+    for (const cancel of cancels) cancel(new EndSignal());
     this.drainEvents(); // each queued runEvent sees 'ended' and resolves
     this.host.onEnd();
   }
@@ -287,9 +289,28 @@ export class Runtime {
       });
   }
 
+  /**
+   * `p`, but rejected with an EndSignal as soon as the program ends (at once
+   * when it already has). The cancel listener lives only until `p` settles.
+   */
+  cancellable<T>(p: Promise<T>): Promise<T> {
+    if (this.stopping) {
+      p.catch(() => {});
+      return Promise.reject(new EndSignal());
+    }
+    return new Promise<T>((resolve, reject) => {
+      const cancel = (e: EndSignal) => reject(e);
+      this.abortListeners.add(cancel);
+      p.then(
+        v => { this.abortListeners.delete(cancel); resolve(v); },
+        e => { this.abortListeners.delete(cancel); reject(e); },
+      );
+    });
+  }
+
   /** `p`, or undefined as soon as the program ends (for awaits outside the driver). */
   untilEnd<T>(p: Promise<T>): Promise<T | undefined> {
-    return Promise.race([p, this.aborted]).catch(e => {
+    return this.cancellable(p).catch(e => {
       if (e instanceof EndSignal) return undefined;
       throw e;
     });
@@ -373,7 +394,7 @@ export class Runtime {
       // no pump in a time slice, while an error is reported or in break mode
       beforeAwait: () => { if (this.slicing === 0 && this.eventsSuspended === 0) this.drainEvents(); },
       afterAwait: () => this.nestedRuns(run),
-      abort: this.aborted,
+      cancellable: this.scope.cancellable,
     };
   }
 
@@ -505,9 +526,10 @@ export class Program {
    * procedures, constants and modules, but no locals and no Private module
    * variables (unknown names are new, empty Immediate variables).
    *
-   * A run-time error returns `Run-time error '<n>': <text>`; declarations
-   * (Dim/Static/Const), syntax errors and compile errors return
-   * `Compile error: <text>`. Errors never reach host.onRuntimeError or break
+   * A run-time error returns `Run-time error '<n>': <text>`; syntax errors
+   * and compile errors return `Compile error: <text>`, and Dim/Static/Const,
+   * On Error, Resume, GoTo and labels give `Compile error: Invalid in
+   * Immediate window`. Errors never reach host.onRuntimeError or break
    * mode (procedures called from here still use their own On Error
    * handlers), and Stop does nothing. `End` ends the program and returns `''`.
    */
@@ -520,7 +542,8 @@ export class Program {
    * 'pause' at the innermost running statement; 'continue' goes on, 'end'
    * ends the program. With no code running, onBreak is called at once with
    * an empty location (`procName: ''`); the state is 'break' until it answers
-   * (a rejected onBreak counts as 'continue').
+   * (a rejected onBreak counts as 'continue', here and during a run). Ignored
+   * while only an Immediate command runs.
    */
   requestPause(): void {
     const rt = this.rt;
@@ -529,6 +552,8 @@ export class Program {
       rt.pauseRequested = true;
       return;
     }
+    // only an Immediate command runs: it never breaks, and break mode would stop nothing
+    if (rt.immediateRuns > 0) return;
     rt.pauseIdle();
   }
 

@@ -435,3 +435,95 @@ describe('End and end()', () => {
     expect(host.endCalls).toBe(1);
   });
 });
+
+describe('review fixes (round 1)', () => {
+  const rtOf = (prog: Program) => (prog as unknown as { rt: { abortListeners: Set<unknown>; state: string } }).rt;
+
+  test('awaits do not accumulate End cancel listeners (DoEvents loop)', async () => {
+    const host = new TestHost();
+    const { prog } = program(lines('Sub Main()', '  Dim i As Long', '  For i = 1 To 3000', '    DoEvents', '  Next', '  Debug.Print "done"', 'End Sub'), host);
+    let max = 0;
+    host.doEvents = async () => { max = Math.max(max, rtOf(prog).abortListeners.size); };
+    await prog.runEvent('Module1', 'Main');
+    expect(host.lines()).toEqual(['done']);
+    expect(max).toBeLessThanOrEqual(1);
+    expect(rtOf(prog).abortListeners.size).toBe(0);
+  });
+
+  test('time slices do not accumulate End cancel listeners either', async () => {
+    const { prog, host } = program(lines('Sub Main()', '  Dim i As Long', '  For i = 1 To 20000', '  Next', '  Debug.Print "done"', 'End Sub'), new TestHost(), { sliceSize: 10 });
+    await prog.runEvent('Module1', 'Main');
+    expect(host.lines()).toEqual(['done']);
+    expect(rtOf(prog).abortListeners.size).toBe(0);
+  });
+
+  test('a rejected onBreak during a run counts as continue; the program stays usable', async () => {
+    const host = new TestHost();
+    const { prog } = program(lines('Sub Main()', '  Stop', '  Debug.Print "x"', 'End Sub', 'Sub T()', '  Debug.Print "t"', 'End Sub'), host);
+    host.breakHook = () => Promise.reject(new Error('dialog failed'));
+    await prog.runEvent('Module1', 'Main');
+    expect(prog.state).toBe('idle');
+    await prog.runEvent('Module1', 'T');
+    expect(host.lines()).toEqual(['x', 't']);
+    host.breakHook = undefined;
+    host.breakChoice = 'continue';
+    prog.requestPause();
+    expect(host.breaks).toHaveLength(2);
+    await tick();
+    expect(prog.state).toBe('idle');
+  });
+
+  test('a synchronously throwing onBreak also counts as continue', async () => {
+    const host = new TestHost();
+    const { prog } = program(lines('Sub Main()', '  Stop', '  Debug.Print "x"', 'End Sub'), host);
+    host.onBreak = () => { throw new Error('sync'); };
+    await prog.runEvent('Module1', 'Main');
+    expect(host.lines()).toEqual(['x']);
+    expect(prog.state).toBe('idle');
+  });
+
+  test('Immediate rejects On Error, Resume, GoTo and labels; the paused handler does not run', async () => {
+    const host = new TestHost();
+    host.breakChoice = 'continue';
+    const { prog } = program(lines('Sub Main()', '  On Error GoTo H', '  Stop', '  Exit Sub', 'H:', '  Debug.Print "HANDLER RAN"', 'End Sub'), host);
+    const seen: string[] = [];
+    host.breakHook = async () => {
+      for (const cmd of ['On Error GoTo H: x = 1 / 0', 'On Error Resume Next', 'Resume Next', 'GoTo H', 'H:', 'If True Then GoTo H']) {
+        seen.push(await prog.immediate(cmd));
+      }
+      seen.push(await prog.immediate('x = 1 / 0'));
+      return 'continue';
+    };
+    await prog.runEvent('Module1', 'Main');
+    const invalid = 'Compile error: Invalid in Immediate window';
+    expect(seen).toEqual([invalid, invalid, invalid, invalid, invalid, invalid, "Run-time error '11': Division by zero"]);
+    expect(host.lines()).toEqual([]);
+  });
+
+  test('an error break consumes a pending pause request (Continue does not break again)', async () => {
+    const host = new TestHost();
+    host.errorChoice = 'debug';
+    host.objects.set('dlg', new FakeObject('Form', { methods: { Show: () => new Promise<VBValue>(r => setTimeout(() => r(10), 5)) } }));
+    const { prog } = program(lines('Dim d As Integer', 'Sub Main()', '  Dim x', '  x = Dlg.Show() / d', '  Debug.Print x', 'End Sub'), host);
+    host.breakHook = async () => { await prog.immediate('d = 2'); return 'continue'; };
+    const p = prog.runEvent('Module1', 'Main');
+    await tick();
+    prog.requestPause(); // arrives while Dlg.Show is pending
+    await p;
+    expect(host.breaks.map(b => b.reason)).toEqual(['error']);
+    expect(printed(host)).toEqual([' 5 ']);
+    expect(prog.state).toBe('idle');
+  });
+
+  test('requestPause while only an Immediate command runs is ignored', async () => {
+    const host = new TestHost();
+    const { prog } = program(lines('Sub Main()', 'End Sub'), host, { sliceSize: 50 });
+    const imm = prog.immediate('Do While k < 20000: k = k + 1: Loop');
+    await tick();
+    prog.requestPause();
+    expect(prog.state).toBe('idle');
+    expect(await imm).toBe('');
+    expect(host.breaks).toEqual([]);
+    expect(prog.state).toBe('idle');
+  });
+});
