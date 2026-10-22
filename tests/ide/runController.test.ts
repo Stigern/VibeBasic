@@ -13,7 +13,7 @@ import { compileErrorBox, messageBox98 } from '../../src/ui98/dialogs';
 
 vi.mock('../../src/ui98/dialogs', async orig => {
   const real = await orig<typeof import('../../src/ui98/dialogs')>();
-  return { ...real, compileErrorBox: vi.fn(async () => {}), messageBox98: vi.fn(real.messageBox98) };
+  return { ...real, compileErrorBox: vi.fn(async () => 'ok' as const), messageBox98: vi.fn(real.messageBox98) };
 });
 const box = vi.mocked(compileErrorBox);
 const msgBox = vi.mocked(messageBox98);
@@ -169,7 +169,7 @@ test('End while a MsgBox is open closes the dialog; End in break leaves no break
 test('project changes are blocked while running; a second start during the compile box does not stack', async () => {
   setup('', 'Sub Main()\n    x = \nEnd Sub\n');
   let release!: () => void;
-  box.mockImplementationOnce(() => new Promise<void>(r => { release = r; }));
+  box.mockImplementationOnce(() => new Promise<'ok'>(r => { release = () => r('ok'); }));
   const first = rc.start(true);
   await tick();
   void rc.start(true);

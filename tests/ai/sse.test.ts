@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, test, vi } from 'vitest';
-import { parseSseChunk, readSseEvent } from '../../src/ai/sse';
+import { parseSseChunk, readSseEvent, type AiUsage } from '../../src/ai/sse';
 import { BrowserBackend } from '../../src/backend/browserBackend';
 
 afterEach(() => { vi.unstubAllGlobals(); });
@@ -57,4 +57,16 @@ test('BrowserBackend: abort rejects with "cancelled"; JSON reply still works', a
   await expect(p).rejects.toThrow('cancelled');
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: 'plain' } }] }), { status: 200, headers: { 'content-type': 'application/json' } })));
   expect(await new BrowserBackend().aiChat('http://h/v1', '', 'x', [], undefined, { onDelta: () => {} })).toBe('plain');
+});
+
+test('BrowserBackend: asks for usage and reports it, with cachedTokens when the server sends them', async () => {
+  const body = d({ choices: [{ delta: { content: 'Hi' } }] })
+    + d({ choices: [], usage: { prompt_tokens: 3210, completion_tokens: 41, prompt_tokens_details: { cached_tokens: 2900 } } }) + 'data: [DONE]\n\n';
+  const f = vi.fn(async () => sseResponse([body]));
+  vi.stubGlobal('fetch', f);
+  const seen: AiUsage[] = [];
+  expect(await new BrowserBackend().aiChat('http://h/v1', '', 'x', [], undefined, { onDelta: () => {}, onUsage: u => seen.push(u) })).toBe('Hi');
+  expect(seen).toEqual([{ promptTokens: 3210, completionTokens: 41, cachedTokens: 2900 }]);
+  expect(JSON.parse((f.mock.calls[0] as any)[1].body).stream_options).toEqual({ include_usage: true });
+  expect(readSseEvent(d({ choices: [], usage: { prompt_tokens: 5, completion_tokens: 1 } }).slice(6)).usage).toEqual({ promptTokens: 5, completionTokens: 1 });
 });

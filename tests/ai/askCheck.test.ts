@@ -166,3 +166,18 @@ test('cancel during the retry discards everything', async () => {
   expect(w.applyChange).not.toHaveBeenCalled();
   expect(b.aiChat).toHaveBeenCalledTimes(2);
 });
+
+test('form mode: invalid JSON gets one retry and the second answer is used', async () => {
+  const s = ide('designer');
+  const broken = '{"ops":[{"op":"add","type":"Label","name":"lblHi",}';
+  const right = '{"ops":[{"op":"add","type":"Label","name":"lblHi"}]}';
+  const b = fakeBackend([broken, right]);
+  const p = askAi(s, b, { codeWindowFor: () => null });
+  await enterPrompt('x');
+  await vi.waitFor(() => expect(text()).toContain('Add Label lblHi'));
+  expect(b.aiChat).toHaveBeenCalledTimes(2);
+  expect(b.aiChat.mock.calls[1][3].at(-1).content).toMatch(/^Your answer was not valid JSON \(.+\)\. Answer again with ONLY the JSON object\.$/);
+  click('OK');
+  await p;
+  expect(s.project.forms[0].controls.some(c => c.name === 'lblHi')).toBe(true);
+});

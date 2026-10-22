@@ -102,3 +102,48 @@ test('Cancel aborts the stream and discards a late reply', async () => {
   expect(document.querySelector('.dlg98')).toBeNull();
   expect(w.applyChange).not.toHaveBeenCalled();
 });
+
+test('the preview shows the measurement line; without usage from the server only the time', async () => {
+  const w = codeWin('Private Sub Command1_Click()\nEnd Sub');
+  const { b, calls } = fakeBackend();
+  const p = askAi(ide(), b, { codeWindowFor: () => w as any });
+  await enterPrompt('x');
+  await vi.waitFor(() => expect(calls).toHaveLength(1));
+  calls[0].opts.onUsage!({ promptTokens: 3210, completionTokens: 41, cachedTokens: 2900 });
+  calls[0].resolve(GOOD);
+  await vi.waitFor(() => expect(document.querySelector('.ai-metrics')?.textContent).toMatch(/^3,210 prompt tokens \(2,900 cached\) · \d+ s$/));
+  btn('Cancel')!.click();
+  await p;
+
+  const w2 = codeWin('Private Sub Command1_Click()\nEnd Sub');
+  const f2 = fakeBackend();
+  const p2 = askAi(ide(), f2.b, { codeWindowFor: () => w2 as any });
+  await enterPrompt('x');
+  await vi.waitFor(() => expect(f2.calls).toHaveLength(1));
+  f2.calls[0].resolve(GOOD);
+  await vi.waitFor(() => expect(document.querySelector('.ai-metrics')?.textContent).toMatch(/^\d+ s$/));
+  btn('Cancel')!.click();
+  await p2;
+});
+
+test('the waiting dialog shows the animation, follows the delta kind, and removes it when closed', async () => {
+  const w = codeWin('Private Sub Command1_Click()\nEnd Sub');
+  const { b, calls } = fakeBackend();
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  try {
+    const p = askAi(ide(), b, { codeWindowFor: () => w as any });
+    await enterPrompt('x');
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const anim = () => document.querySelector<HTMLElement>('.dlg98 .ai-anim');
+    expect(anim()?.querySelector('svg')).toBeTruthy();
+    expect(anim()!.dataset.phase).toBe('thinking');
+    calls[0].opts.onDelta!('content', 'x');
+    expect(anim()!.dataset.phase).toBe('writing');
+    const timers = vi.getTimerCount();
+    btn('Cancel')!.click();
+    await p;
+    expect(anim()).toBeNull();
+    expect(vi.getTimerCount()).toBeLessThan(timers);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
+});

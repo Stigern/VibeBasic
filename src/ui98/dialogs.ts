@@ -197,10 +197,12 @@ export async function inputBox98(doc: Document, o: { prompt: string; title: stri
 }
 
 /** Compile error shown before a program starts. Help is disabled (there is no help file). */
-export async function compileErrorBox(doc: Document, message: string): Promise<void> {
-  await showDialog98(doc, {
+/** `askAi` adds the Ask AI button after OK; 'ai' when it was pressed. */
+export async function compileErrorBox(doc: Document, message: string, o: { askAi?: boolean } = {}): Promise<'ok' | 'ai'> {
+  const v = await showDialog98(doc, {
     title: 'VibeBasic',
     content: messageContent(`Compile error:\n\n${message}`, 'exclamation'),
-    buttons: [{ label: 'OK', value: 'ok', default: true, cancel: true }, { label: 'Help', value: 'help', disabled: true }],
+    buttons: [{ label: 'OK', value: 'ok', default: true, cancel: true }, ...(o.askAi ? [{ label: 'Ask AI', value: 'ai' }] : []), { label: 'Help', value: 'help', disabled: true }],
   });
+  return v === 'ai' ? 'ai' : 'ok';
 }

@@ -1131,8 +1131,12 @@ export function checkLineSyntax(line: string): VBSyntaxError | null {
   }
 }
 
-/** All syntax errors of a module (each with `moduleName` set); after an error parsing resumes on the next line. */
-export function findSyntaxErrors(source: string, moduleName: string): VBSyntaxError[] {
+/**
+ * Parses a module without stopping at errors: every syntax error (each with `moduleName` set) plus the AST of
+ * everything that did parse (a failing statement is skipped to the end of its line). `ast` is null only when
+ * the lexer never got through the source.
+ */
+export function parseModuleLenient(source: string, moduleName: string): { ast: ModuleAst | null; errors: VBSyntaxError[] } {
   const errors: VBSyntaxError[] = [];
   let src = source;
   let tokens: Token[] | null = null;
@@ -1150,14 +1154,21 @@ export function findSyntaxErrors(source: string, moduleName: string): VBSyntaxEr
       src = lines.join('\n');
     }
   }
+  let ast: ModuleAst | null = null;
   if (tokens) {
     const p = new StatementParser(tokens);
     p.collect = errors;
-    p.parseModuleAst(moduleName);
+    ast = p.parseModuleAst(moduleName);
   }
   const seen = new Set<string>();
   for (const e of errors) e.moduleName = moduleName;
-  return errors
+  const sorted = errors
     .sort((a, b) => a.line - b.line || a.col - b.col)
     .filter(e => { const k = `${e.line}:${e.col}:${e.message}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  return { ast, errors: sorted };
+}
+
+/** All syntax errors of a module (each with `moduleName` set); after an error parsing resumes on the next line. */
+export function findSyntaxErrors(source: string, moduleName: string): VBSyntaxError[] {
+  return parseModuleLenient(source, moduleName).errors;
 }

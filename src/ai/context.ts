@@ -103,19 +103,76 @@ function findItem(p: Project, id: string): { form?: FormDef; module?: ModuleDef 
   return { module: p.modules.find(m => m.id === id) };
 }
 
+const LINE_BREAK = /\r\n|\n|\r/;
+const mentions = (text: string, name: string): boolean => new RegExp(`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`, 'i').test(text);
+
+/**
+ * The code as the model should see it. Up to `maxLines` lines it is unchanged. Above that: everything outside
+ * procedures (declarations), the whole current procedure, the whole procedures it calls or the request names
+ * (case-insensitive), and only the heading line plus `' ... (body omitted)` for the rest.
+ */
+export function codeForPrompt(code: string, focus: { procName: string | null; mention: string }, maxLines = 400): string {
+  const lines = code.split(LINE_BREAK);
+  if (lines.length <= maxLines) return code;
+  const procs = listProcedures(code);
+  const current = focus.procName ? procs.find(p => p.name.toLowerCase() === focus.procName!.toLowerCase()) : undefined;
+  const body = current ? lines.slice(current.line - 1, current.endLine).join('\n') : '';
+  const keep = new Set<string>();
+  if (current) keep.add(current.name.toLowerCase());
+  for (const p of procs) if (mentions(focus.mention, p.name) || (current && mentions(body, p.name))) keep.add(p.name.toLowerCase());
+  const out: string[] = [];
+  let next = 1;
+  for (const p of procs) {
+    while (next < p.line) out.push(lines[next++ - 1]);
+    if (keep.has(p.name.toLowerCase())) out.push(...lines.slice(p.line - 1, p.endLine));
+    else out.push(lines[p.line - 1], "' ... (body omitted)");
+    next = p.endLine + 1;
+  }
+  while (next <= lines.length) out.push(lines[next++ - 1]);
+  return out.join('\n');
+}
+
 export function buildCodeRequest(p: Project, itemId: string, cursorLine: number, userPrompt: string): ChatMessage[] {
   const { form, module } = findItem(p, itemId);
   const code = (form ?? module)?.code ?? '';
   const proc = listProcedures(code).find(pr => cursorLine >= pr.line && cursorLine <= pr.endLine);
   const context = form ? `Form description:\n${describeForm(form)}` : `Forms in the project:\n${describeProjectForms(p)}`;
-  const user = `${context}\n\nCode of ${form ? `form ${form.name}` : `module ${module?.name ?? ''}`}:\n${code}\n\nCurrent procedure: ${proc?.name ?? '(none)'}\n\nRequest: ${userPrompt}`;
+  const user = `${context}\n\nCode of ${form ? `form ${form.name}` : `module ${module?.name ?? ''}`}:\n${codeForPrompt(code, { procName: proc?.name ?? null, mention: userPrompt })}\n\nCurrent procedure: ${proc?.name ?? '(none)'}\n\nRequest: ${userPrompt}`;
   return [{ role: 'system', content: `${CODE_SYSTEM_PROMPT}${describeControlTypes()}` }, { role: 'user', content: user }];
+}
+
+export interface FixError { number: number; description: string; compile: boolean; line: number; procName: string | null }
+
+/**
+ * Debugging with AI: the code-mode system prompt; in the user message the form description, the code (the procedure
+ * with the error and its callers in full), the error, the line and the variable values, then `Fix the error.`
+ */
+export function buildFixRequest(p: Project, itemId: string, err: FixError, vars: { name: string; value: string }[]): ChatMessage[] {
+  const { form, module } = findItem(p, itemId);
+  const code = (form ?? module)?.code ?? '';
+  const lines = code.split(LINE_BREAK);
+  const procs = listProcedures(code);
+  const proc = err.procName ? procs.find(pr => pr.name.toLowerCase() === err.procName!.toLowerCase()) : undefined;
+  // the callers of the failing procedure: named in `mention`, so codeForPrompt keeps them whole
+  const callers = proc ? procs.filter(pr => pr !== proc && mentions(lines.slice(pr.line, pr.endLine).join('\n'), proc.name)).map(pr => pr.name) : [];
+  const context = form ? `Form description:\n${describeForm(form)}` : `Forms in the project:\n${describeProjectForms(p)}`;
+  const what = err.compile ? `Compile error: ${err.description}` : `Run-time error ${err.number}: ${err.description}`;
+  const lineText = (lines[err.line - 1] ?? '').trim();
+  const parts = [
+    context,
+    `Code of ${form ? `form ${form.name}` : `module ${module?.name ?? ''}`}:\n${codeForPrompt(code, { procName: proc?.name ?? null, mention: callers.join(' ') })}`,
+    `Error: ${what}`,
+    `Line ${err.line} in ${proc?.name ?? '(declarations)'}: ${lineText}`,
+  ];
+  if (!err.compile) parts.push(`Variable values:\n${vars.length ? vars.map(v => `${v.name} = ${v.value}`).join('\n') : '(none)'}`);
+  parts.push('Fix the error.');
+  return [{ role: 'system', content: `${CODE_SYSTEM_PROMPT}${describeControlTypes()}` }, { role: 'user', content: parts.join('\n\n') }];
 }
 
 export function buildFormRequest(p: Project, formId: string, userPrompt: string): ChatMessage[] {
   const form = p.forms.find(f => f.id === formId);
   if (!form) throw new Error(`Unknown form ${formId}`);
-  const user = `Form description:\n${describeForm(form)}\n\nForm code:\n${form.code}\n\nRequest: ${userPrompt}`;
+  const user = `Form description:\n${describeForm(form)}\n\nForm code:\n${codeForPrompt(form.code, { procName: null, mention: userPrompt })}\n\nRequest: ${userPrompt}`;
   return [{ role: 'system', content: `${FORM_SYSTEM_PROMPT}${describeControlTypes()}` }, { role: 'user', content: user }];
 }
 

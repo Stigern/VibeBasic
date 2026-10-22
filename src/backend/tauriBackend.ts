@@ -134,6 +134,11 @@ export class TauriBackend implements Backend {
     const unlisten = await listen<{ id: string; kind: AiDeltaKind; text: string }>('ai:delta', e => {
       if (e.payload.id === streamId) opts.onDelta?.(e.payload.kind, e.payload.text);
     });
+    const unlistenUsage = await listen<{ id: string; prompt_tokens: number; completion_tokens: number; cached_tokens?: number | null }>('ai:usage', e => {
+      const p = e.payload;
+      if (p.id !== streamId) return;
+      opts.onUsage?.({ promptTokens: p.prompt_tokens, completionTokens: p.completion_tokens, ...(typeof p.cached_tokens === 'number' ? { cachedTokens: p.cached_tokens } : {}) });
+    });
     const onAbort = () => { void invoke('ai_cancel', { streamId }).catch(() => {}); };
     opts.signal?.addEventListener('abort', onAbort);
     try {
@@ -141,6 +146,7 @@ export class TauriBackend implements Backend {
     } finally {
       opts.signal?.removeEventListener('abort', onAbort);
       unlisten();
+      unlistenUsage();
     }
   }
 

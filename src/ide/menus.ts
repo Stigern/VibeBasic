@@ -16,11 +16,12 @@ export const ACTION_NAMES = [
   'sameWidth', 'sameHeight', 'sameBoth', 'bringToFront', 'sendToBack', 'lockControls',
   'stepInto', 'toggleBreakpoint',
   'start', 'startFullCompile', 'break', 'end', 'restart',
-  'askAi', 'options', 'about',
+  'askAi', 'askAiAboutError', 'options', 'about',
 ] as const;
 export type IdeActionName = (typeof ACTION_NAMES)[number];
 
-export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
+/** `breakOnError`: the program is stopped on an unhandled error (enables Tools > Ask AI about this error). */
+export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?: () => boolean } = {}): MenuDef[] {
   const projectName = () => state?.project.name ?? 'Project1';
   const activeItemName = (): string => {
     const id = state?.currentItemId();
@@ -107,6 +108,7 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
     ] },
     { label: 'Tools', items: [
       mk('Ask AI...', 'askAi', 'Ctrl+I', design),
+      mk('Ask AI about this error', 'askAiAboutError', undefined, () => state?.mode === 'break' && !!o.breakOnError?.()),
       sep(),
       mk('Options...', 'options'),
     ] },

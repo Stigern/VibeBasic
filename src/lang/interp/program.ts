@@ -15,6 +15,7 @@ import { EndSignal, SubCall, runGenerator, type ExecScope, type Gen } from './dr
 import { constExpr } from './eval';
 import { RETRY, declareVariable, handleError, invokeProc, isStackOverflow, type BoundArg } from './exec';
 import { runImmediate } from './immediate';
+import { snapshotVariables } from './snapshot';
 
 /**
  * Event handlers nested in each other (an event fired while another handler
@@ -635,6 +636,11 @@ export class Program {
    */
   immediate(text: string): Promise<string> {
     return runImmediate(this.rt, text);
+  }
+
+  /** The variables of the frame stopped in break mode as short text; empty outside break mode. See snapshotVariables. */
+  snapshotVariables(): { name: string; value: string }[] {
+    return snapshotVariables(this.rt.state === 'break' ? this.rt.breakFrame : undefined);
   }
 
   /**

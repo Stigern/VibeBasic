@@ -1,6 +1,6 @@
 import type { Backend, DirListing, FileFilter, Volume } from './backend';
 import type { ChatMessage } from '../ai/types';
-import { readSseEvent, parseSseChunk, type AiChatOptions } from '../ai/sse';
+import { readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
 
 const AI_CONNECT_ERROR = (baseUrl: string) =>
   `Could not connect to ${baseUrl}. Check that the AI server is running and can be reached from this Mac. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0.`;
@@ -82,6 +82,8 @@ async function aiStream(baseUrl: string, apiKey: string, body: string, opts: AiC
       let v: any;
       try { v = JSON.parse(await res.text()); } catch { throw new Error(AI_UNREADABLE); }
       const m = v?.choices?.[0]?.message;
+      const u = readUsage(v);
+      if (u) opts.onUsage?.(u);
       return answerText(typeof m?.content === 'string' ? m.content : '', [m?.reasoning, m?.reasoning_content].find(t => typeof t === 'string') ?? '', v?.choices?.[0]?.finish_reason);
     }
     if (!res.body) throw new Error(AI_UNREADABLE);
@@ -94,6 +96,7 @@ async function aiStream(baseUrl: string, apiKey: string, body: string, opts: AiC
       if (ev.error) throw new Error(ev.error);
       if (ev.done) { done = true; return; }
       if (ev.finish) finish = ev.finish;
+      if (ev.usage) opts.onUsage?.(ev.usage);
       for (const d of ev.deltas) {
         if (d.kind === 'reasoning') reasoning += d.text; else content += d.text;
         opts.onDelta?.(d.kind, d.text);
@@ -251,7 +254,7 @@ export class BrowserBackend implements Backend {
   async aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string, opts?: AiChatOptions): Promise<string> {
     const effort = reasoningEffort?.trim();
     const streaming = !!opts?.onDelta;
-    const body = JSON.stringify({ model, messages, temperature: 0.2, stream: streaming, ...(effort ? { chat_template_kwargs: { reasoning_effort: effort } } : {}) });
+    const body = JSON.stringify({ model, messages, temperature: 0.2, stream: streaming, ...(streaming ? { stream_options: { include_usage: true } } : {}), ...(effort ? { chat_template_kwargs: { reasoning_effort: effort } } : {}) });
     if (streaming) return aiStream(baseUrl, apiKey, body, opts!);
     const v = (await aiRequest(baseUrl, apiKey, 'chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, 600)) as
       { choices?: { message?: { content?: unknown } }[] } | null;

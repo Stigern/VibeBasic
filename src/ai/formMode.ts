@@ -18,7 +18,7 @@ export type FormOp =
   | { op: 'form'; props: Record<string, PropValue> };
 export type ParsedFormOps =
   | { ok: true; ops: FormOp[]; code: string | null; warnings: string[]; codeChanges?: CodeApplyResult['changes']; codeText?: string }
-  | { ok: false; error: string; raw: string };
+  | { ok: false; error: string; raw: string; /** Why the reply was not usable JSON (sent back to the model). */ reason: string };
 type Ok = Extract<ParsedFormOps, { ok: true }>;
 
 export const NOT_UNDERSTOOD = 'The AI answer could not be understood. Try again or rephrase.';
@@ -57,14 +57,19 @@ function sanitizeJson(s: string): string {
   return out;
 }
 
-function parseJsonLoose(reply: string): unknown {
+/** The JSON in a reply (fences, thinking and loose syntax tolerated), or why there is none. */
+function parseJsonLoose(reply: string): { value: unknown } | { reason: string } {
   const text = stripThinking(reply);
   const o = text.indexOf('{'), q = text.indexOf('[');
   // a bare top-level array of ops is accepted too
   const [open, close] = q >= 0 && (o < 0 || q < o) ? ['[', ']'] : ['{', '}'];
   const a = text.indexOf(open), b = text.lastIndexOf(close);
-  if (a < 0 || b <= a) return undefined;
-  try { return JSON.parse(sanitizeJson(text.slice(a, b + 1))); } catch { return undefined; }
+  if (a < 0 || b <= a) return { reason: 'no JSON object found' };
+  try { return { value: JSON.parse(sanitizeJson(text.slice(a, b + 1))) }; }
+  catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { reason: msg.length > 100 ? `${msg.slice(0, 97)}...` : msg };
+  }
 }
 
 /** Op names small models use instead of add / set / delete / form. */
@@ -118,10 +123,12 @@ const GEO = ['Left', 'Top', 'Width', 'Height'];
 
 /** `fixCode` may rewrite the AI's code text (before it is merged into the form's code). */
 export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: string) => string): ParsedFormOps {
-  const fail: ParsedFormOps = { ok: false, error: NOT_UNDERSTOOD, raw: reply };
-  const parsedJson = parseJsonLoose(reply);
+  const loose = parseJsonLoose(reply);
+  if ('reason' in loose) return { ok: false, error: NOT_UNDERSTOOD, raw: reply, reason: loose.reason };
+  const parsedJson = loose.value;
   const json: Record<string, unknown> | undefined = Array.isArray(parsedJson) ? { ops: parsedJson } : isObj(parsedJson) ? parsedJson : undefined;
-  if (!json) return fail;
+  if (!json) return { ok: false, error: NOT_UNDERSTOOD, raw: reply, reason: 'the JSON is not an object' };
+  const fail: ParsedFormOps = { ok: false, error: NOT_UNDERSTOOD, raw: reply, reason: 'it has no usable "ops" and no "code"' };
   const rawOps = Array.isArray(json.ops) ? json.ops : [];
   const warnings: string[] = [];
   const ops: FormOp[] = [];

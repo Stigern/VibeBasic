@@ -15,7 +15,8 @@ import { FormInstance, type FormSession } from './objects/formInstance';
 
 export interface SessionCallbacks {
   debugPrint(text: string, newline: boolean): void;
-  onBreak(info: BreakInfo): Promise<'continue' | 'end'>;   // IDE: yellow line and wait. App: never called
+  /** IDE: yellow line and wait. App: never called. `askAi`: the error dialog's Ask AI was pressed (break mode, then the AI flow). */
+  onBreak(info: BreakInfo & { askAi?: boolean }): Promise<'continue' | 'end'>;
   onEnded(): void;
   readFile(path: string): Promise<Uint8Array>;            // LoadPicture
   appPath: string;
@@ -63,6 +64,7 @@ export class RunSession implements Host, FormSession {
   private timers = new Map<ControlObject, ReturnType<typeof setInterval>>();
   private timerBusy = new Set<ControlObject>();
   private lastYield = -Infinity;   // performance.now() of the last real DoEvents yield
+  private askAiOnBreak = false;    // the error dialog answered 'ai': the next onBreak (on that error) starts the AI flow
 
   constructor(private project: Project, readonly formHost: FormHost, private cb: SessionCallbacks, readonly mode: 'ide' | 'app') {
     for (const [k, a] of Object.entries(project.assets)) this.assets[k] = `data:${a.mime};base64,${a.dataBase64}`;
@@ -214,18 +216,26 @@ export class RunSession implements Host, FormSession {
     return new PictureObject({ asset: `data:${MIME[ext] ?? 'application/octet-stream'};base64,${base64(bytes)}` });
   }
 
-  onRuntimeError(err: VBRuntimeError, _at: CodeLocation): Promise<'end' | 'debug'> {
+  /** 'ai' (Ask AI) is 'debug' for the program; the break that follows tells the IDE to start the AI flow. */
+  async onRuntimeError(err: VBRuntimeError, _at: CodeLocation): Promise<'end' | 'debug'> {
     this.queue.flush();
-    return this.formHost.runtimeErrorBox({ number: err.number, description: err.description, compile: err.compile, mode: this.mode, title: this.title });
+    const r = await this.formHost.runtimeErrorBox({ number: err.number, description: err.description, compile: err.compile, mode: this.mode, title: this.title });
+    this.askAiOnBreak = r === 'ai' && this.mode === 'ide';
+    return r === 'end' ? 'end' : 'debug';
   }
+
+  /** Local and module variables of the frame stopped in break mode (empty otherwise). */
+  variables(): { name: string; value: string }[] { return this.program.snapshotVariables(); }
 
   async onBreak(info: BreakInfo): Promise<'continue' | 'end'> {
     this.queue.flush();
     if (this.mode === 'app') return 'end';
     this._state = 'break';
     this.updateBlocked();
+    const askAi = this.askAiOnBreak && info.reason === 'error';
+    this.askAiOnBreak = false;
     try {
-      return await this.cb.onBreak(info);
+      return await this.cb.onBreak(askAi ? { ...info, askAi } : info);
     } finally {
       if (this._state === 'break') {
         this._state = 'running';
