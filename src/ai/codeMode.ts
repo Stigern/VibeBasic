@@ -31,6 +31,41 @@ export interface CodeApplyResult { source: string; changes: { name: string; kind
 const DECL = /^\s*(Option\s|Dim\s|Const\s|Public\s|Private\s|Global\s|Static\s|Type\s|Enum\s)/i;
 const DECL_ONLY = /^\s*(Dim|Const|Public|Private|Global|Static)\s/i;
 const TAIL = /^\s*End\s+(Sub|Function)\b/i;
+const DECLARE = /^\s*((Public|Private)\s+)?Declare\s/i;
+const BLOCK_START = /^\s*((Public|Private)\s+)?(Type|Enum)\s/i;
+const BLOCK_END = /^\s*End\s+(Type|Enum)\b/i;
+const COMMENT = /^\s*('|Rem(\s|$))/i;
+
+/**
+ * Splits the lines before the first procedure into declarations (with the comments directly attached to them) and
+ * the comment block right above the first procedure (which belongs to that procedure). Other lines (prose) are dropped.
+ */
+function splitHeader(header: string[]): { decls: string[]; procComments: string[] } {
+  let end = header.length;
+  while (end > 0 && header[end - 1].trim() === '') end--;
+  let start = end;
+  while (start > 0 && COMMENT.test(header[start - 1])) start--;
+  const procComments = header.slice(start, end);
+  const rest = header.slice(0, start);
+  const keep = rest.map(() => false);
+  for (let i = 0, inBlock = false; i < rest.length; i++) {
+    const l = rest[i];
+    if (inBlock) { keep[i] = true; if (BLOCK_END.test(l)) inBlock = false; continue; }
+    if (BLOCK_START.test(l)) { keep[i] = true; inBlock = true; continue; }
+    if (!COMMENT.test(l) && (DECL.test(l) || DECLARE.test(l))) keep[i] = true;
+  }
+  // comment groups touching a kept declaration line (no blank line between) stay with it
+  for (let i = 0; i < rest.length; i++) {
+    if (!COMMENT.test(rest[i]) || keep[i]) continue;
+    let a = i, b = i;
+    while (a > 0 && COMMENT.test(rest[a - 1])) a--;
+    while (b + 1 < rest.length && COMMENT.test(rest[b + 1])) b++;
+    const attached = (a > 0 && keep[a - 1] && !COMMENT.test(rest[a - 1])) || (b + 1 < rest.length && keep[b + 1] && !COMMENT.test(rest[b + 1]));
+    for (let k = a; k <= b; k++) keep[k] = attached;
+    i = b;
+  }
+  return { decls: rest.filter((_, i) => keep[i]), procComments };
+}
 const DECLS = '(Declarations)';
 
 export function applyCodeProposal(source: string, code: string, currentProc: string | null): CodeApplyResult | null {
@@ -41,7 +76,7 @@ export function applyCodeProposal(source: string, code: string, currentProc: str
   const changes: CodeApplyResult['changes'] = [];
   let lines = src.split('\n');
 
-  const header = procs.length ? codeLines.slice(0, procs[0].line - 1) : [];
+  const { decls: header, procComments } = procs.length ? splitHeader(codeLines.slice(0, procs[0].line - 1)) : { decls: [], procComments: [] };
   const bareDecls = !procs.length && codeLines.every(l => l.trim() === '' || DECL_ONLY.test(l) || /^\s*'/.test(l));
   const decls = bareDecls ? codeLines : header;
 
@@ -80,6 +115,11 @@ export function applyCodeProposal(source: string, code: string, currentProc: str
     while (text.length > 1 && text[text.length - 1].trim() === '') text.pop();
     const cur = lines.join('\n');
     const r = findProcedureRange(cur, p.name);
+    if (p === procs[0] && procComments.length) {
+      // the comment block above the first procedure goes with it (unless the source already has it right there)
+      const above = r ? lines.slice(Math.max(0, r.line - 1 - procComments.length), r.line - 1) : [];
+      if (above.map(l => l.trim()).join('\n') !== procComments.map(l => l.trim()).join('\n')) text.unshift(...procComments);
+    }
     if (r) {
       lines.splice(r.line - 1, r.endLine - r.line + 1, ...text);
       changes.push({ name: p.name, kind: 'replaced' });

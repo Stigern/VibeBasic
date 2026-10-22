@@ -99,3 +99,56 @@ test('form preview dialog OK / Cancel', async () => {
   click('Cancel');
   expect(await pr).toBe(false);
 });
+test('undo keeps hand edits made after the AI change', () => {
+  const { p, stack } = setup();
+  const f = () => p.forms[0];
+  f().code = 'Option Explicit\n\nPrivate Sub Form_Load()\nEnd Sub';
+  const r = parseFormOps(sampleReply, f());
+  if (!r.ok) throw new Error('parse');
+  stack.execute(formOpsToCommand(p, f().id, r, 'AI changes'));
+  expect(f().code).toContain('cmdOK_Click');
+  // hand edit elsewhere (inside Form_Load, before the AI span), as the code window writes it
+  f().code = f().code.replace('Private Sub Form_Load()\n', 'Private Sub Form_Load()\n    x = 1\n');
+  stack.undo();
+  expect(f().controls.map(c => c.name)).toEqual(['Text1', 'Label1']);
+  expect(f().code).toBe('Option Explicit\n\nPrivate Sub Form_Load()\n    x = 1\nEnd Sub');
+  stack.redo();
+  expect(f().code).toContain('    x = 1\n');
+  expect(f().code).toContain('cmdOK_Click');
+  // edit inside the AI span: undo restores the controls but leaves the code alone
+  f().code = f().code.replace('MsgBox "Hei "', 'MsgBox "Hallo "');
+  const edited = f().code;
+  stack.undo();
+  expect(f().controls.map(c => c.name)).toEqual(['Text1', 'Label1']);
+  expect(f().code).toBe(edited);
+});
+test('no mixed or invalid control arrays', () => {
+  const { p } = setup();
+  const f = p.forms[0];
+  f.controls.push({ ...newControl(f, 'CommandButton', { left: 0, top: 0 }, null), name: 'cmdA', index: 0 });
+  const r = parseFormOps(JSON.stringify({ ops: [
+    { op: 'add', type: 'CommandButton', name: 'Text1(1)' },     // Text1 is not an array
+    { op: 'add', type: 'Label', name: 'cmdA(1)' },              // type differs
+    { op: 'add', type: 'CommandButton', name: 'cmdA(0)' },      // index exists
+    { op: 'add', type: 'CommandButton', name: 'cmdA(1)' },      // valid new member
+  ] }), f) as any;
+  expect(r.ops.map((o: any) => `${o.name}(${o.index})`)).toEqual(['Text11(null)', 'cmdA1(null)', 'cmdA2(null)', 'cmdA(1)']);
+  expect(r.warnings).toContain('Renamed Text1 to Text11 because the name was taken.');
+});
+test('small-model quirks: op aliases, loose props, bare array, raw newlines', () => {
+  const { p } = setup();
+  const reply = '[{"op":"create","type":"Label","name":"lblA","Caption":"Line1\nLine2\tx"},{"op":"update","name":"Text1","Text":"hi"},{"op":"remove","name":"Label1"},{"op":"move","name":"Text1","Left":300}]';
+  const r = parseFormOps(reply, p.forms[0]) as any;
+  expect(r.ok).toBe(true);
+  expect(r.ops).toEqual([
+    { op: 'add', type: 'Label', name: 'lblA', index: null, container: null, props: { Caption: 'Line1\nLine2\tx' } },
+    { op: 'set', name: 'Text1', index: null, props: { Text: 'hi' } },
+    { op: 'delete', name: 'Label1', index: null },
+    { op: 'set', name: 'Text1', index: null, props: { Left: 300 } },
+  ]);
+});
+test('all ops ignored: warnings go into the details text', () => {
+  const r = parseFormOps('{"ops":[{"op":"add","type":"Slider"}]}', setup().p.forms[0]);
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.raw).toContain('Ignored unknown control type Slider.');
+});

@@ -123,7 +123,16 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   if (!form) return;
   const parsed = parseFormOps(res.text, form);
   if (!parsed.ok) { await showNotUnderstood(doc, parsed.raw); return; }
-  if (!await showFormPreview(doc, applyFormOpsToClone(form, parsed), describeOps(parsed), parsed.warnings, project.assets)) return;
+  let ok: boolean;
+  try {
+    const code = parsed.code === null ? undefined
+      : { before: form.code.replace(/\r\n?/g, '\n'), after: parsed.code, changes: parsed.codeChanges ?? [] };
+    ok = await showFormPreview(doc, applyFormOpsToClone(form, parsed), describeOps(parsed), parsed.warnings, project.assets, code);
+  } catch (e) {
+    await showNotUnderstood(doc, `${res.text}\n\nError: ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+  if (!ok) return;
   try { ide.stack.execute(formOpsToCommand(ide.project, itemId, parsed, 'AI changes')); }
   catch (e) { await warn(doc, e instanceof Error ? e.message : String(e)); }
 }

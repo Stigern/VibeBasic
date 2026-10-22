@@ -15,7 +15,7 @@ import type { ControlType, FormDef } from '../model/types';
 import { compileErrorBox } from '../ui98/dialogs';
 import { createCombo, type Combo } from '../ui98/combo';
 import { h } from '../ui98/dom';
-import { popupMenu } from '../ui98/popup';
+import { popupMenu, type PopupItem } from '../ui98/popup';
 import { createMdiWindow, type MdiWindow } from '../ui98/mdiWindow';
 import { openDesigner } from './designer';
 import type { IdeState } from './ideState';
@@ -294,6 +294,8 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
       vbHighlight, vbTheme, errField, breakExt, procEndExt,
       keymap.of([
         { key: 'Enter', run: insertNewlineKeepIndent }, { key: 'Tab', run: c => acceptCompletion(c) || insertTab(c) }, { key: 'Shift-Tab', run: indentLess },
+        // before defaultKeymap: its Mod-i (selectParentSyntax) would swallow Cmd+I (Tools > Ask AI...)
+        { key: 'Mod-i', run: () => { envs.get(ide)?.actions?.askAi?.(); return true; } },
         ...searchKeymap, ...historyKeymap, ...defaultKeymap,
       ]),
     ],
@@ -302,10 +304,41 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   win.body.append(h('div', { class: 'cw-root' }, h('div', { class: 'cw-bar' }, objCombo.el, procCombo.el), editorEl));
   view = new EditorView({ state, parent: editorEl, dispatch: (tr, v) => { v.update([tr]); onTransaction(tr, v); } });
   syncCombos();
+  // Right-click: Cut / Copy / Paste / Select All (+ Ask AI... in design mode); Copy and Select All only in run/break mode.
+  const selected = () => { const r = view.state.selection.main; return view.state.sliceDoc(r.from, r.to); };
+  const clip = (): Clipboard | undefined => (globalThis.navigator as Navigator | undefined)?.clipboard;
+  const copy = async (): Promise<void> => {
+    const t = selected();
+    if (!t) return;
+    const c = clip();
+    if (c?.writeText) { try { await c.writeText(t); return; } catch { /* fall back */ } }
+    view.focus();
+    editorEl.ownerDocument.execCommand?.('copy');
+  };
+  const cut = async (): Promise<void> => {
+    if (!selected()) return;
+    await copy();
+    view.dispatch(view.state.replaceSelection(''));
+    view.focus();
+  };
+  const paste = async (): Promise<void> => {
+    const c = clip();
+    if (c?.readText) {
+      try { const t = await c.readText(); view.dispatch(view.state.replaceSelection(norm(t))); view.focus(); return; } catch { /* fall back */ }
+    }
+    view.focus();
+    editorEl.ownerDocument.execCommand?.('paste');
+  };
+  const selectAll = () => { view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } }); view.focus(); };
   editorEl.addEventListener('contextmenu', e => {
     e.preventDefault();
-    if (ide.mode !== 'design' || !envs.get(ide)?.actions?.askAi) return;
-    popupMenu(editorEl.ownerDocument, e.clientX, e.clientY, [{ label: 'Ask AI...', action: () => envs.get(ide)?.actions?.askAi?.() }]);
+    const askAi = envs.get(ide)?.actions?.askAi;
+    const items: PopupItem[] = ide.mode === 'design'
+      ? [{ label: 'Cut', action: () => { void cut(); } }, { label: 'Copy', action: () => { void copy(); } },
+        { label: 'Paste', action: () => { void paste(); } }, { label: 'Select All', action: selectAll },
+        ...(askAi ? [{ separator: true } as const, { label: 'Ask AI...', action: () => askAi() }] : [])]
+      : [{ label: 'Copy', action: () => { void copy(); } }, { label: 'Select All', action: selectAll }];
+    popupMenu(editorEl.ownerDocument, e.clientX, e.clientY, items);
   });
 
   // ---- window / model sync -----------------------------------------------------------------------------------------

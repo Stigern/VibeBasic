@@ -50,3 +50,37 @@ test('preview dialog resolves on OK and Cancel', async () => {
   click('Cancel');
   expect(await p2).toBe(false);
 });
+
+test('header before the first procedure: declarations and attached comments only; comment above the procedure stays with it', () => {
+  const code = [
+    'Here is the updated code:',
+    "' counter for clicks",
+    'Private mCount As Integer',
+    'Private Type Pt',
+    '    X As Long',
+    'End Type',
+    'This adds a counter.',
+    '',
+    "' Handles the click",
+    'Private Sub Command1_Click()',
+    '    mCount = mCount + 1',
+    'End Sub',
+  ].join('\n');
+  const r = applyCodeProposal('Option Explicit\n\nPrivate Sub Form_Load()\nEnd Sub', code, null)!;
+  expect(r.source).toBe([
+    'Option Explicit',
+    "' counter for clicks",
+    'Private mCount As Integer',
+    'Private Type Pt',
+    '    X As Long',
+    'End Type',
+    '',
+    'Private Sub Form_Load()',
+    'End Sub',
+    '',
+    "' Handles the click",
+    'Private Sub Command1_Click()',
+    '    mCount = mCount + 1',
+    'End Sub',
+  ].join('\n'));
+});

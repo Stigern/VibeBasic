@@ -10,6 +10,15 @@ function aiEndpoint(baseUrl: string, path: string): string {
 }
 
 /** Same error texts as src-tauri/src/ai.rs. Browser fetch needs OLLAMA_ORIGINS=* on the server (development only). */
+/** `error.message` (OpenAI / Ollama) or a plain string `error` from a JSON error body. */
+function errorMessage(body: string): string | null {
+  try {
+    const e = (JSON.parse(body) as { error?: unknown } | null)?.error;
+    const m = typeof e === 'string' ? e : typeof (e as { message?: unknown } | null)?.message === 'string' ? (e as { message: string }).message : '';
+    return m.trim() || null;
+  } catch { return null; }
+}
+
 async function aiRequest(baseUrl: string, apiKey: string, path: string, init: RequestInit, timeoutSecs: number): Promise<unknown> {
   const url = aiEndpoint(baseUrl, path);
   const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) };
@@ -28,9 +37,12 @@ async function aiRequest(baseUrl: string, apiKey: string, path: string, init: Re
     clearTimeout(timer);
   }
   if (!res.ok) {
-    if (res.status === 404) throw new Error(`The AI server answered 404 Not Found for ${url}. Check the base URL. For Ollama it usually ends with /v1.`);
     if (res.status === 401 || res.status === 403) throw new Error(`The AI server refused the request (${res.status}). Check the API key.`);
-    throw new Error(`The AI server answered ${res.status} ${res.statusText}: ${text.slice(0, 200)}`);
+    const status = `${res.status}${res.statusText ? ` ${res.statusText}` : ''}`;
+    const message = errorMessage(text);
+    if (message) throw new Error(`The AI server answered ${status}: ${message}`);
+    if (res.status === 404) throw new Error(`The AI server answered 404 Not Found for ${url}. Check the base URL. For Ollama it usually ends with /v1.`);
+    throw new Error(`The AI server answered ${status}: ${text.slice(0, 200)}`);
   }
   try { return JSON.parse(text); } catch { throw new Error(AI_UNREADABLE); }
 }

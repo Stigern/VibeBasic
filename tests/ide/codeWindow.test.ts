@@ -182,3 +182,33 @@ test('member completion opens after a dot (wiring smoke)', async () => {
   await new Promise(r => setTimeout(r, 50));
   expect(currentCompletions(view.state).map(c => c.label)).toEqual(['SelLength', 'SelStart', 'SelText', 'SetFocus']);
 });
+
+test('Mod-i in the editor opens Ask AI (not selectParentSyntax)', () => {
+  const askAi = vi.fn();
+  registerCodeActions(ide, { askAi } as unknown as IdeActions, { mdiHost: host, actions: { askAi } as unknown as IdeActions });
+  set('Private Sub Command1_Click()\nEnd Sub', 3);
+  const mac = /Mac/.test(navigator.platform);
+  const ev = new KeyboardEvent('keydown', { key: 'i', keyCode: 73, metaKey: mac, ctrlKey: !mac, bubbles: true, cancelable: true });
+  view.contentDOM.dispatchEvent(ev);
+  expect(askAi).toHaveBeenCalledTimes(1);
+  expect(ev.defaultPrevented).toBe(true);
+});
+
+test('right-click menu items per mode', async () => {
+  const askAi = vi.fn();
+  registerCodeActions(ide, { askAi } as unknown as IdeActions, { mdiHost: host, actions: { askAi } as unknown as IdeActions });
+  const labels = () => [...document.querySelectorAll('.menu98 .menu98-item')].map(e => e.classList.contains('sep') ? '-' : e.textContent);
+  const menu = () => { document.querySelectorAll('.menu98').forEach(m => m.remove()); view.dom.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })); return labels(); };
+  expect(menu()).toEqual(['Cut', 'Copy', 'Paste', 'Select All', '-', 'Ask AI...']);
+  // Select All + Cut work on the editor
+  set('abc');
+  (document.querySelectorAll('.menu98 .menu98-item')[3] as HTMLElement).click();
+  expect(view.state.selection.main.to - view.state.selection.main.from).toBe(3);
+  menu();
+  (document.querySelector('.menu98 .menu98-item') as HTMLElement).click();
+  await vi.waitFor(() => expect(cw.getSource()).toBe(''));
+  ide.setMode('run');
+  expect(menu()).toEqual(['Copy', 'Select All']);
+  ide.setMode('break');
+  expect(menu()).toEqual(['Copy', 'Select All']);
+});

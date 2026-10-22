@@ -41,15 +41,27 @@ fn map_send_error(e: &reqwest::Error, base_url: &str, timeout_secs: u64) -> Stri
   }
 }
 
+/// `error.message` (OpenAI / Ollama) or a plain string `error` from a JSON error body.
+fn body_message(body: &str) -> Option<String> {
+  let v: Value = serde_json::from_str(body).ok()?;
+  let e = v.get("error")?;
+  let m = e.get("message").and_then(Value::as_str).or_else(|| e.as_str())?.trim();
+  (!m.is_empty()).then(|| m.to_string())
+}
+
 fn status_error(status: reqwest::StatusCode, url: &str, body: &str) -> String {
-  match status.as_u16() {
-    404 => format!("The AI server answered 404 Not Found for {url}. Check the base URL. For Ollama it usually ends with /v1."),
-    401 | 403 => format!("The AI server refused the request ({}). Check the API key.", status.as_u16()),
-    _ => {
-      let head: String = body.chars().take(200).collect();
-      format!("The AI server answered {status}: {head}")
-    }
+  let code = status.as_u16();
+  if code == 401 || code == 403 {
+    return format!("The AI server refused the request ({code}). Check the API key.");
   }
+  if let Some(m) = body_message(body) {
+    return format!("The AI server answered {status}: {m}");
+  }
+  if code == 404 {
+    return format!("The AI server answered 404 Not Found for {url}. Check the base URL. For Ollama it usually ends with /v1.");
+  }
+  let head: String = body.chars().take(200).collect();
+  format!("The AI server answered {status}: {head}")
 }
 
 /// Sends the request and returns the parsed JSON body, or a readable error text.
@@ -190,6 +202,23 @@ mod tests {
     });
     let e = chat(&server.url("/v1"), &None, "m", &msgs()).await.unwrap_err();
     assert!(e.starts_with("The AI server answered 404 Not Found"), "{e}");
+  }
+
+  #[tokio::test]
+  async fn error_message_from_json_body() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions");
+      then.status(404).json_body(json!({"error":{"message":"model \"x\" not found, try pulling it first"}}));
+    });
+    server.mock(|when, then| {
+      when.method(GET).path("/v1/models");
+      then.status(500).json_body(json!({"error":"out of memory"}));
+    });
+    let e = chat(&server.url("/v1"), &None, "x", &msgs()).await.unwrap_err();
+    assert_eq!(e, "The AI server answered 404 Not Found: model \"x\" not found, try pulling it first");
+    let e = list_models(&server.url("/v1"), &None).await.unwrap_err();
+    assert_eq!(e, "The AI server answered 500 Internal Server Error: out of memory");
   }
 
   #[tokio::test]

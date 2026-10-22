@@ -83,3 +83,10 @@ test('test connection error shown', async () => {
   okButton().click();
   await p;
 });
+test('a failed save is reported', async () => {
+  const b = { ...fakeBackend(), saveSettings: async () => { throw new Error('disk full'); } };
+  const tab = buildAiTab(b, document);
+  tab.apply();
+  await vi.waitFor(() => expect(document.querySelector('.dlg98')?.textContent).toContain('Could not save the AI settings: disk full'));
+  okButton().click();
+});

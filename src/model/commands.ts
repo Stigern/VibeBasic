@@ -204,18 +204,55 @@ export function setPropertyCmd(formId: string, targetId: string | 'form', name: 
   };
 }
 
-/** Replaces the code of a form or module (AI proposals). Undo restores the old code. */
+/** Common prefix length and common suffix length (not overlapping the prefix) of two strings. */
+function commonEnds(a: string, b: string): [number, number] {
+  let s = 0;
+  while (s < a.length && s < b.length && a[s] === b[s]) s++;
+  let e = 0;
+  while (e < a.length - s && e < b.length - s && a[a.length - 1 - e] === b[b.length - 1 - e]) e++;
+  return [s, e];
+}
+
+/**
+ * Changes the code of a form or module (AI proposals). Only the changed span is recorded: the code window writes
+ * keystrokes straight to `code`, so undo/redo swap just that span back, and only while it is still intact
+ * (hand edits elsewhere are kept). If the span was edited by hand, undo/redo leave the code alone (no throw).
+ */
 export function setCodeCmd(itemId: string, newCode: string): Command {
-  let old = '';
-  const itemOf = (p: Project): { code: string } => {
-    const it = p.forms.find(f => f.id === itemId) ?? p.modules.find(m => m.id === itemId);
-    if (!it) throw new Error(`Code item not found: ${itemId}`);
-    return it;
+  const find = (p: Project): { code: string } | undefined => p.forms.find(f => f.id === itemId) ?? p.modules.find(m => m.id === itemId);
+  let span: { at: number; oldText: string; newText: string } | null = null;
+  let last = '';            // the code right after our last write
+  let showing: 'new' | 'old' = 'new';
+  let detached = false;     // the span was edited by hand: undo/redo no longer touch the code
+  const swap = (p: Project, want: 'new' | 'old') => {
+    const it = find(p);
+    if (!it || !span || detached || showing === want) return;
+    const cur = it.code;
+    const present = want === 'old' ? span.newText : span.oldText;
+    const next = want === 'old' ? span.oldText : span.newText;
+    let at = -1;
+    if (cur === last) at = span.at;
+    else {
+      const [s, e] = commonEnds(last, cur);
+      if (last.length - e <= span.at) at = span.at + cur.length - last.length;      // edits before the span only
+      else if (s >= span.at + present.length) at = span.at;                          // edits after the span only
+      else if (present && cur.indexOf(present) >= 0 && cur.indexOf(present) === cur.lastIndexOf(present)) at = cur.indexOf(present);
+    }
+    if (at < 0 || cur.slice(at, at + present.length) !== present) { detached = true; return; }
+    it.code = cur.slice(0, at) + next + cur.slice(at + present.length);
+    span.at = at; last = it.code; showing = want;
   };
   return {
     label: 'Change code',
-    do(p) { const it = itemOf(p); old = it.code; it.code = newCode; },
-    undo(p) { itemOf(p).code = old; },
+    do(p) {
+      if (span) { swap(p, 'new'); return; }
+      const it = find(p);
+      if (!it) throw new Error(`Code item not found: ${itemId}`);
+      const [s, e] = commonEnds(it.code, newCode);
+      span = { at: s, oldText: it.code.slice(s, it.code.length - e), newText: newCode.slice(s, newCode.length - e) };
+      it.code = newCode; last = newCode; showing = 'new';
+    },
+    undo(p) { swap(p, 'old'); },
   };
 }
 

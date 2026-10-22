@@ -33,9 +33,14 @@ export async function showCodePreview(doc: Document, before: string, after: stri
   return v === 'ok';
 }
 
-/** Form preview: the list of changes (warnings in grey) beside a read-only rendering of the result, at most 320 px wide. */
+type CodeChange = Parameters<typeof showCodePreview>[3][number];
+
+/**
+ * Form preview: the list of changes (warnings in grey) beside a read-only rendering of the result, at most 320 px wide.
+ * With `code`, the "Code..." button shows the proposed code change (informational; its OK/Cancel just close it).
+ */
 export async function showFormPreview(doc: Document, after: FormDef, lines: string[], warnings: string[],
-  assets: Record<string, Asset> = {}): Promise<boolean> {
+  assets: Record<string, Asset> = {}, code?: { before: string; after: string; changes: CodeChange[] }): Promise<boolean> {
   const surface = renderFormSurface(after, 'design', ref => {
     const a = assets[ref.asset];
     return a ? `data:${a.mime};base64,${a.dataBase64}` : null;
@@ -50,9 +55,13 @@ export async function showFormPreview(doc: Document, after: FormDef, lines: stri
     ...(lines.length ? lines : ['(no changes)']).map(t => h('div', { class: 'ai-op' }, t)),
     ...warnings.map(t => h('div', { class: 'ai-warning', style: 'color:#808080;margin-top:4px' }, t)));
   const content = h('div', { style: 'display:flex;gap:8px;align-items:flex-start' }, left, frame);
-  const v = await showDialog98(doc, {
-    title: 'AI Suggestion', content,
-    buttons: [{ label: 'OK', value: 'ok', default: true }, { label: 'Cancel', value: 'cancel', cancel: true }],
-  });
-  return v === 'ok';
+  for (;;) {
+    const v = await showDialog98(doc, {
+      title: 'AI Suggestion', content,
+      buttons: [{ label: 'OK', value: 'ok', default: true }, { label: 'Cancel', value: 'cancel', cancel: true },
+        { label: 'Code...', value: 'code', disabled: !code }],
+    });
+    if (v !== 'code' || !code) return v === 'ok';
+    await showCodePreview(doc, code.before, code.after, code.changes);
+  }
 }

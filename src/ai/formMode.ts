@@ -32,7 +32,7 @@ function resolveType(raw: string): Exclude<ControlType, 'Form'> | null {
   return ALIASES[low] ?? null;
 }
 
-/** Removes `//` comments and trailing commas outside strings. */
+/** Removes `//` comments and trailing commas outside strings; escapes raw newlines and tabs inside strings. */
 function sanitizeJson(s: string): string {
   let out = '';
   for (let i = 0; i < s.length; i++) {
@@ -40,7 +40,7 @@ function sanitizeJson(s: string): string {
     if (c === '"') {
       let j = i + 1;
       while (j < s.length && s[j] !== '"') j += s[j] === '\\' ? 2 : 1;
-      out += s.slice(i, j + 1);
+      out += s.slice(i, j + 1).replace(/\r?\n/g, '\\n').replace(/\t/g, '\\t').replace(/\r/g, '\\r');
       i = j;
     } else if (c === '/' && s[i + 1] === '/') {
       while (i < s.length && s[i] !== '\n') i++;
@@ -57,9 +57,23 @@ function sanitizeJson(s: string): string {
 
 function parseJsonLoose(reply: string): unknown {
   const text = stripThinking(reply);
-  const a = text.indexOf('{'), b = text.lastIndexOf('}');
+  const o = text.indexOf('{'), q = text.indexOf('[');
+  // a bare top-level array of ops is accepted too
+  const [open, close] = q >= 0 && (o < 0 || q < o) ? ['[', ']'] : ['{', '}'];
+  const a = text.indexOf(open), b = text.lastIndexOf(close);
   if (a < 0 || b <= a) return undefined;
   try { return JSON.parse(sanitizeJson(text.slice(a, b + 1))); } catch { return undefined; }
+}
+
+/** Op names small models use instead of add / set / delete / form. */
+const OP_ALIASES: Record<string, string> = {
+  remove: 'delete', update: 'set', modify: 'set', change: 'set', move: 'set', edit: 'set', create: 'add', insert: 'add',
+};
+const OP_KEYS = new Set(['op', 'type', 'name', 'container', 'index', 'props']);
+/** The op's props; without a `props` object, loose top-level keys (e.g. {"op":"set","name":"X","Caption":"y"}) count. */
+function propsOf(raw: Record<string, unknown>): Record<string, unknown> {
+  if (isObj(raw.props)) return raw.props;
+  return Object.fromEntries(Object.entries(raw).filter(([k]) => !OP_KEYS.has(k.toLowerCase())));
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -102,36 +116,44 @@ const GEO = ['Left', 'Top', 'Width', 'Height'];
 
 export function parseFormOps(reply: string, form: FormDef): ParsedFormOps {
   const fail: ParsedFormOps = { ok: false, error: NOT_UNDERSTOOD, raw: reply };
-  const json = parseJsonLoose(reply);
-  if (!isObj(json)) return fail;
+  const parsedJson = parseJsonLoose(reply);
+  const json: Record<string, unknown> | undefined = Array.isArray(parsedJson) ? { ops: parsedJson } : isObj(parsedJson) ? parsedJson : undefined;
+  if (!json) return fail;
   const rawOps = Array.isArray(json.ops) ? json.ops : [];
   const warnings: string[] = [];
   const ops: FormOp[] = [];
   // Working picture of the form's controls while the ops are read (names, types, containers).
   const work: FormDef = { ...form, controls: form.controls.map(c => ({ ...c, props: {} })) };
   const taken = (n: string, i: number | null): boolean => work.controls.some(c => c.name.toLowerCase() === n.toLowerCase() && (i === null || c.index === i));
+  /** A new control may only join an existing name as a further member of a control array of the same type. */
+  const clashes = (n: string, i: number | null, type: ControlType): boolean => {
+    const same = work.controls.filter(c => c.name.toLowerCase() === n.toLowerCase());
+    return same.length > 0 && (i === null || same.some(c => c.index === null || c.type !== type || c.index === i));
+  };
   const find = (n: string, i: number | null) => work.controls.filter(c => c.name.toLowerCase() === n.toLowerCase() && (i === null || c.index === i));
 
   for (const raw of rawOps) {
     if (!isObj(raw) || typeof raw.op !== 'string') continue;
-    const kind = raw.op.trim().toLowerCase();
+    const low = raw.op.trim().toLowerCase();
+    const kind = OP_ALIASES[low] ?? low;
     if (kind === 'form') {
-      const props = parseProps('Form', raw.props, 'Form', warnings);
+      const props = parseProps('Form', propsOf(raw), 'Form', warnings);
       if (Object.keys(props).length) ops.push({ op: 'form', props });
     } else if (kind === 'add') {
       const typeName = typeof raw.type === 'string' ? raw.type : '';
       const type = resolveType(typeName);
       if (!type) { warnings.push(`Ignored unknown control type ${typeName}.`); continue; }
-      const rawProps = isObj(raw.props) ? raw.props : {};
+      const rawProps = propsOf(raw);
       const given = typeof raw.name === 'string' && raw.name.trim() ? raw.name : typeof rawProps.Name === 'string' ? rawProps.Name : '';
       let { name, index } = splitName(given);
       if (index === null && typeof rawProps.Index === 'number' && rawProps.Index >= 0) index = Math.floor(rawProps.Index);
+      if (index === null && typeof raw.index === 'number' && raw.index >= 0) index = Math.floor(raw.index);
       if (!name) name = nextDefaultName(work, type);
       else if (!validateName(name)) {
         const fixed = nextDefaultName(work, type);
         warnings.push(`Renamed ${name} to ${fixed} because the name was not valid.`);
         name = fixed; index = null;
-      } else if (taken(name, index)) {
+      } else if (clashes(name, index, type)) {
         let n = 1;
         while (taken(`${name}${n}`, null)) n++;
         warnings.push(`Renamed ${name} to ${name}${n} because the name was taken.`);
@@ -154,6 +176,7 @@ export function parseFormOps(reply: string, form: FormDef): ParsedFormOps {
       ops.push({ op: 'add', type, name, index, container, props });
     } else if (kind === 'set' || kind === 'delete') {
       const s = splitName(typeof raw.name === 'string' ? raw.name : '');
+      if (s.index === null && typeof raw.index === 'number' && raw.index >= 0) s.index = Math.floor(raw.index);
       const targets = s.name ? find(s.name, s.index) : [];
       if (!targets.length) { warnings.push(`Ignored change to missing control ${label(s.name, s.index)}.`); continue; }
       if (kind === 'delete') {
@@ -165,7 +188,7 @@ export function parseFormOps(reply: string, form: FormDef): ParsedFormOps {
         work.controls = work.controls.filter(c => !gone.has(c.id));
         ops.push({ op: 'delete', name: targets[0].name, index: s.index });
       } else {
-        const props = parseProps(targets[0].type, raw.props, label(targets[0].name, s.index), warnings);
+        const props = parseProps(targets[0].type, propsOf(raw), label(targets[0].name, s.index), warnings);
         if (Object.keys(props).length) ops.push({ op: 'set', name: targets[0].name, index: s.index, props });
       }
     } else warnings.push(`Ignored unknown operation ${raw.op}.`);
@@ -178,7 +201,7 @@ export function parseFormOps(reply: string, form: FormDef): ParsedFormOps {
     const r = applyCodeProposal(form.code, text, null);
     if (r) { code = r.source; codeChanges = r.changes; } else warnings.push('Ignored code that could not be merged into the form.');
   }
-  if (!ops.length && code === null) return fail;
+  if (!ops.length && code === null) return warnings.length ? { ...fail, raw: `${reply}\n\nIgnored:\n${warnings.join('\n')}` } : fail;
   return { ok: true, ops, code, warnings, ...(codeChanges ? { codeChanges } : {}) };
 }
 

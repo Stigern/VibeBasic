@@ -169,3 +169,28 @@ test('disabled during run', () => {
   s.setMode('break');
   expect(item().enabled!()).toBe(false);
 });
+
+test('form preview Code... button shows the proposed code', async () => {
+  const s = ide('designer');
+  const reply = '{"ops":[{"op":"set","name":"Command1","props":{"Caption":"Go"}}],"code":"Private Sub Command1_Click()\\n    MsgBox \\"x\\"\\nEnd Sub"}';
+  const p = askAi(s, fakeBackend('m', async () => reply), { codeWindowFor: () => null });
+  await enterPrompt('x');
+  await vi.waitFor(() => expect(btn('Code...')).toBeTruthy());
+  expect(btn('Code...')!.disabled).toBe(false);
+  click('Code...');
+  await vi.waitFor(() => expect(document.querySelector('.ai-after')?.textContent).toContain('MsgBox "x"'));
+  click('Cancel');   // closes the code view only
+  await vi.waitFor(() => expect(btn('Code...')).toBeTruthy());
+  click('OK');
+  await p;
+  expect(s.project.forms[0].code).toContain('MsgBox "x"');
+});
+
+test('form preview Code... is disabled without code', async () => {
+  const p = askAi(ide('designer'), fakeBackend('m', async () => '{"ops":[{"op":"delete","name":"Command1"}]}'), { codeWindowFor: () => null });
+  await enterPrompt('x');
+  await vi.waitFor(() => expect(btn('Code...')).toBeTruthy());
+  expect(btn('Code...')!.disabled).toBe(true);
+  click('Cancel');
+  await p;
+});

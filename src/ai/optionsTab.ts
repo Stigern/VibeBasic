@@ -43,7 +43,9 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
       field('Base URL:', baseUrl), field('Model:', model.el), field('API Key (optional):', apiKey), test,
       h('div', {}, 'For Ollama on another PC use http://<its IP>:11434/v1')),
     apply() {
-      void loading.then(() => saveAiSettings(backend, { baseUrl: baseUrl.value.trim(), model: model.getValue().trim(), apiKey: apiKey.value }));
+      void loading
+        .then(() => saveAiSettings(backend, { baseUrl: baseUrl.value.trim(), model: model.getValue().trim(), apiKey: apiKey.value }))
+        .catch(e => messageBox98(doc, { prompt: `Could not save the AI settings: ${e instanceof Error ? e.message : String(e)}`, title: 'VibeBasic', buttons: 48 }));
     },
     // exposed for tests
     controls: { baseUrl, model, apiKey, test, testConnection },
