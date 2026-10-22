@@ -12,7 +12,7 @@ import { askAi } from '../ai/askDialog';
 import { getCodeWindow, openCodeWindow, registerCodeActions } from './codeWindow';
 import { openDesigner, registerDesignerActions } from './designer';
 import { createPropertiesWindow, type PropertiesWindow } from './properties';
-import { createToolbox } from './toolbox';
+import { attachToolboxWindow, createToolbox, type ToolboxLayout } from './toolbox';
 import { createProjectExplorer, registerProjectActions, type ProjectExplorer } from './projectExplorer';
 import { showProjectProperties } from './projectDialogs';
 import { showOptions } from './optionsDialog';
@@ -101,6 +101,12 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     tb('toolbox', 'Toolbox', 'viewToolbox'),
   ]);
   createToolbox(layout.toolboxHost, state);
+  const tbxPane = layout.panes.toolbox.el;
+  const toolboxWin = attachToolboxWindow({
+    pane: tbxPane, bar: tbxPane.querySelector(':scope > .title-bar')!, grid: layout.toolboxHost.querySelector('.tbx98-grid')!,
+    area: layout.mainArea, save: l => { void backend.saveSettings('toolbox', l).catch(() => {}); },
+  });
+  void backend.loadSettings<Partial<ToolboxLayout>>('toolbox').then(l => { if (l && typeof l === 'object') toolboxWin.setLayout(l); }).catch(() => {});
   explorer = createProjectExplorer(layout.projectHost, state, env);
   propsWin = createPropertiesWindow(layout.propertiesHost, state, { backend });
   bindShortcuts(menus, window);

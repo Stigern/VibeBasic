@@ -12,6 +12,8 @@ export interface IdeLayout {
   menubarHost: HTMLElement;
   toolbarHost: HTMLElement;
   toolboxHost: HTMLElement;
+  /** The area below menu/toolbar (toolbox, MDI, right panes); the floating Toolbox is confined to it. */
+  mainArea: HTMLElement;
   /** The grey MDI area (#808080); designer and code windows are createMdiWindow(mdiHost, ...). */
   mdiHost: HTMLElement;
   projectHost: HTMLElement;
@@ -50,7 +52,8 @@ export function buildLayout(root: HTMLElement): IdeLayout {
   const split = h('div', { class: 'ide98-split', title: 'Drag to resize' });
   right.append(panes.project.el, split, panes.properties.el);
   const center = h('div', { class: 'ide98-center' }, mdiHost, panes.immediate.el);
-  root.append(menubarHost, toolbarHost, h('div', { class: 'ide98-main' }, panes.toolbox.el, center, right), statusHost);
+  const mainArea = h('div', { class: 'ide98-main' }, panes.toolbox.el, center, right);
+  root.append(menubarHost, toolbarHost, mainArea, statusHost);
 
   split.addEventListener('mousedown', e => {
     e.preventDefault();
@@ -66,7 +69,7 @@ export function buildLayout(root: HTMLElement): IdeLayout {
   });
 
   layout = {
-    root, menubarHost, toolbarHost, mdiHost, statusHost, panes,
+    root, menubarHost, toolbarHost, mainArea, mdiHost, statusHost, panes,
     toolboxHost: panes.toolbox.body, projectHost: panes.project.body,
     propertiesHost: panes.properties.body, immediateHost: panes.immediate.body,
     setPaneVisible(name, visible) { panes[name].el.classList.toggle('hidden', !visible); },
