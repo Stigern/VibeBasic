@@ -15,7 +15,7 @@ export type FormOp =
   | { op: 'delete'; name: string; index: number | null }
   | { op: 'form'; props: Record<string, PropValue> };
 export type ParsedFormOps =
-  | { ok: true; ops: FormOp[]; code: string | null; warnings: string[]; codeChanges?: CodeApplyResult['changes'] }
+  | { ok: true; ops: FormOp[]; code: string | null; warnings: string[]; codeChanges?: CodeApplyResult['changes']; codeText?: string }
   | { ok: false; error: string; raw: string };
 type Ok = Extract<ParsedFormOps, { ok: true }>;
 
@@ -114,7 +114,8 @@ function parseProps(type: ControlType, rawProps: unknown, owner: string, warning
 
 const GEO = ['Left', 'Top', 'Width', 'Height'];
 
-export function parseFormOps(reply: string, form: FormDef): ParsedFormOps {
+/** `fixCode` may rewrite the AI's code text (before it is merged into the form's code). */
+export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: string) => string): ParsedFormOps {
   const fail: ParsedFormOps = { ok: false, error: NOT_UNDERSTOOD, raw: reply };
   const parsedJson = parseJsonLoose(reply);
   const json: Record<string, unknown> | undefined = Array.isArray(parsedJson) ? { ops: parsedJson } : isObj(parsedJson) ? parsedJson : undefined;
@@ -196,13 +197,15 @@ export function parseFormOps(reply: string, form: FormDef): ParsedFormOps {
 
   let code: string | null = null;
   let codeChanges: CodeApplyResult['changes'] | undefined;
+  let text: string | undefined;
   if (typeof json.code === 'string' && json.code.trim()) {
-    const text = json.code.includes('```') ? extractCode(json.code) ?? json.code : json.code;
+    const extracted = json.code.includes('```') ? extractCode(json.code) ?? json.code : json.code;
+    text = fixCode ? fixCode(extracted) : extracted;
     const r = applyCodeProposal(form.code, text, null);
     if (r) { code = r.source; codeChanges = r.changes; } else warnings.push('Ignored code that could not be merged into the form.');
   }
   if (!ops.length && code === null) return warnings.length ? { ...fail, raw: `${reply}\n\nIgnored:\n${warnings.join('\n')}` } : fail;
-  return { ok: true, ops, code, warnings, ...(codeChanges ? { codeChanges } : {}) };
+  return { ok: true, ops, code, warnings, ...(codeChanges ? { codeChanges } : {}), ...(code !== null && text !== undefined ? { codeText: text } : {}) };
 }
 
 const quote = (s: string) => `"${s.replace(/"/g, '""')}"`;

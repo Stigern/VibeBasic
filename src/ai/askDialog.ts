@@ -12,6 +12,8 @@ import { buildCodeRequest, buildFormRequest } from './context';
 import { NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
 import { showCodePreview, showFormPreview } from './previewDialogs';
 import { loadAiSettings } from './settings';
+import type { ChatMessage } from './types';
+import { autoFixEventNames, validateCode } from './validate';
 
 const VB_EXCLAMATION = 48;
 const TITLE = 'VibeBasic';
@@ -54,10 +56,10 @@ async function promptDialog(doc: Document, title: string): Promise<string | null
 type Waited = { kind: 'reply'; text: string } | { kind: 'error'; message: string } | { kind: 'cancel' };
 
 /** Waiting dialog with a back-and-forth progress bar. Cancel closes it; a reply arriving afterwards is discarded. */
-async function waitForReply(doc: Document, model: string, request: Promise<string>): Promise<Waited> {
+async function waitForReply(doc: Document, model: string, request: Promise<string>, label = `Waiting for ${model}...`): Promise<Waited> {
   const block = h('div', { style: 'position:absolute;top:1px;bottom:1px;left:0;width:40px;background:#000080' });
   const bar = h('div', { class: 'ai-progress', style: 'position:relative;height:16px;margin-top:8px;overflow:hidden;box-shadow:inset -1px -1px #fff,inset 1px 1px #808080' }, block);
-  const content = h('div', { style: 'min-width:260px' }, h('div', {}, `Waiting for ${model}...`), bar);
+  const content = h('div', { style: 'min-width:260px' }, h('div', {}, label), bar);
   let pos = 0, dir = 1;
   const timer = setInterval(() => {
     const max = Math.max(0, bar.clientWidth - 40);
@@ -95,41 +97,85 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   const prompt = await promptDialog(doc, `Ask AI - ${item.name} (${codeMode ? 'Code' : 'Form'})`);
   if (prompt === null) return;
 
-  let request: Promise<string>;
-  try {
-    const messages = codeMode
-      ? buildCodeRequest(project, itemId, codeWin!.getCursorLine(), prompt)
-      : buildFormRequest(project, itemId, prompt);
-    request = backend.aiChat(settings.baseUrl, settings.apiKey, settings.model, messages);
-  } catch (e) { request = Promise.reject(e); }
-  const res = await waitForReply(doc, settings.model, request);
+  const effort = settings.thinking === 'server' ? undefined : settings.thinking;
+  const send = (build: () => ChatMessage[]): Promise<string> => {
+    try { return backend.aiChat(settings.baseUrl, settings.apiKey, settings.model, build(), effort); }
+    catch (e) { return Promise.reject(e); }
+  };
+  const form = project.forms.find(f => f.id === itemId) ?? null;
+  const moduleName = item.name;
+
+  // One answer, understood: fixed event names, the problems left in it, and what the preview needs.
+  type Analysis =
+    | { kind: 'code'; applied: NonNullable<ReturnType<typeof applyCodeProposal>>; notes: string[]; problems: string[] }
+    | { kind: 'form'; parsed: Extract<ReturnType<typeof parseFormOps>, { ok: true }>; notes: string[]; problems: string[] };
+  const fixer = (notes: string[]) => (code: string): string => {
+    if (!form) return code;
+    const r = autoFixEventNames(code, form.name);
+    notes.push(...r.notes);
+    return r.code;
+  };
+  const analyse = (text: string): Analysis | null => {
+    const notes: string[] = [];
+    if (codeMode) {
+      const raw = extractCode(text);
+      if (raw === null) return null;
+      const code = fixer(notes)(raw);
+      const before = codeWin!.getSource();
+      const proc = listProcedures(before).find(p => codeWin!.getCursorLine() >= p.line && codeWin!.getCursorLine() <= p.endLine)?.name ?? null;
+      const applied = applyCodeProposal(before, code, proc);
+      if (!applied) return null;
+      return { kind: 'code', applied, notes, problems: validateCode(code, { moduleName, form }) };
+    }
+    if (!form) return null;
+    const parsed = parseFormOps(text, form, fixer(notes));
+    if (!parsed.ok) return null;
+    const extra = parsed.ops.filter((o): o is Extract<typeof o, { op: 'add' }> => o.op === 'add').map(o => ({ name: o.name, type: o.type }));
+    const problems = parsed.codeText === undefined ? [] : validateCode(parsed.codeText, { moduleName, form, extraControls: extra });
+    return { kind: 'form', parsed, notes, problems };
+  };
+
+  const messages = (() => { try { return codeMode ? buildCodeRequest(project, itemId, codeWin!.getCursorLine(), prompt) : buildFormRequest(project, itemId, prompt); } catch { return null; } })();
+  const res = await waitForReply(doc, settings.model, send(() => { if (!messages) throw new Error('Could not build the request.'); return messages; }));
   if (res.kind === 'cancel') return;
   if (res.kind === 'error') { await warn(doc, res.message); return; }
   if (ide.project !== project) return;   // a different project was opened meanwhile
 
-  if (codeMode) {
+  let reply = res.text;
+  let result = analyse(reply);
+  if (result && result.problems.length && messages) {
+    // One retry: tell the model what is wrong and keep the first answer if the second is no better understood.
+    const followUp: ChatMessage[] = [...messages, { role: 'assistant', content: reply },
+      { role: 'user', content: `Your answer has these problems:\n${result.problems.map(p => `- ${p}`).join('\n')}\nFix them and answer again in exactly the same format.` }];
+    const again = await waitForReply(doc, settings.model, send(() => followUp), 'Checking and fixing...');
+    if (again.kind === 'cancel') return;
+    if (ide.project !== project) return;
+    if (again.kind === 'reply') {
+      const second = analyse(again.text);
+      if (second) { result = second; reply = again.text; }
+    }
+  }
+  if (!result) { await showNotUnderstood(doc, reply); return; }
+  const warnings = [...result.notes, ...result.problems];
+
+  if (result.kind === 'code') {
     const win = codeWin!;
-    const code = extractCode(res.text);
     const before = win.getSource();
-    const proc = listProcedures(before).find(p => win.getCursorLine() >= p.line && win.getCursorLine() <= p.endLine)?.name ?? null;
-    const applied = code === null ? null : applyCodeProposal(before, code, proc);
-    if (!applied) { await showNotUnderstood(doc, res.text); return; }
-    if (!await showCodePreview(doc, before.replace(/\r\n?/g, '\n'), applied.source, applied.changes)) return;
+    const { applied } = result;
+    if (!await showCodePreview(doc, before.replace(/\r\n?/g, '\n'), applied.source, applied.changes, warnings)) return;
     win.applyChange(0, win.getSource().length, applied.source);
     return;
   }
 
-  const form = project.forms.find(f => f.id === itemId);
+  const { parsed } = result;
   if (!form) return;
-  const parsed = parseFormOps(res.text, form);
-  if (!parsed.ok) { await showNotUnderstood(doc, parsed.raw); return; }
   let ok: boolean;
   try {
     const code = parsed.code === null ? undefined
       : { before: form.code.replace(/\r\n?/g, '\n'), after: parsed.code, changes: parsed.codeChanges ?? [] };
-    ok = await showFormPreview(doc, applyFormOpsToClone(form, parsed), describeOps(parsed), parsed.warnings, project.assets, code);
+    ok = await showFormPreview(doc, applyFormOpsToClone(form, parsed), describeOps(parsed), [...parsed.warnings, ...warnings], project.assets, code);
   } catch (e) {
-    await showNotUnderstood(doc, `${res.text}\n\nError: ${e instanceof Error ? e.message : String(e)}`);
+    await showNotUnderstood(doc, `${reply}\n\nError: ${e instanceof Error ? e.message : String(e)}`);
     return;
   }
   if (!ok) return;

@@ -5,7 +5,11 @@ import { field } from '../ide/projectDialogs';
 import { createCombo } from '../ui98/combo';
 import { messageBox98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
-import { defaultAiSettings, loadAiSettings, saveAiSettings } from './settings';
+import { THINKING_LEVELS, defaultAiSettings, loadAiSettings, saveAiSettings } from './settings';
+import type { Thinking } from './types';
+
+const THINKING_LABELS: Record<Thinking, string> = { server: 'Server default', low: 'Low (fast)', medium: 'Medium', high: 'High (thorough)' };
+const thinkingOf = (label: string): Thinking => THINKING_LEVELS.find(t => THINKING_LABELS[t] === label) ?? 'server';
 
 type AiBackend = Pick<Backend, 'loadSettings' | 'saveSettings' | 'aiListModels'>;
 
@@ -13,14 +17,16 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
   const d = defaultAiSettings();
   const baseUrl = h('input', { type: 'text', value: d.baseUrl });
   const model = createCombo({ items: [], value: d.model, editable: true, onChange: () => { dirty.model = true; } });
+  const thinking = createCombo({ items: THINKING_LEVELS.map(t => THINKING_LABELS[t]), value: THINKING_LABELS[d.thinking], editable: false, onChange: () => { dirty.thinking = true; } });
   const apiKey = h('input', { type: 'password', value: '', autocomplete: 'off' });
   const test = h('button', { type: 'button' }, 'Test Connection');
-  const dirty = { baseUrl: false, apiKey: false, model: false };
+  const dirty = { baseUrl: false, apiKey: false, model: false, thinking: false };
   baseUrl.addEventListener('input', () => { dirty.baseUrl = true; });
   apiKey.addEventListener('input', () => { dirty.apiKey = true; });
   const loading = loadAiSettings(backend).then(s => {
     if (!dirty.baseUrl) baseUrl.value = s.baseUrl;
     if (!dirty.apiKey) apiKey.value = s.apiKey;
+    if (!dirty.thinking) thinking.setValue(THINKING_LABELS[s.thinking]);
     if (!dirty.model) { model.setValue(s.model); if (s.model) model.setItems([s.model]); }
   }).catch(() => {});
 
@@ -43,15 +49,16 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
   return {
     label: 'AI',
     content: h('div', { class: 'dlgform98' },
-      field('Base URL:', baseUrl), field('Model:', model.el), field('API Key (optional):', apiKey), test,
-      h('div', {}, 'For Ollama on another PC use http://<its IP>:11434/v1')),
+      field('Base URL:', baseUrl), field('Model:', model.el), field('API Key (optional):', apiKey), field('Thinking:', thinking.el), test,
+      h('div', {}, 'For Ollama on another PC use http://<its IP>:11434/v1'),
+      h('div', {}, 'Thinking level is sent to vLLM/Qwen servers. Use Server default for other servers.')),
     apply() {
       void loading
-        .then(() => saveAiSettings(backend, { baseUrl: baseUrl.value.trim(), model: model.getValue().trim(), apiKey: apiKey.value }))
+        .then(() => saveAiSettings(backend, { baseUrl: baseUrl.value.trim(), model: model.getValue().trim(), apiKey: apiKey.value, thinking: thinkingOf(thinking.getValue()) }))
         .catch(e => messageBox98(doc, { prompt: `Could not save the AI settings: ${e instanceof Error ? e.message : String(e)}`, title: 'VibeBasic', buttons: 48 }));
     },
     // exposed for tests
-    controls: { baseUrl, model, apiKey, test, testConnection },
+    controls: { baseUrl, model, apiKey, thinking, test, testConnection },
   };
 }
 

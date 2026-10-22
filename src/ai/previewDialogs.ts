@@ -10,7 +10,7 @@ const CELL = 'margin:0;padding:0 3px;white-space:pre;font:13px "Courier New",mon
 
 /** Before/After view of a code change. Resolves true on OK, false on Cancel. */
 export async function showCodePreview(doc: Document, before: string, after: string,
-  changes: { name: string; kind: 'replaced' | 'added' | 'body' | 'declarations' }[]): Promise<boolean> {
+  changes: { name: string; kind: 'replaced' | 'added' | 'body' | 'declarations' }[], warnings: string[] = []): Promise<boolean> {
   const left = h('div', { class: 'ai-before', style: 'min-width:0' });
   const right = h('div', { class: 'ai-after', style: 'min-width:0' });
   const cell = (text: string, bg: string, cls = '') => h('div', { class: cls, style: `${CELL}background:${bg}` }, text);
@@ -25,7 +25,8 @@ export async function showCodePreview(doc: Document, before: string, after: stri
   const list = h('ul', { class: 'ai-changes', style: 'margin:8px 0 0;padding-left:18px' },
     ...changes.map(c => h('li', {}, `${KIND_LABEL[c.kind]} ${c.name}`)));
   const content = h('div', {}, h('div', { style: 'display:flex;gap:8px' }, col('Before', left), col('After', right)),
-    h('div', { style: 'margin-top:8px' }, 'Changes:'), list);
+    h('div', { style: 'margin-top:8px' }, 'Changes:'), list,
+    ...warnings.map(t => h('div', { class: 'ai-warning', style: 'color:#808080;margin-top:4px' }, t)));
   const v = await showDialog98(doc, {
     title: 'AI Suggestion', content,
     buttons: [{ label: 'OK', value: 'ok', default: true }, { label: 'Cancel', value: 'cancel', cancel: true }],

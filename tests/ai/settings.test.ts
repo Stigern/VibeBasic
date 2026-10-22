@@ -16,27 +16,32 @@ const fakeBackend = (listModels: (b: string, k: string) => Promise<string[]> = a
 const flush = () => new Promise(r => setTimeout(r, 0));
 const okButton = () => [...document.querySelectorAll('button')].find(b => b.textContent === 'OK')!;
 
-test('defaults', async () => expect(await loadAiSettings(fakeBackend())).toEqual({ baseUrl: 'http://localhost:11434/v1', model: '', apiKey: '' }));
+test('defaults', async () => expect(await loadAiSettings(fakeBackend())).toEqual({ baseUrl: 'http://localhost:11434/v1', model: '', apiKey: '', thinking: 'server' }));
 test('roundtrip', async () => {
   const b = fakeBackend();
-  const s = { baseUrl: 'http://10.0.0.5:11434/v1', model: 'qwen2.5-coder:14b', apiKey: 'k' };
+  const s = { baseUrl: 'http://10.0.0.5:11434/v1', model: 'qwen2.5-coder:14b', apiKey: 'k', thinking: 'low' as const };
   await saveAiSettings(b, s);
   expect(b.store.get('ai')).toEqual(s);
   expect(await loadAiSettings(b)).toEqual(s);
 });
 test('tab loads saved values; key is a password field; apply saves', async () => {
   const b = fakeBackend();
-  await saveAiSettings(b, { baseUrl: 'http://x/v1', model: 'm1', apiKey: 'secret' });
+  await saveAiSettings(b, { baseUrl: 'http://x/v1', model: 'm1', apiKey: 'secret', thinking: 'medium' });
   const tab = buildAiTab(b, document);
   await flush();
   expect(tab.controls.baseUrl.value).toBe('http://x/v1');
   expect(tab.controls.model.getValue()).toBe('m1');
   expect(tab.controls.apiKey.type).toBe('password');
+  expect(tab.controls.thinking.getValue()).toBe('Medium');
   tab.controls.model.setValue('m2');
+  tab.controls.thinking.setValue('High (thorough)');
   tab.apply();
   await flush();
-  expect(b.store.get('ai')).toEqual({ baseUrl: 'http://x/v1', model: 'm2', apiKey: 'secret' });
+  expect(b.store.get('ai')).toEqual({ baseUrl: 'http://x/v1', model: 'm2', apiKey: 'secret', thinking: 'high' });
   expect(tab.content.textContent).toContain('For Ollama on another PC use http://<its IP>:11434/v1');
+  expect(tab.content.textContent).toContain('Thinking:');
+  expect(tab.content.textContent).toContain('Use Server default for other servers.');
+  expect((tab.controls.thinking.el.querySelector('input') as HTMLInputElement).readOnly).toBe(true);
 });
 test('test connection fills models and reports', async () => {
   const b = fakeBackend(async () => ['qwen2.5-coder:14b']);
@@ -84,11 +89,11 @@ test('settings text fields have OS auto-capitalisation and correction off', () =
 });
 test('apply before the load finished still saves the stored values', async () => {
   const b = fakeBackend();
-  await saveAiSettings(b, { baseUrl: 'http://x/v1', model: 'm1', apiKey: 'k' });
+  await saveAiSettings(b, { baseUrl: 'http://x/v1', model: 'm1', apiKey: 'k', thinking: 'server' });
   const tab = buildAiTab(b, document);
   tab.apply();
   await flush();
-  expect(b.store.get('ai')).toEqual({ baseUrl: 'http://x/v1', model: 'm1', apiKey: 'k' });
+  expect(b.store.get('ai')).toEqual({ baseUrl: 'http://x/v1', model: 'm1', apiKey: 'k', thinking: 'server' });
 });
 test('test connection error shown', async () => {
   const b = fakeBackend(async () => { throw 'Could not connect to http://x/v1'; });
@@ -106,4 +111,11 @@ test('a failed save is reported', async () => {
   tab.apply();
   await vi.waitFor(() => expect(document.querySelector('.dlg98')?.textContent).toContain('Could not save the AI settings: disk full'));
   okButton().click();
+});
+test('old settings without thinking load as server default', async () => {
+  const b = fakeBackend();
+  b.store.set('ai', { baseUrl: 'http://x/v1', model: 'm', apiKey: '' });
+  expect((await loadAiSettings(b)).thinking).toBe('server');
+  b.store.set('ai', { baseUrl: 'http://x/v1', model: 'm', apiKey: '', thinking: 'bogus' });
+  expect((await loadAiSettings(b)).thinking).toBe('server');
 });

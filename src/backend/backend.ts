@@ -39,7 +39,7 @@ export interface Backend {
   /** Model ids from `GET {baseUrl}/models`. Rejects with a readable error text. */
   aiListModels(baseUrl: string, apiKey: string): Promise<string[]>;
   /** `POST {baseUrl}/chat/completions`; resolves to choices[0].message.content. Rejects with a readable error text. */
-  aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[]): Promise<string>;
+  aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string): Promise<string>;
   /** Made apps: the runtime menu's Quit (Cmd+Q) was chosen. */
   onQuitRequested(handler: () => void): void;
 }

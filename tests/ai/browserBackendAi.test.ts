@@ -15,3 +15,13 @@ test('AI error body message is shown instead of the base URL hint', async () => 
   reply(404, 'Not Found', 'nope');
   await expect(b.aiChat('http://h/v1', '', 'x', [])).rejects.toThrow('Check the base URL. For Ollama it usually ends with /v1.');
 });
+
+test('reasoning effort goes into chat_template_kwargs only when given', async () => {
+  const b = new BrowserBackend();
+  const f = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { status: 200 }));
+  vi.stubGlobal('fetch', f);
+  await b.aiChat('http://h/v1', '', 'x', [], 'low');
+  expect(JSON.parse((f.mock.calls[0] as any)[1].body).chat_template_kwargs).toEqual({ reasoning_effort: 'low' });
+  await b.aiChat('http://h/v1', '', 'x', []);
+  expect(JSON.parse((f.mock.calls[1] as any)[1].body)).not.toHaveProperty('chat_template_kwargs');
+});

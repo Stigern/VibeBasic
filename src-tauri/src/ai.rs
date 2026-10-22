@@ -120,10 +120,15 @@ pub async fn chat(
   api_key: &Option<String>,
   model: &str,
   messages: &[ChatMessage],
+  reasoning_effort: &Option<String>,
 ) -> Result<String, String> {
   let url = endpoint(base_url, "chat/completions");
   let c = client(CHAT_TIMEOUT_SECS)?;
-  let body = json!({ "model": model, "messages": messages, "temperature": 0.2, "stream": false });
+  let mut body = json!({ "model": model, "messages": messages, "temperature": 0.2, "stream": false });
+  // vLLM/Qwen servers honour chat_template_kwargs.reasoning_effort; other servers get nothing extra.
+  if let Some(e) = reasoning_effort.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
+    body["chat_template_kwargs"] = json!({ "reasoning_effort": e });
+  }
   let v = send_json(c.post(&url).json(&body), base_url, &url, api_key, CHAT_TIMEOUT_SECS).await?;
   reply_text(&v)
 }
@@ -157,8 +162,9 @@ pub async fn ai_chat(
   api_key: Option<String>,
   model: String,
   messages: Vec<ChatMessage>,
+  reasoning_effort: Option<String>,
 ) -> Result<String, String> {
-  chat(&base_url, &api_key, &model, &messages).await
+  chat(&base_url, &api_key, &model, &messages, &reasoning_effort).await
 }
 
 #[cfg(test)]
@@ -183,9 +189,34 @@ mod tests {
       when.method(POST).path("/v1/chat/completions").json_body_partial(r#"{"model":"qwen","stream":false}"#);
       then.status(200).json_body(json!({"choices":[{"message":{"content":"hei"}}]}));
     });
-    let r = chat(&server.url("/v1"), &None, "qwen", &msgs()).await;
+    let r = chat(&server.url("/v1"), &None, "qwen", &msgs(), &None).await;
     assert_eq!(r.unwrap(), "hei");
     m.assert();
+  }
+
+  #[tokio::test]
+  async fn reasoning_effort_in_body_only_when_set() {
+    let server = MockServer::start();
+    let with = server.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions").json_body_partial(r#"{"chat_template_kwargs":{"reasoning_effort":"low"}}"#);
+      then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"}}]}));
+    });
+    assert_eq!(chat(&server.url("/v1"), &None, "m", &msgs(), &Some("low".into())).await.unwrap(), "ok");
+    with.assert();
+
+    let server2 = MockServer::start();
+    let without = server2.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions").body_contains("chat_template_kwargs");
+      then.status(200).json_body(json!({"choices":[{"message":{"content":"x"}}]}));
+    });
+    let any = server2.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions");
+      then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"}}]}));
+    });
+    assert_eq!(chat(&server2.url("/v1"), &None, "m", &msgs(), &None).await.unwrap(), "ok");
+    assert_eq!(chat(&server2.url("/v1"), &None, "m", &msgs(), &Some("  ".into())).await.unwrap(), "ok");
+    without.assert_hits(0);
+    any.assert_hits(2);
   }
 
   #[test]
@@ -213,7 +244,7 @@ mod tests {
       when.method(POST).path("/v1/chat/completions").header("authorization", "Bearer k");
       then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"}}]}));
     });
-    assert_eq!(chat(&server.url("/v1"), &Some("k".into()), "m", &msgs()).await.unwrap(), "ok");
+    assert_eq!(chat(&server.url("/v1"), &Some("k".into()), "m", &msgs(), &None).await.unwrap(), "ok");
     with.assert();
 
     let server2 = MockServer::start();
@@ -225,7 +256,7 @@ mod tests {
       when.header_exists("authorization");
       then.status(200).body("x");
     });
-    assert_eq!(chat(&server2.url("/v1"), &Some(String::new()), "m", &msgs()).await.unwrap(), "ok");
+    assert_eq!(chat(&server2.url("/v1"), &Some(String::new()), "m", &msgs(), &None).await.unwrap(), "ok");
     any.assert();
     auth.assert_hits(0);
   }
@@ -247,7 +278,7 @@ mod tests {
       when.any_request();
       then.status(404);
     });
-    let e = chat(&server.url("/v1"), &None, "m", &msgs()).await.unwrap_err();
+    let e = chat(&server.url("/v1"), &None, "m", &msgs(), &None).await.unwrap_err();
     assert!(e.starts_with("The AI server answered 404 Not Found"), "{e}");
   }
 
@@ -262,7 +293,7 @@ mod tests {
       when.method(GET).path("/v1/models");
       then.status(500).json_body(json!({"error":"out of memory"}));
     });
-    let e = chat(&server.url("/v1"), &None, "x", &msgs()).await.unwrap_err();
+    let e = chat(&server.url("/v1"), &None, "x", &msgs(), &None).await.unwrap_err();
     assert_eq!(e, "The AI server answered 404 Not Found: model \"x\" not found, try pulling it first");
     let e = list_models(&server.url("/v1"), &None).await.unwrap_err();
     assert_eq!(e, "The AI server answered 500 Internal Server Error: out of memory");
@@ -281,14 +312,14 @@ mod tests {
     });
     let e = list_models(&server.url("/v1"), &None).await.unwrap_err();
     assert_eq!(e, "The AI server refused the request (401). Check the API key.");
-    let e = chat(&server.url("/v1"), &None, "m", &msgs()).await.unwrap_err();
+    let e = chat(&server.url("/v1"), &None, "m", &msgs(), &None).await.unwrap_err();
     assert!(e.starts_with("The AI server answered 500 Internal Server Error: boom"), "{e}");
   }
 
   #[tokio::test]
   async fn connection_refused_message() {
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let e = chat(&format!("http://127.0.0.1:{port}/v1"), &None, "m", &msgs()).await.unwrap_err();
+    let e = chat(&format!("http://127.0.0.1:{port}/v1"), &None, "m", &msgs(), &None).await.unwrap_err();
     assert!(e.starts_with("Could not connect to"), "{e}");
   }
 
@@ -299,7 +330,7 @@ mod tests {
       when.any_request();
       then.status(200).body("hei");
     });
-    let e = chat(&server.url("/v1"), &None, "m", &msgs()).await.unwrap_err();
+    let e = chat(&server.url("/v1"), &None, "m", &msgs(), &None).await.unwrap_err();
     assert_eq!(e, "The AI server sent an answer VibeBasic could not read.");
     let e = list_models(&server.url("/v1"), &None).await.unwrap_err();
     assert_eq!(e, "The AI server sent an answer VibeBasic could not read.");

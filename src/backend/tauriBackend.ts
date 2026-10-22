@@ -102,8 +102,8 @@ export class TauriBackend implements Backend {
     return call<string[]>('ai_list_models', { baseUrl, apiKey });
   }
 
-  aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[]): Promise<string> {
-    return call<string>('ai_chat', { baseUrl, apiKey, model, messages });
+  aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string): Promise<string> {
+    return call<string>('ai_chat', { baseUrl, apiKey, model, messages, reasoningEffort: reasoningEffort || null });
   }
 
   onQuitRequested(handler: () => void): void {

@@ -145,8 +145,9 @@ export class BrowserBackend implements Backend {
     return v.data.map((m) => (m as { id?: unknown })?.id).filter((id): id is string => typeof id === 'string');
   }
 
-  async aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[]): Promise<string> {
-    const body = JSON.stringify({ model, messages, temperature: 0.2, stream: false });
+  async aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string): Promise<string> {
+    const effort = reasoningEffort?.trim();
+    const body = JSON.stringify({ model, messages, temperature: 0.2, stream: false, ...(effort ? { chat_template_kwargs: { reasoning_effort: effort } } : {}) });
     const v = (await aiRequest(baseUrl, apiKey, 'chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, 180)) as
       { choices?: { message?: { content?: unknown } }[] } | null;
     const content = v?.choices?.[0]?.message?.content;
