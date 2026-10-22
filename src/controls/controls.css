@@ -228,3 +228,37 @@
 .ts-tab.selected { height: 22px; margin-top: 0; z-index: 1; padding-bottom: 2px; box-shadow: inset 1px 1px #fff, inset -1px 0 #000, inset -2px 0 #808080; }
 .vb-TabStrip:focus-within .ts-tab.selected span { outline: 1px dotted #000; outline-offset: 1px; }
 .ts-tab u { border-bottom: 1px solid currentColor; }
+
+/* ---------- TreeView, ListView, MSFlexGrid ---------- */
+.vb-TreeView, .vb-ListView, .vb-MSFlexGrid { background: #fff; box-shadow: var(--w98-sunken); }
+.vb-tv, .vb-lv, .vb-fg { position: absolute; left: 2px; top: 2px; right: 2px; bottom: 2px; overflow: auto; outline: none; box-sizing: border-box; }
+.tv-row { display: flex; align-items: center; height: 16px; white-space: pre; cursor: default; }
+.tv-tog { flex: none; width: 9px; height: 9px; margin-right: 4px; box-sizing: border-box; border: 1px solid #808080; background: #fff; font: 9px/6px monospace;
+  text-align: center; color: #000; }
+.tv-tog.none { visibility: hidden; }
+.tv-text { padding: 0 2px; }
+.tv-text.sel { background: #000080; color: #fff; }
+.vb-TreeView:focus-within .tv-text.sel { outline: 1px dotted #ff0; outline-offset: -1px; }
+.lv-head { display: flex; position: sticky; top: 0; background: #c0c0c0; z-index: 1; height: 17px; width: max-content; }
+.lv-hcol { flex: none; box-sizing: border-box; padding: 1px 4px; box-shadow: var(--w98-raised); overflow: hidden; white-space: pre; }
+.lv-row { display: flex; height: 16px; width: max-content; }
+.lv-cell { flex: none; box-sizing: border-box; padding: 0 4px; line-height: 16px; overflow: hidden; white-space: pre; }
+.lv-grid .lv-cell { box-shadow: inset -1px -1px #c0c0c0; }
+.lv-grid .lv-row { box-shadow: inset 0 -1px #c0c0c0; }
+.lv-row.sel .lv-cell.first, .lv-row.sel.lv-full .lv-cell, .lv-full .lv-row.sel .lv-cell { background: #000080; color: #fff; }
+.lv-item { display: inline-flex; align-items: center; vertical-align: top; cursor: default; }
+.lv-ico { flex: none; width: 16px; height: 16px; margin-right: 3px; background: linear-gradient(#fff, #fff) 3px 2px / 10px 12px no-repeat; box-shadow: inset 0 0 0 1px #808080; opacity: .8; }
+.lv-label { padding: 0 2px; white-space: pre; }
+.lv-item.sel .lv-label { background: #000080; color: #fff; }
+.lv-view0 .lv-item { flex-direction: column; width: 76px; height: 54px; margin: 2px; justify-content: flex-start; text-align: center; }
+.lv-view0 .lv-ico { width: 32px; height: 32px; margin: 0 0 2px; }
+.lv-view1 .lv-item { width: 140px; height: 18px; }
+.lv-view2 { display: flex; flex-direction: column; flex-wrap: wrap; align-content: flex-start; }
+.lv-view2 .lv-item { width: 140px; height: 18px; }
+.fg-table { border-collapse: separate; border-spacing: 0; table-layout: fixed; background: #fff; }
+.fg-table td { box-sizing: border-box; padding: 0 2px; overflow: hidden; white-space: pre; text-overflow: clip; }
+.fg-lines1 td { border-right: 1px solid #c0c0c0; border-bottom: 1px solid #c0c0c0; }
+.fg-lines2 td { border-right: 1px solid #fff; border-bottom: 1px solid #fff; box-shadow: inset 1px 1px #808080; }
+.fg-lines3 td { border-right: 1px solid #808080; border-bottom: 1px solid #808080; box-shadow: inset 1px 1px #fff; }
+.fg-table td.fixed { background: #c0c0c0; box-shadow: inset 1px 1px #fff, inset -1px -1px #808080; border: 0; }
+.fg-table td.sel { background: #000080; color: #fff; }

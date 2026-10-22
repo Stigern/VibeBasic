@@ -11,7 +11,7 @@ import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 type Props = Record<string, PropValue>;
 type Target = { id: string; def: ControlDef | null };
 
-const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar']);
+const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'TreeView', 'ListView', 'MSFlexGrid']);
 const KEY_CODES: Record<string, number> = {
   Backspace: 8, Tab: 9, Enter: 13, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34, End: 35, Home: 36,
   ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46,
@@ -100,6 +100,12 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     if (el && surface.el.contains(el)) { const id = el.dataset.controlId!; return { id, def: defs.get(id) ?? null }; }
     return surface.clientEl.contains(t) ? { id: 'form', def: null } : null;
   }
+  /** Like targetOf(e.target), but also for a click whose target a handler has already replaced (a list or grid repaints on click). */
+  function clickTarget(e: Event): Target | null {
+    if (e.target instanceof Node && e.target.isConnected) return targetOf(e.target);
+    const el = e.composedPath().find((n): n is HTMLElement => n instanceof HTMLElement && n.dataset?.controlId !== undefined && surface.el.contains(n));
+    return el ? targetOf(el) : null;
+  }
   const viewOf = (id: string): ControlView | undefined => surface.views.get(id);
   const usable = (id: string): boolean => { const p = propsOf(id); return p.Enabled !== false && p.Visible !== false; };
 
@@ -107,7 +113,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   on<MouseEvent>('click', e => {
     const closeBtn = (e.target as Element).closest?.('.title-bar-controls button[aria-label="Close"]');
     if (closeBtn) { if (!blocked) send({ t: 'closeRequest' }); return; }
-    const tg = targetOf(e.target);
+    const tg = clickTarget(e);
     if (blocked || !tg) return;
     if (tg.id === 'form') { emit('form', 'Click'); return; }
     const type = tg.def!.type;
@@ -125,7 +131,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
       if (was) apply(tg.id, { Value: true }); else emit(tg.id, 'Click', [], { Value: true });
     }
   });
-  on<MouseEvent>('dblclick', e => { const tg = targetOf(e.target); if (!blocked && tg && usable(tg.id)) emit(tg.id, 'DblClick'); });
+  on<MouseEvent>('dblclick', e => { const tg = clickTarget(e); if (!blocked && tg && usable(tg.id)) emit(tg.id, 'DblClick'); });
 
   // --- mouse ---
   function mouse(event: string) {
@@ -188,6 +194,22 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     const tg = targetOf(e.target);
     if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl || !usable(tg.id)) return;
     emit(tg.id, 'Click', [], { SelectedTab: Number(e.detail.index) });
+  });
+  // TreeView / ListView / MSFlexGrid: the renderer reports clicks by 1-based collection index (the run session maps them to objects)
+  const custom = (type: string, fn: (id: string, d: Record<string, number | boolean>) => void) => on<CustomEvent>(type, e => {
+    const tg = targetOf(e.target);
+    if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl || !usable(tg.id)) return;
+    fn(tg.id, e.detail);
+  });
+  custom('vbnodeclick', (id, d) => emit(id, 'NodeClick', [Number(d.index)], { SelectedNode: Number(d.index) }));
+  custom('vbnodetoggle', (id, d) => emit(id, d.expanded ? 'Expand' : 'Collapse', [Number(d.index)], { Toggled: `${d.index}|${d.expanded ? 1 : 0}` }));
+  custom('vbitemclick', (id, d) => emit(id, 'ItemClick', [Number(d.index)], { SelectedIndex: Number(d.index) }));
+  custom('vbcolclick', (id, d) => emit(id, 'ColumnClick', [Number(d.index)]));
+  custom('vbcellclick', (id, d) => {
+    const cur = propsOf(id);
+    if (cur.Row === d.row && cur.Col === d.col) return;
+    emit(id, 'RowColChange', [], { Row: Number(d.row), Col: Number(d.col) });
+    emit(id, 'SelChange');
   });
   on<CustomEvent>('vbselect', e => {
     const tg = targetOf(e.target);

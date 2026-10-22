@@ -21,7 +21,8 @@ export function describeControlTypes(): string {
   lines.push('All controls also have: Left, Top, Width, Height, Visible, Enabled, TabIndex, Tag and the methods Move, SetFocus, Refresh, ZOrder.'
     + ' Exceptions: Shape has no Enabled, TabIndex or SetFocus; Line has X1, Y1, X2, Y2 (twips) instead of Left, Top, Width, Height, and no Enabled, TabIndex, Move or SetFocus.'
     + ' A StatusBar always sits at the bottom of the form, full width (only its Height matters). Its Panels and a TabStrip\'s Tabs are one item per line,'
-    + ' fields separated by | : Panels "Text|Key|Width|Alignment(0 left, 1 center, 2 right)", Tabs "Caption|Key".');
+    + ' fields separated by | : Panels "Text|Key|Width|Alignment(0 left, 1 center, 2 right)", Tabs "Caption|Key".'
+    + ' A ListView\'s ColumnHeaders are lines "Text|Key|Width|Alignment(0 left, 1 right, 2 center)"; Nodes, ListItems and the cells of an MSFlexGrid (TextMatrix) are filled by code at run time.');
   return lines.join('\n');
 }
 

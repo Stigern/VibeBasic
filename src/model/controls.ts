@@ -342,12 +342,60 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
     events: [evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
+
+  // Nodes / ListItems are run-time only; ColumnHeaders are lines 'Text|Key|Width|Alignment'. SelectedNode / SelectedIndex are window state.
+  TreeView: def({
+    type: 'TreeView', namePrefix: 'TreeView', defaultWidth: 2400, defaultHeight: 2400, toolboxTooltip: 'TreeView',
+    defaultEvent: 'NodeClick', defaultMember: null,
+    props: [
+      ...common(), font(),
+      en('LineStyle', 0, ['tvwTreeLines', 'tvwRootLines']), int('Indentation', 285, { min: 0 }),
+      p('Nodes', 'list', [], { designTime: false, runtime: 'ro' }),
+      rt('SelectedItem', 'string', ''),
+      p('SelectedNode', 'int', 0, { designTime: false, runtime: 'none' }),
+    ],
+    events: [evClick(), evDbl(), ev('NodeClick', 'ByVal Node As MSComctlLib.Node'), ev('Expand', 'ByVal Node As MSComctlLib.Node'),
+      ev('Collapse', 'ByVal Node As MSComctlLib.Node'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  ListView: def({
+    type: 'ListView', namePrefix: 'ListView', defaultWidth: 3600, defaultHeight: 2400, toolboxTooltip: 'ListView',
+    defaultEvent: 'ItemClick', defaultMember: null,
+    props: [
+      ...common(), font(),
+      en('View', 0, ['lvwIcon', 'lvwSmallIcon', 'lvwList', 'lvwReport']),
+      bool('FullRowSelect', false), bool('GridLines', false), bool('Sorted', false),
+      int('SortKey', 0, { min: 0 }), en('SortOrder', 0, ['lvwAscending', 'lvwDescending']),
+      p('ColumnHeaders', 'list', [], { runtime: 'ro' }),
+      p('ListItems', 'list', [], { designTime: false, runtime: 'ro' }),
+      rt('SelectedItem', 'string', ''),
+      p('SelectedIndex', 'int', 0, { designTime: false, runtime: 'none' }),
+    ],
+    events: [evClick(), evDbl(), ev('ItemClick', 'ByVal Item As MSComctlLib.ListItem'),
+      ev('ColumnClick', 'ByVal ColumnHeader As MSComctlLib.ColumnHeader'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  // The cells live in the run-time mirror (TextMatrix), not in the properties.
+  MSFlexGrid: def({
+    type: 'MSFlexGrid', namePrefix: 'MSFlexGrid', defaultWidth: 3600, defaultHeight: 2400, toolboxTooltip: 'MSFlexGrid',
+    defaultEvent: 'Click', defaultMember: null,
+    props: [
+      ...common(), font(),
+      int('Rows', 2, { min: 1 }), int('Cols', 2, { min: 1 }), int('FixedRows', 1, { min: 0 }), int('FixedCols', 1, { min: 0 }),
+      en('GridLines', 1, ['flexGridNone', 'flexGridFlat', 'flexGridInset', 'flexGridRaised']),
+      en('SelectionMode', 0, ['flexSelectionFree', 'flexSelectionByRow', 'flexSelectionByColumn']),
+      rt('Row', 'int', 1), rt('Col', 'int', 1), rt('Text', 'string', ''),
+      rt('TextMatrix', 'string', ''), rt('ColWidth', 'int', 975), rt('RowHeight', 'int', 240), rt('ColAlignment', 'int', 1),
+    ],
+    events: [evClick(), evDbl(), ev('RowColChange'), ev('SelChange'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
 };
 
 /** VB6 toolbox order. */
 export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
   'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip',
+  'TreeView', 'ListView', 'MSFlexGrid',
 ];
 
 // ---------------------------------------------------------------------------------------------------------------

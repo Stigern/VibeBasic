@@ -10,7 +10,7 @@
 import './controls.css';
 import { vbColorToCss } from '../model/colors';
 import { CONTROL_TYPES } from '../model/controls';
-import { splitFields } from '../model/fieldLines';
+import { joinFields, splitFields } from '../model/fieldLines';
 import { isDocked } from '../model/geometry';
 import { twipsToPx } from '../model/twips';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../model/types';
@@ -841,6 +841,155 @@ function tabStrip(c: Ctx): Renderer {
   };
 }
 
+/** TreeView: rows from the `Nodes` lines ('level|index|expanded|key|text', tree order); `SelectedNode` is the selected index.
+ *  Run mode: a click on a +/- box (or a double click) toggles and dispatches `vbnodetoggle` ({ index, expanded }), a click on a node
+ *  selects it and dispatches `vbnodeclick` ({ index }). */
+function treeView(c: Ctx): Renderer {
+  let root: HTMLElement;
+  function paint() {
+    const f = c.list('Nodes').map(splitFields), sel = c.num('SelectedNode'), indent = Math.max(0, twipsToPx(c.num('Indentation')));
+    const rows: HTMLElement[] = [];
+    let skip = -1;   // level below which the nodes are hidden by a collapsed parent
+    f.forEach((n, i) => {
+      const level = Number(n[0]) || 0;
+      if (skip >= 0 && level > skip) return;
+      skip = -1;
+      const kids = i + 1 < f.length && Number(f[i + 1][0]) > level, open = n[2] === '1';
+      if (kids && !open) skip = level;
+      rows.push(h('div', { class: 'tv-row', dataset: { index: n[1] ?? '', kids: kids ? '1' : '0', open: open ? '1' : '0' }, style: { paddingLeft: `${level * indent + 2}px` } },
+        h('span', { class: kids ? 'tv-tog' : 'tv-tog none' }, kids ? (open ? '-' : '+') : ''),
+        h('span', { class: Number(n[1]) === sel ? 'tv-text sel' : 'tv-text' }, n[4] ?? '')));
+    });
+    root.replaceChildren(...rows);
+  }
+  function toggle(row: HTMLElement): void {
+    const index = row.dataset.index!, expanded = row.dataset.open !== '1';
+    c.props.Nodes = c.list('Nodes').map(line => { const f = splitFields(line); if (f[1] !== index) return line; f[2] = expanded ? '1' : '0'; return joinFields(f); });
+    paint();
+    c.fire('vbnodetoggle', { index: Number(index), expanded });
+  }
+  return {
+    build() {
+      root = h('div', { class: 'vb-tv', tabindex: '0' });
+      c.el.replaceChildren(root);
+      c.setInput(root);
+      if (c.mode !== 'run') return;
+      const rowOf = (e: Event) => { const r = (e.target as Element).closest<HTMLElement>('.tv-row'); return r && root.contains(r) && root.getAttribute('aria-disabled') !== 'true' ? r : null; };
+      root.addEventListener('click', e => {
+        const row = rowOf(e);
+        if (!row) return;
+        if ((e.target as Element).closest('.tv-tog') && row.dataset.kids === '1') { toggle(row); return; }
+        c.props.SelectedNode = Number(row.dataset.index);
+        paint();
+        c.fire('vbnodeclick', { index: Number(row.dataset.index) });
+      });
+      root.addEventListener('dblclick', e => { const row = rowOf(e); if (row?.dataset.kids === '1') toggle(row); });
+    },
+    patch(k) { if (has(k, 'Nodes', 'SelectedNode', 'Indentation', 'LineStyle')) paint(); },
+    bg: () => null,
+  };
+}
+
+/** ListView: `ListItems` lines ('index|text|sub1|sub2…', index = collection index) in the four views; Report shows the
+ *  `ColumnHeaders` ('Text|Key|Width|Alignment'). Sorted / SortKey / SortOrder only change the display order. Run mode: a click on an item
+ *  dispatches `vbitemclick` ({ index }), on a column header `vbcolclick` ({ index }). */
+function listView(c: Ctx): Renderer {
+  let root: HTMLElement;
+  const ALIGN = ['left', 'right', 'center'];
+  function paint() {
+    const view = c.num('View'), sel = c.num('SelectedIndex');
+    let items = c.list('ListItems').map(splitFields);
+    if (c.bool('Sorted')) {
+      const key = c.num('SortKey'), dir = c.num('SortOrder') === 1 ? -1 : 1;
+      const val = (f: string[]): string => (f[1 + key] ?? '').toLowerCase();
+      items = items.map((f, i) => ({ f, i })).sort((a, b) => (val(a.f) < val(b.f) ? -dir : val(a.f) > val(b.f) ? dir : a.i - b.i)).map(x => x.f);
+    }
+    root.className = `vb-lv lv-view${view}${c.bool('GridLines') ? ' lv-grid' : ''}${c.bool('FullRowSelect') ? ' lv-full' : ''}`;
+    if (view === 3) {
+      const cols = c.list('ColumnHeaders').map(splitFields);
+      if (!cols.length) cols.push(['']);
+      const style = (f: string[]) => ({ width: `${twipsToPx(Number(f[2]) || 1440)}px`, textAlign: ALIGN[Number(f[3])] ?? 'left' });
+      const head = h('div', { class: 'lv-head' }, ...cols.map((f, i) => h('div', { class: 'lv-hcol', dataset: { index: String(i + 1) }, style: style(f) }, f[0] ?? '')));
+      const rows = items.map(f => h('div', { class: Number(f[0]) === sel ? 'lv-row sel' : 'lv-row', dataset: { index: f[0] ?? '' } },
+        ...cols.map((cf, j) => h('div', { class: j === 0 ? 'lv-cell first' : 'lv-cell', style: style(cf) }, f[1 + j] ?? ''))));
+      root.replaceChildren(head, ...rows);
+    } else {
+      root.replaceChildren(...items.map(f => h('div', { class: Number(f[0]) === sel ? 'lv-item sel' : 'lv-item', dataset: { index: f[0] ?? '' } },
+        h('span', { class: 'lv-ico' }), h('span', { class: 'lv-label' }, f[1] ?? ''))));
+    }
+  }
+  return {
+    build() {
+      root = h('div', { class: 'vb-lv', tabindex: '0' });
+      c.el.replaceChildren(root);
+      c.setInput(root);
+      if (c.mode !== 'run') return;
+      root.addEventListener('click', e => {
+        if (root.getAttribute('aria-disabled') === 'true') return;
+        const t = e.target as Element, col = t.closest<HTMLElement>('.lv-hcol'), item = t.closest<HTMLElement>('.lv-row, .lv-item');
+        if (col && root.contains(col)) c.fire('vbcolclick', { index: Number(col.dataset.index) });
+        else if (item && root.contains(item)) {
+          c.props.SelectedIndex = Number(item.dataset.index);
+          paint();
+          c.fire('vbitemclick', { index: Number(item.dataset.index) });
+        }
+      });
+    },
+    patch(k) { if (has(k, 'ListItems', 'ColumnHeaders', 'SelectedIndex', 'View', 'GridLines', 'FullRowSelect', 'Sorted', 'SortKey', 'SortOrder')) paint(); },
+    bg: () => null,
+  };
+}
+
+/** MSFlexGrid: a table of Rows x Cols; `Cells` is row-major, `ColWidths` / `RowHeights` / `ColAligns` are per column / row (twips,
+ *  flexAlign*). The fixed rows and columns are grey. Run mode: a click on a cell that is not fixed sets Row and Col
+ *  and dispatches `vbcellclick` ({ row, col }). */
+function flexGrid(c: Ctx): Renderer {
+  let root: HTMLElement;
+  const nums = (n: string, d: number): number[] => c.list(n).map(x => (x === '' ? d : Number(x)));
+  function paint() {
+    const rows = Math.max(1, c.num('Rows')), cols = Math.max(1, c.num('Cols'));
+    const fr = Math.min(c.num('FixedRows'), rows), fc = Math.min(c.num('FixedCols'), cols);
+    const cells = c.list('Cells'), widths = nums('ColWidths', 975), heights = nums('RowHeights', 240), aligns = nums('ColAligns', 1);
+    const row = c.num('Row'), col = c.num('Col'), mode = c.num('SelectionMode');
+    const px = (t: number | undefined, d: number): number => Math.max(0, twipsToPx(t ?? d));
+    const table = h('table', { class: `fg-table fg-lines${c.num('GridLines')}` });
+    table.style.width = `${Array.from({ length: cols }, (_, i) => px(widths[i], 975)).reduce((a, b) => a + b, 0)}px`;
+    table.append(h('colgroup', {}, ...Array.from({ length: cols }, (_, i) => h('col', { style: { width: `${px(widths[i], 975)}px` } }))));
+    for (let r = 0; r < rows; r++) {
+      const tr = h('tr', { style: { height: `${px(heights[r], 240)}px` } });
+      for (let i = 0; i < cols; i++) {
+        const fixed = r < fr || i < fc, text = cells[r * cols + i] ?? '', a = aligns[i] ?? 1;
+        const on = !fixed && (mode === 1 ? r === row : mode === 2 ? i === col : r === row && i === col);
+        const td = h('td', { class: `${fixed ? 'fixed' : ''}${on ? ' sel' : ''}`.trim() }, text);
+        td.dataset.r = String(r); td.dataset.c = String(i);
+        td.style.textAlign = fixed ? 'center' : a === 9 ? (text !== '' && !isNaN(Number(text)) ? 'right' : 'left') : (['left', 'center', 'right'][Math.floor(a / 3)] ?? 'left');
+        td.style.verticalAlign = a === 9 ? 'middle' : (['top', 'middle', 'bottom'][a % 3] ?? 'middle');
+        tr.append(td);
+      }
+      table.append(tr);
+    }
+    root.replaceChildren(table);
+  }
+  return {
+    build() {
+      root = h('div', { class: 'vb-fg', tabindex: '0' });
+      c.el.replaceChildren(root);
+      c.setInput(root);
+      if (c.mode !== 'run') return;
+      root.addEventListener('click', e => {
+        const td = (e.target as Element).closest<HTMLElement>('td');
+        if (!td || !root.contains(td) || td.classList.contains('fixed') || root.getAttribute('aria-disabled') === 'true') return;
+        const [r, i] = [Number(td.dataset.r), Number(td.dataset.c)];
+        c.props.Row = r; c.props.Col = i;
+        paint();
+        c.fire('vbcellclick', { row: r, col: i });
+      });
+    },
+    patch(k) { if (has(k, 'Rows', 'Cols', 'FixedRows', 'FixedCols', 'Cells', 'ColWidths', 'RowHeights', 'ColAligns', 'Row', 'Col', 'GridLines', 'SelectionMode')) paint(); },
+    bg: () => null,
+  };
+}
+
 const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   CommandButton: commandButton,
   Label: label,
@@ -862,6 +1011,9 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   UpDown: upDown,
   StatusBar: statusBar,
   TabStrip: tabStrip,
+  TreeView: treeView,
+  ListView: listView,
+  MSFlexGrid: flexGrid,
 };
 
 // ---------------------------------------------------------------------------------------------------------------

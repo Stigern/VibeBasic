@@ -10,6 +10,8 @@ import type { PatchQueue } from '../patchQueue';
 import { PictureObject, type HasPictureRef } from './appObjects';
 import type { ChangeKind, CollectionObject, ItemObject } from './collectionObject';
 import { makePanels, makeTabs, panelLine, tabLine } from './commonCollections';
+import { DEFAULT_ALIGN, GridData } from './gridData';
+import { columnLine, listLine, makeColumns, makeListItems, makeNodes, nodeLines, TreeNode, type NodesCollection, type Picker } from './listCollections';
 
 export interface RunContext {
   resolveAsset(ref: PictureRef): string | null;
@@ -56,6 +58,10 @@ export class ControlObject implements VBObject {
   readonly props: Record<string, PropValue> = {};
   /** Item collections (lower-case property name): StatusBar.Panels, TabStrip.Tabs. */
   private readonly collections = new Map<string, CollectionObject<ItemObject>>();
+  /** TreeView node / ListView item that is selected (by click or by code). */
+  private selItem: ItemObject | null = null;
+  /** MSFlexGrid cells. */
+  private grid: GridData | null = null;
 
   constructor(readonly def: ControlDef, private formKey: string, private queue: PatchQueue, private ctx: RunContext) {
     const td = CONTROL_TYPES[def.type];
@@ -77,7 +83,108 @@ export class ControlObject implements VBObject {
       this.collections.set('tabs', tabs);
       const sel = Number(this.props.SelectedTab);
       this.props.SelectedTab = tabs.count === 0 ? 0 : Math.min(tabs.count, Math.max(1, sel || 1));
+    } else if (def.type === 'TreeView') {
+      this.collections.set('nodes', makeNodes(() => this.sendNodes(), this.picker()) as unknown as CollectionObject<ItemObject>);
+    } else if (def.type === 'ListView') {
+      this.collections.set('columnheaders', makeColumns(this.lines('ColumnHeaders'), () => this.sendColumns()));
+      this.collections.set('listitems', makeListItems(() => this.sendItems(), this.picker()));
+    } else if (def.type === 'MSFlexGrid') {
+      this.grid = new GridData(Number(this.props.Rows), Number(this.props.Cols));
+      this.props.Row = Math.min(Number(this.props.Row), this.grid.rows - 1);
+      this.props.Col = Math.min(Number(this.props.Col), this.grid.cols - 1);
+      this.syncGrid();
     }
+  }
+
+  // -- TreeView, ListView and MSFlexGrid: what the window gets ---------------------------------------------------
+
+  private picker(): Picker { return { is: i => this.selItem === i, pick: i => this.select(i) }; }
+  private selectedIndex(): number { return this.selItem?.owner ? this.selItem.index : 0; }
+  private selProp(): string { return this.def.type === 'TreeView' ? 'SelectedNode' : 'SelectedIndex'; }
+
+  /** Selects a node / list item by code (no NodeClick / ItemClick, as in VB6). */
+  private select(i: ItemObject | null): void {
+    this.selItem = i;
+    this.props[this.selProp()] = this.selectedIndex();
+    this.send({ [this.selProp()]: this.selectedIndex() });
+  }
+
+  private sendNodes(): void {
+    const nodes = this.collections.get('nodes') as unknown as NodesCollection;
+    const lines = nodeLines(nodes.roots);
+    this.props.Nodes = lines;
+    this.props.SelectedNode = this.selectedIndex();
+    this.send({ Nodes: lines, SelectedNode: this.selectedIndex() });
+  }
+  private sendItems(): void {
+    const lines = this.collections.get('listitems')!.items().map(listLine);
+    this.props.ListItems = lines;
+    this.props.SelectedIndex = this.selectedIndex();
+    this.send({ ListItems: lines, SelectedIndex: this.selectedIndex() });
+  }
+  private sendColumns(): void {
+    const lines = this.collections.get('columnheaders')!.items().map(columnLine);
+    this.props.ColumnHeaders = lines;
+    this.send({ ColumnHeaders: lines });
+  }
+
+  /** The grid arrays as window props (`cells` is shared, not copied; see gridData.ts). */
+  private gridProps(all: boolean): Record<string, PropValue> {
+    const g = this.grid!;
+    const p: Record<string, PropValue> = { Cells: g.cells };
+    if (all) Object.assign(p, { ColWidths: g.colWidth.map(String), RowHeights: g.rowHeight.map(String), ColAligns: g.colAlign.map(String) });
+    return p;
+  }
+  private syncGrid(send = false): void {
+    Object.assign(this.props, this.gridProps(true));
+    if (send) this.send(this.gridProps(true));
+  }
+  /** Rows / Cols / FixedRows / FixedCols were set: resize the cells and keep Row / Col inside. */
+  private gridResized(): void {
+    const g = this.grid!;
+    g.resize(Number(this.props.Rows), Number(this.props.Cols));
+    this.props.Row = Math.min(Number(this.props.Row), g.rows - 1);
+    this.props.Col = Math.min(Number(this.props.Col), g.cols - 1);
+    this.syncGrid();
+    this.send({ ...this.gridProps(true), Row: this.props.Row, Col: this.props.Col });
+  }
+  private gridIndex(args: VBValue[], n: number): number[] {
+    if (args.length !== n) throw new VBRuntimeError(450);
+    return args.map(a => num(this.plain(a)));
+  }
+  /** TextMatrix, Text, ColWidth, RowHeight, ColAlignment (get); undefined = an ordinary property. */
+  private gridGet(l: string, args: VBValue[]): VBValue | undefined {
+    const g = this.grid!;
+    switch (l) {
+      case 'textmatrix': { const [r, c] = this.gridIndex(args, 2); if (!g.has(r, c)) throw badIndex(); return g.get(r, c); }
+      case 'text': if (args.length) throw new VBRuntimeError(450); return g.get(Number(this.props.Row), Number(this.props.Col));
+      case 'colwidth': { const [c] = this.gridIndex(args, 1); if (!g.has(0, c)) throw badIndex(); return g.colWidth[c]; }
+      case 'rowheight': { const [r] = this.gridIndex(args, 1); if (!g.has(r, 0)) throw badIndex(); return g.rowHeight[r]; }
+      case 'colalignment': { const [c] = this.gridIndex(args, 1); if (!g.has(0, c)) throw badIndex(); return g.colAlign[c] ?? DEFAULT_ALIGN; }
+    }
+    return undefined;
+  }
+  private gridSet(l: string, args: VBValue[], value: VBValue): boolean {
+    const g = this.grid!;
+    switch (l) {
+      case 'textmatrix': case 'text': {
+        const [r, c] = l === 'text' ? [Number(this.props.Row), Number(this.props.Col)] : this.gridIndex(args, 2);
+        if (l === 'text' && args.length) throw new VBRuntimeError(450);
+        if (!g.has(r, c)) throw badIndex();
+        g.set(r, c, toStr(this.plain(value)));
+        this.send({ Cells: g.cells });
+        return true;
+      }
+      case 'colwidth': case 'rowheight': case 'colalignment': {
+        const [i] = this.gridIndex(args, 1), n = num(this.plain(value));
+        if (l === 'rowheight' ? !g.has(i, 0) : !g.has(0, i)) throw badIndex();
+        if (n < (l === 'colalignment' ? 0 : -1) || (l === 'colalignment' && n > 9)) throw new VBRuntimeError(380);
+        if (l === 'colwidth') g.colWidth[i] = n; else if (l === 'rowheight') g.rowHeight[i] = n; else g.colAlign[i] = n;
+        this.syncGrid(true);
+        return true;
+      }
+    }
+    return false;
   }
 
   private lines(prop: string): string[] { return Array.isArray(this.props[prop]) ? [...(this.props[prop] as string[])] : []; }
@@ -112,7 +219,13 @@ export class ControlObject implements VBObject {
 
   /** The arguments an event handler receives: object arguments (PanelClick's Panel) replace the index the window sent. */
   eventArgs(event: string, args: (number | string)[]): VBValue[] {
-    if (event === 'PanelClick') return [this.collections.get('panels')?.find(args[0]) ?? Nothing];
+    const object = (collection: string): VBValue[] => [this.collections.get(collection)?.find(args[0]) ?? Nothing];
+    switch (event) {
+      case 'PanelClick': return object('panels');
+      case 'NodeClick': case 'Expand': case 'Collapse': return object('nodes');
+      case 'ItemClick': return object('listitems');
+      case 'ColumnClick': return object('columnheaders');
+    }
     return args;
   }
 
@@ -121,7 +234,17 @@ export class ControlObject implements VBObject {
 
   /** State reported by the window (user input). Updates the mirror without sending a patch back. */
   applyState(props: Record<string, PropValue>): void {
-    for (const [k, v] of Object.entries(props)) this.props[getPropDef(this.def.type, k)?.name ?? k] = v;
+    for (const [k, v] of Object.entries(props)) {
+      if (k === 'SelectedNode' || k === 'SelectedIndex') this.selItem = this.collections.get(k === 'SelectedNode' ? 'nodes' : 'listitems')?.find(Number(v)) ?? null;
+      else if (k === 'Toggled') {   // 'index|0 or 1': a node was expanded / collapsed by a click on the +/- box
+        const [i, on] = String(v).split('|');
+        this.collections.get('nodes')?.find(Number(i))?.setRaw('Expanded', on === '1');
+        const nodes = this.collections.get('nodes') as unknown as NodesCollection | undefined;
+        if (nodes) this.props.Nodes = nodeLines(nodes.roots);
+        continue;
+      }
+      this.props[getPropDef(this.def.type, k)?.name ?? k] = v;
+    }
   }
 
   // -- VBObject ---------------------------------------------------------------------------------------------
@@ -147,8 +270,10 @@ export class ControlObject implements VBObject {
     if (col) return args.length ? col.getMember('Item', args) : col;
     if (pd.name === 'SelectedItem') {
       if (args.length) throw new VBRuntimeError(450);
-      return this.collections.get('tabs')?.find(Number(this.props.SelectedTab)) ?? Nothing;
+      if (this.def.type === 'TabStrip') return this.collections.get('tabs')?.find(Number(this.props.SelectedTab)) ?? Nothing;
+      return this.selItem?.owner ? this.selItem : Nothing;
     }
+    if (this.grid) { const v = this.gridGet(l, args); if (v !== undefined) return v; }
     if (pd.kind === 'list') return this.getListItem(args);
     if (pd.name === 'Selected') return this.selected(args);
     if (args.length) throw new VBRuntimeError(450);
@@ -164,10 +289,21 @@ export class ControlObject implements VBObject {
     if (pd.name === 'SelectedItem') {
       if (args.length) throw new VBRuntimeError(450);
       if (value === Nothing) throw new VBRuntimeError(91);
+      if (this.def.type !== 'TabStrip') {   // TreeView / ListView: a Node / ListItem of this control
+        const item = this.collections.get(this.def.type === 'TreeView' ? 'nodes' : 'listitems')?.items().find(t => t === value);
+        if (!item) throw new VBRuntimeError(5);
+        this.select(item);
+        return;
+      }
       const tab = this.collections.get('tabs')?.items().find(t => t === value);
       if (!tab) throw new VBRuntimeError(5);
       this.selectTab(tab.index);
       return;
+    }
+    if (this.grid && this.gridSet(name.toLowerCase(), args, value)) return;
+    if (this.grid && (pd.name === 'Row' || pd.name === 'Col')) {
+      const n = num(this.plain(value));
+      if (n < 0 || n >= (pd.name === 'Row' ? this.grid.rows : this.grid.cols)) throw new VBRuntimeError(380);
     }
     if (pd.kind === 'list') {
       if (args.length !== 1) throw new VBRuntimeError(450);
@@ -316,6 +452,7 @@ export class ControlObject implements VBObject {
       }
     }
     this.send(patch);
+    if (this.grid && (name === 'Rows' || name === 'Cols' || name === 'FixedRows' || name === 'FixedCols')) this.gridResized();
     if (this.def.type === 'Timer' && (name === 'Enabled' || name === 'Interval')) this.ctx.timerChanged(this);
     this.ctx.propChanged?.(this, name === 'SelText' ? 'Text' : name, old);
   }

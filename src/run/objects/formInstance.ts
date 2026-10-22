@@ -275,6 +275,7 @@ export class FormInstance implements VBObject {
         break;
       case 'ListBox': if (prop === 'ListIndex' && changed) ev = 'Click'; break;
       case 'HScrollBar': case 'VScrollBar': if (prop === 'Value' && changed) ev = 'Change'; break;
+      case 'MSFlexGrid': if ((prop === 'Row' || prop === 'Col') && changed) ev = 'RowColChange'; break;
       case 'TabStrip': if (prop === 'SelectedTab' && changed) ev = 'Click'; break;
       case 'CheckBox': if (prop === 'Value' && changed) ev = 'Click'; break;
       case 'Label': if (prop === 'Caption' && changed) ev = 'Change'; break;

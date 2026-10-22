@@ -177,6 +177,9 @@ export class ItemObject implements CollectionItem {
 
   get key(): string { return String(this.values.get('key') ?? ''); }
 
+  /** Sets a field without telling the owner (state reported by the window). */
+  setRaw(name: string, v: VBValue): void { this.values.set(lc(name), v); }
+
   /** Raw field access for the owner (no change notification). */
   field(name: string): VBValue { return this.values.get(lc(name)) ?? Empty; }
 

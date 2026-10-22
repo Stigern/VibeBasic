@@ -66,5 +66,16 @@ group({
   vbByte: 17, vbUserDefinedType: 36, vbArray: 8192,
 });
 
+// TreeView, ListView, MSFlexGrid
+group({
+  tvwFirst: 0, tvwLast: 1, tvwNext: 2, tvwPrevious: 3, tvwChild: 4, tvwTreeLines: 0, tvwRootLines: 1,
+  lvwIcon: 0, lvwSmallIcon: 1, lvwList: 2, lvwReport: 3, lvwAscending: 0, lvwDescending: 1,
+  lvwColumnLeft: 0, lvwColumnRight: 1, lvwColumnCenter: 2,
+  flexGridNone: 0, flexGridFlat: 1, flexGridInset: 2, flexGridRaised: 3,
+  flexSelectionFree: 0, flexSelectionByRow: 1, flexSelectionByColumn: 2,
+  flexAlignLeftTop: 0, flexAlignLeftCenter: 1, flexAlignLeftBottom: 2, flexAlignCenterTop: 3, flexAlignCenterCenter: 4,
+  flexAlignCenterBottom: 5, flexAlignRightTop: 6, flexAlignRightCenter: 7, flexAlignRightBottom: 8, flexAlignGeneral: 9,
+});
+
 // StatusBar / TabStrip
 group({ sbrNormal: 0, sbrSimple: 1, sbrText: 0, sbrLeft: 0, sbrCenter: 1, sbrRight: 2 });

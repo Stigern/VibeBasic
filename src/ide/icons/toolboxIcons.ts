@@ -28,5 +28,8 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
   UpDown: svg(box(4, 1, 8, 7, '#c0c0c0') + box(4, 8, 8, 7, '#c0c0c0') + '<path d="M6 6l2-3 2 3zM6 10l2 3 2-3z" fill="#000"/>'),
   StatusBar: svg(box(1, 5, 14, 6, '#c0c0c0') + '<path d="M2.5 6.5h6v3h-6zM9.5 6.5h4v3h-4z" fill="#fff" stroke="#808080"/>'),
   TabStrip: svg('<path d="M1.5 14.5v-9h13v9z" fill="#c0c0c0" stroke="#000"/><path d="M1.5 5.5v-2.5h5v2.5M7.5 5.5v-1.5h4v1.5" fill="#fff" stroke="#000"/>'),
+  TreeView: svg('<path d="M3 3v10M3 6h3M3 12h3M7 9h3" stroke="#808080" fill="none"/>' + box(1, 2, 4, 3, '#fff') + box(6, 5, 8, 3, '#fff') + box(6, 11, 8, 3, '#000080') + box(8, 8, 6, 3, '#fff')),
+  ListView: svg(box(1, 2, 14, 12) + '<path d="M1 5.5h14M6 2v12" stroke="#808080"/><path d="M3 8h2M3 10.5h2M3 13h2M8 8h5M8 10.5h5" stroke="#000"/>'),
+  MSFlexGrid: svg(box(1, 2, 14, 12) + '<path d="M1 5.5h14M1 8.5h14M1 11.5h14M5.5 2v12M10.5 2v12" stroke="#808080"/><rect x="2" y="3" width="3" height="2" fill="#c0c0c0"/>'),
   Form: svg(box(1, 2, 14, 12, '#c0c0c0') + '<rect x="2" y="3" width="12" height="3" fill="#000080"/>'),
 };
