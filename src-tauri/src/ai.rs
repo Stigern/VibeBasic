@@ -125,10 +125,25 @@ pub async fn chat(
   let c = client(CHAT_TIMEOUT_SECS)?;
   let body = json!({ "model": model, "messages": messages, "temperature": 0.2, "stream": false });
   let v = send_json(c.post(&url).json(&body), base_url, &url, api_key, CHAT_TIMEOUT_SECS).await?;
-  v.pointer("/choices/0/message/content")
-    .and_then(Value::as_str)
-    .map(str::to_string)
-    .ok_or_else(unreadable)
+  reply_text(&v)
+}
+
+/// The answer text of a chat reply. Reasoning models served with a reasoning parser (vLLM `--reasoning-parser`)
+/// sometimes put the whole answer in `reasoning`/`reasoning_content` and leave `content` null; then that text is
+/// used, since the code/JSON extractors find the answer inside it.
+fn reply_text(v: &Value) -> Result<String, String> {
+  let msg = v.pointer("/choices/0/message");
+  let field = |name: &str| {
+    msg.and_then(|m| m.get(name)).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+  };
+  if let Some(c) = field("content") {
+    return Ok(c);
+  }
+  if let Some(r) = field("reasoning").or_else(|| field("reasoning_content")) {
+    return Ok(r);
+  }
+  let finish = v.pointer("/choices/0/finish_reason").and_then(Value::as_str).unwrap_or("none");
+  Err(format!("{} (Details: the reply had no text; finish_reason = {finish}.)", unreadable()))
 }
 
 #[tauri::command]
@@ -171,6 +186,24 @@ mod tests {
     let r = chat(&server.url("/v1"), &None, "qwen", &msgs()).await;
     assert_eq!(r.unwrap(), "hei");
     m.assert();
+  }
+
+  #[test]
+  fn reply_text_falls_back_to_reasoning() {
+    let v = json!({"choices":[{"message":{"content":null,"reasoning":"think...\n```vb\nPrivate Sub A()\nEnd Sub\n```"},"finish_reason":"stop"}]});
+    assert!(reply_text(&v).unwrap().contains("Private Sub A()"));
+    let v = json!({"choices":[{"message":{"content":"","reasoning_content":"r"}}]});
+    assert_eq!(reply_text(&v).unwrap(), "r");
+    let v = json!({"choices":[{"message":{"content":"  hei "}}]});
+    assert_eq!(reply_text(&v).unwrap(), "hei");
+  }
+
+  #[test]
+  fn reply_text_reports_finish_reason() {
+    let v = json!({"choices":[{"message":{"content":null},"finish_reason":"length"}]});
+    let e = reply_text(&v).unwrap_err();
+    assert!(e.starts_with("The AI server sent an answer VibeBasic could not read."));
+    assert!(e.contains("finish_reason = length"));
   }
 
   #[tokio::test]
