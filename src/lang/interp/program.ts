@@ -4,8 +4,9 @@ import type { ProcDecl, TypeDecl, VBTypeName } from '../ast';
 import { VBRuntimeError } from '../errors';
 import type { BuiltinCtx } from '../builtins';
 import type { CodeLocation, Host } from '../host';
+import { generalDateText } from '../builtins/format';
 import { parseModule } from '../parser';
-import { VBArray, VBRecord, VBRef, defaultValue, toNumber, type VBValue } from '../values';
+import { VBArray, VBRecord, VBRef, defaultValue, setDateTextFormatter, toNumber, type VBValue } from '../values';
 import { EndSignal, SubCall, runGenerator, type Gen } from './driver';
 import { constExpr } from './eval';
 import { declareVariable, evalBounds, handleError, invokeProc, type BoundArg } from './exec';
@@ -14,7 +15,12 @@ import {
 } from './scope';
 
 export interface SourceModule { name: string; kind: 'form' | 'module'; source: string }
-export interface ProgramOptions { sliceSize?: number /* default 10000 */; locale?: string }
+export interface ProgramOptions {
+  sliceSize?: number /* default 10000 */;
+  locale?: string;
+  /** Default MsgBox/InputBox title (default 'Project1'). */
+  appTitle?: string;
+}
 
 export type ProgramState = 'idle' | 'running' | 'break' | 'ended';
 
@@ -51,7 +57,8 @@ export class Runtime {
   constructor(sources: SourceModule[], readonly host: Host, opts: ProgramOptions = {}) {
     this.sliceSize = Math.max(1, opts.sliceSize ?? 10000);
     this.locale = opts.locale ?? Intl.DateTimeFormat().resolvedOptions().locale;
-    this.builtinCtx = { host, locale: this.locale };
+    this.builtinCtx = { host, locale: this.locale, appTitle: opts.appTitle ?? 'Project1' };
+    setDateTextFormatter(v => generalDateText(v.serial, this.locale));
     this.declRun = new Run(this);
     for (const src of sources) {
       const m = new ModuleScope(src.name, src.kind, parseModule(src.source, src.name));

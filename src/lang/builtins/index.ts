@@ -1,38 +1,19 @@
 // Built-in function and constant registry. The interpreter looks names up
 // here after user code, enum members and constants (see interp/eval.ts).
-// Task 5 only registers what the interpreter core needs (LBound/UBound);
-// Task 6 fills in the rest of the library.
+// The library is split over strings.ts, convert.ts, math.ts, datetime.ts,
+// misc.ts (dialogs, colours, IIf ...) and constants.ts; importing this file
+// registers everything.
 
-import type { Host } from '../host';
 import { VBRuntimeError } from '../errors';
 import { VBArray, toNumber, type VBValue } from '../values';
+import { def } from './util';
 
-export interface BuiltinCtx {
-  host: Host;
-  /** BCP 47 locale for date/number text (ProgramOptions.locale). */
-  locale: string;
-}
-
-/**
- * A built-in function. The interpreter checks `minArgs`/`maxArgs` (error 450)
- * before calling `fn`. Trailing omitted arguments are left out of `args`;
- * an omitted argument in the middle (`MsgBox "x", , "t"`) is `undefined`.
- */
-export type Builtin = {
-  minArgs: number;
-  maxArgs: number;
-  fn: (args: VBValue[], ctx: BuiltinCtx) => VBValue | Promise<VBValue>;
-};
-
-/** Built-in functions by lower-case name. */
-export const BUILTINS = new Map<string, Builtin>();
-
-/** Built-in constants (vbCrLf, vbYes, ...) by lower-case name. */
-export const CONSTANTS = new Map<string, VBValue>();
+export { BUILTINS, CONSTANTS, def } from './util';
+export type { Builtin, BuiltinCtx } from './util';
+export { formatValue } from './format';
 
 function arrayBound(which: 0 | 1) {
   return (args: VBValue[]): VBValue => {
-    if (args.length < 1 || args.length > 2) throw new VBRuntimeError(450);
     const a = args[0];
     if (!(a instanceof VBArray)) throw new VBRuntimeError(13);
     const dim = args[1] === undefined ? 1 : toNumber(args[1]);
@@ -41,5 +22,12 @@ function arrayBound(which: 0 | 1) {
   };
 }
 
-BUILTINS.set('lbound', { minArgs: 1, maxArgs: 2, fn: arrayBound(0) });
-BUILTINS.set('ubound', { minArgs: 1, maxArgs: 2, fn: arrayBound(1) });
+def('lbound', 1, 2, arrayBound(0));
+def('ubound', 1, 2, arrayBound(1));
+
+import './strings';
+import './convert';
+import './math';
+import './datetime';
+import './misc';
+import './constants';

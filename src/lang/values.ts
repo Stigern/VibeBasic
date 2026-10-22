@@ -201,7 +201,7 @@ function isObject(v: VBValue): v is VBObject {
 // ---------------------------------------------------------------------------
 
 /** Round half to even (VB6 integer conversion). Never returns -0. */
-function bankers(n: number): number {
+export function bankers(n: number): number {
   const fl = Math.floor(n);
   const diff = n - fl;
   let r: number;
@@ -288,7 +288,7 @@ export function toStr(v: VBValue): string {
   if (typeof v === 'boolean') return v ? 'True' : 'False';
   if (v instanceof EmptyT) return '';
   if (v instanceof NullT) throw new VBRuntimeError(94);
-  if (isDate(v)) return dateToPlaceholder(v);
+  if (isDate(v)) return dateToText(v);
   throw new VBRuntimeError(13);
 }
 
@@ -335,7 +335,18 @@ export function dateParts(serial: number): { y: number; m: number; d: number; h:
   };
 }
 
-/** Locale-free text for a date; real formatting lives in the Format/CStr built-ins. */
+/**
+ * How `toStr` (CStr, `&`, Print) turns a date into text. The default is a
+ * locale-free ISO-like text; `Program` installs the locale-based General Date
+ * formatter (builtins/format.ts) with `setDateTextFormatter`. Global, so the
+ * most recently created Program's locale wins.
+ */
+let dateToText: (v: VBDate) => string = v => dateToPlaceholder(v);
+export function setDateTextFormatter(fn: ((v: VBDate) => string) | undefined): void {
+  dateToText = fn ?? (v => dateToPlaceholder(v));
+}
+
+/** Locale-free text for a date (the default for `toStr`). */
 function dateToPlaceholder(v: VBDate): string {
   const p = dateParts(v.serial);
   const p2 = (x: number) => String(x).padStart(2, '0');

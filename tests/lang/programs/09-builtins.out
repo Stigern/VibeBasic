@@ -1,0 +1,36 @@
+ 12 Hello|World|Wor|World
+ 5  9  0  9 
+HELLO, WORLD|hello, world
+[pad][pad  ][  pad]
+HeLLo, WorLd|HeLLo, World
+[   ]****cba
+ 65 B 248 æ€
+ 2 green|red + green + blue
+ 1 -1 
+ 42-42 .5
+42|0.5|True
+ 12  3  255  0 
+ 2  4  7  1234  2.5 False
+TrueFalseTrueTrueTrue
+IntegerDoubleStringBooleanNullEmpty 8 
+-3 -2  3 -1  4 
+ 2  4  1.23 
+FF10FFFF
+ 1  0  0  1 
+TrueTrue
+10/22/2026 1:05:09 PM
+ 2026  10  22  13  5  9  5 
+2/28/2026
+ 364 
+Thursday, October 22, 2026|22.10.2026 13:05:09
+10/22/2026|1:05:09 PM|1:05 PM
+OctoberThu
+1,234,567.89|0.50|005
+26%|$1,234.50|(3.0)
+Yes|1234.50|1.23E+04
+ 33023  128  255  16711680 
+yesb
+ 36  65  13 True
+[MsgBox] Continue?
+True
+[Error 5 at Module1:57] Invalid procedure call or argument
