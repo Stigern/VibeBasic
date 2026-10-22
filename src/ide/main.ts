@@ -8,6 +8,7 @@ import { TOOLBAR_ICONS } from './icons/toolbarIcons';
 import { IdeState } from './ideState';
 import { buildLayout, type IdeLayout } from './layout';
 import { buildMenus, type IdeActions } from './menus';
+import { registerCodeActions } from './codeWindow';
 import { openDesigner, registerDesignerActions } from './designer';
 import { createPropertiesWindow, type PropertiesWindow } from './properties';
 import { createToolbox } from './toolbox';
@@ -35,6 +36,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   const menus = buildMenus(actions, state);
   let refresh = () => {};
   registerDesignerActions(state, actions, () => refresh());
+  registerCodeActions(state, actions, { mdiHost: layout.mdiHost, actions });
   const menubar = createMenubar(layout.menubarHost, menus);
 
   const tb = (icon: string, title: string, name: string, pred?: () => boolean): ToolbarItem => ({

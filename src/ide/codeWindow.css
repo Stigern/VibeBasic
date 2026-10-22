@@ -1,0 +1,5 @@
+.cw-root { display: flex; flex-direction: column; height: 100%; }
+.cw-bar { flex: none; display: flex; gap: 6px; padding: 3px; }
+.cw-bar .cb98 { flex: 1; min-width: 0; }
+.cw-editor { flex: 1; min-height: 0; background: #fff; box-shadow: var(--w98-sunken); margin: 0 3px 3px; overflow: hidden; }
+.cw-editor .cm-editor { height: 100%; }

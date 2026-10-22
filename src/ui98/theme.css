@@ -141,6 +141,7 @@ input[type=text], textarea { cursor: text; }
 .cb98-glyph { width: 0; height: 0; border-left: 3.5px solid transparent; border-right: 3.5px solid transparent; border-top: 4px solid #000; }
 .cb98-list { position: absolute; left: 0; right: 0; top: 100%; z-index: 99999; box-sizing: border-box; max-height: 200px; overflow: auto; background: #fff; border: 1px solid #000; }
 .cb98-item { padding: 1px 3px; white-space: nowrap; }
+.cb98-bold { font-weight: bold; }
 .cb98-item:hover, .cb98-item.selected { background: var(--w98-title-from); color: #fff; }
 
 /* ---------- tabs ---------- */

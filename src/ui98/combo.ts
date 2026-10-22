@@ -6,18 +6,21 @@ export interface ComboOptions {
   /** Editable = typed text is accepted (DropDown Combo); otherwise Dropdown List. */
   editable?: boolean;
   onChange?: (value: string) => void;
+  /** Items for which this returns true are shown in bold. */
+  bold?: (item: string) => boolean;
 }
 
 export interface Combo {
   el: HTMLElement;
   getValue(): string;
   setValue(v: string): void;
-  setItems(items: string[]): void;
+  setItems(items: string[], bold?: (item: string) => boolean): void;
 }
 
 /** Win98 dropdown combo box (own DOM list, so it looks the same everywhere). */
 export function createCombo(o: ComboOptions): Combo {
   let items = [...o.items];
+  let bold = o.bold;
   let value = o.value ?? '';
   const input = h('input', { type: 'text', class: 'cb98-input', value, readOnly: !o.editable });
   const arrow = h('span', { class: 'cb98-arrow', role: 'button', 'aria-label': 'Open list' }, h('span', { class: 'cb98-glyph' }));
@@ -40,7 +43,7 @@ export function createCombo(o: ComboOptions): Combo {
   function openList() {
     closeList();
     list = h('div', { class: 'cb98-list' }, ...items.map(it => {
-      const row = h('div', { class: it === value ? 'cb98-item selected' : 'cb98-item' }, it);
+      const row = h('div', { class: `cb98-item${it === value ? ' selected' : ''}${bold?.(it) ? ' cb98-bold' : ''}` }, it);
       row.addEventListener('mousedown', e => { e.preventDefault(); set(it, true); closeList(); });
       return row;
     }));
@@ -57,6 +60,6 @@ export function createCombo(o: ComboOptions): Combo {
     el,
     getValue: () => value,
     setValue: v => set(v, false),
-    setItems: next => { items = [...next]; if (list) openList(); },
+    setItems: (next, b) => { items = [...next]; bold = b ?? bold; if (list) openList(); },
   };
 }
