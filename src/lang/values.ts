@@ -49,6 +49,9 @@ function cloneValue(v: VBValue): VBValue {
  * `init` makes the value of a fresh element (default: `defaultValue(elemType)`);
  * pass a factory for arrays of user types so each cell gets its own record.
  * A dimension with `hi = lo - 1` is allowed and empty (like `Array()`).
+ * `VBArray.unallocated()` makes a dynamic array before its first `ReDim`
+ * (`Dim a()`): it has no dimensions and every access is error 9.
+ * More than `MAX_ARRAY_ELEMENTS` elements is error 7 (Out of memory).
  */
 export class VBArray {
   bounds: [lo: number, hi: number][];
@@ -60,12 +63,28 @@ export class VBArray {
     public fixed = false,
     private init: () => VBValue = () => defaultValue(elemType),
   ) {
-    this.bounds = checkBounds(bounds);
-    this.data = this.fresh(this.bounds);
+    this.bounds = bounds.length === 0 && unallocating ? [] : checkBounds(bounds);
+    this.data = this.bounds.length === 0 ? [] : this.fresh(this.bounds);
   }
 
+  /** A dynamic array that has not been `ReDim`'d yet (`Dim a() As T`). */
+  static unallocated(elemType: VBTypeName, init?: () => VBValue): VBArray {
+    unallocating = true;
+    try {
+      return new VBArray(elemType, [], false, init);
+    } finally {
+      unallocating = false;
+    }
+  }
+
+  /** False for a dynamic array before its first `ReDim` (and after `Erase`). */
+  get allocated(): boolean { return this.bounds.length > 0; }
+
   /** Total number of elements. */
-  get size(): number { return sizeOf(this.bounds); }
+  get size(): number { return this.bounds.length === 0 ? 0 : sizeOf(this.bounds); }
+
+  /** All elements in storage order (last index varies fastest). */
+  values(): VBValue[] { return this.data.slice(); }
 
   get(idx: number[]): VBValue { return this.data[this.offset(idx)]; }
 
@@ -87,7 +106,7 @@ export class VBArray {
       const last = nb.length - 1;
       const ok = nb.length === this.bounds.length
         && nb.every((b, i) => i === last ? b[0] === this.bounds[i][0] : b[0] === this.bounds[i][0] && b[1] === this.bounds[i][1]);
-      if (!ok) throw new VBRuntimeError(9);
+      if (!ok && this.bounds.length > 0) throw new VBRuntimeError(9);
       const old = this.bounds;
       for (let flat = 0; flat < this.data.length; flat++) {
         // decompose the old flat offset into indexes, then re-place it in `next`
@@ -108,7 +127,9 @@ export class VBArray {
 
   /** Deep copy. */
   clone(): VBArray {
-    const c = new VBArray(this.elemType, this.bounds.map(b => [b[0], b[1]] as [number, number]), this.fixed, this.init);
+    const c = this.bounds.length === 0
+      ? VBArray.unallocated(this.elemType, this.init)
+      : new VBArray(this.elemType, this.bounds.map(b => [b[0], b[1]] as [number, number]), this.fixed, this.init);
     c.data = this.data.map(cloneValue);
     return c;
   }
@@ -123,12 +144,24 @@ export class VBArray {
   private offset(idx: number[]): number { return offsetIn(this.bounds, idx); }
 }
 
+/** Set while `VBArray.unallocated` runs, so the constructor accepts zero dimensions. */
+let unallocating = false;
+
+/** Arrays larger than this (2^26 elements) are error 7, Out of memory. */
+export const MAX_ARRAY_ELEMENTS = 2 ** 26;
+
+/** Bounds are rounded like `CLng` (banker's rounding); more than `MAX_ARRAY_ELEMENTS` elements is error 7. */
 function checkBounds(bounds: [number, number][]): [number, number][] {
   if (bounds.length === 0) throw new VBRuntimeError(9);
-  return bounds.map(([lo, hi]) => {
-    if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo - 1) throw new VBRuntimeError(9);
-    return [lo, hi] as [number, number];
+  const out = bounds.map(([lo, hi]) => {
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) throw new VBRuntimeError(6);
+    const l = bankers(lo);
+    const h = bankers(hi);
+    if (h < l - 1) throw new VBRuntimeError(9);
+    return [l, h] as [number, number];
   });
+  if (sizeOf(out) > MAX_ARRAY_ELEMENTS) throw new VBRuntimeError(7);
+  return out;
 }
 
 function sizeOf(b: [number, number][]): number {
@@ -138,7 +171,7 @@ function sizeOf(b: [number, number][]): number {
 }
 
 function offsetIn(bounds: [number, number][], idx: number[]): number {
-  if (idx.length !== bounds.length) throw new VBRuntimeError(9);
+  if (idx.length !== bounds.length || bounds.length === 0) throw new VBRuntimeError(9);
   let off = 0;
   for (let d = 0; d < bounds.length; d++) {
     const i = bankers(idx[d]);

@@ -1,0 +1,88 @@
+// Generator driver for the interpreter.
+//
+// All statement execution and expression evaluation are generators (`Gen<T>`).
+// A generator talks to the driver by yielding:
+//   - a Promise: the driver awaits it and resumes the generator with the
+//     result (or throws the rejection into it). Host dialogs, DoEvents and
+//     the periodic `setTimeout(0)` slice use this.
+//   - a SubCall: the driver runs that generator to completion on its own
+//     explicit stack and resumes the caller with its return value (or throws
+//     its error into the caller). Every VB procedure call goes through a
+//     SubCall, so VB recursion depth does not grow the JS stack.
+//
+// Nothing else is ever yielded. Between yields everything runs synchronously.
+
+import type { VBValue } from '../values';
+
+/** Thrown into running code to stop it (End statement, Program.end, unhandled error). Never caught by VB code. */
+export class EndSignal {
+  readonly kind = 'end';
+}
+
+/** Ask the driver to run `gen` as a nested call and resume with its result. */
+export class SubCall {
+  constructor(readonly gen: Gen<VBValue>) {}
+}
+
+export type Yielded = Promise<unknown> | SubCall;
+export type Gen<T> = Generator<Yielded, T, unknown>;
+
+type Resume = { ok: true; value: unknown } | { ok: false; error: unknown };
+
+/**
+ * Runs `root` to completion, awaiting yielded promises and running SubCalls
+ * on an explicit stack. Resolves with the root's return value; rejects with
+ * whatever the root throws.
+ */
+export async function runGenerator<T>(root: Gen<T>): Promise<T> {
+  const stack: Gen<unknown>[] = [root];
+  let input: Resume = { ok: true, value: undefined };
+  while (stack.length > 0) {
+    const g = stack[stack.length - 1];
+    let r: IteratorResult<Yielded, unknown>;
+    try {
+      r = input.ok ? g.next(input.value) : g.throw(input.error);
+    } catch (e) {
+      stack.pop();
+      input = { ok: false, error: e };
+      continue;
+    }
+    if (r.done) {
+      stack.pop();
+      input = { ok: true, value: r.value };
+      continue;
+    }
+    const y: Yielded = r.value;
+    if (y instanceof SubCall) {
+      stack.push(y.gen);
+      input = { ok: true, value: undefined };
+      continue;
+    }
+    try {
+      input = { ok: true, value: await y };
+    } catch (e) {
+      input = { ok: false, error: e };
+    }
+  }
+  if (!input.ok) throw input.error;
+  return input.value as T;
+}
+
+/**
+ * Runs a generator that must not call procedures or wait (constant
+ * expressions, array bounds in Type fields). If it yields anything it is
+ * closed and `onYield()` is called, which must throw.
+ */
+export function runSync<T>(gen: Gen<T>, onYield: () => never): T {
+  const r = gen.next();
+  if (!r.done) {
+    gen.return(undefined as T);
+    onYield();
+  }
+  return r.value;
+}
+
+/** A promise that resolves on the next macrotask, letting the UI and timers run. */
+export function nextTick(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}

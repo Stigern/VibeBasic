@@ -1,0 +1,14 @@
+ 5  4  3  2  1 
+total 22 i 13 
+until 3 
+loop while 0 
+do while 2 
+loop until 3 
+wend 7 
+exit for 8 
+abcd
+exit do 12 
+after empty 1 
+ 11  12  21  22 
+ 0  .25  .5  .75  1 
+ 1  10 
