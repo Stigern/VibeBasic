@@ -32,10 +32,10 @@ export function makePanels(lines: string[], onChange: Change): CollectionObject<
   return col;
 }
 
-/** A TabStrip Tab: Caption (default), Key, Index, Tag, Selected (read/write; setting True selects the tab). */
+/** A TabStrip Tab: Caption (default), Key, Image (index or key into the ImageList), Index, Tag, Selected (read/write; setting True selects the tab). */
 class TabItem extends ItemObject {
-  constructor(init: { Caption?: string; Key?: string }, private sel: { get(): number; set(i: number): void }) {
-    super('Tab', 'Caption', [{ name: 'Caption', kind: 'string' }, { name: 'Key', kind: 'string' }, { name: 'Tag', kind: 'any' }], { ...init });
+  constructor(init: { Caption?: string; Key?: string; Image?: string }, private sel: { get(): number; set(i: number): void }) {
+    super('Tab', 'Caption', [{ name: 'Caption', kind: 'string' }, { name: 'Key', kind: 'string' }, { name: 'Tag', kind: 'any' }, { name: 'Image', kind: 'string' }], { ...init });
   }
   hasMember(name: string): boolean { return name.toLowerCase() === 'selected' || super.hasMember(name); }
   getMember(name: string, args: VBValue[]): VBValue {
@@ -47,14 +47,14 @@ class TabItem extends ItemObject {
   }
 }
 
-export function tabLine(t: ItemObject): string { return joinFields([String(t.field('Caption')), String(t.field('Key'))]); }
+export function tabLine(t: ItemObject): string { return joinFields([String(t.field('Caption')), String(t.field('Key')), String(t.field('Image'))]); }
 
 export function makeTabs(lines: string[], onChange: Change, sel: { get(): number; set(i: number): void }): CollectionObject<ItemObject> {
   // Add(Index, Key, Caption, Image)
   const col = new CollectionObject<ItemObject>('Tabs', args => ({
-    item: new TabItem({ Key: optString(args[1]), Caption: optString(args[2]) }, sel), at: optPosition(args[0]),
+    item: new TabItem({ Key: optString(args[1]), Caption: optString(args[2]), Image: optString(args[3]) }, sel), at: optPosition(args[0]),
   }), onChange);
-  for (const line of lines) { const [Caption, Key] = splitFields(line); col.append(new TabItem({ Caption, Key }, sel)); }
+  for (const line of lines) { const [Caption, Key, Image] = splitFields(line); col.append(new TabItem({ Caption, Key, Image }, sel)); }
   return col;
 }
 

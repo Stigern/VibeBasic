@@ -76,6 +76,7 @@ export class FormInstance implements VBObject {
       timerChanged: c => this.s.syncTimer(this, c),
       propChanged: (c, p, old) => this.propChanged(c, p, old),
       dialogs: this.s.formHost,
+      controlByName: n => this.state().byName.get(lc(n)),
       files: { listVolumes: () => this.s.formHost.listVolumes(), listDir: p => this.s.formHost.listDir(p), defaultPath: this.s.appPath },
     };
     const formDef = { id: 'form', type: 'Form', name: this.def.name, index: null, parentId: null, props: this.def.props } as unknown as ControlDef;

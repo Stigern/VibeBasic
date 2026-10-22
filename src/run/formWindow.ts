@@ -6,13 +6,14 @@
 
 import { renderFormSurface, type ControlView } from '../controls/render';
 import { encodeRuns, readRuns } from '../controls/richText';
+import { userClickButton } from '../model/toolbar';
 import type { ControlDef, PropValue } from '../model/types';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 
 type Props = Record<string, PropValue>;
 type Target = { id: string; def: ControlDef | null };
 
-const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'TreeView', 'ListView', 'MSFlexGrid', 'RichTextBox']);
+const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'Toolbar', 'TreeView', 'ListView', 'MSFlexGrid', 'RichTextBox']);
 const KEY_CODES: Record<string, number> = {
   Backspace: 8, Tab: 9, Enter: 13, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34, End: 35, Home: 36,
   ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46,
@@ -191,6 +192,14 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     const tg = targetOf(e.target);
     if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl || !usable(tg.id)) return;
     emit(tg.id, 'PanelClick', [Number(e.detail.index)]);
+  });
+  // Toolbar: a click on a button toggles a check button or presses a group button (the new lines carry the state), then ButtonClick(Button)
+  on<CustomEvent>('vbbuttonclick', e => {
+    const tg = targetOf(e.target);
+    if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl || !usable(tg.id)) return;
+    const index = Number(e.detail.index), cur = propsOf(tg.id).Buttons;
+    const lines = userClickButton(Array.isArray(cur) ? cur.map(String) : [], index);
+    if (lines) emit(tg.id, 'ButtonClick', [index], { Buttons: lines });
   });
   // TabStrip: a click on a tab selects it, then Click
   on<CustomEvent>('vbtabclick', e => {

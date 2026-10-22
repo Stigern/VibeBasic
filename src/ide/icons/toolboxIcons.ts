@@ -36,6 +36,9 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
   DirListBox: svg(box(1, 1, 14, 14) + '<path d="M3 4h4v2H3zM5 7.5h4v2H5zM7 11h4v2H7z" fill="#ff0" stroke="#000"/>'),
   FileListBox: svg(box(1, 1, 14, 14) + '<path d="M3 3h5v6H3z" fill="#fff" stroke="#000"/><path d="M4 5h3M4 7h3M9 9h5v5H9z" stroke="#000" fill="#fff"/><path d="M10 11h3" stroke="#000"/>'),
   RichTextBox: svg(box(1, 2, 14, 12) + '<path d="M3 5h4M3 7.5h8M3 10h6M3 12.5h7" stroke="#000"/><path d="M9 4v3M8 7h3" stroke="#c00000" fill="none"/>'),
+  Toolbar: svg(box(1, 3, 14, 10, '#c0c0c0') + box(2, 4, 4, 8, '#c0c0c0') + '<path d="M3.500 6.500l1 1 1-1M3.500 9.500h2" stroke="#000" fill="none"/>'
+    + '<path d="M7.500 4v8" stroke="#808080"/>' + box(9, 4, 4, 8, '#c0c0c0') + '<rect x="10" y="6" width="2" height="2" fill="#008000"/><rect x="10" y="9" width="2" height="2" fill="#c00000"/>'),
+  ImageList: svg(box(1, 2, 9, 8) + '<path d="M2 9l3-4 2 2 1-1 2 3z" fill="#0000c0"/>' + box(6, 7, 9, 8) + '<path d="M7 14l3-4 2 2 1-1 2 3z" fill="#008000"/><circle cx="12.500" cy="9.500" r="1" fill="#c00000"/>'),
   SSTab: svg('<path d="M1.5 14.5v-9h13v9z" fill="#c0c0c0" stroke="#000"/><path d="M1.5 5.5v-3h4v3" fill="#fff" stroke="#000"/>'
     + '<path d="M5.5 5.5v-2h4v2M9.5 5.5v-2h5v2" fill="#c0c0c0" stroke="#000"/><path d="M3 8h6M3 10h8M3 12h5" stroke="#808080"/>'),
   Form: svg(box(1, 2, 14, 12, '#c0c0c0') + '<rect x="2" y="3" width="12" height="3" fill="#000080"/>'),

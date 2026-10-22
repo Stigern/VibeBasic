@@ -105,7 +105,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
   // ---- model -> surface sync ----------------------------------------------------------------------------------
   const snapshot = (c: ControlDef) => JSON.stringify(c.props);
   let lastForm = JSON.stringify(form0.props);
-  const last = new Map(form0.controls.map(c => [c.id, { json: snapshot(c), props: structuredClone(c.props) }]));
+  const last = new Map(form0.controls.map(c => [c.id, { json: snapshot(c), props: structuredClone(c.props), name: c.name }]));
   const structOf = (cs: ControlDef[]) => cs.map(c => `${c.id}:${c.parentId}:${c.tab ?? ''}`).join('|');
   let lastStruct = structOf(form0.controls);
   const dflt = (type: ControlType, k: string): PropValue =>
@@ -127,8 +127,11 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     form.controls.forEach((c, i) => {
       const prev = last.get(c.id);
       if (!prev) { surface.addControl(structuredClone(c), i); }
-      else if (prev.json !== snapshot(c)) { const d = diff(c.type, prev.props, c.props); if (Object.keys(d).length) surface.update(c.id, d); }
-      last.set(c.id, { json: snapshot(c), props: structuredClone(c.props) });
+      else {
+        if (prev.name !== c.name) surface.rename(c.id, c.name);   // a Toolbar finds its ImageList by name
+        if (prev.json !== snapshot(c)) { const d = diff(c.type, prev.props, c.props); if (Object.keys(d).length) surface.update(c.id, d); }
+      }
+      last.set(c.id, { json: snapshot(c), props: structuredClone(c.props), name: c.name });
     });
     const struct = structOf(form.controls);
     if (struct !== lastStruct) { surface.reorder(structuredClone(form.controls)); lastStruct = struct; }

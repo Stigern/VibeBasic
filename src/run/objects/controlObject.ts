@@ -17,7 +17,9 @@ import type { ChangeKind, CollectionObject, ItemObject } from './collectionObjec
 import { makePanels, makeTabs, panelLine, tabLine } from './commonCollections';
 import { DEFAULT_ALIGN, GridData } from './gridData';
 import { dirListItem, filterFiles, findVolume, joinPath, normalizePath, resolvePath, subDirs, type FileContext } from './fileControls';
-import { columnLine, listLine, makeColumns, makeListItems, makeNodes, nodeLines, TreeNode, type NodesCollection, type Picker } from './listCollections';
+import { columnLine, iconLine, listLine, makeColumns, makeListItems, makeNodes, nodeLines, TreeNode, type NodesCollection, type Picker } from './listCollections';
+import { listImageItemLine, makeButtons, makeListImages, toolbarLine } from './imageCollections';
+import { parseButton, setPressed } from '../../model/toolbar';
 
 export interface RunContext {
   resolveAsset(ref: PictureRef): string | null;
@@ -34,7 +36,12 @@ export interface RunContext {
   };
   /** DriveListBox, DirListBox, FileListBox: the volumes and folder contents from the backend. */
   files?: FileContext;
+  /** A control of the form by name (what `Toolbar1.ImageList` returns). */
+  controlByName?(name: string): ControlObject | ControlArrayObject | undefined;
 }
+
+/** The properties that name an ImageList of the form (`Toolbar1.ImageList = ImageList1`). */
+const IMAGE_REFS = new Set(['ImageList', 'Icons', 'SmallIcons']);
 
 /** Any picture value (what LoadPicture returns, or what `Picture` reads) carries its asset reference. */
 export type { HasPictureRef };
@@ -119,6 +126,10 @@ export class ControlObject implements VBObject {
       this.collections.set('tabs', tabs);
       const sel = Number(this.props.SelectedTab);
       this.props.SelectedTab = tabs.count === 0 ? 0 : Math.min(tabs.count, Math.max(1, sel || 1));
+    } else if (def.type === 'ImageList') {
+      this.collections.set('listimages', makeListImages(this.lines('ListImages'), () => this.sendImages()));
+    } else if (def.type === 'Toolbar') {
+      this.collections.set('buttons', makeButtons(this.lines('Buttons'), (k, i) => this.buttonsChanged(k, i)));
     } else if (def.type === 'TreeView') {
       this.collections.set('nodes', makeNodes(() => this.sendNodes(), this.picker()) as unknown as CollectionObject<ItemObject>);
     } else if (def.type === 'ListView') {
@@ -215,10 +226,36 @@ export class ControlObject implements VBObject {
     this.send({ Nodes: lines, SelectedNode: this.selectedIndex() });
   }
   private sendItems(): void {
-    const lines = this.collections.get('listitems')!.items().map(listLine);
+    const items = this.collections.get('listitems')!.items();
+    const lines = items.map(listLine), icons = items.map(iconLine);
     this.props.ListItems = lines;
+    this.props.ListIcons = icons;
     this.props.SelectedIndex = this.selectedIndex();
-    this.send({ ListItems: lines, SelectedIndex: this.selectedIndex() });
+    this.send({ ListItems: lines, ListIcons: icons, SelectedIndex: this.selectedIndex() });
+  }
+
+  // -- ImageList and Toolbar ---------------------------------------------------------------------------------------
+
+  private sendImages(): void {
+    const lines = this.collections.get('listimages')!.items().map(listImageItemLine);
+    this.props.ListImages = lines;
+    this.send({ ListImages: lines });
+  }
+
+  /** The window's button lines carry the pressed state: the items take it over. */
+  private syncButtons(lines: readonly string[]): void {
+    this.collections.get('buttons')?.items().forEach((b, i) => { if (lines[i] !== undefined) b.setRaw('Value', parseButton(lines[i]).value); });
+  }
+
+  /** A Buttons collection or button changed: pressing a tbrButtonGroup button releases its group, then the lines go to the window. */
+  private buttonsChanged(kind: ChangeKind, item: ItemObject | null): void {
+    let lines = this.collections.get('buttons')!.items().map(toolbarLine);
+    if (kind === 'item' && item && parseButton(toolbarLine(item)).value) {
+      lines = setPressed(lines, item.index, true);
+      this.syncButtons(lines);
+    }
+    this.props.Buttons = lines;
+    this.send({ Buttons: lines });
   }
   private sendColumns(): void {
     const lines = this.collections.get('columnheaders')!.items().map(columnLine);
@@ -323,6 +360,7 @@ export class ControlObject implements VBObject {
       case 'NodeClick': case 'Expand': case 'Collapse': return object('nodes');
       case 'ItemClick': return object('listitems');
       case 'ColumnClick': return object('columnheaders');
+      case 'ButtonClick': return object('buttons');
     }
     return args;
   }
@@ -342,6 +380,7 @@ export class ControlObject implements VBObject {
         if (nodes) this.props.Nodes = nodeLines(nodes.roots);
         continue;
       }
+      else if (k === 'Buttons' && Array.isArray(v)) this.syncButtons(v);   // the user pressed a check or group button
       this.props[getPropDef(this.def.type, k)?.name ?? k] = v;
     }
     if (isBrowserType(this.def.type) && 'Path' in props && this.props.Path !== oldPath) this.reload();   // a folder opened by a double click
@@ -391,6 +430,10 @@ export class ControlObject implements VBObject {
     if (pd.kind === 'list') return this.getListItem(args);
     if (pd.name === 'Selected') return this.selected(args);
     if (args.length) throw new VBRuntimeError(450);
+    if (IMAGE_REFS.has(pd.name)) {   // the ImageList control itself (its name when the form cannot be asked)
+      const name = String(this.props[pd.name] ?? '');
+      return name === '' ? Nothing : (this.ctx.controlByName?.(name) as VBValue | undefined) ?? name;
+    }
     const v = this.read(pd);
     if (pd.kind === 'font') return new FontObject(() => this.props.Font as FontValue, f => this.write(this.propDef('Font'), f));
     if (pd.kind === 'picture') return v ? new PictureObject(v as PictureRef) : Nothing;
@@ -539,6 +582,10 @@ export class ControlObject implements VBObject {
       throw new VBRuntimeError(13);
     }
     if (pd.kind === 'font') throw new VBRuntimeError(13);
+    if (IMAGE_REFS.has(pd.name)) {
+      if (value === Nothing || value === Empty) return '';
+      if (value instanceof ControlObject && value.def.type === 'ImageList') return value.def.name;
+    }
     const v = this.plain(value);
     switch (pd.kind) {
       case 'string': case 'text': return toStr(v);

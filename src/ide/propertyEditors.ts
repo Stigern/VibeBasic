@@ -75,7 +75,7 @@ export function formatPropertyValue(def: PropDef, value: PropValue | undefined):
     case 'color': return typeof v === 'number' ? formatColor(v) : '';
     case 'font': return typeof v === 'object' && v && 'name' in v ? v.name : '';
     case 'picture': return v ? '(Bitmap)' : '(None)';
-    case 'list': return Array.isArray(v) ? v.join(', ') : '';
+    case 'list': return def.name === 'ListImages' ? '(Collection)' : Array.isArray(v) ? v.join(', ') : '';
     case 'text': return typeof v === 'string' ? v.replace(/\r?\n/g, ' ') : '';
     default: return v === null ? '' : String(v);
   }

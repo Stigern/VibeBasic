@@ -19,8 +19,16 @@ export function setControlPos(c: ControlDef, left: number, top: number): void {
   c.props.Y1 = n(c.props.Y1) + dy; c.props.Y2 = n(c.props.Y2) + dy;
 }
 
-/** A StatusBar on the form docks to the bottom edge, full width (its Left, Top and Width are ignored). */
-export const isDocked = (c: Pick<ControlDef, 'type' | 'parentId'>): boolean => c.type === 'StatusBar' && c.parentId === null;
+/** The edge a control on the form docks to, full width (its Left, Top and Width are ignored): a StatusBar at the bottom, a Toolbar
+ *  by its Align (vbAlignTop 1, the default; vbAlignBottom 2; vbAlignNone 0 leaves it where it is). */
+export function dockEdge(c: Pick<ControlDef, 'type' | 'parentId' | 'props'>): 'top' | 'bottom' | null {
+  if (c.parentId !== null) return null;
+  if (c.type === 'StatusBar') return 'bottom';
+  if (c.type !== 'Toolbar') return null;
+  const a = typeof c.props?.Align === 'number' ? c.props.Align : 1;
+  return a === 1 ? 'top' : a === 2 ? 'bottom' : null;
+}
+export const isDocked = (c: Pick<ControlDef, 'type' | 'parentId' | 'props'>): boolean => dockEdge(c) !== null;
 
 /** The client area of a form in twips (Width/Height are the outer size; see formMetrics in controls/render.ts). */
 export function formClientTwips(props: Record<string, PropValue>): { width: number; height: number } {
@@ -35,5 +43,5 @@ export function formClientTwips(props: Record<string, PropValue>): { width: numb
 export function dockedRect(form: { props: Record<string, PropValue> }, c: ControlDef): { left: number; top: number; width: number; height: number } {
   const cl = formClientTwips(form.props);
   const height = typeof c.props.Height === 'number' ? c.props.Height : 315;
-  return { left: 0, top: Math.max(0, cl.height - height), width: cl.width, height };
+  return { left: 0, top: dockEdge(c) === 'top' ? 0 : Math.max(0, cl.height - height), width: cl.width, height };
 }

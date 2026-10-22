@@ -17,17 +17,19 @@ const given = (v: VBValue | undefined): v is VBValue => v !== undefined && v !==
 // TreeView
 
 const TVW_FIRST = 0, TVW_LAST = 1, TVW_NEXT = 2, TVW_CHILD = 4;
-const NODE_FIELDS = ['text', 'key', 'tag', 'expanded', 'index'];
+const NODE_FIELDS = ['text', 'key', 'tag', 'expanded', 'index', 'image', 'selectedimage'];
 
-/** A Node: Text (default), Key, Tag, Expanded, Index, Selected and the navigation members. */
+/** A Node: Text (default), Key, Tag, Expanded, Index, Image, SelectedImage (index or key into the TreeView's ImageList), Selected and the
+ *  navigation members. */
 export class TreeNode extends ItemObject {
   parent: TreeNode | null = null;
   kids: TreeNode[] = [];
   /** Where Add put it (consumed when the collection links the node into the tree). */
   pending: { rel: TreeNode | null; how: number } | null = null;
 
-  constructor(init: { Text?: string; Key?: string }, private roots: TreeNode[], private sel: Picker) {
-    super('Node', 'Text', [{ name: 'Text', kind: 'string' }, { name: 'Key', kind: 'string' }, { name: 'Tag', kind: 'any' }, { name: 'Expanded', kind: 'bool' }], { ...init });
+  constructor(init: { Text?: string; Key?: string; Image?: string; SelectedImage?: string }, private roots: TreeNode[], private sel: Picker) {
+    super('Node', 'Text', [{ name: 'Text', kind: 'string' }, { name: 'Key', kind: 'string' }, { name: 'Tag', kind: 'any' }, { name: 'Expanded', kind: 'bool' },
+      { name: 'Image', kind: 'string' }, { name: 'SelectedImage', kind: 'string' }], { ...init });
   }
 
   siblings(): TreeNode[] { return this.parent ? this.parent.kids : this.roots; }
@@ -85,11 +87,11 @@ export class NodesCollection extends CollectionObject<TreeNode> {
   clear(): void { this.roots.length = 0; super.clear(); }
 }
 
-/** Add(Relative, Relationship, Key, Text): no Relative = last root; a Relative without Relationship = tvwNext (VB6). */
+/** Add(Relative, Relationship, Key, Text, Image, SelectedImage): no Relative = last root; a Relative without Relationship = tvwNext (VB6). */
 export function makeNodes(onChange: Change, sel: Picker): NodesCollection {
   const roots: TreeNode[] = [];
   const col: NodesCollection = new NodesCollection(roots, args => {
-    const node = new TreeNode({ Key: optString(args[2]), Text: optString(args[3]) }, roots, sel);
+    const node = new TreeNode({ Key: optString(args[2]), Text: optString(args[3]), Image: optString(args[4]), SelectedImage: optString(args[5]) }, roots, sel);
     if (given(args[0])) {
       const r = args[0];
       const rel = isObject(r) ? (r instanceof TreeNode && r.owner === (col as unknown) ? r : null) : col.find(r) ?? null;
@@ -121,7 +123,7 @@ export function nodeLines(roots: TreeNode[]): string[] {
   const out: string[] = [];
   const walk = (ns: TreeNode[], level: number): void => {
     for (const n of ns) {
-      out.push(joinFields([level, n.index, n.field('Expanded') ? 1 : 0, n.key, toStr(n.field('Text'))]));
+      out.push(joinFields([level, n.index, n.field('Expanded') ? 1 : 0, n.key, toStr(n.field('Text')), toStr(n.field('Image')), toStr(n.field('SelectedImage'))]));
       walk(n.kids, level + 1);
     }
   };
@@ -132,11 +134,12 @@ export function nodeLines(roots: TreeNode[]): string[] {
 // ---------------------------------------------------------------------------------------------------------------
 // ListView
 
-/** A ListItem: Text (default), Key, Tag, SubItems(i), Selected, Index. */
+/** A ListItem: Text (default), Key, Tag, Icon, SmallIcon (index or key into the ListView's Icons / SmallIcons), SubItems(i), Selected, Index. */
 export class ListItem extends ItemObject {
   subs: string[] = [];
-  constructor(init: { Text?: string; Key?: string }, private sel: Picker) {
-    super('ListItem', 'Text', [{ name: 'Text', kind: 'string' }, { name: 'Key', kind: 'string' }, { name: 'Tag', kind: 'any' }], { ...init });
+  constructor(init: { Text?: string; Key?: string; Icon?: string; SmallIcon?: string }, private sel: Picker) {
+    super('ListItem', 'Text', [{ name: 'Text', kind: 'string' }, { name: 'Key', kind: 'string' }, { name: 'Tag', kind: 'any' },
+      { name: 'Icon', kind: 'string' }, { name: 'SmallIcon', kind: 'string' }], { ...init });
   }
   hasMember(name: string): boolean { return ['subitems', 'selected'].includes(lc(name)) || super.hasMember(name); }
 
@@ -175,9 +178,12 @@ export class ListItem extends ItemObject {
 export function makeListItems(onChange: Change, sel: Picker): CollectionObject<ItemObject> {
   // Add(Index, Key, Text, Icon, SmallIcon)
   return new CollectionObject<ItemObject>('ListItems', args => ({
-    item: new ListItem({ Key: optString(args[1]), Text: optString(args[2]) }, sel), at: optPosition(args[0]),
+    item: new ListItem({ Key: optString(args[1]), Text: optString(args[2]), Icon: optString(args[3]), SmallIcon: optString(args[4]) }, sel), at: optPosition(args[0]),
   }), onChange);
 }
+
+/** 'Icon|SmallIcon' of a list item (the window's `ListIcons`, one line per item in collection order). */
+export const iconLine = (i: ItemObject): string => joinFields([toStr(i.field('Icon')), toStr(i.field('SmallIcon'))]);
 
 export const listLine = (i: ItemObject): string => joinFields([i.index, toStr(i.field('Text')), ...(i as ListItem).subs]);
 

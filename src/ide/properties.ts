@@ -8,6 +8,7 @@ import { createCombo, type Combo } from '../ui98/combo';
 import { h } from '../ui98/dom';
 import { createTabs } from '../ui98/tabs';
 import type { IdeState } from './ideState';
+import { customPropEditor } from './imageListEditor';
 import { bytesToBase64, createColorPopup, formatPropertyValue, mimeFromPath, parsePropertyInput, showFontDialog } from './propertyEditors';
 
 const VB_OK_EXCL = 48, VB_YESNO_QUESTION = 4 | 32;
@@ -113,6 +114,7 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     const mixed = value === undefined && ts.length > 1;   // differing values in a multi-selection: blank
     const shown = mixed ? '' : formatPropertyValue(def, value);
     const text = mixed ? '' : def.kind === 'text' ? String(value ?? '') : def.kind === 'list' ? (Array.isArray(value) ? value.join('\n') : '') : shown;
+    if (customPropEditor({ doc, backend: opts.backend ?? getBackend(), project: ide.project, form, type: ts[0].type, def, value, cell, apply: (v, extra) => setValue(form, ts, def, v, extra) })) return;
     let done = false;
     const commit = (t: string) => { if (done || ide.mode !== 'design') return; done = true; void applyText(form, ts, def, t); };
     const mkInput = (multi: boolean) => {

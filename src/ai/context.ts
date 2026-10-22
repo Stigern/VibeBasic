@@ -27,7 +27,11 @@ export function describeControlTypes(): string {
     + ' Its Filter looks like "Text (*.txt)|*.txt|All (*.*)|*.*".'
     + ' DriveListBox, DirListBox and FileListBox show the Mac\'s volumes, folders and files: Drive1.Drive is the path of a volume ("/" is the startup disk), Dir1.Path a folder, File1.Pattern "*.txt;*.bas".'
     + ' The usual link is Drive1_Change: Dir1.Path = Drive1.Drive, and Dir1_Change: File1.Path = Dir1.Path; File1.FileName is the selected file. The lists are filled asynchronously, so a read of ListCount or List(i) waits for the folder.'
-    + ' An SSTab is a container with Tabs tabs (Tab is the current one, 0-based); TabCaption is one caption per line. A control added with "container" set to an SSTab goes on the tab given by "tab" (0-based, default the current tab); Top must leave room for the tabs (TabHeight, 520).');
+    + ' An SSTab is a container with Tabs tabs (Tab is the current one, 0-based); TabCaption is one caption per line. A control added with "container" set to an SSTab goes on the tab given by "tab" (0-based, default the current tab); Top must leave room for the tabs (TabHeight, 520).'
+    + ' A Toolbar sits at the top of the form, full width (Align = 1; only its Height matters); its Buttons are one per line "Caption|Key|Style|Image|ToolTipText"'
+    + ' (Style 0 default, 1 check, 2 button group, 3 separator, 4 placeholder, 5 dropdown; Image is an index or key into its ImageList).'
+    + ' An ImageList is invisible at run time; its pictures (ListImages) are added by the user in the Properties window or by code (ListImages.Add , "key", LoadPicture(path)),'
+    + ' so leave ListImages alone. A Toolbar, TreeView, TabStrip (ImageList) and ListView (Icons, SmallIcons) name an ImageList control by its Name; a TabStrip tab\'s line is "Caption|Key|Image".');
   return lines.join('\n');
 }
 

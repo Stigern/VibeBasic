@@ -92,3 +92,10 @@ group({ sbrNormal: 0, sbrSimple: 1, sbrText: 0, sbrLeft: 0, sbrCenter: 1, sbrRig
 
 // SSTab
 group({ ssStyleTabbedDialog: 0, ssStylePropertyPage: 1 });
+
+// Toolbar (Button.Style, Button.Value, Toolbar.Style) and Align
+group({
+  tbrDefault: 0, tbrCheck: 1, tbrButtonGroup: 2, tbrSeparator: 3, tbrPlaceholder: 4, tbrDropdown: 5,
+  tbrUnpressed: 0, tbrPressed: 1, tbrStandard: 0, tbrFlat: 1,
+  vbAlignNone: 0, vbAlignTop: 1, vbAlignBottom: 2, vbAlignLeft: 3, vbAlignRight: 4,
+});

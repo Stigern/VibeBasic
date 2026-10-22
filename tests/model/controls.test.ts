@@ -18,7 +18,7 @@ const ALL = Object.keys(CONTROL_TYPES) as ControlType[];
 const NON_FORM = ALL.filter(t => t !== 'Form') as Exclude<ControlType, 'Form'>[];
 
 test('registry has every ControlType keyed by its own type', () => {
-  expect(ALL.sort()).toEqual(['CheckBox', 'ComboBox', 'CommandButton', 'Form', 'Frame', 'HScrollBar', 'Image', 'Label', 'ListBox', 'OptionButton', 'PictureBox', 'ProgressBar', 'TextBox', 'Timer', 'VScrollBar', 'Shape', 'Line', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'DriveListBox', 'DirListBox', 'FileListBox', 'SSTab'].sort());
+  expect(ALL.sort()).toEqual(['CheckBox', 'ComboBox', 'CommandButton', 'Form', 'Frame', 'HScrollBar', 'Image', 'Label', 'ListBox', 'OptionButton', 'PictureBox', 'ProgressBar', 'TextBox', 'Timer', 'VScrollBar', 'Shape', 'Line', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'DriveListBox', 'DirListBox', 'FileListBox', 'SSTab', 'ImageList', 'Toolbar'].sort());
   for (const [k, d] of Object.entries(CONTROL_TYPES)) expect(d.type).toBe(k);
 });
 
@@ -47,7 +47,7 @@ test('event and method names are unique per type', () => {
 });
 
 test('common properties on every type except Timer; Timer has exactly its five', () => {
-  for (const t of NON_FORM.filter(x => x !== 'Timer' && x !== 'CommonDialog' && x !== 'Shape' && x !== 'Line' && x !== 'StatusBar')) {   // StatusBar: no TabIndex/TabStop (VB6)
+  for (const t of NON_FORM.filter(x => x !== 'Timer' && x !== 'CommonDialog' && x !== 'Shape' && x !== 'Line' && x !== 'StatusBar' && x !== 'Toolbar' && x !== 'ImageList')) {   // StatusBar, Toolbar: no TabIndex/TabStop; ImageList: Left, Top, Tag only
     for (const p of ['Left', 'Top', 'Width', 'Height', 'Visible', 'Enabled', 'TabIndex', 'TabStop', 'Tag', 'ToolTipText'])
       expect(getPropDef(t, p), `${t}.${p}`).toBeDefined();
   }
@@ -94,7 +94,7 @@ test('defaults from the control table', () => {
 test('flags: containers, invisible at runtime, tooltips', () => {
   for (const t of ALL) {
     expect(CONTROL_TYPES[t].isContainer).toBe(t === 'Form' || t === 'Frame' || t === 'PictureBox' || t === 'SSTab');
-    expect(CONTROL_TYPES[t].invisibleAtRuntime).toBe(t === 'Timer' || t === 'CommonDialog');
+    expect(CONTROL_TYPES[t].invisibleAtRuntime).toBe(t === 'Timer' || t === 'CommonDialog' || t === 'ImageList');
     expect(CONTROL_TYPES[t].toolboxTooltip.length).toBeGreaterThan(0);
   }
 });
@@ -150,7 +150,7 @@ test('event coverage per type', () => {
 
 test('methods', () => {
   const m = (t: ControlType, n: string) => CONTROL_TYPES[t].methods.find(x => x.name === n);
-  for (const t of NON_FORM.filter(x => !['Timer', 'CommonDialog', 'Shape', 'Line'].includes(x))) for (const n of ['Move', 'SetFocus', 'Refresh', 'ZOrder']) expect(m(t, n), `${t}.${n}`).toBeDefined();
+  for (const t of NON_FORM.filter(x => !['Timer', 'CommonDialog', 'Shape', 'Line', 'ImageList'].includes(x))) for (const n of ['Move', 'SetFocus', 'Refresh', 'ZOrder']) expect(m(t, n), `${t}.${n}`).toBeDefined();
   expect(m('CommandButton', 'Move')?.params).toBe('Left As Single, [Top], [Width], [Height]');
   expect(m('CommandButton', 'ZOrder')?.params).toBe('[Position]');
   expect(m('ListBox', 'AddItem')?.params).toBe('Item As String, [Index]');
@@ -163,7 +163,7 @@ test('methods', () => {
 
 test('toolbox order follows VB6', () => {
   expect(TOOLBOX_ORDER).toEqual(['Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
-    'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab']);
+    'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar', 'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab']);
 });
 
 test('getPropDef is case-insensitive and returns undefined for unknown', () => {

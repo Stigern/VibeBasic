@@ -13,7 +13,7 @@ test('component data drives the Toolbox: intrinsic controls first, then the chec
   expect(toolboxTools([])).toEqual(INTRINSIC);
   // checked out of order: the Toolbox still follows the component table
   expect(toolboxTools(['TABCTL32.OCX', 'mscomctl.ocx']).slice(INTRINSIC.length))
-    .toEqual(['ProgressBar', 'Slider', 'StatusBar', 'TabStrip', 'TreeView', 'ListView', 'SSTab']);
+    .toEqual(['ProgressBar', 'Slider', 'StatusBar', 'TabStrip', 'Toolbar', 'TreeView', 'ListView', 'ImageList', 'SSTab']);
   // every control type is reachable: intrinsic or in exactly one listed component
   const all = toolboxTools(availableComponents().map(c => c.file));
   expect([...all].sort()).toEqual([...TOOLBOX_ORDER].sort());

@@ -227,6 +227,32 @@
 .stb-grip { flex: none; width: 13px; background:
   repeating-linear-gradient(135deg, transparent 0 2px, #808080 2px 3px, #fff 3px 4px) 0 0 / 100% 100%; clip-path: polygon(100% 0, 100% 100%, 0 100%); }
 
+/* ---------- Toolbar ---------- */
+.vb-Toolbar { background: #c0c0c0; box-shadow: inset 0 -1px #808080, inset 0 1px #fff; }
+.vb-tbr { position: absolute; left: 0; top: 0; right: 0; bottom: 0; display: flex; align-items: center; flex-wrap: nowrap; overflow: hidden; padding: 0 2px; gap: 0; outline: none; }
+.tbr-btn { flex: none; box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 3px; padding: 0 4px; margin: 0 0 0 1px;
+  white-space: pre; box-shadow: inset 1px 1px #fff, inset -1px -1px #0a0a0a, inset 2px 2px #dfdfdf, inset -2px -2px #808080; }
+.tbr-flat .tbr-btn { box-shadow: none; }
+.tbr-btn.pressed { box-shadow: inset 1px 1px #0a0a0a, inset -1px -1px #fff, inset 2px 2px #808080;
+  background: repeating-conic-gradient(#c0c0c0 0 25%, #fff 0 50%) 0 0 / 2px 2px; }
+.tbr-flat .tbr-btn.pressed { box-shadow: inset 1px 1px #808080, inset -1px -1px #fff; }
+.tbr-btn.off { color: #808080; }
+.tbr-btn.off .tbr-img { opacity: .5; }
+.tbr-flat .tbr-btn:hover:not(.off):not(.pressed) { box-shadow: inset 1px 1px #fff, inset -1px -1px #808080; }
+.vb-run .tbr-btn:active:not(.off) { box-shadow: inset 1px 1px #0a0a0a, inset -1px -1px #fff, inset 2px 2px #808080; }
+.tbr-img { flex: none; image-rendering: pixelated; }
+.tbr-sep { flex: none; width: 2px; height: 22px; margin: 0 3px; box-shadow: inset 1px 0 #808080, inset -1px 0 #fff; }
+.tbr-gap { flex: none; }
+.tbr-arrow { flex: none; width: 0; height: 0; margin-left: 2px; border: 3px solid transparent; border-top: 3px solid #000; border-bottom: 0; }
+.tbr-btn.off .tbr-arrow { border-top-color: #808080; }
+.vb-ImageList { background: #c0c0c0; box-shadow: var(--w98-raised); }
+.vb-ImageList svg { display: block; }
+.ts-img, .tv-img, .lv-img { flex: none; image-rendering: pixelated; }
+.ts-img { margin-right: 3px; }
+.tv-img { margin-right: 3px; }
+.lv-cell .lv-img { vertical-align: middle; margin-right: 3px; }
+.lv-ico.lv-img { background: none; box-shadow: none; opacity: 1; width: auto; height: auto; }
+
 /* ---------- TabStrip ---------- */
 .vb-ts { position: absolute; left: 0; top: 0; right: 0; bottom: 0; outline: none; }
 .ts-body { position: absolute; left: 0; right: 0; top: 21px; bottom: 0; box-sizing: border-box; box-shadow: var(--w98-raised); background: #c0c0c0; }

@@ -340,7 +340,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     type: 'TabStrip', component: 'MSCOMCTL.OCX', namePrefix: 'TabStrip', defaultWidth: 3600, defaultHeight: 2400, toolboxTooltip: 'TabStrip',
     defaultEvent: 'Click', defaultMember: null,
     props: [
-      ...common(), font(),
+      ...common(), font(), str('ImageList'),
       p('Tabs', 'list', ['Tab 1'], { runtime: 'ro' }),
       rt('SelectedItem', 'string', ''),
       p('SelectedTab', 'int', 1, { designTime: false, runtime: 'none' }),   // 1-based index of the selected tab (window state)
@@ -353,7 +353,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     type: 'TreeView', component: 'MSCOMCTL.OCX', namePrefix: 'TreeView', defaultWidth: 2400, defaultHeight: 2400, toolboxTooltip: 'TreeView',
     defaultEvent: 'NodeClick', defaultMember: null,
     props: [
-      ...common(), font(),
+      ...common(), font(), str('ImageList'),
       en('LineStyle', 0, ['tvwTreeLines', 'tvwRootLines']), int('Indentation', 285, { min: 0 }),
       p('Nodes', 'list', [], { designTime: false, runtime: 'ro' }),
       rt('SelectedItem', 'string', ''),
@@ -367,12 +367,13 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     type: 'ListView', component: 'MSCOMCTL.OCX', namePrefix: 'ListView', defaultWidth: 3600, defaultHeight: 2400, toolboxTooltip: 'ListView',
     defaultEvent: 'ItemClick', defaultMember: null,
     props: [
-      ...common(), font(),
+      ...common(), font(), str('Icons'), str('SmallIcons'),
       en('View', 0, ['lvwIcon', 'lvwSmallIcon', 'lvwList', 'lvwReport']),
       bool('FullRowSelect', false), bool('GridLines', false), bool('Sorted', false),
       int('SortKey', 0, { min: 0 }), en('SortOrder', 0, ['lvwAscending', 'lvwDescending']),
       p('ColumnHeaders', 'list', [], { runtime: 'ro' }),
       p('ListItems', 'list', [], { designTime: false, runtime: 'ro' }),
+      p('ListIcons', 'list', [], { designTime: false, runtime: 'none' }),   // 'Icon|SmallIcon' per list item, in collection order (window state)
       rt('SelectedItem', 'string', ''),
       p('SelectedIndex', 'int', 0, { designTime: false, runtime: 'none' }),
     ],
@@ -479,14 +480,45 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     events: [ev('Click', 'PreviousTab As Integer'), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
     onPropSet: syncSSTab,
   }),
+
+  // Invisible at run time, like the CommonDialog (Left and Top only). ListImages are lines 'Key|asset|Tag' (see imageList.ts); the
+  // (Custom) editor in the Properties window adds the pictures. ImageWidth / ImageHeight are in pixels.
+  ImageList: def({
+    type: 'ImageList', component: 'MSCOMCTL.OCX', namePrefix: 'ImageList', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true,
+    toolboxTooltip: 'ImageList', defaultEvent: '', defaultMember: null,
+    props: [
+      int('Left', 0), int('Top', 0), str('Tag'),
+      int('ImageWidth', 16, { min: 1, max: 32767 }), int('ImageHeight', 16, { min: 1, max: 32767 }),
+      color('MaskColor', 0xc0c0c0), bool('UseMaskColor', true),
+      p('ListImages', 'list', [], { runtime: 'ro' }),
+    ],
+    events: [], methods: [],
+  }),
+
+  // Align top by default (full width at the top of the form; nothing is pushed down). Buttons are lines 'Caption|Key|Style|Image|ToolTipText'
+  // (see toolbar.ts); at run time they seed the Buttons collection. ButtonHeight / ButtonWidth are in twips.
+  Toolbar: def({
+    type: 'Toolbar', component: 'MSCOMCTL.OCX', namePrefix: 'Toolbar', defaultWidth: 4800, defaultHeight: 390, toolboxTooltip: 'Toolbar',
+    defaultEvent: 'ButtonClick', defaultMember: null,
+    props: [
+      int('Left', 0), int('Top', 0), int('Width', 0), int('Height', 0), bool('Visible', true), bool('Enabled', true),
+      str('Tag'), str('ToolTipText'), font(),
+      en('Align', 1, ['vbAlignNone', 'vbAlignTop', 'vbAlignBottom']),
+      str('ImageList'), en('Style', 0, ['tbrStandard', 'tbrFlat']),
+      int('ButtonHeight', 330, { min: 1 }), int('ButtonWidth', 345, { min: 1 }),
+      bool('ShowTips', true), bool('Wrappable', true),
+      p('Buttons', 'list', [], { runtime: 'ro' }),
+    ],
+    events: [evClick(), evDbl(), ev('ButtonClick', 'ByVal Button As MSComctlLib.Button'), ...evMouse()],
+  }),
 };
 
 /** VB6 toolbox order: every control type. The Toolbox shows the intrinsic ones, then the checked components' ones
  *  (components.ts toolboxTools), each in this order. */
 export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
-  'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip',
-  'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab',
+  'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar',
+  'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab',
 ];
 
 // ---------------------------------------------------------------------------------------------------------------
