@@ -13,13 +13,15 @@ test('component data drives the Toolbox: intrinsic controls first, then the chec
   expect(toolboxTools([])).toEqual(INTRINSIC);
   // checked out of order: the Toolbox still follows the component table
   expect(toolboxTools(['TABCTL32.OCX', 'mscomctl.ocx']).slice(INTRINSIC.length))
-    .toEqual(['ProgressBar', 'Slider', 'StatusBar', 'TabStrip', 'TreeView', 'ListView', 'SSTab']);
+    .toEqual(['ProgressBar', 'Slider', 'StatusBar', 'TabStrip', 'Toolbar', 'TreeView', 'ListView', 'ImageList', 'SSTab']);
   // every control type is reachable: intrinsic or in exactly one listed component
   const all = toolboxTools(availableComponents().map(c => c.file));
   expect([...all].sort()).toEqual([...TOOLBOX_ORDER].sort());
   // components without any control yet are not listed
-  expect(availableComponents().map(c => c.file)).toEqual(['MSCOMCTL.OCX', 'MSCOMCT2.OCX', 'COMDLG32.OCX', 'RICHTX32.OCX', 'MSFLXGRD.OCX', 'TABCTL32.OCX']);
-  expect(controlsOf('MSINET.OCX')).toEqual([]);
+  expect(availableComponents().map(c => c.file)).toEqual(['MSCOMCTL.OCX', 'MSCOMCT2.OCX', 'COMDLG32.OCX', 'RICHTX32.OCX', 'MSFLXGRD.OCX', 'TABCTL32.OCX', 'SHDOCVW.DLL', 'MSINET.OCX', 'MSWINSCK.OCX', 'MSCHRT20.OCX', 'MSMASK32.OCX', 'MCI32.OCX', 'MSDXM.OCX', 'AGENTCTL.DLL']);
+  expect(controlsOf('MSINET.OCX')).toEqual(['Inet']);
+  expect(controlsOf('MCI32.OCX')).toEqual(['MMControl']);
+  expect(controlsOf('AGENTCTL.DLL')).toEqual(['Agent']);
 });
 
 test('an old project (no components) keeps its controls visible; a used component is always checked on load', () => {

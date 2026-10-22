@@ -1,13 +1,17 @@
 // Run-time control objects: a ControlObject mirrors one control's properties and queues every change
 // as a patch to the form window; a ControlArrayObject is the `Command1(i)` collection.
 
-import type { VBObject } from '../../lang/host';
+import type { OutSlot, VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
-import { Empty, Nothing, coerce, isObject, toBool, toStr, type VBValue } from '../../lang/values';
+import { Empty, Nothing, Null, NullT, coerce, isObject, toBool, toStr, type VBDate, type VBRef, type VBValue } from '../../lang/values';
 import { CONTROL_TYPES, getPropDef, type PropDef } from '../../model/controls';
 import { decodeRuns, encodeRuns, formatAt, formatRange, replaceRange, runsText, type RtfPatch, type Run } from '../../controls/richText';
 import type { DirListing, Volume } from '../../backend/backend';
+import { formatValue } from '../../lang/builtins/format';
+import { dateParts } from '../../lang/values';
+import { clampDate, dayOf, setPart, weekdayOf } from '../../model/dateControls';
 import { joinFields } from '../../model/fieldLines';
+import { clipText, fitText, fromText, maskedText, parseMask, typeChar } from '../../model/mask';
 import { flagOn, syncSSTab } from '../../model/ssTab';
 import { baseName, type FileDialogRequest } from '../commonDialog';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../../model/types';
@@ -17,7 +21,16 @@ import type { ChangeKind, CollectionObject, ItemObject } from './collectionObjec
 import { makePanels, makeTabs, panelLine, tabLine } from './commonCollections';
 import { DEFAULT_ALIGN, GridData } from './gridData';
 import { dirListItem, filterFiles, findVolume, joinPath, normalizePath, resolvePath, subDirs, type FileContext } from './fileControls';
-import { columnLine, listLine, makeColumns, makeListItems, makeNodes, nodeLines, TreeNode, type NodesCollection, type Picker } from './listCollections';
+import { columnLine, iconLine, listLine, makeColumns, makeListItems, makeNodes, nodeLines, TreeNode, type NodesCollection, type Picker } from './listCollections';
+import { listImageItemLine, makeButtons, makeListImages, toolbarLine } from './imageCollections';
+import { parseButton, setPressed } from '../../model/toolbar';
+import type { NetSession } from '../net';
+import { decodeChart, encodeChart, resizeChart, sampleChart, MAX_CHART_COLS, MAX_CHART_ROWS, type ChartModel } from '../../model/chart';
+import { chartFromArray, chartToArray, ChartPlot } from './chartObjects';
+import { InetControl, WebBrowserControl, WinsockControl, type NetControl, type NetHost } from './netControls';
+import type { RichControl, RichHost } from './richControl';
+import { MciControl, MediaPlayerControl } from './mediaControls';
+import { AgentControl } from './agentControl';
 
 export interface RunContext {
   resolveAsset(ref: PictureRef): string | null;
@@ -34,7 +47,18 @@ export interface RunContext {
   };
   /** DriveListBox, DirListBox, FileListBox: the volumes and folder contents from the backend. */
   files?: FileContext;
+  /** A control of the form by name (what `Toolbar1.ImageList` returns). */
+  controlByName?(name: string): ControlObject | ControlArrayObject | undefined;
+  /** Inet, Winsock, WebBrowser: the run's network (made on first use). Throws when there is none. */
+  net?(): NetSession;
+  /** Raises an event of the control from outside code (a socket's DataArrival ...); resolves when the handler has finished. */
+  raise?(ctrl: ControlObject, event: string, args: VBRef[]): Promise<void>;
+  /** MMControl, MediaPlayer: a file of the program (relative to App.Path); error 53 when it cannot be read. */
+  readFile?(path: string): Promise<Uint8Array>;
 }
+
+/** The properties that name an ImageList of the form (`Toolbar1.ImageList = ImageList1`). */
+const IMAGE_REFS = new Set(['ImageList', 'Icons', 'SmallIcons']);
 
 /** Any picture value (what LoadPicture returns, or what `Picture` reads) carries its asset reference. */
 export type { HasPictureRef };
@@ -64,7 +88,19 @@ class FontObject implements VBObject {
 
 const isListType = (t: string): boolean => t === 'ListBox' || t === 'ComboBox';
 const isBrowserType = (t: string): boolean => t === 'DirListBox' || t === 'FileListBox';
+/** DTPicker and MonthView: Value is a date serial (null: no date); Day ... DayOfWeek are parts of it. */
+const isDateType = (t: string): boolean => t === 'DTPicker' || t === 'MonthView';
+const DATE_PARTS = new Set(['Day', 'Month', 'Year', 'Hour', 'Minute', 'Second', 'DayOfWeek']);
+const dateValue = (serial: number): VBDate => ({ kind: 'date', serial });
 const num = (v: VBValue): number => coerce(v, 'Long') as number;
+/** MaskedEdit.Text = "...": the display string for it; 380 when it does not fit the Mask. */
+function fromTextOrFail(mask: string, prompt: string, text: string): string {
+  const slots = parseMask(mask);
+  if (slots.length === 0) return text;
+  const t = fromText(slots, prompt, text);
+  if (t === null) throw new VBRuntimeError(380);
+  return t;
+}
 const badIndex = (): VBRuntimeError => new VBRuntimeError(381, 'Invalid property array index');
 
 export class ControlObject implements VBObject {
@@ -87,6 +123,12 @@ export class ControlObject implements VBObject {
   private pendingName: string | null = null;
   /** DriveListBox: the volumes, once known. */
   private volumes: Volume[] | null = null;
+  /** Winsock, Inet, WebBrowser: their methods and network state. */
+  private ext: NetControl | null = null;
+  /** MMControl, MediaPlayer, Agent: their properties, methods and state (see richControl.ts). */
+  private rich: RichControl | null = null;
+  /** MSChart: the data table (the window gets it as the prop `ChartLines`) and the Plot.Axis(id) titles. */
+  private chart: ChartModel | null = null;
 
   constructor(readonly def: ControlDef, private formKey: string, private queue: PatchQueue, private ctx: RunContext) {
     const td = CONTROL_TYPES[def.type];
@@ -111,6 +153,24 @@ export class ControlObject implements VBObject {
       this.reload();
     } else if (def.type === 'DriveListBox') this.loadVolumes();
     if (def.type === 'SSTab') syncSSTab(this.props, 'Tabs');
+    if (def.type === 'Winsock') this.ext = new WinsockControl(this.netHost());
+    else if (def.type === 'Inet') this.ext = new InetControl(this.netHost());
+    else if (def.type === 'WebBrowser') this.ext = new WebBrowserControl(this.netHost());
+    if (def.type === 'MMControl') this.rich = new MciControl(this.richHost());
+    else if (def.type === 'MediaPlayer') this.rich = new MediaPlayerControl(this.richHost());
+    else if (def.type === 'Agent') this.rich = new AgentControl(this.richHost());
+    if (def.type === 'MonthView') {   // the selection starts out as the Value
+      const v = typeof this.props.Value === 'number' ? dayOf(this.props.Value) : dayOf(Number(CONTROL_TYPES.MonthView.props.find(p => p.name === 'Value')!.default));
+      this.props.Value = v;
+      this.props.SelStart = v; this.props.SelEnd = v;
+    }
+    if (def.type === 'MSChart') {
+      const rows = Math.max(1, Number(this.props.RowCount) || 5), cols = Math.max(1, Number(this.props.ColumnCount) || 4);
+      this.chart = decodeChart(this.lines('ChartLines')) ?? sampleChart(rows, cols);
+      this.props.AxisTitles = ['', '', '', ''].map((t, i) => this.lines('AxisTitles')[i] ?? t);
+      this.syncChart(false);
+    }
+    if (def.type === 'MaskedEdit') this.props.Text = fitText(String(this.props.Mask ?? ''), String(this.props.PromptChar ?? '_'), String(this.props.Text ?? ''));
     if (def.type === 'StatusBar') {
       this.collections.set('panels', makePanels(this.lines('Panels'), (k, _i, at) => this.collectionChanged(k, at)));
     } else if (def.type === 'TabStrip') {
@@ -119,6 +179,10 @@ export class ControlObject implements VBObject {
       this.collections.set('tabs', tabs);
       const sel = Number(this.props.SelectedTab);
       this.props.SelectedTab = tabs.count === 0 ? 0 : Math.min(tabs.count, Math.max(1, sel || 1));
+    } else if (def.type === 'ImageList') {
+      this.collections.set('listimages', makeListImages(this.lines('ListImages'), () => this.sendImages()));
+    } else if (def.type === 'Toolbar') {
+      this.collections.set('buttons', makeButtons(this.lines('Buttons'), (k, i) => this.buttonsChanged(k, i)));
     } else if (def.type === 'TreeView') {
       this.collections.set('nodes', makeNodes(() => this.sendNodes(), this.picker()) as unknown as CollectionObject<ItemObject>);
     } else if (def.type === 'ListView') {
@@ -130,6 +194,107 @@ export class ControlObject implements VBObject {
       this.props.Col = Math.min(Number(this.props.Col), this.grid.cols - 1);
       this.syncGrid();
     }
+  }
+
+  // -- Winsock, Inet and WebBrowser --------------------------------------------------------------------------------
+
+  private netHost(): NetHost {
+    return {
+      props: this.props, name: this.def.name, self: this,
+      raise: (event, args) => this.ctx.raise?.(this, event, args) ?? Promise.resolve(),
+      net: () => {
+        const n = this.ctx.net?.();
+        if (!n) throw new VBRuntimeError(429, 'ActiveX component can\'t create object');
+        return n;
+      },
+      send: p => this.send(p),
+    };
+  }
+
+  private richHost(): RichHost {
+    return {
+      props: this.props, name: this.def.name,
+      raise: (event, args) => this.ctx.raise?.(this, event, args) ?? Promise.resolve(),
+      send: p => this.send(p),
+      readFile: path => {
+        const r = this.ctx.readFile;
+        return r ? r(path) : Promise.reject(new VBRuntimeError(53));
+      },
+    };
+  }
+
+  /** The form unloads or the program ends: sockets close, requests are aborted, media stops. */
+  dispose(): void { this.ext?.dispose(); this.rich?.dispose(); }
+
+  /** Winsock GetData / PeekData write to their first argument. */
+  byRefArgs(name: string): readonly number[] | undefined { return this.ext?.byRef?.[name.toLowerCase()]; }
+
+  // -- MSChart ----------------------------------------------------------------------------------------------------
+
+  /** The counts, the current Row / Column and the data are in step with the table; with `send` the window gets them. */
+  private syncChart(send = true): void {
+    const m = this.chart!, p = this.props;
+    p.RowCount = m.rows; p.ColumnCount = m.cols;
+    p.Row = Math.min(m.rows, Math.max(1, Number(p.Row) || 1)); p.Column = Math.min(m.cols, Math.max(1, Number(p.Column) || 1));
+    p.ChartLines = encodeChart(m);
+    if (send) this.send({ RowCount: m.rows, ColumnCount: m.cols, Row: p.Row, Column: p.Column, ChartLines: p.ChartLines });
+  }
+
+  /** Data, RowLabel, ColumnLabel, ChartData and Plot; undefined = an ordinary property. */
+  private chartGet(pd: PropDef, args: VBValue[]): VBValue | undefined {
+    const m = this.chart!, r = Number(this.props.Row) - 1, c = Number(this.props.Column) - 1;
+    switch (pd.name) {
+      case 'Data': case 'RowLabel': case 'ColumnLabel': case 'ChartData': case 'Plot':
+        if (args.length) throw new VBRuntimeError(450);
+    }
+    switch (pd.name) {
+      case 'Data': return m.values[r][c];
+      case 'RowLabel': return m.rowLabels[r];
+      case 'ColumnLabel': return m.colLabels[c];
+      case 'ChartData': return chartToArray(m);
+      case 'Plot': return new ChartPlot({ get: id => this.axisTitles()[id] ?? '', set: (id, t) => this.setAxisTitle(id, t) });
+    }
+    return undefined;
+  }
+
+  private axisTitles(): string[] { return this.lines('AxisTitles'); }
+  private setAxisTitle(id: number, text: string): void {
+    const t = this.axisTitles();
+    while (t.length < 4) t.push('');
+    t[id] = text;
+    this.props.AxisTitles = t;
+    this.send({ AxisTitles: t });
+  }
+
+  /** RowCount, ColumnCount, Row, Column, Data, RowLabel, ColumnLabel and ChartData are set here; false for every other property. */
+  private chartSet(pd: PropDef, args: VBValue[], value: VBValue): boolean {
+    const m = this.chart!;
+    const known = ['RowCount', 'ColumnCount', 'Row', 'Column', 'Data', 'RowLabel', 'ColumnLabel', 'ChartData'];
+    if (!known.includes(pd.name)) return false;
+    if (args.length) throw new VBRuntimeError(450);
+    const v = this.plain(value);
+    const r = Number(this.props.Row) - 1, c = Number(this.props.Column) - 1;
+    switch (pd.name) {
+      case 'RowCount': case 'ColumnCount': {
+        const n = num(v), isRow = pd.name === 'RowCount';
+        if (n < 1 || n > (isRow ? MAX_CHART_ROWS : MAX_CHART_COLS)) throw new VBRuntimeError(380);
+        this.chart = isRow ? resizeChart(m, n, m.cols) : resizeChart(m, m.rows, n);
+        this.syncChart();
+        return true;
+      }
+      case 'Row': case 'Column': {
+        const n = num(v);
+        if (n < 1 || n > (pd.name === 'Row' ? m.rows : m.cols)) throw new VBRuntimeError(380);
+        this.write(pd, n);
+        return true;
+      }
+      case 'Data': m.values[r][c] = coerce(v, 'Double') as number; break;
+      case 'RowLabel': m.rowLabels[r] = toStr(v); break;
+      case 'ColumnLabel': m.colLabels[c] = toStr(v); break;
+      case 'ChartData': this.chart = chartFromArray(value); break;
+    }
+    this.syncChart();
+    return true;
   }
 
   // -- DriveListBox, DirListBox and FileListBox ----------------------------------------------------------------
@@ -215,10 +380,36 @@ export class ControlObject implements VBObject {
     this.send({ Nodes: lines, SelectedNode: this.selectedIndex() });
   }
   private sendItems(): void {
-    const lines = this.collections.get('listitems')!.items().map(listLine);
+    const items = this.collections.get('listitems')!.items();
+    const lines = items.map(listLine), icons = items.map(iconLine);
     this.props.ListItems = lines;
+    this.props.ListIcons = icons;
     this.props.SelectedIndex = this.selectedIndex();
-    this.send({ ListItems: lines, SelectedIndex: this.selectedIndex() });
+    this.send({ ListItems: lines, ListIcons: icons, SelectedIndex: this.selectedIndex() });
+  }
+
+  // -- ImageList and Toolbar ---------------------------------------------------------------------------------------
+
+  private sendImages(): void {
+    const lines = this.collections.get('listimages')!.items().map(listImageItemLine);
+    this.props.ListImages = lines;
+    this.send({ ListImages: lines });
+  }
+
+  /** The window's button lines carry the pressed state: the items take it over. */
+  private syncButtons(lines: readonly string[]): void {
+    this.collections.get('buttons')?.items().forEach((b, i) => { if (lines[i] !== undefined) b.setRaw('Value', parseButton(lines[i]).value); });
+  }
+
+  /** A Buttons collection or button changed: pressing a tbrButtonGroup button releases its group, then the lines go to the window. */
+  private buttonsChanged(kind: ChangeKind, item: ItemObject | null): void {
+    let lines = this.collections.get('buttons')!.items().map(toolbarLine);
+    if (kind === 'item' && item && parseButton(toolbarLine(item)).value) {
+      lines = setPressed(lines, item.index, true);
+      this.syncButtons(lines);
+    }
+    this.props.Buttons = lines;
+    this.send({ Buttons: lines });
   }
   private sendColumns(): void {
     const lines = this.collections.get('columnheaders')!.items().map(columnLine);
@@ -323,6 +514,9 @@ export class ControlObject implements VBObject {
       case 'NodeClick': case 'Expand': case 'Collapse': return object('nodes');
       case 'ItemClick': return object('listitems');
       case 'ColumnClick': return object('columnheaders');
+      case 'ButtonClick': return object('buttons');
+      case 'DateClick': case 'DateDblClick': return args.map(a => dateValue(Number(a)));
+      case 'SelChange': if (this.def.type === 'MonthView') return args.map(a => dateValue(Number(a))); break;
     }
     return args;
   }
@@ -342,9 +536,12 @@ export class ControlObject implements VBObject {
         if (nodes) this.props.Nodes = nodeLines(nodes.roots);
         continue;
       }
+      else if (k === 'Buttons' && Array.isArray(v)) this.syncButtons(v);   // the user pressed a check or group button
       this.props[getPropDef(this.def.type, k)?.name ?? k] = v;
     }
     if (isBrowserType(this.def.type) && 'Path' in props && this.props.Path !== oldPath) this.reload();   // a folder opened by a double click
+    this.ext?.applyState?.(props);
+    this.rich?.applyState?.(props);
     if (this.def.type === 'RichTextBox') {   // the user typed, or moved the selection
       if ('Runs' in props) this.runs = decodeRuns(String(props.Runs ?? '')) ?? (this.props.Text ? [{ text: String(this.props.Text), fmt: {} }] : []);
       if ('SelStart' in props || 'SelLength' in props) this.pendingFmt = null;
@@ -369,7 +566,11 @@ export class ControlObject implements VBObject {
       if (this.def.index === null) throw new VBRuntimeError(343, 'Object not an array');
       return this.def.index;
     }
+    // a method used as a function: `s = Inet1.OpenURL(url)` (the interpreter waits for a Promise)
+    if (this.ext && !getPropDef(this.def.type, name) && CONTROL_TYPES[this.def.type].methods.some(m => m.name.toLowerCase() === l)) return this.callMethod(name, args) as VBValue;
     const pd = this.propDef(name);
+    if (this.rich?.get) { const v = this.rich.get(pd.name, args); if (v !== undefined) return v; }
+    if (this.chart) { const v = this.chartGet(pd, args); if (v !== undefined) return v; }
     const col = this.collections.get(l);
     if (col) return args.length ? col.getMember('Item', args) : col;
     if (pd.name === 'SelectedItem') {
@@ -391,15 +592,27 @@ export class ControlObject implements VBObject {
     if (pd.kind === 'list') return this.getListItem(args);
     if (pd.name === 'Selected') return this.selected(args);
     if (args.length) throw new VBRuntimeError(450);
+    if (IMAGE_REFS.has(pd.name)) {   // the ImageList control itself (its name when the form cannot be asked)
+      const name = String(this.props[pd.name] ?? '');
+      return name === '' ? Nothing : (this.ctx.controlByName?.(name) as VBValue | undefined) ?? name;
+    }
     const v = this.read(pd);
     if (pd.kind === 'font') return new FontObject(() => this.props.Font as FontValue, f => this.write(this.propDef('Font'), f));
     if (pd.kind === 'picture') return v ? new PictureObject(v as PictureRef) : Nothing;
+    if (pd.kind === 'date') return typeof v === 'number' ? dateValue(v) : Null;
+    if (v === null && isDateType(this.def.type)) return Null;   // Day ... of a DTPicker without a Value
     return v as VBValue;
   }
 
-  setMember(name: string, args: VBValue[], value: VBValue): void {
+  setMember(name: string, args: VBValue[], value: VBValue): void | Promise<void> {
     const pd = this.propDef(name);
     if (pd.runtime === 'ro' || name.toLowerCase() === 'name' || name.toLowerCase() === 'index') throw new VBRuntimeError(383);
+    if (this.rich?.set) {
+      if (args.length) throw new VBRuntimeError(450);
+      const r = this.rich.set(pd.name, this.plain(value));
+      if (r !== false) return r === true ? undefined : r;
+    }
+    if (this.chart && this.chartSet(pd, args, value)) return;
     if (pd.name === 'SelectedItem') {
       if (args.length) throw new VBRuntimeError(450);
       if (value === Nothing) throw new VBRuntimeError(91);
@@ -443,12 +656,48 @@ export class ControlObject implements VBObject {
       return;
     }
     if (args.length) throw new VBRuntimeError(450);
-    this.write(pd, this.convert(pd, value));
+    if (this.def.type === 'MaskedEdit' && pd.name === 'SelText' && String(this.props.Mask ?? '') !== '') { this.maskSelText(toStr(this.plain(value))); return; }
+    if (isDateType(this.def.type) && DATE_PARTS.has(pd.name)) { this.setDatePart(pd.name, num(this.plain(value))); return; }
+    const v = this.convert(pd, value);
+    if (this.ext?.set?.(pd.name, v)) return;
+    this.write(pd, v);
   }
 
-  callMethod(name: string, args: VBValue[]): VBValue | Promise<VBValue> {
+  /** MaskedEdit.SelText = "x" with a Mask: the characters are typed over the selection (those that do not fit are left out). */
+  private maskSelText(text: string): void {
+    const slots = parseMask(String(this.props.Mask)), prompt = String(this.props.PromptChar ?? '_').charAt(0) || '_';
+    let t = String(this.props.Text ?? ''), pos = Number(this.props.SelStart), len = Number(this.props.SelLength);
+    for (const ch of text) {
+      const r = typeChar(slots, t, prompt, pos, len, ch, this.props.AllowPrompt === true);
+      if (!r.error) { t = r.text; pos = r.caret; len = 0; }
+    }
+    this.write(this.propDef('Text'), t);
+    this.write(this.propDef('SelStart'), pos);
+    this.write(this.propDef('SelLength'), 0);
+  }
+
+  /** DTPicker / MonthView Day, Month, Year, Hour, Minute, Second, DayOfWeek: changes that part of Value (380 when it does not fit). */
+  private setDatePart(name: string, n: number): void {
+    const cur = this.props.Value;
+    if (typeof cur !== 'number') throw new VBRuntimeError(94);
+    let next: number | null;
+    if (name === 'DayOfWeek') next = n >= 1 && n <= 7 ? cur + (n - weekdayOf(cur)) : null;
+    else next = setPart(cur, name as 'Day', n);
+    if (next === null) throw new VBRuntimeError(380);
+    this.write(this.propDef('Value'), this.clampToRange(next));
+  }
+
+  /** A date inside MinDate and MaxDate (MonthView: a whole day). */
+  private clampToRange(serial: number): number {
+    const s = this.def.type === 'MonthView' ? dayOf(serial) : serial;
+    return clampDate(s, Number(this.props.MinDate), Number(this.props.MaxDate));
+  }
+
+  callMethod(name: string, args: VBValue[], refs?: (OutSlot | undefined)[]): VBValue | Promise<VBValue> {
     const l = name.toLowerCase();
     if (!CONTROL_TYPES[this.def.type].methods.some(m => m.name.toLowerCase() === l)) throw new VBRuntimeError(438);
+    if (this.ext) { const r = this.ext.call(l, args, refs); if (r !== undefined) return r; }
+    if (this.rich?.call) { const r = this.rich.call(l, args, refs); if (r !== undefined) return r; }
     switch (l) {
       case 'move': return this.move(args);
       case 'setfocus': this.queue.send(this.formKey, { t: 'focus', id: this.def.id }); return Empty;
@@ -490,7 +739,17 @@ export class ControlObject implements VBObject {
           const i = this.props.ListIndex as number;
           return i >= 0 ? this.list()[i] ?? '' : '';
         }
+        if (this.def.type === 'MaskedEdit') return this.maskValue('text');
         break;
+      case 'ClipText': case 'FormattedText': return this.maskValue(pd.name === 'ClipText' ? 'clip' : 'formatted');
+      case 'Day': case 'Month': case 'Year': case 'Hour': case 'Minute': case 'Second': case 'DayOfWeek': {
+        if (!isDateType(this.def.type)) break;
+        const v = this.props.Value;
+        if (typeof v !== 'number') return null;
+        if (pd.name === 'DayOfWeek') return weekdayOf(v);
+        const p = dateParts(v);
+        return ({ Day: p.d, Month: p.m, Year: p.y, Hour: p.h, Minute: p.n, Second: p.s } as Record<string, number>)[pd.name];
+      }
       case 'SelText': {
         const t = String(this.props.Text ?? ''), s = Number(this.props.SelStart), n = Number(this.props.SelLength);
         return t.substr(s, n);
@@ -539,9 +798,32 @@ export class ControlObject implements VBObject {
       throw new VBRuntimeError(13);
     }
     if (pd.kind === 'font') throw new VBRuntimeError(13);
+    if (IMAGE_REFS.has(pd.name)) {
+      if (value === Nothing || value === Empty) return '';
+      if (value instanceof ControlObject && value.def.type === 'ImageList') return value.def.name;
+    }
     const v = this.plain(value);
     switch (pd.kind) {
-      case 'string': case 'text': return toStr(v);
+      case 'date': {
+        if (v instanceof NullT) {   // only a DTPicker with a CheckBox can be without a date
+          if (this.def.type === 'DTPicker' && pd.name === 'Value' && this.props.CheckBox === true) return null;
+          throw new VBRuntimeError(94);
+        }
+        const serial = (coerce(v, 'Date') as VBDate).serial;
+        if (pd.name === 'MinDate' && serial > Number(this.props.MaxDate)) throw new VBRuntimeError(380);
+        if (pd.name === 'MaxDate' && serial < Number(this.props.MinDate)) throw new VBRuntimeError(380);
+        if (pd.name === 'MinDate' || pd.name === 'MaxDate') return serial;
+        const day = this.clampToRange(serial);
+        if (pd.name === 'SelEnd' && this.props.MultiSelect === true && Math.abs(day - Number(this.props.SelStart)) + 1 > Number(this.props.MaxSelCount)) {
+          throw new VBRuntimeError(380);   // a range of at most MaxSelCount days
+        }
+        return day;
+      }
+      case 'string': case 'text':
+        if (this.def.type === 'MaskedEdit' && pd.name === 'Text') {   // the whole text with its literals, or just the entries
+          return fromTextOrFail(String(this.props.Mask ?? ''), String(this.props.PromptChar ?? '_'), toStr(v));
+        }
+        return toStr(v);
       case 'bool': return toBool(v);
       case 'color': return num(v);
       case 'enum': {
@@ -580,6 +862,11 @@ export class ControlObject implements VBObject {
     } else {
       this.props[name] = v;
       patch[name] = v;
+      if (isDateType(this.def.type)) this.syncDates(name, patch);
+      else if (this.def.type === 'MaskedEdit' && (name === 'Mask' || name === 'PromptChar')) {   // a new mask starts out empty
+        this.props.Text = fitText(String(this.props.Mask ?? ''), String(this.props.PromptChar ?? '_'), '');
+        patch.Text = this.props.Text;
+      }
       if (isBrowserType(this.def.type) && v !== old) {
         if (name === 'Path') { Object.assign(patch, { List: [], ListIndex: -1 }); Object.assign(this.props, { List: [], ListIndex: -1 }); this.reload(); }
         else if (this.def.type === 'FileListBox' && (name === 'Pattern' || name === 'Hidden' || name === 'Normal' || name === 'Archive')) Object.assign(patch, this.listProps());
@@ -597,6 +884,42 @@ export class ControlObject implements VBObject {
     if (this.grid && (name === 'Rows' || name === 'Cols' || name === 'FixedRows' || name === 'FixedCols')) this.gridResized();
     if (this.def.type === 'Timer' && (name === 'Enabled' || name === 'Interval')) this.ctx.timerChanged(this);
     this.ctx.propChanged?.(this, name === 'SelText' ? 'Text' : name, old);
+  }
+
+  /** DTPicker / MonthView: a date property was set; Value, SelStart and SelEnd stay in step and inside MinDate .. MaxDate. */
+  private syncDates(name: string, patch: Record<string, PropValue>): void {
+    const p = this.props;
+    const set = (k: string, v: PropValue) => { p[k] = v; patch[k] = v; };
+    const clampProp = (k: string) => { const v = p[k]; if (typeof v === 'number' && this.clampToRange(v) !== v) set(k, this.clampToRange(v)); };
+    if (name === 'MinDate' || name === 'MaxDate') {
+      clampProp('Value');
+      if (this.def.type === 'MonthView') { clampProp('SelStart'); clampProp('SelEnd'); }
+      return;
+    }
+    if (this.def.type !== 'MonthView') return;
+    const multi = p.MultiSelect === true;
+    if (name === 'Value') { set('SelStart', p.Value); set('SelEnd', p.Value); }
+    else if (name === 'SelStart') {   // the end stays when it still makes a range of at most MaxSelCount days
+      const span = Number(p.SelEnd) - Number(p.SelStart) + 1;
+      if (!multi || span < 1 || span > Number(p.MaxSelCount)) set('SelEnd', p.SelStart);
+      set('Value', p.SelStart);
+    }
+    else if (name === 'SelEnd') { if (!multi || Number(p.SelEnd) < Number(p.SelStart)) set('SelStart', p.SelEnd); set('Value', p.SelStart); }
+    else if (name === 'MultiSelect' && !multi) set('SelEnd', p.SelStart);
+  }
+
+  /** MaskedEdit: Text (with PromptInclude), ClipText (entries only) and FormattedText (the display, or the Format applied to the entries). */
+  private maskValue(kind: 'text' | 'clip' | 'formatted'): string {
+    const mask = String(this.props.Mask ?? ''), prompt = String(this.props.PromptChar ?? '_').charAt(0) || '_', shown = String(this.props.Text ?? '');
+    const slots = parseMask(mask);
+    if (slots.length === 0) return kind === 'clip' ? shown : kind === 'formatted' ? this.formatted(shown) : shown;
+    if (kind === 'clip') return clipText(slots, shown, prompt);
+    if (kind === 'formatted') return this.formatted(shown, clipText(slots, shown, prompt));
+    return maskedText(slots, shown, prompt, this.props.PromptInclude !== false);
+  }
+  private formatted(shown: string, entries = shown): string {
+    const fmt = String(this.props.Format ?? '');
+    return fmt === '' ? shown : formatValue(entries, fmt, Intl.DateTimeFormat().resolvedOptions().locale);
   }
 
   /** RichTextBox: SelBold ... describe the selection as it is now. */
@@ -638,7 +961,7 @@ export class ControlObject implements VBObject {
   }
 
   private send(props: Record<string, PropValue>): void {
-    if (this.def.type === 'Timer' || this.def.type === 'CommonDialog') return;   // no view
+    if (this.def.type === 'Timer' || this.def.type === 'CommonDialog' || this.def.type === 'Inet' || this.def.type === 'Winsock') return;   // no view
     this.queue.set(this.formKey, this.def.id, props);
     // a RichTextBox applies each change at the selection as it is now: no merging of SelStart = 3 and SelBold = True into one patch
     if (this.def.type === 'RichTextBox') this.queue.flush();
@@ -800,12 +1123,39 @@ export class ControlObject implements VBObject {
 }
 
 /** `Command1(i)`: the controls sharing one name, addressed by Index. */
+/** Load / Unload of control array elements at run time (the form makes and drops them). */
+export interface ElementFactory {
+  spawn(template: ControlObject, index: number): ControlObject;
+  drop(c: ControlObject): void;
+}
+
 export class ControlArrayObject implements VBObject {
   readonly vbTypeName = 'Object';
   private members = new Map<number, ControlObject>();
+  /** The elements made by `Load Name(i)` (only those can be unloaded). */
+  private loaded = new Set<ControlObject>();
 
-  constructor(readonly name: string, controls: ControlObject[] = []) {
+  constructor(readonly name: string, controls: ControlObject[] = [], private factory?: ElementFactory) {
     for (const c of controls) this.add(c);
+  }
+
+  /** `Load Name(i)`: a new element with the design-time properties of the lowest one. 360 when it exists. */
+  loadElement(index: number): void {
+    if (!this.factory) throw new VBRuntimeError(438);
+    if (this.members.has(index)) throw new VBRuntimeError(360, 'Object already loaded');
+    if (index < 0 || index > 32767) throw new VBRuntimeError(340, `Control array element '${index}' doesn't exist`);
+    const c = this.factory.spawn(this.sorted()[0], index);
+    this.add(c);
+    this.loaded.add(c);
+  }
+
+  /** `Unload Name(i)`: only an element made by Load (362 for one made at design time). */
+  unloadElement(index: number): void {
+    const c = this.item(index);
+    if (!this.loaded.has(c) || !this.factory) throw new VBRuntimeError(362, 'Can\'t unload controls created at design time');
+    this.loaded.delete(c);
+    this.remove(index);
+    this.factory.drop(c);
   }
 
   add(c: ControlObject): void { this.members.set(c.index ?? 0, c); }

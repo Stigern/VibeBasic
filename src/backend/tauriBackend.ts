@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import type { Backend, DirListing, FileFilter, Volume } from './backend';
+import type { Backend, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { ChatMessage } from '../ai/types';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
 
@@ -20,6 +20,19 @@ async function call<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
     throw new Error(typeof e === 'string' ? e : e instanceof Error ? e.message : String(e));
   }
 }
+
+function toBase64(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function fromBase64(b64: string): Uint8Array {
+  const s = atob(b64), out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+
+type RawSocketEvent = Exclude<SocketEvent, { kind: 'data' }> | { kind: 'data'; id: number; data: string; remoteIp: string; remotePort: number };
 
 export class TauriBackend implements Backend {
   readonly kind = 'tauri' as const;
@@ -68,6 +81,31 @@ export class TauriBackend implements Backend {
 
   listDir(path: string): Promise<DirListing> {
     return call<DirListing>('list_dir', { path });
+  }
+
+  // -- Inet and Winsock (inet.rs, winsock.rs) --
+
+  async inetRequest(r: InetRequest): Promise<InetResponse> {
+    const res = await call<Omit<InetResponse, 'body'> & { body: string }>('inet_request', {
+      id: r.id, url: r.url, method: r.method, headers: r.headers, body: toBase64(r.body),
+      timeoutSecs: Math.max(0, Math.round(r.timeoutSecs)), userName: r.userName, password: r.password,
+    });
+    return { ...res, body: fromBase64(res.body) };
+  }
+  async inetCancel(id: string): Promise<void> { await call<void>('inet_cancel', { id }); }
+  sockConnect(id: number, host: string, port: number): Promise<SocketInfo> { return call<SocketInfo>('sock_connect', { id, host, port }); }
+  sockListen(id: number, port: number, ip: string): Promise<SocketInfo> { return call<SocketInfo>('sock_listen', { id, port, ip }); }
+  sockAccept(id: number, requestId: number): Promise<SocketInfo> { return call<SocketInfo>('sock_accept', { id, requestId }); }
+  sockBind(id: number, port: number, ip: string): Promise<SocketInfo> { return call<SocketInfo>('sock_bind', { id, port, ip }); }
+  async sockSend(id: number, data: Uint8Array, host: string, port: number): Promise<void> { await call<void>('sock_send', { id, data: toBase64(data), host, port }); }
+  async sockClose(id: number): Promise<void> { await call<void>('sock_close', { id }); }
+  async netReset(): Promise<void> { await call<void>('net_reset', {}); }
+  netLocalIp(): Promise<string> { return call<string>('net_local_ip', {}); }
+  onSocketEvent(handler: (e: SocketEvent) => void): Promise<() => void> {
+    return listen<RawSocketEvent>('vb:socket', e => {
+      const p = e.payload;
+      handler(p.kind === 'data' ? { ...p, data: fromBase64(p.data) } : p);
+    });
   }
 
   readTextFile(path: string): Promise<string> {

@@ -32,7 +32,7 @@ test('validateCode: syntax errors with line numbers', () => {
 
 test('validateCode: unknown control and wrong event', () => {
   const f = form();
-  const p = validateCode('Private Sub Command9_Click()\nEnd Sub\nPrivate Sub Command1_Timer()\nEnd Sub\nPrivate Sub Helper_Done()\nEnd Sub\nPrivate Sub Do_It()\nEnd Sub', { moduleName: 'Form1', form: f });
+  const p = validateCode('Private Sub Command9_Click()\nEnd Sub\nPrivate Sub Command1_Timer()\nEnd Sub\nPrivate Sub Helper_Work()\nEnd Sub\nPrivate Sub Do_It()\nEnd Sub', { moduleName: 'Form1', form: f });
   expect(p).toEqual(['There is no control named Command9, so Command9_Click would never run.', 'A CommandButton has no Timer event.']);
 });
 

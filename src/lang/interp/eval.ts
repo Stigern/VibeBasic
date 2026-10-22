@@ -16,6 +16,7 @@ import {
 import { binaryOp, plain, unaryOp } from './operators';
 import { invokeProc, type BoundArg, MISSING } from './exec';
 import type { Runtime } from './program';
+import type { OutSlot, VBObject } from '../host';
 
 const compileError = (msg: string) => VBRuntimeError.compile(msg);
 
@@ -144,7 +145,7 @@ export function* formMethod(f: Frame, name: string, args: (Expr | MissingArg)[])
   const notDefined = (e: unknown) => (e instanceof VBRuntimeError && e.number === 438 ? compileError('Sub or Function not defined') : e);
   let r: VBValue | Promise<VBValue>;
   try {
-    r = me.callMethod(name, methodArgs(argv));
+    r = me.callMethod(name, methodArgs(argv), yield* hostRefs(f, me, name, args));
   } catch (e) {
     throw notDefined(e);
   }
@@ -358,6 +359,34 @@ export function methodArgs(argv: VBValue[]): VBValue[] {
   return argv;
 }
 
+/**
+ * The slots of a host method's ByRef arguments (`Winsock1.GetData strData`): only for the positions the object lists in
+ * `byRefArgs` and only where the caller passed a variable, array element or record field. A store converts to the
+ * slot's declared type, like an assignment.
+ */
+export function* hostRefs(f: Frame, obj: VBObject, name: string, args: (Expr | MissingArg)[]): Gen<(OutSlot | undefined)[] | undefined> {
+  const pos = obj.byRefArgs?.(name);
+  if (!pos?.length) return undefined;
+  const out: (OutSlot | undefined)[] = [];
+  for (const i of pos) {
+    const a = args[i];
+    if (a === undefined || a.kind === 'missing') continue;
+    const r = yield* refOf(f, a);
+    if (!r || r === MISSING || !('slot' in r)) continue;
+    const { slot, type, isArray } = r;
+    out[i] = {
+      get value() { return slot.value; },
+      set value(v: VBValue) {
+        if (isArray) {   // a dynamic array variable takes a whole array (GetData into a Byte array)
+          if (!(v instanceof VBArray)) throw new VBRuntimeError(13);
+          slot.value = v;
+        } else slot.value = type === undefined ? v : storeValue(v, type);
+      },
+    };
+  }
+  return out;
+}
+
 /** Top `With` object. */
 export function withObject(f: Frame): VBValue {
   if (f.withStack.length === 0) throw compileError('Invalid or unqualified reference');
@@ -401,7 +430,7 @@ export function* memberGet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: 
     if (args === null) r = base.getMember(name, []);
     else {
       const argv = yield* evalArgValues(f, args);
-      r = base.hasMember(name) ? base.getMember(name, argv) : base.callMethod(name, methodArgs(argv));
+      r = base.hasMember(name) ? base.getMember(name, argv) : base.callMethod(name, methodArgs(argv), yield* hostRefs(f, base, name, args));
     }
     if (r instanceof Promise) return yield* awaitHost(f, r);
     yield* afterHostCall(f);
@@ -691,7 +720,8 @@ function* memberSet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: string,
   if (base instanceof NothingT) throw new VBRuntimeError(91);
   if (!(base instanceof ModuleRef) && !(base instanceof EnumRef) && isObject(base)) {
     if (!base.hasMember(name)) throw new VBRuntimeError(438);
-    if (isSet) base.setMember(name, args, value);
+    let wait: void | Promise<void> = undefined;   // a host may finish a property write later (MMControl1.Command = "Play" with Wait)
+    if (isSet) wait = base.setMember(name, args, value);
     else {
       let current: VBValue | undefined;
       try {
@@ -700,12 +730,13 @@ function* memberSet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: string,
         if (!(e instanceof VBRuntimeError)) throw e; // e.g. a write-only property: setMember decides
       }
       if (current !== undefined && isObjectValue(current)) {
-        if (isObjectValue(value)) base.setMember(name, args, value);
+        if (isObjectValue(value)) wait = base.setMember(name, args, value);
         else setDefault(current, [], value);
       } else {
-        base.setMember(name, args, plain(value));
+        wait = base.setMember(name, args, plain(value));
       }
     }
+    if (wait instanceof Promise) { yield* awaitHost(f, wait.then(() => Empty)); return; }
     yield* afterHostCall(f);
     return;
   }

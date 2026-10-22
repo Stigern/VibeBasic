@@ -92,3 +92,65 @@ group({ sbrNormal: 0, sbrSimple: 1, sbrText: 0, sbrLeft: 0, sbrCenter: 1, sbrRig
 
 // SSTab
 group({ ssStyleTabbedDialog: 0, ssStylePropertyPage: 1 });
+
+// Toolbar (Button.Style, Button.Value, Toolbar.Style) and Align
+group({
+  tbrDefault: 0, tbrCheck: 1, tbrButtonGroup: 2, tbrSeparator: 3, tbrPlaceholder: 4, tbrDropdown: 5,
+  tbrUnpressed: 0, tbrPressed: 1, tbrStandard: 0, tbrFlat: 1,
+  vbAlignNone: 0, vbAlignTop: 1, vbAlignBottom: 2, vbAlignLeft: 3, vbAlignRight: 4,
+});
+
+// DTPicker (Format) and MonthView (StartOfWeek)
+group({
+  dtpLongDate: 0, dtpShortDate: 1, dtpTime: 2, dtpCustom: 3,
+  mvwSunday: 1, mvwMonday: 2, mvwTuesday: 3, mvwWednesday: 4, mvwThursday: 5, mvwFriday: 6, mvwSaturday: 7,
+});
+
+// Inet (MSINET.OCX): StateChanged states, protocols, access types, data types
+group({
+  icNone: 0, icHostResolvingHost: 1, icHostResolved: 2, icConnecting: 3, icConnected: 4, icRequesting: 5, icRequestSent: 6,
+  icReceivingResponse: 7, icResponseReceived: 8, icDisconnecting: 9, icDisconnected: 10, icError: 11, icResponseCompleted: 12,
+  icUnknown: 0, icDefault: 1, icFTP: 2, icReserved: 3, icHTTP: 4, icHTTPS: 5,
+  icUseDefault: 0, icDirect: 1, icNamedProxy: 2,
+  icString: 0, icByteArray: 1,
+});
+
+// Winsock (MSWINSCK.OCX): protocols, states and error numbers
+group({
+  sckTCPProtocol: 0, sckUDPProtocol: 1,
+  sckClosed: 0, sckOpen: 1, sckListening: 2, sckConnectionPending: 3, sckResolvingHost: 4, sckHostResolved: 5,
+  sckConnecting: 6, sckConnected: 7, sckClosing: 8, sckError: 9,
+  sckOutOfMemory: 7, sckInvalidPropertyValue: 380, sckGetNotSupported: 394, sckSetNotSupported: 383,
+  sckBadState: 40006, sckInvalidArg: 40014, sckSuccess: 40017, sckUnsupported: 40018, sckInvalidOp: 40020, sckOutOfRange: 40021, sckWrongProtocol: 40026,
+  sckOpCanceled: 10004, sckInvalidArgument: 10014, sckWouldBlock: 10035, sckInProgress: 10036, sckAlreadyComplete: 10037, sckNotSocket: 10038,
+  sckMsgTooBig: 10040, sckPortNotSupported: 10043, sckAddressInUse: 10048, sckAddressNotAvailable: 10049, sckNetworkSubsystemFailed: 10050,
+  sckNetworkUnreachable: 10051, sckNetReset: 10052, sckConnectAborted: 10053, sckConnectionReset: 10054, sckNoBufferSpace: 10055,
+  sckAlreadyConnected: 10056, sckNotConnected: 10057, sckSocketShutdown: 10058, sckTimedout: 10060, sckConnectionRefused: 10061,
+  sckNotInitialized: 10093, sckHostNotFound: 11001, sckHostNotFoundTryAgain: 11002, sckNonRecoverableError: 11003, sckNoData: 11004,
+});
+
+// WebBrowser (SHDOCVW.DLL): Navigate flags
+group({ navOpenInNewWindow: 1, navNoHistory: 2, navNoReadFromCache: 4, navNoWriteToCache: 8 });
+
+// MSChart (MSCHRT20.OCX): chartType and Plot.Axis(id)
+group({
+  VtChChartType3dBar: 0, VtChChartType2dBar: 1, VtChChartType3dLine: 2, VtChChartType2dLine: 3,
+  VtChChartType3dArea: 4, VtChChartType2dArea: 5, VtChChartType3dStep: 6, VtChChartType2dStep: 7,
+  VtChChartType2dPie: 14, VtChChartType2dXY: 16,
+  VtChAxisIdX: 0, VtChAxisIdY: 1, VtChAxisIdY2: 2, VtChAxisIdZ: 3,
+});
+
+// MMControl (MCI32.OCX): Mode, Done's NotifyCode, TimeFormat, Orientation, RecordMode, BorderStyle
+group({
+  mciModeNotOpen: 524, mciModeStop: 525, mciModePlay: 526, mciModeRecord: 527, mciModeSeek: 528, mciModePause: 529, mciModeReady: 530,
+  mciSuccessful: 1, mciSuperseded: 2, mciAborted: 4, mciFailure: 8,
+  mciFormatMilliseconds: 0, mciFormatHms: 1, mciFormatMsf: 2, mciFormatFrames: 3, mciFormatSmpte24: 4, mciFormatSmpte25: 5,
+  mciFormatSmpte30: 6, mciFormatSmpte30Drop: 7, mciFormatBytes: 8, mciFormatSamples: 9, mciFormatTmsf: 10,
+  mciOrientHorz: 0, mciOrientVert: 1, mciRecordInsert: 0, mciRecordOverwrite: 1, mciBorderNone: 0, mciFixedSingle: 1,
+});
+
+// MediaPlayer (MSDXM.OCX): PlayState and ReadyState
+group({
+  mpStopped: 0, mpPaused: 1, mpPlaying: 2, mpWaiting: 3, mpScanForward: 4, mpScanReverse: 5, mpClosed: 6,
+  mpReadyStateUninitialized: 0, mpReadyStateLoading: 1, mpReadyStateInteractive: 3, mpReadyStateComplete: 4,
+});

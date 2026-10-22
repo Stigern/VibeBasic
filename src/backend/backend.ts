@@ -9,7 +9,42 @@ export interface Volume { name: string; path: string }
 /** One folder: sub-folder names and files, sorted; the symlinked folders are left out. */
 export interface DirListing { dirs: string[]; files: { name: string; hidden: boolean }[] }
 
-export interface Backend {
+/** Inet (OpenURL / Execute): one HTTP(S) request; `headers` are "Name: value" lines, `timeoutSecs` 0 = none. */
+export interface InetRequest { id: string; url: string; method: string; headers: string; body: Uint8Array; timeoutSecs: number; userName: string; password: string }
+/** Any HTTP status is an answer. A failed request rejects with "number|description" (35761|Request timed out ...). */
+export interface InetResponse { status: number; statusText: string; version: string; headers: [string, string][]; body: Uint8Array }
+/** The addresses of a Winsock socket once it is connected, listening or bound. */
+export interface SocketInfo { localIp: string; localPort: number; remoteIp: string; remotePort: number }
+/** What a socket reports on its own (the "vb:socket" events of the Rust side). */
+export type SocketEvent =
+  | { kind: 'connectionRequest'; id: number; requestId: number; remoteIp: string; remotePort: number }
+  | { kind: 'data'; id: number; data: Uint8Array; remoteIp: string; remotePort: number }
+  | { kind: 'close'; id: number }
+  | { kind: 'error'; id: number; number: number; description: string };
+
+/**
+ * Inet and Winsock: the network calls the main window makes for a running program. Socket ids are chosen by the caller.
+ * The socket calls reject with "number|description" (10061|Connection is forcefully rejected ...).
+ */
+export interface NetApi {
+  inetRequest(r: InetRequest): Promise<InetResponse>;
+  inetCancel(id: string): Promise<void>;
+  sockConnect(id: number, host: string, port: number): Promise<SocketInfo>;
+  sockListen(id: number, port: number, ip: string): Promise<SocketInfo>;
+  sockAccept(id: number, requestId: number): Promise<SocketInfo>;
+  /** UDP: bind the local port (0 = any). */
+  sockBind(id: number, port: number, ip: string): Promise<SocketInfo>;
+  /** TCP: on the connection; UDP: one datagram to host:port. */
+  sockSend(id: number, data: Uint8Array, host: string, port: number): Promise<void>;
+  sockClose(id: number): Promise<void>;
+  /** Closes every socket and aborts every Inet request (the end of a run). */
+  netReset(): Promise<void>;
+  netLocalIp(): Promise<string>;
+  /** Resolves with the function that stops listening. */
+  onSocketEvent(handler: (e: SocketEvent) => void): Promise<() => void>;
+}
+
+export interface Backend extends NetApi {
   readonly kind: 'tauri' | 'browser';
   showMainWindow(): Promise<void>;
   /** Open dialog filtered to *.vbb. Null when cancelled. */

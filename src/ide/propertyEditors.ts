@@ -2,6 +2,8 @@
 // editors, and picture loading helpers.
 import { PALETTE_48, SYSTEM_COLORS, vbColorToCss } from '../model/colors';
 import type { PropDef } from '../model/controls';
+import { generalDateText, localeDateParser } from '../lang/builtins/format';
+import { parseDate } from '../lang/values';
 import type { FontValue, PropValue } from '../model/types';
 import { showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
@@ -62,6 +64,11 @@ export function parsePropertyInput(def: PropDef, text: string): ParseResult {
       return def.enumValues?.some(e => e.value === n) ? { ok: true, value: n } : FAIL;
     }
     case 'color': return parseColor(text);
+    case 'date': {   // a date or time as CDate reads it; blank is no date (a DTPicker with CheckBox)
+      if (text.trim() === '') return { ok: true, value: null };
+      const d = parseDate(text, localeDateParser(Intl.DateTimeFormat().resolvedOptions().locale));
+      return d ? { ok: true, value: d.serial } : FAIL;
+    }
     default: return FAIL;
   }
 }
@@ -73,9 +80,10 @@ export function formatPropertyValue(def: PropDef, value: PropValue | undefined):
     case 'bool': return v ? 'True' : 'False';
     case 'enum': return def.enumValues?.find(e => e.value === v)?.label ?? String(v);
     case 'color': return typeof v === 'number' ? formatColor(v) : '';
+    case 'date': return typeof v === 'number' ? generalDateText(v, Intl.DateTimeFormat().resolvedOptions().locale) : '';
     case 'font': return typeof v === 'object' && v && 'name' in v ? v.name : '';
     case 'picture': return v ? '(Bitmap)' : '(None)';
-    case 'list': return Array.isArray(v) ? v.join(', ') : '';
+    case 'list': return def.name === 'ListImages' ? '(Collection)' : Array.isArray(v) ? v.join(', ') : '';
     case 'text': return typeof v === 'string' ? v.replace(/\r?\n/g, ' ') : '';
     default: return v === null ? '' : String(v);
   }

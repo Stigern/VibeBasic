@@ -8,6 +8,7 @@ import { Program, type SourceModule } from '../lang/interp/program';
 import type { VBRef, VBValue } from '../lang/values';
 import type { PictureRef, Project } from '../model/types';
 import type { FormHost } from './formHost';
+import { NetSession } from './net';
 import { PatchQueue } from './patchQueue';
 import { AppObject, PictureObject, ScreenObject } from './objects/appObjects';
 import type { ControlObject } from './objects/controlObject';
@@ -18,7 +19,7 @@ export interface SessionCallbacks {
   /** IDE: yellow line and wait. App: never called. `askAi`: the error dialog's Ask AI was pressed (break mode, then the AI flow). */
   onBreak(info: BreakInfo & { askAi?: boolean }): Promise<'continue' | 'end'>;
   onEnded(): void;
-  readFile(path: string): Promise<Uint8Array>;            // LoadPicture
+  readFile(path: string): Promise<Uint8Array>;            // LoadPicture, MMControl and MediaPlayer files
   appPath: string;
   /** App.EXEName; defaults to the project name (the IDE). Made apps pass the bundle name. */
   appName?: string;
@@ -65,6 +66,7 @@ export class RunSession implements Host, FormSession {
   private timerBusy = new Set<ControlObject>();
   private lastYield = -Infinity;   // performance.now() of the last real DoEvents yield
   private askAiOnBreak = false;    // the error dialog answered 'ai': the next onBreak (on that error) starts the AI flow
+  private netSession: NetSession | null = null;
 
   constructor(private project: Project, readonly formHost: FormHost, private cb: SessionCallbacks, readonly mode: 'ide' | 'app') {
     for (const [k, a] of Object.entries(project.assets)) this.assets[k] = `data:${a.mime};base64,${a.dataBase64}`;
@@ -119,6 +121,14 @@ export class RunSession implements Host, FormSession {
     if (this.ended || this.program.state === 'running' || this.program.state === 'break') return;
     for (const f of this.forms.values()) if (f.loaded) return;
     this.program.end();
+  }
+
+  /** Inet, Winsock, WebBrowser: made when the first such control is created; closed at the end of the program. */
+  net(): NetSession {
+    if (this.netSession) return this.netSession;
+    const api = this.formHost.net?.();
+    if (!api) throw new VBRuntimeError(429, 'ActiveX component can\'t create object');
+    return this.netSession = new NetSession(api);
   }
 
   resolveAsset(ref: PictureRef): string | null {
@@ -207,16 +217,21 @@ export class RunSession implements Host, FormSession {
     this.lastYield = performance.now();
   }
 
-  async loadPicture(path: string): Promise<VBValue> {
-    if (path === '') return new PictureObject(null);
-    const p = path.replace(/\\/g, '/');   // VB code builds Windows paths: App.Path & "\pic.bmp"
+  /** A file of the program (relative paths are from App.Path; VB code builds Windows paths: App.Path & "\pic.bmp"). 53 when it cannot be read. */
+  async readFile(path: string): Promise<Uint8Array> {
+    const p = path.replace(/\\/g, '/');
     const full = p.startsWith('/') || /^[A-Za-z]:\//.test(p) ? p : `${this.cb.appPath.replace(/\\/g, '/').replace(/\/+$/, '')}/${p}`;
-    let bytes: Uint8Array;
     try {
-      bytes = await this.cb.readFile(full);
+      return await this.cb.readFile(full);
     } catch {
       throw new VBRuntimeError(53);
     }
+  }
+
+  async loadPicture(path: string): Promise<VBValue> {
+    if (path === '') return new PictureObject(null);
+    const full = path.replace(/\\/g, '/');
+    const bytes = await this.readFile(path);
     const ext = /\.([^./]+)$/.exec(full)?.[1]?.toLowerCase() ?? '';
     return new PictureObject({ asset: `data:${MIME[ext] ?? 'application/octet-stream'};base64,${base64(bytes)}` });
   }
@@ -257,6 +272,7 @@ export class RunSession implements Host, FormSession {
     this.queue.stop();
     this.modalStack = [];
     for (const f of this.forms.values()) if (f.loaded || f.hasWindow()) f.teardown();
+    this.netSession?.shutdown();   // every socket closed, every Inet request aborted
     this.cb.onEnded();
   }
 }

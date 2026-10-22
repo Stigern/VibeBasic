@@ -11,9 +11,16 @@ import './controls.css';
 import { vbColorToCss } from '../model/colors';
 import { CONTROL_TYPES } from '../model/controls';
 import { joinFields, splitFields } from '../model/fieldLines';
-import { isDocked } from '../model/geometry';
+import { dockEdge, isDocked } from '../model/geometry';
+import { findListImage, type ImageLookup, type ImageSource } from '../model/imageList';
+import { TBR_DROPDOWN, TBR_PLACEHOLDER, TBR_SEPARATOR, parseButton } from '../model/toolbar';
 import { flagOn, ssTabLayout } from '../model/ssTab';
 import { twipsToPx } from '../model/twips';
+import { msChart } from './chart';
+import { mediaPlayer, mmControl } from './media';
+import { agentControl } from './agent';
+import { dtPicker, maskedEdit, monthView } from './calendar';
+import { inetIcon, webBrowser, winsockIcon } from './webBrowser';
 import { decodeRuns, encodeRuns, formatAt, readRuns, replaceRange, selectionOffsets, setSelectionOffsets, writeRuns, type Run, type RtfFormat, type RtfPatch } from './richText';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../model/types';
 import { h, mnemonicNodes } from '../ui98/dom';
@@ -49,6 +56,8 @@ export interface FormSurface {
   addControl(def: ControlDef, index?: number): void;
   /** Removes the control and all its descendants. */
   removeControl(id: string): void;
+  /** A control got a new name (the ImageList a Toolbar names by it is found again). */
+  rename(id: string, name: string): void;
   /** Re-stacks and re-parents from the flat z-ordered list (after ZOrder / drag into a Frame / undo). */
   reorder(controls: ControlDef[]): void;
   /** Design-mode grid dots; gridX/gridY in twips. Ignored in run mode. */
@@ -77,6 +86,9 @@ function applyFont(el: HTMLElement, f: FontValue): void {
 const cssUrl = (u: string): string => `url(${JSON.stringify(u)})`;
 const isRef = (v: unknown): v is PictureRef => typeof v === 'object' && v !== null && !Array.isArray(v) && 'asset' in v;
 const isFont = (v: unknown): v is FontValue => typeof v === 'object' && v !== null && !Array.isArray(v) && 'size' in v;
+/** An <img> of an ImageList picture, at the ImageList's size. */
+const imageEl = (src: ImageSource, cls: string): HTMLElement =>
+  h('img', { class: cls, src: src.url, draggable: 'false', style: { width: `${src.width}px`, height: `${src.height}px` } });
 const round3 = (n: number): number => Math.round(n * 1000) / 1000;
 
 /** Per type: every registry default, so partially filled `props` still render. */
@@ -87,10 +99,14 @@ for (const [t, td] of Object.entries(CONTROL_TYPES)) {
   DEFAULTS[t] = m;
 }
 
+/** Pseudo property: the ImageList a control uses changed (the form surface sends it to the controls that name it). */
+export const IMAGES_CHANGED = '*images';
+const IMAGE_USERS = new Set<string>(['Toolbar', 'TreeView', 'ListView', 'TabStrip']);
+
 type Keys = ReadonlySet<string> | null;                       // null = everything (first render / rebuild)
 const has = (k: Keys, ...names: string[]): boolean => k === null || names.some(n => k.has(n));
 
-interface Ctx {
+export interface Ctx {
   readonly type: ConcreteType;
   readonly mode: RenderMode;
   readonly el: HTMLElement;
@@ -102,6 +118,8 @@ interface Ctx {
   list(n: string): string[];
   color(n: string): string;
   pic(n: string): string | null;
+  /** The image `ref` (an index or a key) of the ImageList that the property `listProp` names; null when there is none. */
+  image(listProp: string, ref: string): ImageSource | null;
   setInput(e: HTMLElement | undefined): void;
   setHost(e: HTMLElement | undefined): void;
   setHostFor(f: (child: ControlDef) => HTMLElement): void;
@@ -110,13 +128,15 @@ interface Ctx {
   fire(type: string, detail?: unknown): void;
 }
 
-interface Renderer {
+export interface Renderer {
   /** Property names that need `build()` to run again when they change. */
   structural?: readonly string[];
   build(): void;
   patch(keys: Keys): void;
   /** Background colour of `el`; null = none. Default: BackColor when the type has one. */
   bg?(): string | null;
+  /** Shown at run time although the type is invisible at run time (the Agent's layer of characters). */
+  overlay?: boolean;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1078,9 +1098,11 @@ function tabStrip(c: Ctx): Renderer {
       });
     },
     patch(k) {
-      if (has(k, 'Tabs')) {
-        tabs.replaceChildren(...c.list('Tabs').map((line, i) =>
-          h('div', { class: 'ts-tab', dataset: { index: String(i + 1) } }, h('span', {}, ...mnemonicNodes(splitFields(line)[0] ?? '')))));
+      if (has(k, 'Tabs', 'ImageList', IMAGES_CHANGED)) {
+        tabs.replaceChildren(...c.list('Tabs').map((line, i) => {
+          const f = splitFields(line), img = f[2] ? c.image('ImageList', f[2]) : null;
+          return h('div', { class: 'ts-tab', dataset: { index: String(i + 1) } }, ...(img ? [imageEl(img, 'ts-img')] : []), h('span', {}, ...mnemonicNodes(f[0] ?? '')));
+        }));
       }
       if (has(k, 'Tabs', 'SelectedTab')) paint();
     },
@@ -1103,8 +1125,11 @@ function treeView(c: Ctx): Renderer {
       skip = -1;
       const kids = i + 1 < f.length && Number(f[i + 1][0]) > level, open = n[2] === '1';
       if (kids && !open) skip = level;
-      rows.push(h('div', { class: 'tv-row', dataset: { index: n[1] ?? '', kids: kids ? '1' : '0', open: open ? '1' : '0' }, style: { paddingLeft: `${level * indent + 2}px` } },
+      const isSel = Number(n[1]) === sel, img = c.image('ImageList', (isSel && n[6]) || n[5] || '');
+      rows.push(h('div', { class: 'tv-row', dataset: { index: n[1] ?? '', kids: kids ? '1' : '0', open: open ? '1' : '0' },
+        style: { paddingLeft: `${level * indent + 2}px`, ...(img && img.height > 16 ? { height: `${img.height}px` } : {}) } },
         h('span', { class: kids ? 'tv-tog' : 'tv-tog none' }, kids ? (open ? '-' : '+') : ''),
+        ...(img ? [imageEl(img, 'tv-img')] : []),
         h('span', { class: Number(n[1]) === sel ? 'tv-text sel' : 'tv-text' }, n[4] ?? '')));
     });
     root.replaceChildren(...rows);
@@ -1132,7 +1157,7 @@ function treeView(c: Ctx): Renderer {
       });
       root.addEventListener('dblclick', e => { const row = rowOf(e); if (row?.dataset.kids === '1') toggle(row); });
     },
-    patch(k) { if (has(k, 'Nodes', 'SelectedNode', 'Indentation', 'LineStyle')) paint(); },
+    patch(k) { if (has(k, 'Nodes', 'SelectedNode', 'Indentation', 'LineStyle', 'ImageList', IMAGES_CHANGED)) paint(); },
     bg: () => null,
   };
 }
@@ -1146,6 +1171,12 @@ function listView(c: Ctx): Renderer {
   function paint() {
     const view = c.num('View'), sel = c.num('SelectedIndex');
     let items = c.list('ListItems').map(splitFields);
+    const icons = c.list('ListIcons').map(splitFields);
+    // lvwIcon shows the big icon of the Icons list, the other views the small one of SmallIcons
+    const iconOf = (f: string[]): ImageSource | null => {
+      const ic = icons[Number(f[0]) - 1] ?? [];
+      return view === 0 ? (ic[0] ? c.image('Icons', ic[0]) : null) : (ic[1] ? c.image('SmallIcons', ic[1]) : null);
+    };
     if (c.bool('Sorted')) {
       const key = c.num('SortKey'), dir = c.num('SortOrder') === 1 ? -1 : 1;
       const val = (f: string[]): string => (f[1 + key] ?? '').toLowerCase();
@@ -1157,12 +1188,18 @@ function listView(c: Ctx): Renderer {
       if (!cols.length) cols.push(['']);
       const style = (f: string[]) => ({ width: `${twipsToPx(Number(f[2]) || 1440)}px`, textAlign: ALIGN[Number(f[3])] ?? 'left' });
       const head = h('div', { class: 'lv-head' }, ...cols.map((f, i) => h('div', { class: 'lv-hcol', dataset: { index: String(i + 1) }, style: style(f) }, f[0] ?? '')));
-      const rows = items.map(f => h('div', { class: Number(f[0]) === sel ? 'lv-row sel' : 'lv-row', dataset: { index: f[0] ?? '' } },
-        ...cols.map((cf, j) => h('div', { class: j === 0 ? 'lv-cell first' : 'lv-cell', style: style(cf) }, f[1 + j] ?? ''))));
+      const rows = items.map(f => {
+        const img = iconOf(f);
+        return h('div', { class: Number(f[0]) === sel ? 'lv-row sel' : 'lv-row', dataset: { index: f[0] ?? '' } },
+          ...cols.map((cf, j) => h('div', { class: j === 0 ? 'lv-cell first' : 'lv-cell', style: style(cf) }, ...(j === 0 && img ? [imageEl(img, 'lv-img')] : []), f[1 + j] ?? '')));
+      });
       root.replaceChildren(head, ...rows);
     } else {
-      root.replaceChildren(...items.map(f => h('div', { class: Number(f[0]) === sel ? 'lv-item sel' : 'lv-item', dataset: { index: f[0] ?? '' } },
-        h('span', { class: 'lv-ico' }), h('span', { class: 'lv-label' }, f[1] ?? ''))));
+      root.replaceChildren(...items.map(f => {
+        const img = iconOf(f);
+        return h('div', { class: Number(f[0]) === sel ? 'lv-item sel' : 'lv-item', dataset: { index: f[0] ?? '' } },
+          img ? imageEl(img, 'lv-ico lv-img') : h('span', { class: 'lv-ico' }), h('span', { class: 'lv-label' }, f[1] ?? ''));
+      }));
     }
   }
   return {
@@ -1182,7 +1219,7 @@ function listView(c: Ctx): Renderer {
         }
       });
     },
-    patch(k) { if (has(k, 'ListItems', 'ColumnHeaders', 'SelectedIndex', 'View', 'GridLines', 'FullRowSelect', 'Sorted', 'SortKey', 'SortOrder')) paint(); },
+    patch(k) { if (has(k, 'ListItems', 'ListIcons', 'ColumnHeaders', 'SelectedIndex', 'View', 'GridLines', 'FullRowSelect', 'Sorted', 'SortKey', 'SortOrder', 'Icons', 'SmallIcons', IMAGES_CHANGED)) paint(); },
     bg: () => null,
   };
 }
@@ -1306,6 +1343,59 @@ function ssTab(c: Ctx): Renderer {
   };
 }
 
+const IMAGELIST_SVG = '<svg viewBox="0 0 32 32" width="32" height="32" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges">'
+  + '<rect x="3.500" y="4.500" width="14" height="12" fill="#fff" stroke="#000"/><path d="M4 16l4-5 3 3 2-2 4 4z" fill="#0000c0"/>'
+  + '<rect x="12.500" y="14.500" width="14" height="12" fill="#fff" stroke="#000"/><path d="M13 26l4-5 3 3 2-2 4 4z" fill="#008000"/>'
+  + '<circle cx="22" cy="18.500" r="1.500" fill="#c00000"/></svg>';
+
+/** Invisible at run time; in the designer an icon, like the Timer. */
+function imageList(c: Ctx): Renderer {
+  return {
+    build() { c.el.innerHTML = IMAGELIST_SVG; },
+    patch() { /* nothing: the icon is fixed */ },
+  };
+}
+
+/** Toolbar: buttons from the `Buttons` lines ('Caption|Key|Style|Image|ToolTipText', plus 'Value|Enabled|Visible' at run time), each with
+ *  the picture `Image` (index or key) of the ImageList and its caption. Run mode: a click on an enabled button dispatches `vbbuttonclick`
+ *  ({ index }, 1-based) on inputEl; the window toggles check and group buttons. */
+function toolbar(c: Ctx): Renderer {
+  let root: HTMLElement;
+  function paint() {
+    const bw = Math.max(1, twipsToPx(c.num('ButtonWidth'))), bh = Math.max(1, twipsToPx(c.num('ButtonHeight')));
+    root.className = `vb-tbr${c.num('Style') === 1 ? ' tbr-flat' : ''}`;
+    const els: HTMLElement[] = [];
+    c.list('Buttons').map(parseButton).forEach((b, i) => {
+      if (!b.visible) return;
+      if (b.style === TBR_SEPARATOR) { els.push(h('div', { class: 'tbr-sep' })); return; }
+      if (b.style === TBR_PLACEHOLDER) { els.push(h('div', { class: 'tbr-gap', style: { width: `${bw}px` } })); return; }
+      const img = b.image ? c.image('ImageList', b.image) : null;
+      const btn = h('div', {
+        class: `tbr-btn${b.value ? ' pressed' : ''}${b.enabled ? '' : ' off'}`, dataset: { index: String(i + 1), enabled: b.enabled ? '1' : '0' },
+        style: { minWidth: `${bw}px`, height: `${Math.max(bh, img ? img.height + 6 : 0)}px` },
+      }, ...(img ? [imageEl(img, 'tbr-img')] : []), ...(b.caption ? [h('span', { class: 'tbr-cap' }, ...mnemonicNodes(b.caption))] : []),
+        ...(b.style === TBR_DROPDOWN ? [h('span', { class: 'tbr-arrow' })] : []));
+      if (c.mode === 'run' && c.bool('ShowTips') && b.tip) btn.title = b.tip;
+      els.push(btn);
+    });
+    root.replaceChildren(...els);
+  }
+  return {
+    build() {
+      root = h('div', { class: 'vb-tbr' });
+      c.el.replaceChildren(root);
+      c.setInput(root);
+      if (c.mode !== 'run') return;
+      root.addEventListener('click', e => {
+        const b = (e.target as Element).closest<HTMLElement>('.tbr-btn');
+        if (b && root.contains(b) && b.dataset.enabled === '1' && root.getAttribute('aria-disabled') !== 'true') c.fire('vbbuttonclick', { index: Number(b.dataset.index) });
+      });
+    },
+    patch(k) { if (has(k, 'Buttons', 'Style', 'ButtonWidth', 'ButtonHeight', 'ShowTips', 'ImageList', IMAGES_CHANGED)) paint(); },
+    bg: () => null,
+  };
+}
+
 const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   CommandButton: commandButton,
   Label: label,
@@ -1336,12 +1426,24 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   CommonDialog: commonDialog,
   RichTextBox: richTextBox,
   SSTab: ssTab,
+  ImageList: imageList,
+  Toolbar: toolbar,
+  DTPicker: dtPicker,
+  MonthView: monthView,
+  MaskedEdit: maskedEdit,
+  WebBrowser: webBrowser,
+  Inet: inetIcon,
+  Winsock: winsockIcon,
+  MSChart: msChart,
+  MMControl: mmControl,
+  MediaPlayer: mediaPlayer,
+  Agent: agentControl,
 };
 
 // ---------------------------------------------------------------------------------------------------------------
 // Control core
 
-export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetResolver): ControlView {
+export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetResolver, images: ImageLookup = () => null): ControlView {
   const td = CONTROL_TYPES[def.type];
   const defaults = DEFAULTS[def.type];
   const el = h('div', { class: `vb-ctl vb-${def.type} vb-${mode}`, dataset: { controlId: def.id } });
@@ -1357,6 +1459,7 @@ export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetRe
     list: n => { const v = get(n); return Array.isArray(v) ? v.map(String) : []; },
     color: n => vbColorToCss(ctx.num(n)),
     pic: n => { const v = get(n); return isRef(v) ? assets(v) : null; },
+    image: (listProp, ref) => images(ctx.str(listProp), ref),
     setInput: e => { view.inputEl = e; },
     setHost: e => { view.childHost = e; },
     setHostFor: f => { view.childHostFor = f; },
@@ -1392,7 +1495,7 @@ export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetRe
       el.style.top = `${twipsToPx(typeof props.Top === 'number' ? props.Top : 0)}px`;
       ctx.applySize();
     }
-    const hidden = mode === 'run' && (td.invisibleAtRuntime || !ctx.bool('Visible'));
+    const hidden = mode === 'run' && !r.overlay && (td.invisibleAtRuntime || !ctx.bool('Visible'));
     el.style.display = hidden ? 'none' : '';
     const disabled = mode === 'run' && 'Enabled' in defaults && !ctx.bool('Enabled');
     el.classList.toggle('vb-disabled', disabled);
@@ -1411,7 +1514,7 @@ export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetRe
     if (ie) {
       if (mode === 'design') { ie.tabIndex = -1; ie.style.pointerEvents = 'none'; }
       else {
-        ie.tabIndex = props.TabStop === false || def.type === 'StatusBar' ? -1 : 0;
+        ie.tabIndex = props.TabStop === false || def.type === 'StatusBar' || def.type === 'Toolbar' || def.type === 'Agent' ? -1 : 0;
         if ('disabled' in ie) (ie as HTMLButtonElement).disabled = disabled;
         else ie.setAttribute('aria-disabled', String(disabled));
       }
@@ -1550,16 +1653,17 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
     gridEl.style.backgroundSize = `${gx}px ${gy}px`;
   }
 
-  /** A StatusBar sits at the bottom edge of the form, full width (it follows the form when it is resized). */
+  /** A StatusBar sits at the bottom edge of the form, full width; a Toolbar at the top (Align) or the bottom (it follows the form when it is resized). */
   function dock(): void {
     const m = formMetrics(props);
     for (const [id, d] of defs) {
       const v = views.get(id);
-      if (!v || !isDocked(d)) continue;
-      const hPx = parseFloat(v.el.style.height) || twipsToPx(CONTROL_TYPES.StatusBar.defaultHeight);
+      const edge = dockEdge(d);
+      if (!v || !edge) continue;
+      const hPx = parseFloat(v.el.style.height) || twipsToPx(CONTROL_TYPES[d.type].defaultHeight);
       v.el.style.left = '0px';
       v.el.style.width = `${m.clientWidth}px`;
-      v.el.style.top = `${Math.max(0, m.clientHeight - hPx)}px`;
+      v.el.style.top = edge === 'top' ? '0px' : `${Math.max(0, m.clientHeight - hPx)}px`;
     }
   }
 
@@ -1594,10 +1698,29 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
     host.insertBefore(view.el, ref);
   }
 
+  /** An ImageList's pictures by index or key (its current props, also after a change); null for an unknown list or image. */
+  const imageLookup: ImageLookup = (name, ref) => {
+    if (!name) return null;
+    const l = name.toLowerCase();
+    for (const d of defs.values()) {
+      if (d.type !== 'ImageList' || d.name.toLowerCase() !== l) continue;
+      const lines = Array.isArray(d.props.ListImages) ? d.props.ListImages.map(String) : [];
+      const img = findListImage(lines, ref);
+      const url = img && img.asset ? assets({ asset: img.asset }) : null;
+      const dim = (k: string): number => (typeof d.props[k] === 'number' && (d.props[k] as number) > 0 ? d.props[k] as number : 16);
+      return url ? { url, width: dim('ImageWidth'), height: dim('ImageHeight') } : null;
+    }
+    return null;
+  };
+  /** The controls that show pictures of an ImageList repaint them (an ImageList changed, was added, removed or renamed). */
+  function imagesChanged(): void {
+    for (const d of defs.values()) if (IMAGE_USERS.has(d.type)) views.get(d.id)?.update({ [IMAGES_CHANGED]: 1 });
+  }
+
   function add(def: ControlDef, index?: number): void {
     if (views.has(def.id)) return;
     defs.set(def.id, def);
-    views.set(def.id, renderControl(def, mode, assets));
+    views.set(def.id, renderControl(def, mode, assets, imageLookup));
     order.splice(index === undefined ? order.length : Math.max(0, Math.min(index, order.length)), 0, def.id);
   }
 
@@ -1605,9 +1728,13 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
     el, clientEl, drawLayer, views,
     update(id, changed) {
       if (id !== 'form') {
+        let d = defs.get(id);
+        if (d && !(IMAGES_CHANGED in changed)) defs.set(id, d = { ...d, props: { ...d.props, ...changed } });   // the lookups and dock() see the new values
         views.get(id)?.update(changed);
-        const d = defs.get(id);
-        if (d && isDocked(d)) dock();
+        if (!d) return;
+        if ('Align' in changed && !isDocked(d)) views.get(id)?.update({ Left: d.props.Left ?? 0, Top: d.props.Top ?? 0, Width: d.props.Width ?? 0, Height: d.props.Height ?? 0 });
+        if (isDocked(d)) dock();
+        if (d.type === 'ImageList') imagesChanged();
         return;
       }
       const keys = new Set(Object.keys(changed));
@@ -1617,8 +1744,15 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
       else if (keys.has('Caption')) { const t = el.querySelector('.title-bar-text'); if (t) t.textContent = str('Caption'); }
       patchClient(keys);
     },
+    rename(id, name) {
+      const d = defs.get(id);
+      if (!d || d.name === name) return;
+      defs.set(id, { ...d, name });
+      if (d.type === 'ImageList') imagesChanged();
+    },
     addControl(def, index) {
       add(def, index);
+      if (def.type === 'ImageList') imagesChanged();
       place(def.id);
       for (const d of defs.values()) if (d.parentId === def.id) place(d.id);   // children that arrived before their parent
       dock();
@@ -1629,8 +1763,10 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
         grew = false;
         for (const d of defs.values()) if (d.parentId !== null && doomed.has(d.parentId) && !doomed.has(d.id)) { doomed.add(d.id); grew = true; }
       }
+      const hadImages = [...doomed].some(d => defs.get(d)?.type === 'ImageList');
       for (const d of doomed) { views.get(d)?.el.remove(); views.delete(d); defs.delete(d); }
       order = order.filter(o => !doomed.has(o));
+      if (hadImages) imagesChanged();
     },
     reorder(controls) {
       for (const d of controls) if (views.has(d.id)) defs.set(d.id, d);
@@ -1651,6 +1787,7 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
   layoutChrome();
   patchClient(null);
   applyGrid();
+  for (const d of form.controls) defs.set(d.id, d);   // an ImageList further down the form is known when a Toolbar above it renders
   for (const d of form.controls) add(d);
   for (const id of [...order]) place(id);
   dock();

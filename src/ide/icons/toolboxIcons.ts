@@ -36,7 +36,28 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
   DirListBox: svg(box(1, 1, 14, 14) + '<path d="M3 4h4v2H3zM5 7.5h4v2H5zM7 11h4v2H7z" fill="#ff0" stroke="#000"/>'),
   FileListBox: svg(box(1, 1, 14, 14) + '<path d="M3 3h5v6H3z" fill="#fff" stroke="#000"/><path d="M4 5h3M4 7h3M9 9h5v5H9z" stroke="#000" fill="#fff"/><path d="M10 11h3" stroke="#000"/>'),
   RichTextBox: svg(box(1, 2, 14, 12) + '<path d="M3 5h4M3 7.5h8M3 10h6M3 12.5h7" stroke="#000"/><path d="M9 4v3M8 7h3" stroke="#c00000" fill="none"/>'),
+  Toolbar: svg(box(1, 3, 14, 10, '#c0c0c0') + box(2, 4, 4, 8, '#c0c0c0') + '<path d="M3.500 6.500l1 1 1-1M3.500 9.500h2" stroke="#000" fill="none"/>'
+    + '<path d="M7.500 4v8" stroke="#808080"/>' + box(9, 4, 4, 8, '#c0c0c0') + '<rect x="10" y="6" width="2" height="2" fill="#008000"/><rect x="10" y="9" width="2" height="2" fill="#c00000"/>'),
+  ImageList: svg(box(1, 2, 9, 8) + '<path d="M2 9l3-4 2 2 1-1 2 3z" fill="#0000c0"/>' + box(6, 7, 9, 8) + '<path d="M7 14l3-4 2 2 1-1 2 3z" fill="#008000"/><circle cx="12.500" cy="9.500" r="1" fill="#c00000"/>'),
   SSTab: svg('<path d="M1.5 14.5v-9h13v9z" fill="#c0c0c0" stroke="#000"/><path d="M1.5 5.5v-3h4v3" fill="#fff" stroke="#000"/>'
     + '<path d="M5.5 5.5v-2h4v2M9.5 5.5v-2h5v2" fill="#c0c0c0" stroke="#000"/><path d="M3 8h6M3 10h8M3 12h5" stroke="#808080"/>'),
+  DTPicker: svg(box(1, 3, 14, 10) + box(11, 4, 3, 8, '#c0c0c0') + '<path d="M11.500 7h3l-1.500 2z" fill="#000"/><path d="M3 6h2M3 8h5M3 10h3" stroke="#000"/><rect x="3" y="5" width="2" height="2" fill="#000080"/>'),
+  MonthView: svg(box(1, 1, 14, 14) + '<rect x="2" y="2" width="12" height="3" fill="#000080"/><path d="M3 7h2M6 7h2M9 7h2M3 9h2M6 9h2M9 9h2M3 11h2M6 11h2M9 11h2M12 7h1M12 9h1" stroke="#808080"/>'
+    + '<circle cx="7" cy="10" r="1.800" fill="none" stroke="#c00000"/>'),
+  MaskedEdit: svg(box(1, 4, 14, 8) + '<path d="M3 9.500h2M6 9.500h2" stroke="#000"/><path d="M10 9.500h3" stroke="#808080"/><path d="M9.500 5.500h0M9 6v2M11 6v2M8.500 6.800h3M8.500 7.800h3" stroke="#000080" fill="none"/>'),
+  WebBrowser: svg(box(1, 1, 14, 14) + '<rect x="2" y="2" width="12" height="2" fill="#000080"/><circle cx="8" cy="9.500" r="4" fill="#00a0e0" stroke="#000080"/>'
+    + '<path d="M4 9.500h8M8 5.500v8M6 6.500c-1 2-1 4 0 6M10 6.500c1 2 1 4 0 6" stroke="#000080" fill="none"/>'),
+  Inet: svg('<circle cx="7" cy="7" r="5.500" fill="#00a0e0" stroke="#000080"/><path d="M1.500 7h11M7 1.500v11M4.500 2.500c-1.500 3-1.500 6 0 9M9.500 2.500c1.500 3 1.500 6 0 9" stroke="#000080" fill="none"/>'
+    + '<path d="M12 9v4M10 11.500l2 2.500 2-2.500" stroke="#008000" fill="none" stroke-width="1.500"/>'),
+  Winsock: svg(box(0, 2, 6, 5, '#c0c0c0') + '<rect x="1" y="3" width="4" height="3" fill="#008080"/>' + box(10, 9, 6, 5, '#c0c0c0') + '<rect x="11" y="10" width="4" height="3" fill="#008080"/>'
+    + '<path d="M3 7v4h7M6 4.500h4v4.500" stroke="#000" fill="none"/><path d="M1 8h4M11 15h4" stroke="#000"/>'),
+  MSChart: svg(box(1, 1, 14, 14) + '<rect x="2" y="2" width="12" height="12" fill="#c0c0c0"/><rect x="3" y="8" width="2" height="5" fill="#000080" stroke="#000"/><rect x="6" y="4" width="2" height="9" fill="#800000" stroke="#000"/>'
+    + '<rect x="9" y="6" width="2" height="7" fill="#ffff00" stroke="#000"/><rect x="12" y="9" width="1" height="4" fill="#008080" stroke="#000"/>'),
+  MMControl: svg(box(0, 4, 6, 8, '#c0c0c0') + box(5, 4, 6, 8, '#c0c0c0') + box(10, 4, 6, 8, '#c0c0c0')
+    + '<path d="M2 6v4l2.500-2z" fill="#000"/><rect x="7" y="6" width="2" height="4" fill="#000"/><path d="M12 6h1v4h-1zM14 6l-1 2 1 2z" fill="#000"/>'),
+  MediaPlayer: svg(box(1, 1, 14, 10, '#000') + '<path d="M6 3.500v5l4-2.500z" fill="#00ff00"/>' + box(1, 11, 14, 4, '#c0c0c0') + '<rect x="3" y="12.500" width="6" height="1" fill="#808080"/><rect x="5" y="12" width="2" height="2" fill="#000"/>'),
+  Agent: svg('<rect x="1.500" y="0.500" width="9" height="6" rx="2" fill="#ffffe1" stroke="#000"/><path d="M4 6.500l-1 2.500 3-2.500" fill="#ffffe1" stroke="#000"/>'
+    + box(6, 8, 9, 7, '#c0c0c0') + '<rect x="7" y="9" width="7" height="4" fill="#000080"/><rect x="8" y="10" width="1" height="1" fill="#00ffff"/><rect x="12" y="10" width="1" height="1" fill="#00ffff"/>'
+    + '<rect x="10" y="6" width="1" height="2" fill="#ff0000"/>'),
   Form: svg(box(1, 2, 14, 12, '#c0c0c0') + '<rect x="2" y="3" width="12" height="3" fill="#000080"/>'),
 };

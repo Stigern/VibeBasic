@@ -6,7 +6,12 @@ export type ControlType = 'Form' | 'CommandButton' | 'Label' | 'TextBox' | 'Chec
   | 'TreeView' | 'ListView' | 'MSFlexGrid'
   | 'CommonDialog' | 'RichTextBox'
   | 'DriveListBox' | 'DirListBox' | 'FileListBox'
-  | 'SSTab';
+  | 'SSTab'
+  | 'ImageList' | 'Toolbar'
+  | 'DTPicker' | 'MonthView' | 'MaskedEdit'
+  | 'WebBrowser' | 'Inet' | 'Winsock'
+  | 'MSChart'
+  | 'MMControl' | 'MediaPlayer' | 'Agent';
 export interface FontValue { name: string; size: number; bold: boolean; italic: boolean; underline: boolean }
 export interface PictureRef { asset: string }                 // key in Project.assets
 export type PropValue = string | number | boolean | string[] | FontValue | PictureRef | null;

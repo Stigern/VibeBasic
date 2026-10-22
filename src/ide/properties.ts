@@ -11,6 +11,7 @@ import { h } from '../ui98/dom';
 import { showFloating } from '../ui98/floating';
 import { createTabs } from '../ui98/tabs';
 import type { IdeState } from './ideState';
+import { customPropEditor } from './imageListEditor';
 import { bytesToBase64, createColorPopup, formatPropertyValue, mimeFromPath, parsePropertyInput, showFontDialog } from './propertyEditors';
 import { CATEGORIES, categoryOf, describeProperty, type Category } from './propertyInfo';
 
@@ -158,6 +159,7 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     const myEpoch = epoch;
     const mixed = value === undefined && ts.length > 1;   // differing values in a multi-selection: blank
     const shown = mixed ? '' : formatPropertyValue(def, value);
+    if (customPropEditor({ doc, backend: opts.backend ?? getBackend(), project: ide.project, form, type: ts[0].type, def, value, cell, apply: (v, extra) => setValue(form, ts, def, v, extra) })) return null;
     let done = false;
     const live = () => !done && myEpoch === epoch && ide.mode === 'design';
     const commitText = (t: string) => { if (!live()) return; done = true; void applyText(form, ts, def, t); };

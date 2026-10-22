@@ -1,6 +1,6 @@
 // What the run session needs from the environment that shows form windows and dialogs.
 
-import type { DirListing, Volume } from '../backend/backend';
+import type { DirListing, NetApi, Volume } from '../backend/backend';
 import type { FontValue } from '../model/types';
 import type { FileDialogRequest } from './commonDialog';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
@@ -23,6 +23,8 @@ export interface FormHost {
   /** DriveListBox / DirListBox / FileListBox: the volumes and folder contents, read by the main window (the same call in the IDE and in made apps). */
   listVolumes(): Promise<Volume[]>;
   listDir(path: string): Promise<DirListing>;
+  /** Inet and Winsock: the network calls, made by the main window. Absent: the controls raise errors. */
+  net?(): NetApi;
   /** 'ai' only in the IDE: break mode on the line, then the Ask AI flow. */
   runtimeErrorBox(o: { number: number; description: string; compile: boolean; mode: 'ide' | 'app'; title: string }): Promise<'end' | 'debug' | 'ai'>;
 }

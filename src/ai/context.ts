@@ -27,7 +27,23 @@ export function describeControlTypes(): string {
     + ' Its Filter looks like "Text (*.txt)|*.txt|All (*.*)|*.*".'
     + ' DriveListBox, DirListBox and FileListBox show the Mac\'s volumes, folders and files: Drive1.Drive is the path of a volume ("/" is the startup disk), Dir1.Path a folder, File1.Pattern "*.txt;*.bas".'
     + ' The usual link is Drive1_Change: Dir1.Path = Drive1.Drive, and Dir1_Change: File1.Path = Dir1.Path; File1.FileName is the selected file. The lists are filled asynchronously, so a read of ListCount or List(i) waits for the folder.'
-    + ' An SSTab is a container with Tabs tabs (Tab is the current one, 0-based); TabCaption is one caption per line. A control added with "container" set to an SSTab goes on the tab given by "tab" (0-based, default the current tab); Top must leave room for the tabs (TabHeight, 520).');
+    + ' An SSTab is a container with Tabs tabs (Tab is the current one, 0-based); TabCaption is one caption per line. A control added with "container" set to an SSTab goes on the tab given by "tab" (0-based, default the current tab); Top must leave room for the tabs (TabHeight, 520).'
+    + ' A Toolbar sits at the top of the form, full width (Align = 1; only its Height matters); its Buttons are one per line "Caption|Key|Style|Image|ToolTipText"'
+    + ' (Style 0 default, 1 check, 2 button group, 3 separator, 4 placeholder, 5 dropdown; Image is an index or key into its ImageList).'
+    + ' An ImageList is invisible at run time; its pictures (ListImages) are added by the user in the Properties window or by code (ListImages.Add , "key", LoadPicture(path)),'
+    + ' so leave ListImages alone. A Toolbar, TreeView, TabStrip (ImageList) and ListView (Icons, SmallIcons) name an ImageList control by its Name; a TabStrip tab\'s line is "Caption|Key|Image".'
+    + ' The dates of a DTPicker and a MonthView (Value, MinDate, MaxDate) are written as text like "2026-10-22" in the form description and in "props"; Format is dtpLongDate 0, dtpShortDate 1, dtpTime 2, dtpCustom 3 (CustomFormat "dd.MM.yyyy": d M y h H m s t tokens); MonthView StartOfWeek is 1 (Sunday) to 7.'
+    + ' A MaskedEdit\'s Mask uses # digit, ? letter, A letter or digit, & any character, 9 / C / a optional, \\ escapes, other characters are literals; its Text is the whole display string ("__.__.____"), ClipText has the entries only.'
+    + ' Inet and Winsock are invisible at run time (Left, Top, Tag only). Inet: s = Inet1.OpenURL(url) waits and returns the page; Inet1.Execute url, "GET" returns at once and raises StateChanged(State) with icResponseCompleted (then GetChunk(1024, icString) in a loop) or icError.'
+    + ' Winsock: a client sets RemoteHost/RemotePort and calls Connect (Connect event, then SendData); a server sets LocalPort, calls Listen and in ConnectionRequest(requestID) calls Close and Accept requestID (or Load a new element of a Winsock control array and Accept there);'
+    + ' in DataArrival(bytesTotal) Winsock1.GetData strData reads the text into a variable. Protocol sckUDPProtocol uses Bind and SendData with RemoteHost/RemotePort.'
+    + ' A WebBrowser shows a page with Navigate "https://..." (NavigateComplete2, DocumentComplete, LocationURL, LocationName); many sites refuse to be shown inside another page.'
+    + ' An MSChart draws a table of RowCount rows x ColumnCount columns (a column is a series, a row a data point; the sample data at first): chartType is VtChChartType2dBar 1, 3dBar 0, 2dLine 3, 2dArea 5, 2dStep 7, 2dPie 14, 2dXY 16 (3dLine 2, 3dArea 4, 3dStep 6); ShowLegend, TitleText, Stacking.'
+    + ' Code fills it with MSChart1.ChartData = a 2-D array (strings in the first row and column are the labels) or with Row, Column, Data, RowLabel and ColumnLabel (counts from 1); MSChart1.Plot.Axis(VtChAxisIdX).AxisTitle.Text sets an axis title.'
+    + ' An MMControl plays a file: FileName = App.Path & "\\x.wav", Command = "Open", then Command = "Play" (Mode mciModePlay 526, mciModeStop 525; Position and Length in ms;'
+    + ' Notify = True before a command raises Done(NotifyCode) when it finishes). A MediaPlayer plays FileName (AutoStart) with Play, Pause, Stop; PlayStateChange(OldState, NewState), EndOfStream; CurrentPosition and Duration are seconds.'
+    + ' An Agent is invisible: Agent1.Characters.Load "Robby" (or "Wizard"), then Set c = Agent1.Characters("Robby"): c.Show, c.Speak "Hi", c.Play "Wave" (Greet, Think, Explain, Congratulate, Surprised, Idle),'
+    + ' c.MoveTo x, y and c.GestureAt x, y queue one after the other (pixels in the form); each returns a Request and raises Agent1_RequestComplete(Request).');
   return lines.join('\n');
 }
 
