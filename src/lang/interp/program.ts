@@ -50,8 +50,16 @@ export class Runtime {
   state: ProgramState = 'idle';
   /** Set when the program ends; running code stops at the next statement boundary. */
   stopping = false;
-  /** Set by requestPause; the next statement boundary enters break mode. */
+  /** Set by requestPause (or a breakpoint line); the next statement boundary enters break mode. */
   pauseRequested = false;
+  /** Procedures running, over all runs (nested event handlers on top of the one they interrupted). */
+  callDepth = 0;
+  /** Stepping: a statement breaks when `callDepth <= stepDepth` (Infinity: Step Into; -1: not stepping). */
+  stepDepth = -1;
+  /** Breakpoint lines per module key (set by the IDE). */
+  private readonly userBreakpoints = new Map<string, Set<number>>();
+  /** The one-shot line of Run To Cursor. */
+  private runTo?: { key: string; line: number };
   /** Statements since the last time slice. */
   stmtCount = 0;
   /** Column of an unfinished Debug.Print line (after a trailing `;` or `,`). */
@@ -294,8 +302,43 @@ export class Runtime {
    * with an empty location; state 'break' until it answers ('end' ends the
    * program, 'continue' or a rejected onBreak goes back to 'idle').
    */
+  /** Ends a step and a Run To Cursor (any break does). */
+  stopDebugging(): void {
+    this.stepDepth = -1;
+    if (this.runTo) {
+      const key = this.runTo.key;
+      this.runTo = undefined;
+      this.syncBreakpoints(key);
+    }
+  }
+
+  setBreakpoints(moduleName: string, lines: Iterable<number>): void {
+    const key = lc(moduleName);
+    const set = new Set(lines);
+    if (set.size) this.userBreakpoints.set(key, set);
+    else this.userBreakpoints.delete(key);
+    this.syncBreakpoints(key);
+  }
+
+  setRunTo(moduleName: string, line: number): void {
+    const old = this.runTo?.key;
+    this.runTo = { key: lc(moduleName), line };
+    if (old !== undefined && old !== this.runTo.key) this.syncBreakpoints(old);
+    this.syncBreakpoints(this.runTo.key);
+  }
+
+  /** The module's effective break lines: its breakpoints and the Run To Cursor line. */
+  private syncBreakpoints(key: string): void {
+    const m = this.modules.get(key);
+    if (!m) return;
+    const set = new Set(this.userBreakpoints.get(key));
+    if (this.runTo?.key === key) set.add(this.runTo.line);
+    m.breakpoints = set.size ? set : null;
+  }
+
   pauseIdle(): void {
     this.pauseRequested = false;
+    this.stopDebugging();
     this.state = 'break';
     this.eventsSuspended++;
     const info = { reason: 'pause' as const, at: { moduleName: '', procName: '', line: 0 } };
@@ -655,6 +698,37 @@ export class Program {
     // only an Immediate command runs: it never breaks, and break mode would stop nothing
     if (rt.immediateRuns > 0) return;
     rt.pauseIdle();
+  }
+
+  /**
+   * Breakpoints of a module (replacing its previous ones): the program
+   * enters break mode (reason 'pause') before a statement on one of these
+   * lines runs, when the line is reached (not again while it stays on that
+   * line). Never in an Immediate command. Lines are 1-based source lines.
+   */
+  setBreakpoints(moduleName: string, lines: Iterable<number>): void {
+    this.rt.setBreakpoints(moduleName, lines);
+  }
+
+  /** Run To Cursor: a one-shot breakpoint, removed by the next break of any kind. */
+  runToLine(moduleName: string, line: number): void {
+    this.rt.setRunTo(moduleName, line);
+  }
+
+  /**
+   * Arms a step; call it in break mode before answering onBreak with
+   * 'continue' (or before the first event, to break at the first statement).
+   * - 'into': break at the next statement that runs, in any procedure;
+   * - 'over': break at the next statement in this procedure or a caller
+   *   (calls run to completion);
+   * - 'out': break at the next statement in a caller.
+   * Stays armed while the program waits for events (the next event handler
+   * breaks for 'into' and, at the top level, 'over'); any break ends it.
+   */
+  step(mode: 'into' | 'over' | 'out'): void {
+    const rt = this.rt;
+    const depth = rt.callDepth;
+    rt.stepDepth = mode === 'into' || depth === 0 ? (mode === 'out' ? -1 : Infinity) : mode === 'over' ? depth : depth - 1;
   }
 
   /**

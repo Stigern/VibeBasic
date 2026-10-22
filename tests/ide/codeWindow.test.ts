@@ -212,3 +212,26 @@ test('right-click menu items per mode', async () => {
   ide.setMode('break');
   expect(menu()).toEqual(['Copy', 'Select All']);
 });
+
+test('a breakpoint follows its line when a line is inserted above it', () => {
+  set('Private Sub Form_Load()\n  x = 1\n  y = 2\nEnd Sub\n');
+  expect(cw.toggleBreakpoint(3)).toBe(true);
+  expect(cw.breakpointLines()).toEqual([3]);
+  expect(view.dom.querySelectorAll('.cm-vb-bp').length).toBe(1);
+  expect(ide.hasBreakpoints).toBe(true);
+  view.dispatch({ changes: { from: view.state.doc.line(2).from, insert: '  z = 0\n' } });
+  expect(cw.breakpointLines()).toEqual([4]);
+  expect(cw.toggleBreakpoint(4)).toBe(true);
+  expect(cw.breakpointLines()).toEqual([]);
+  expect(ide.hasBreakpoints).toBe(false);
+});
+
+test('F9 on a comment, blank, Dim or Sub header line does nothing', () => {
+  set("Dim a\nPrivate Sub Form_Load()\n  ' note\n\n  Dim b As Integer\n  b = 1\nEnd Sub\n");
+  const actions: IdeActions = {};
+  registerCodeActions(ide, actions, { mdiHost: host });
+  for (const n of [1, 2, 3, 4, 5, 7]) { toLine(n); actions.toggleBreakpoint(); }
+  expect(cw.breakpointLines()).toEqual([]);
+  toLine(6); actions.toggleBreakpoint();
+  expect(cw.breakpointLines()).toEqual([6]);
+});

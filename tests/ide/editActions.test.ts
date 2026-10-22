@@ -161,6 +161,4 @@ test('every enabled menu item and toolbar button has a registered action', () =>
     }
   }
   expect(missing).toEqual([]);
-  // Debug menu stays disabled
-  expect(ide.menus.find(m => m.label === 'Debug')!.items.every(i => !i.enabled!())).toBe(true);
 });

@@ -15,7 +15,7 @@ export const ACTION_NAMES = [
   'addForm', 'addModule', 'removeItem', 'projectProperties',
   'alignLefts', 'alignCenters', 'alignRights', 'alignTops', 'alignMiddles', 'alignBottoms',
   'sameWidth', 'sameHeight', 'sameBoth', 'bringToFront', 'sendToBack', 'lockControls',
-  'stepInto', 'toggleBreakpoint',
+  'stepInto', 'stepOver', 'stepOut', 'runToCursor', 'toggleBreakpoint', 'clearAllBreakpoints',
   'start', 'startFullCompile', 'break', 'end', 'restart',
   'askAi', 'options', 'about',
 ] as const;
@@ -66,9 +66,11 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
   });
   const sep = (): MenuItem => ({ label: '-', separator: true });
   const sub = (label: string, items: MenuItem[]): MenuItem => ({ label, submenu: items });
-  const never = () => false;
   const design = () => (state?.mode ?? 'design') === 'design';
   const idle = () => !state?.busy;
+  const inCode = () => !state || state.activeView.kind === 'code';
+  // stepping starts the program in design mode and goes on in break mode; never while it runs
+  const canStep = () => idle() && (state?.mode ?? 'design') !== 'run';
 
   return [
     { label: 'File', items: [
@@ -93,7 +95,7 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
       sep(),
       mk('Select All', 'selectAll', 'Ctrl+A', () => editEnabled(state, 'selectAll')),
       sep(),
-      mk('Find...', 'find', 'Ctrl+F', () => state?.activeView.kind === 'code' || !state),
+      mk('Find...', 'find', 'Ctrl+F', inCode),
     ] },
     { label: 'View', items: [
       mk('Code', 'viewCode', 'F7'),
@@ -123,8 +125,13 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
       mk('Lock Controls', 'lockControls', undefined, undefined, { checked: () => state?.controlsLocked ?? false }),
     ] },
     { label: 'Debug', items: [
-      mk('Step Into', 'stepInto', 'F8', never),
-      mk('Toggle Breakpoint', 'toggleBreakpoint', 'F9', never),
+      mk('Step Into', 'stepInto', 'F8', canStep),
+      mk('Step Over', 'stepOver', 'Shift+F8', canStep),
+      mk('Step Out', 'stepOut', 'Ctrl+Shift+F8', () => state?.mode === 'break'),
+      mk('Run To Cursor', 'runToCursor', 'Ctrl+F8', () => canStep() && inCode()),
+      sep(),
+      mk('Toggle Breakpoint', 'toggleBreakpoint', 'F9', inCode),
+      mk('Clear All Breakpoints', 'clearAllBreakpoints', 'Ctrl+Shift+F9', () => state?.hasBreakpoints ?? true),
     ] },
     { label: 'Run', items: [
       mk(() => (state?.mode === 'break' ? 'Continue' : 'Start'), 'start', 'F5', () => idle() && (state?.mode ?? 'design') !== 'run'),

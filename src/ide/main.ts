@@ -83,6 +83,15 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   actions.break = () => rc.breakNow();
   actions.end = () => rc.end();
   actions.restart = () => { void rc.restart(); };
+  actions.stepInto = () => rc.step('into');
+  actions.stepOver = () => rc.step('over');
+  actions.stepOut = () => rc.step('out');
+  actions.runToCursor = () => {
+    const v = state.activeView;
+    const w = v.kind === 'code' ? getCodeWindow(state, v.itemId) : null;
+    const item = v.kind === 'code' ? [...state.project.forms, ...state.project.modules].find(x => x.id === v.itemId) : undefined;
+    if (w && item) rc.runToCursor(item.name, w.getCursorLine());
+  };
   const menubar = createMenubar(layout.menubarHost, menus);
 
   const toolbar = createToolbar(layout.toolbarHost, buildToolbarItems(actions, state));
@@ -104,7 +113,8 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   state.on('mode', () => { refresh(); updateTitle(); });
   state.on('selection', () => refresh());
   state.on('activeView', () => refresh());
-  state.on('codeSelection', () => refresh());   // only fires when selected / not selected flips, so no throttle is needed
+  state.on('codeSelection', () => refresh());
+  state.on('breakpoints', () => refresh());   // only fires when selected / not selected flips, so no throttle is needed
   updateTitle();
   // Saved IDE options (async; the defaults apply until they arrive)
   void backend.loadSettings<Partial<IdeOptions>>('ide').then(o => {

@@ -30,11 +30,13 @@ test('make item and project-properties use project name', () => {
   expect(items.map(i => i.label)).toContain('Kalk Properties...');
   expect(items.map(i => i.label)).toContain('Remove Form1');
 });
-test('shortcuts, submenus and debug items disabled', () => {
-  const all = buildMenus({ stepInto: () => {}, toggleBreakpoint: () => {} });
+test('shortcuts and submenus', () => {
+  const all = buildMenus({});
   const debug = all.find(m => m.label === 'Debug')!.items;
-  expect(debug.map(i => [i.label, i.shortcut])).toEqual([['Step Into', 'F8'], ['Toggle Breakpoint', 'F9']]);
-  expect(debug.every(i => !i.enabled!())).toBe(true);
+  expect(debug.map(i => [i.label, i.shortcut])).toEqual([
+    ['Step Into', 'F8'], ['Step Over', 'Shift+F8'], ['Step Out', 'Ctrl+Shift+F8'], ['Run To Cursor', 'Ctrl+F8'], ['-', undefined],
+    ['Toggle Breakpoint', 'F9'], ['Clear All Breakpoints', 'Ctrl+Shift+F9'],
+  ]);
   const sc = (l: string, m: string) => all.find(x => x.label === m)!.items.find(i => i.label === l)!.shortcut;
   expect(sc('Redo', 'Edit')).toBe('Ctrl+Y');
   expect(sc('Break', 'Run')).toBe('Ctrl+Break');
@@ -73,4 +75,19 @@ test('startIde builds shell: toolbox, toolbar, designer window, immediate hidden
   expect((root.querySelector('[data-tool="Label"]') as HTMLElement).title).toBe('Label');
   (root.querySelector('[data-tool="Pointer"]') as HTMLElement).click();
   expect(ide.state.currentTool).toBe('Pointer');
+});
+
+test('Debug menu items are enabled per mode', () => {
+  const s = new IdeState();
+  const names = ['stepInto', 'stepOver', 'stepOut', 'runToCursor', 'toggleBreakpoint', 'clearAllBreakpoints'];
+  const items = buildMenus(Object.fromEntries(names.map(n => [n, () => {}])), s).find(m => m.label === 'Debug')!.items.filter(i => !i.separator);
+  const enabled = () => items.filter(i => i.enabled!()).map(i => i.label);
+  expect(enabled()).toEqual(['Step Into', 'Step Over']);
+  s.activeView = { kind: 'code', itemId: s.project.forms[0].id };
+  expect(enabled()).toEqual(['Step Into', 'Step Over', 'Run To Cursor', 'Toggle Breakpoint']);
+  s.breakpointsChanged(true);
+  s.mode = 'run';
+  expect(enabled()).toEqual(['Toggle Breakpoint', 'Clear All Breakpoints']);
+  s.mode = 'break';
+  expect(enabled()).toEqual(['Step Into', 'Step Over', 'Step Out', 'Run To Cursor', 'Toggle Breakpoint', 'Clear All Breakpoints']);
 });

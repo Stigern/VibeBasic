@@ -5,7 +5,7 @@ import { newProject } from '../model/controls';
 import type { ControlType, Project } from '../model/types';
 
 export type ActiveView = { kind: 'designer'; formId: string } | { kind: 'code'; itemId: string } | { kind: 'none' };
-export type IdeEvent = 'project' | 'selection' | 'activeView' | 'mode' | 'options' | 'tool' | 'closeWindows' | 'codeSelection';
+export type IdeEvent = 'project' | 'selection' | 'activeView' | 'mode' | 'options' | 'tool' | 'closeWindows' | 'codeSelection' | 'breakpoints';
 export interface IdeOptions {
   autoSyntaxCheck: boolean; requireVariableDeclaration: boolean;
   showGrid: boolean; gridWidth: number; gridHeight: number; alignToGrid: boolean;
@@ -32,6 +32,8 @@ export class IdeState {
   busy = false;
   options: IdeOptions = { ...DEFAULT_OPTIONS };
   controlsLocked = false;
+  /** True while any code window (open or closed) has a breakpoint (Debug > Clear All Breakpoints). */
+  hasBreakpoints = false;
   /** Form/module selected in the Project Explorer (target of Project > Remove). */
   explorerItemId: string | null = null;
   private listeners: Record<string, (() => void)[]> = {};
@@ -74,6 +76,8 @@ export class IdeState {
   setSelection(sel: { formId: string; ids: string[] } | null): void { this.selection = sel; this.emit('selection'); }
   setActiveView(v: ActiveView): void { this.activeView = v; this.emit('activeView'); }
   setCodeSelection(has: boolean): void { if (this.codeHasSelection === has) return; this.codeHasSelection = has; this.emit('codeSelection'); }
+  /** A breakpoint was set or cleared somewhere (the run controller passes them to a running program). */
+  breakpointsChanged(any: boolean): void { this.hasBreakpoints = any; this.emit('breakpoints'); }
   setMode(m: 'design' | 'run' | 'break'): void { this.mode = m; this.emit('mode'); }
   setBusy(b: boolean): void { this.busy = b; this.emit('mode'); }
   /** Selecting a tool; `Pointer` resets. */
