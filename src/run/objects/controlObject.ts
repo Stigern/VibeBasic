@@ -55,6 +55,8 @@ export interface RunContext {
   raise?(ctrl: ControlObject, event: string, args: VBRef[]): Promise<void>;
   /** MMControl, MediaPlayer: a file of the program (relative to App.Path); error 53 when it cannot be read. */
   readFile?(path: string): Promise<Uint8Array>;
+  /** SetFocus: the control is the form's ActiveControl at once (the window confirms it later). */
+  focused?(ctrl: ControlObject): void;
 }
 
 /** The properties that name an ImageList of the form (`Toolbar1.ImageList = ImageList1`). */
@@ -700,7 +702,7 @@ export class ControlObject implements VBObject {
     if (this.rich?.call) { const r = this.rich.call(l, args, refs); if (r !== undefined) return r; }
     switch (l) {
       case 'move': return this.move(args);
-      case 'setfocus': this.queue.send(this.formKey, { t: 'focus', id: this.def.id }); return Empty;
+      case 'setfocus': this.queue.send(this.formKey, { t: 'focus', id: this.def.id }); this.ctx.focused?.(this); return Empty;
       case 'additem': return this.addItem(args);
       case 'removeitem': return this.removeItem(args);
       case 'clear': return this.clear();

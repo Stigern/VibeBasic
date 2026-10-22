@@ -38,14 +38,13 @@ export function parseClean(code: string, name: string): ModuleAst | null {
   return r.errors.length ? null : r.ast;
 }
 
-/** Form methods the run-time form object answers besides its registry entries (formInstance.ts FORM_METHODS, Load/Unload). */
-const FORM_EXTRA = ['show', 'hide', 'refresh', 'move', 'setfocus', 'zorder', 'load', 'unload', 'scalewidth', 'scaleheight', 'name'];
-/** VB6 form members that may be used in loops over the form's controls; counted as known (uncertain, never reported). */
-const FORM_UNCERTAIN = ['controls', 'activecontrol', 'count'];
+/** Members the run-time form object answers besides its registry entries (formInstance.ts FORM_METHODS and FORM_OBJECTS, Load/Unload). */
+const FORM_EXTRA = ['show', 'hide', 'refresh', 'move', 'setfocus', 'zorder', 'load', 'unload', 'scalewidth', 'scaleheight', 'name',
+  'controls', 'activecontrol', 'count'];
 
 /** Members of a form: its controls, registry properties and methods, and the names declared in its code. */
 export function formMembers(form: FormDef, codeNames: Iterable<string>, extraControls: { name: string }[] = []): Set<string> {
-  const out = new Set<string>([...FORM_EXTRA, ...FORM_UNCERTAIN, ...codeNames]);
+  const out = new Set<string>([...FORM_EXTRA, ...codeNames]);
   for (const c of [...form.controls, ...extraControls]) out.add(c.name.toLowerCase());
   for (const p of CONTROL_TYPES.Form.props) if (p.runtime !== 'none') out.add(p.name.toLowerCase());
   for (const m of CONTROL_TYPES.Form.methods) out.add(m.name.toLowerCase());

@@ -79,6 +79,15 @@ export class TauriBackend implements Backend {
     return call<Volume[]>('list_volumes', {});
   }
 
+  /** pbpaste / pbcopy on the Rust side: navigator.clipboard wants a user gesture, which a Timer or Form_Load does not have. */
+  clipboardGetText(): Promise<string> {
+    return call<string>('clipboard_get_text', {});
+  }
+
+  clipboardSetText(text: string): Promise<void> {
+    return call<void>('clipboard_set_text', { text });
+  }
+
   listDir(path: string): Promise<DirListing> {
     return call<DirListing>('list_dir', { path });
   }

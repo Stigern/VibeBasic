@@ -19,6 +19,7 @@ import { runFileDialog, type FileDialogRequest } from './commonDialog';
 import type { DialogSpec } from './dialogSpec';
 import type { RuntimeErrorInfo } from './errorDialog';
 import type { FormHost, FormWindow } from './formHost';
+import type { ClipboardApi } from './objects/globalObjects';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 import { windowOptionsFor } from './windowOptions';
 
@@ -239,6 +240,11 @@ export class TauriFormHost implements FormHost {
   listDir(path: string): Promise<DirListing> { return getBackend().listDir(path); }
   /** Inet and Winsock: the sockets and requests belong to this (main) window, which runs the program. */
   net(): NetApi { return getBackend(); }
+  /** Clipboard: from this (main) window, through the backend (pbcopy / pbpaste). */
+  clipboard(): ClipboardApi {
+    const b = getBackend();
+    return { getText: () => b.clipboardGetText(), setText: t => b.clipboardSetText(t) };
+  }
 
   async colorDialog(o: { color: number }): Promise<number | null> {
     const r = String(await this.dialog({ kind: 'color', ...o }, ''));

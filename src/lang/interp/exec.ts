@@ -670,7 +670,7 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
       yield* enterBreak(f, 'pause');
       return;
     case 'unload': case 'load': {
-      // `Load Winsock1(i)`: an element of a control array, which may not exist yet
+      // `Load Command1(i)`: an element of a control array, which may not exist yet
       if (s.target.kind === 'call' && s.target.target.kind === 'name' && s.target.args.length === 1) {
         const arr = yield* evalExpr(f, s.target.target);
         if (isObject(arr) && (s.kind === 'load' ? arr.loadElement : arr.unloadElement)) {
@@ -682,6 +682,8 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
           else yield* afterHostCall(f);
           return;
         }
+        // `Load Text1(1)` where Text1 is a single control (or another object): not a control array
+        if (isObject(arr)) throw new VBRuntimeError(343, 'Object not an array');
       }
       const obj = yield* evalExpr(f, s.target);
       if (obj instanceof NothingT) throw new VBRuntimeError(91);

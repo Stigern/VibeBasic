@@ -63,6 +63,9 @@ export interface Backend extends NetApi {
   listVolumes(): Promise<Volume[]>;
   /** DirListBox / FileListBox: the contents of one folder. Rejects with the error text when it can't be read. */
   listDir(path: string): Promise<DirListing>;
+  /** Clipboard object of a running program: the system clipboard as text. Rejects when it cannot be reached. */
+  clipboardGetText(): Promise<string>;
+  clipboardSetText(text: string): Promise<void>;
   readTextFile(path: string): Promise<string>;
   writeTextFile(path: string, text: string): Promise<void>;
   readBinaryFile(path: string): Promise<Uint8Array>;

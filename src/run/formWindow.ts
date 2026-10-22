@@ -153,7 +153,8 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   on<FocusEvent>('focusin', e => {
     const tg = targetOf(e.target);
     if (blocked || !tg?.def || targetOf(e.relatedTarget)?.id === tg.id) return;
-    emit(tg.id, 'GotFocus');
+    if (handles(tg.id, 'GotFocus')) emit(tg.id, 'GotFocus');
+    else send({ t: 'focused', id: tg.id });   // the run session keeps ActiveControl
   });
   on<FocusEvent>('focusout', e => {
     const tg = targetOf(e.target);
@@ -372,6 +373,22 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
         case 'patch': if (m.id === 'form' || defs.has(m.id)) apply(m.id, m.props); break;
         case 'patches': for (const p of m.items) if (p.id === 'form' || defs.has(p.id)) apply(p.id, p.props); break;
         case 'focus': viewOf(m.id)?.inputEl?.focus(); break;
+        case 'addControl':
+          if (defs.has(m.def.id)) break;
+          defs.set(m.def.id, m.def);
+          state.set(m.def.id, { ...m.def.props });
+          s.handled[m.def.id] = m.handled;
+          surface.addControl(m.def);
+          computeTabOrder();
+          for (const k of defs.keys()) retab(k);
+          break;
+        case 'removeControl':
+          if (!defs.has(m.id)) break;
+          surface.removeControl(m.id);
+          defs.delete(m.id);
+          state.delete(m.id);
+          computeTabOrder();
+          break;
         case 'show': surface.el.style.display = ''; focusInitial(); break;
         case 'hide': surface.el.style.display = 'none'; break;
         case 'blocked': setBlocked(m.blocked); break;

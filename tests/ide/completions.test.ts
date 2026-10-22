@@ -30,3 +30,12 @@ test('member already typed in full: no list (Enter inserts a newline)', () => {
   expect(completionsFor('Text1.text', form)).toBeNull();
   expect(completionsFor('Text1.Tex', form)!.options).toEqual(['Text']);
 });
+
+test('global objects: Screen, Clipboard, Forms, App; Controls and ActiveControl in a form', () => {
+  expect(completionsFor('Screen.Active', form)!.options).toEqual(['ActiveControl', 'ActiveForm']);
+  expect(completionsFor('Clipboard.', null)!.options).toEqual(['Clear', 'GetFormat', 'GetText', 'SetText']);
+  expect(completionsFor('n = Forms.C', null)!.options).toEqual(['Count']);
+  expect(completionsFor('Controls.', form)!.options).toEqual(['Count', 'Item']);
+  expect(completionsFor('Me.Contr', form)!.options).toEqual(['ControlBox', 'Controls']);
+  expect(completionsFor('Controls.', null)).toBeNull();
+});

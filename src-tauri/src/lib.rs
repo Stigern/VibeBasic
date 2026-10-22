@@ -1,4 +1,5 @@
 mod ai;
+mod clipboard;
 mod embedded;
 mod files;
 mod inet;
@@ -21,6 +22,8 @@ pub fn run() {
       files::read_binary_file,
       files::list_volumes,
       files::list_dir,
+      clipboard::clipboard_get_text,
+      clipboard::clipboard_set_text,
       inet::inet_request,
       inet::inet_cancel,
       winsock::sock_connect,
