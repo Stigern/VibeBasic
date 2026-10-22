@@ -239,6 +239,27 @@ describe('mountFormWindow', () => {
     expect(sent).toHaveLength(1);
   });
 
+  test('initial focus: Enter on the active element clicks the default button', async () => {
+    const t1 = mk('TextBox');
+    const ok = mk('CommandButton', { Default: true });
+    mount([t1, ok], { [ok.id]: ['Click'] });
+    await Promise.resolve();
+    expect(document.activeElement).toBe(root.querySelector('input'));
+    sent.length = 0;
+    key(document.activeElement!, 'keydown', 'Enter', 13);
+    expect(sent).toEqual([{ t: 'event', id: ok.id, event: 'Click', args: [] }]);
+  });
+
+  test('label-only form with KeyPreview receives keys; buttons keep Space', async () => {
+    const l = mk('Label');
+    mount([l], { form: ['KeyPress'] }, { KeyPreview: true });
+    await Promise.resolve();
+    expect(document.activeElement).toBe(root.firstElementChild);
+    sent.length = 0;
+    expect(typeKey(document.activeElement!, 'q')).toBe(true);   // not a text field: not swallowed
+    expect(sent).toMatchObject([{ id: 'form', event: 'KeyPress', args: [113] }]);
+  });
+
   test('ready is sent after mount', async () => {
     mount([], {});
     await Promise.resolve();

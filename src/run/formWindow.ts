@@ -37,6 +37,8 @@ function isTextField(el: EventTarget | null): el is HTMLInputElement | HTMLTextA
 
 export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: FromWindow) => void): { receive(m: ToWindow): void; dispose(): void } {
   const surface = renderFormSurface(s.form, 'run', ref => s.assets[ref.asset] ?? null);
+  surface.el.tabIndex = -1;   // so keys reach the form's listeners when no control has focus
+  surface.el.style.outline = 'none';
   root.appendChild(surface.el);
   const ac = new AbortController();
   const on = <T extends Event>(type: string, fn: (e: T) => void) =>
@@ -210,7 +212,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     for (const id of chain) emit(id, 'KeyDown', [code, shift]);
     const ascii = keyAscii(e);
     const pc = ascii === null ? [] : chain.filter(id => handles(id, 'KeyPress'));
-    if (pc.length) { e.preventDefault(); sendKeyPress(pc, ascii!, e.target); }
+    if (pc.length) { if (isTextField(e.target)) e.preventDefault(); sendKeyPress(pc, ascii!, e.target); }
     if (e.key === 'Enter' && !prevented && tg.def?.type !== 'CommandButton' && !(e.target instanceof HTMLTextAreaElement)) clickButton('Default');
     else if (e.key === 'Escape' && !prevented) clickButton('Cancel');
   });
@@ -245,14 +247,20 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     observer.observe(root);
   }
 
-  queueMicrotask(() => { if (!disposed) send({ t: 'ready' }); });
+  /** VB6: a shown form focuses the first control in tab order; without one the form itself gets the keys. */
+  function focusInitial(): void {
+    const first = [...tabRank].sort((a, b) => a[1] - b[1]).map(([id]) => id)
+      .find(id => usable(id) && (viewOf(id)?.inputEl?.tabIndex ?? -1) >= 0);
+    (first ? viewOf(first)!.inputEl! : surface.el).focus();
+  }
+  queueMicrotask(() => { if (disposed) return; send({ t: 'ready' }); focusInitial(); });
 
   return {
     receive(m) {
       switch (m.t) {
         case 'patch': if (m.id === 'form' || defs.has(m.id)) apply(m.id, m.props); break;
         case 'focus': viewOf(m.id)?.inputEl?.focus(); break;
-        case 'show': surface.el.style.display = ''; break;
+        case 'show': surface.el.style.display = ''; focusInitial(); break;
         case 'hide': surface.el.style.display = 'none'; break;
         case 'blocked': setBlocked(m.blocked); break;
         case 'keyResult': {
