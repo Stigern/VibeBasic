@@ -25,10 +25,21 @@ fn unreadable() -> String {
   "The AI server sent an answer VibeBasic could not read.".to_string()
 }
 
+/// The innermost cause of a request error (e.g. "No route to host (os error 65)"), for the error text.
+fn root_cause(e: &reqwest::Error) -> String {
+  let mut cur: &dyn std::error::Error = e;
+  while let Some(next) = cur.source() {
+    cur = next;
+  }
+  cur.to_string()
+}
+
 fn map_send_error(e: &reqwest::Error, base_url: &str, timeout_secs: u64) -> String {
+  eprintln!("ai request failed: {e:?}");
   if e.is_connect() {
     format!(
-      "Could not connect to {base_url}. Check that the AI server is running and can be reached from this Mac. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0."
+      "Could not connect to {base_url}. Check that the AI server is running and can be reached from this Mac. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0. (Details: {})",
+      root_cause(e)
     )
   } else if e.is_timeout() {
     format!("The AI server did not answer within {timeout_secs} seconds.")
@@ -37,7 +48,10 @@ fn map_send_error(e: &reqwest::Error, base_url: &str, timeout_secs: u64) -> Stri
   } else if e.is_decode() || e.is_body() {
     unreadable()
   } else {
-    format!("Could not connect to {base_url}. Check that the AI server is running and can be reached from this Mac. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0.")
+    format!(
+      "Could not connect to {base_url}. Check that the AI server is running and can be reached from this Mac. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0. (Details: {})",
+      root_cause(e)
+    )
   }
 }
 
