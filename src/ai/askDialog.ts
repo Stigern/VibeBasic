@@ -144,8 +144,11 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
     notes.push(...r.notes);
     return r.code;
   };
+  // Why the last form-mode answer was not usable JSON (null when it was, or in code mode).
+  let jsonReason: string | null = null;
   const analyse = (text: string): Analysis | null => {
     const notes: string[] = [];
+    jsonReason = null;
     if (codeMode) {
       const raw = extractCode(text);
       if (raw === null) return null;
@@ -154,13 +157,13 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
       const proc = listProcedures(before).find(p => codeWin!.getCursorLine() >= p.line && codeWin!.getCursorLine() <= p.endLine)?.name ?? null;
       const applied = applyCodeProposal(before, code, proc);
       if (!applied) return null;
-      return { kind: 'code', applied, notes, problems: validateCode(code, { moduleName, form }) };
+      return { kind: 'code', applied, notes, problems: validateCode(code, { moduleName, form, project }) };
     }
     if (!form) return null;
     const parsed = parseFormOps(text, form, fixer(notes));
-    if (!parsed.ok) return null;
+    if (!parsed.ok) { jsonReason = parsed.reason; return null; }
     const extra = parsed.ops.filter((o): o is Extract<typeof o, { op: 'add' }> => o.op === 'add').map(o => ({ name: o.name, type: o.type }));
-    const problems = parsed.codeText === undefined ? [] : validateCode(parsed.codeText, { moduleName, form, extraControls: extra });
+    const problems = parsed.codeText === undefined ? [] : validateCode(parsed.codeText, { moduleName, form, extraControls: extra, project });
     return { kind: 'form', parsed, notes, problems };
   };
 
@@ -173,10 +176,13 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   let reply = res.text;
   let metrics = res.metrics;
   let result = analyse(reply);
-  if (result && result.problems.length && messages) {
-    // One retry: tell the model what is wrong and keep the first answer if the second is no better understood.
-    const followUp: ChatMessage[] = [...messages, { role: 'assistant', content: reply },
-      { role: 'user', content: `Your answer has these problems:\n${result.problems.map(p => `- ${p}`).join('\n')}\nFix them and answer again in exactly the same format.` }];
+  // One retry at most: for the problems the checks found, or (form mode) for an answer that was not usable JSON.
+  const complaint = result?.problems.length
+    ? `Your answer has these problems:\n${result.problems.map(p => `- ${p}`).join('\n')}\nFix them and answer again in exactly the same format.`
+    : !result && jsonReason !== null ? `Your answer was not valid JSON (${jsonReason}). Answer again with ONLY the JSON object.` : null;
+  if (complaint && messages) {
+    // Keep the first answer if the second is no better understood.
+    const followUp: ChatMessage[] = [...messages, { role: 'assistant', content: reply }, { role: 'user', content: complaint }];
     log.separator();
     const again = await waitForReply(doc, settings.model, send(() => followUp), log, 'Checking and fixing...');
     if (again.kind === 'cancel') return;
@@ -184,6 +190,7 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
     if (again.kind === 'reply') {
       const second = analyse(again.text);
       if (second) { result = second; reply = again.text; metrics = again.metrics; }
+      else if (!result) reply = again.text;   // neither was understood: Details shows the latest
     }
   }
   if (!result) { await showNotUnderstood(doc, reply); return; }

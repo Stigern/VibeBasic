@@ -54,7 +54,7 @@ test('pixels converted', () => {
   expect(r.warnings).toContain('Sizes for cmdOK looked like pixels and were converted to twips.');
 });
 test('garbage is not understood', () => {
-  expect(parseFormOps('Jeg kan ikke det.', setup().p.forms[0])).toEqual({ ok: false, error: 'The AI answer could not be understood. Try again or rephrase.', raw: 'Jeg kan ikke det.' });
+  expect(parseFormOps('Jeg kan ikke det.', setup().p.forms[0])).toEqual({ ok: false, error: 'The AI answer could not be understood. Try again or rephrase.', raw: 'Jeg kan ikke det.', reason: 'no JSON object found' });
   expect(parseFormOps('{"ops":[{"op":"delete","name":"Nope"}]}', setup().p.forms[0]).ok).toBe(false);
 });
 test('control array name parsed', () => {
