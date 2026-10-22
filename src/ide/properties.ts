@@ -10,7 +10,7 @@ import { createTabs } from '../ui98/tabs';
 import type { IdeState } from './ideState';
 import { bytesToBase64, createColorPopup, formatPropertyValue, mimeFromPath, parsePropertyInput, showFontDialog } from './propertyEditors';
 
-const VB_OK_EXCL = 1 | 48, VB_YESNO_QUESTION = 4 | 32;
+const VB_OK_EXCL = 48, VB_YESNO_QUESTION = 4 | 32;
 const NAME_DEF: PropDef = { name: '(Name)', kind: 'string', default: '', designTime: true, runtime: 'rw' };
 const INDEX_DEF: PropDef = { name: 'Index', kind: 'int', default: 0, designTime: true, runtime: 'rw', min: 0 };
 const DEFAULT_FONT: FontValue = { name: 'MS Sans Serif', size: 8, bold: false, italic: false, underline: false };
@@ -50,14 +50,14 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     const name = text.trim();
     if (!validateName(name)) return invalid();
     if (t.id === 'form') {
-      if (name === form.name) return;
+      if (name === form.name) { refresh(); return; }
       const clash = ide.project.forms.some(f => f.id !== form.id && f.name.toLowerCase() === name.toLowerCase())
         || ide.project.modules.some(m => m.name.toLowerCase() === name.toLowerCase());
       if (clash) return invalid();
       ide.stack.execute(renameCmd(form.id, 'form', name, null));
       return;
     }
-    if (name === t.name) return;
+    if (name === t.name) { refresh(); return; }
     const others = form.controls.filter(c => c.id !== t.id && c.name.toLowerCase() === name.toLowerCase());
     if (!others.length) {
       // a member of an array that gets a new unique name leaves the array
@@ -65,6 +65,7 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
       return;
     }
     if (others[0].type !== t.type) return invalid();
+    // Joining an existing control array is silent (as in Task 7's paste and VB6); only a new array asks.
     const cmds: Command[] = [];
     if (others.every(o => o.index === null)) {
       const r = await messageBox98(doc, {
@@ -83,7 +84,7 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
 
   async function setIndex(form: FormDef, t: Target, v: number): Promise<void> {
     if (form.controls.some(c => c.id !== t.id && c.name.toLowerCase() === t.name.toLowerCase() && c.index === v)) return invalid();
-    if (v !== t.index) ide.stack.execute(renameCmd(form.id, t.id, t.name, v));
+    if (v !== t.index) ide.stack.execute(renameCmd(form.id, t.id, t.name, v)); else refresh();
   }
 
   async function applyValue(form: FormDef, ts: Target[], def: PropDef, value: PropValue): Promise<void> {
@@ -109,8 +110,9 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
   }
 
   function editorFor(form: FormDef, ts: Target[], def: PropDef, cell: HTMLElement, value: PropValue | undefined): void {
-    const shown = formatPropertyValue(def, value);
-    const text = def.kind === 'text' ? String(value ?? '') : def.kind === 'list' ? (Array.isArray(value) ? value.join('\n') : '') : shown;
+    const mixed = value === undefined && ts.length > 1;   // differing values in a multi-selection: blank
+    const shown = mixed ? '' : formatPropertyValue(def, value);
+    const text = mixed ? '' : def.kind === 'text' ? String(value ?? '') : def.kind === 'list' ? (Array.isArray(value) ? value.join('\n') : '') : shown;
     let done = false;
     const commit = (t: string) => { if (done) return; done = true; void applyText(form, ts, def, t); };
     const mkInput = (multi: boolean) => {

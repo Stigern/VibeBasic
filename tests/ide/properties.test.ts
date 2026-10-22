@@ -83,7 +83,7 @@ test('invalid name shows message and reverts', async () => {
   ide.setSelection({ formId: form().id, ids: [c.id] });
   edit('(Name)', '1abc');
   await flush();
-  expect(box).toHaveBeenCalledWith(document, expect.objectContaining({ prompt: 'Invalid property value' }));
+  expect(box).toHaveBeenCalledWith(document, expect.objectContaining({ prompt: 'Invalid property value', buttons: 48 }));
   expect(form().controls[0].name).toBe('Command1');
 });
 
@@ -114,6 +114,20 @@ test('form name edit renames the form; duplicate form is invalid', async () => {
   edit('(Name)', 'frmMain2');
   await flush();
   expect(form().name).toBe('frmMain2');
+  // same name again: editor closes, nothing changes
+  edit('(Name)', 'frmMain2');
+  await flush();
+  expect(box).not.toHaveBeenCalled();
+  expect(rowEl('(Name)').querySelector('.pw98-editor')).not.toBeNull();   // re-rendered, still editable
+  ide.project.forms.push({ id: 'f2', name: 'Other', props: {}, controls: [], code: '' });
+  ide.project.modules.push({ id: 'm1', name: 'Mod1', code: '' });
+  for (const clash of ['other', 'Mod1']) {
+    box.mockClear();
+    edit('(Name)', clash);
+    await flush();
+    expect(box).toHaveBeenCalledWith(document, expect.objectContaining({ prompt: 'Invalid property value', buttons: 48 }));
+    expect(form().name).toBe('frmMain2');
+  }
 });
 
 test('multi-selection: common props only, no (Name), edit applies to all', () => {
@@ -126,6 +140,13 @@ test('multi-selection: common props only, no (Name), edit applies to all', () =>
   expect(form().controls.map(c => c.props.Top)).toEqual([300, 300, 300]);
   ide.stack.undo();
   expect(form().controls.map(c => c.props.Top)).toEqual([0, 0, 0]);
+});
+
+test('multi-selection with differing values opens a blank editor', () => {
+  const a = add('CommandButton'), b = add('CommandButton', 2000);
+  ide.setSelection({ formId: form().id, ids: [a.id, b.id] });
+  rowEl('Left').click();
+  expect((rowEl('Left').querySelector('.pw98-editor') as HTMLInputElement).value).toBe('');
 });
 
 test('picture: file goes to assets and property set is one undo step; Delete clears', async () => {
