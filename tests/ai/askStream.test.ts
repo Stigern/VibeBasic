@@ -125,3 +125,25 @@ test('the preview shows the measurement line; without usage from the server only
   btn('Cancel')!.click();
   await p2;
 });
+
+test('the waiting dialog shows the animation, follows the delta kind, and removes it when closed', async () => {
+  const w = codeWin('Private Sub Command1_Click()\nEnd Sub');
+  const { b, calls } = fakeBackend();
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  try {
+    const p = askAi(ide(), b, { codeWindowFor: () => w as any });
+    await enterPrompt('x');
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const anim = () => document.querySelector<HTMLElement>('.dlg98 .ai-anim');
+    expect(anim()?.querySelector('svg')).toBeTruthy();
+    expect(anim()!.dataset.phase).toBe('thinking');
+    calls[0].opts.onDelta!('content', 'x');
+    expect(anim()!.dataset.phase).toBe('writing');
+    const timers = vi.getTimerCount();
+    btn('Cancel')!.click();
+    await p;
+    expect(anim()).toBeNull();
+    expect(vi.getTimerCount()).toBeLessThan(timers);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
+});

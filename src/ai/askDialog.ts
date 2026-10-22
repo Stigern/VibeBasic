@@ -7,6 +7,7 @@ import type { IdeState } from '../ide/ideState';
 import { listProcedures } from '../model/procedures';
 import { messageBox98, showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
+import { createAiAnimation } from './aiAnimation';
 import { applyCodeProposal, extractCode } from './codeMode';
 import { buildCodeRequest, buildFormRequest } from './context';
 import { NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
@@ -66,7 +67,7 @@ export function formatMetrics(usage: AiUsage | undefined, ms: number): string {
 type Waited = { kind: 'reply'; text: string; metrics: string } | { kind: 'error'; message: string } | { kind: 'cancel' };
 
 /**
- * Waiting dialog with a back-and-forth progress bar and a box that shows the reply as it streams in.
+ * Waiting dialog with a 1998-style animation (thinking or writing), a back-and-forth progress bar and a box that shows the reply as it streams in.
  * Cancel closes it and aborts the request (`signal`); a reply arriving afterwards is discarded.
  * A reply carries the measurement line (token counts from the server, and the time taken).
  */
@@ -79,7 +80,8 @@ async function waitForReply(doc: Document, model: string, start: (o: AiChatOptio
       + 'font:12px/14px "Courier New",monospace;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;'
       + 'box-shadow:inset -1px -1px #fff,inset 1px 1px #808080,inset -2px -2px #dfdfdf,inset 2px 2px #000',
   });
-  const content = h('div', { style: 'min-width:420px' }, h('div', {}, label), bar, box);
+  const anim = createAiAnimation(doc);
+  const content = h('div', { style: 'min-width:420px' }, anim.el, h('div', {}, label), bar, box);
   log.attach(box);
   let pos = 0, dir = 1;
   const timer = setInterval(() => {
@@ -92,7 +94,7 @@ async function waitForReply(doc: Document, model: string, start: (o: AiChatOptio
   const t0 = Date.now();
   let usage: AiUsage | undefined;
   let request: Promise<string>;
-  try { request = start({ signal: ctrl.signal, onDelta: (kind, text) => log.add(kind, text), onUsage: u => { usage = u; } }); }
+  try { request = start({ signal: ctrl.signal, onDelta: (kind, text) => { anim.setPhase(kind === 'content' ? 'writing' : 'thinking'); log.add(kind, text); }, onUsage: u => { usage = u; } }); }
   catch (e) { request = Promise.reject(e); }
   const answered = request.then<Waited, Waited>(text => ({ kind: 'reply', text, metrics: formatMetrics(usage, Date.now() - t0) }), e => ({ kind: 'error', message: e instanceof Error ? e.message : String(e) }));
   const cancelled = showDialog98(doc, { title: TITLE, content, buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }] })
@@ -102,7 +104,7 @@ async function waitForReply(doc: Document, model: string, start: (o: AiChatOptio
     if (res.kind !== 'cancel') content.closest('.dlg98-overlay')?.dispatchEvent(new Event('dlg98-abort'));
     else ctrl.abort();
     return res;
-  } finally { clearInterval(timer); log.detach(); }
+  } finally { clearInterval(timer); anim.dispose(); log.detach(); }
 }
 
 export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor(itemId: string): CodeWindow | null }, doc: Document = document): Promise<void> {
