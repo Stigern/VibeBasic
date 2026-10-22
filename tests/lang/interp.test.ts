@@ -410,3 +410,69 @@ test('VBRuntimeError from host objects is a normal run-time error', async () => 
   expect(await run(lines('Sub Main()', '  Debug.Print Thing.Value', 'End Sub'), 'Main', host))
     .toEqual(['[Error 380 at Module1:2] Invalid property value']);
 });
+
+describe('review fixes (round 1)', () => {
+  const both = (body: string[]) => [false, true].map(explicit => lines(...(explicit ? ['Option Explicit'] : []), ...body));
+
+  test('I-1: Dim in a branch that is not taken still declares the variable', async () => {
+    expect(await run(lines('Sub Main()', '  If False Then', '    Dim a As Integer', '  End If', '  a = 70000', '  Debug.Print a', 'End Sub')))
+      .toEqual(['[Error 6 at Module1:5] Overflow']);
+    expect(await run(lines('Option Explicit', 'Sub Main()', '  If False Then', '    Dim a As Integer', '  End If', '  a = 5', '  Debug.Print a', 'End Sub')))
+      .toEqual([' 5 ']);
+  });
+
+  test('I-1: Dim after a GoTo that skips it', async () => {
+    for (const src of both(['Sub Main()', '  GoTo Skip', '  Dim n As Integer', 'Skip:', '  n = 2.5', '  Debug.Print n', 'End Sub'])) {
+      expect(await run(src)).toEqual([' 2 ']);
+    }
+  });
+
+  test('I-1: Dim and Const in a loop with zero iterations', async () => {
+    for (const src of both([
+      'Sub Main()', '  Dim i As Integer', '  For i = 1 To 0', '    Const K = 3', '    Dim b(1 To K) As Long', '  Next',
+      '  b(2) = 7', '  Debug.Print b(2); UBound(b); K', 'End Sub',
+    ])) {
+      expect(await run(src)).toEqual([' 7  3  3 ']);
+    }
+  });
+
+  test('I-1: Static in a branch that is not taken keeps its value between calls', async () => {
+    expect(await run(lines(
+      'Option Explicit', 'Sub Main()', '  Tick: Tick: Tick', 'End Sub',
+      'Sub Tick()', '  If False Then', '    Static n As Integer', '  End If', '  n = n + 1', '  Debug.Print n;', 'End Sub',
+    ))).toEqual([' 1  2  3 ']);
+  });
+
+  test('I-1: an error in a declaration evaluated at entry is reported at its Dim line', async () => {
+    expect(await run(lines('Sub Main()', '  Debug.Print "start"', '  If False Then', '    Dim a(-5) As Integer', '  End If', 'End Sub')))
+      .toEqual(['[Error 9 at Module1:4] Subscript out of range']);
+  });
+
+  test('M-1: a failing For Each element assignment is reported at the For Each line', async () => {
+    expect(await run(lines(
+      'Sub Main()', '  Dim x As Integer, arr(2) As String', '  arr(0) = "1": arr(1) = "z": arr(2) = "3"',
+      '  For Each x In arr', '    Debug.Print x', '  Next', 'End Sub',
+    ))).toEqual([' 1 ', '[Error 13 at Module1:4] Type mismatch']);
+  });
+
+  test('M-3: For converts end and step to the counter type before the loop', async () => {
+    expect(await run(lines('Sub Main()', '  Dim i As Integer', '  For i = 32760 To 40000', '    Debug.Print i;', '  Next', 'End Sub')))
+      .toEqual(['[Error 6 at Module1:3] Overflow']);
+    expect(await run(lines('Sub Main()', '  Dim i As Integer', '  For i = 1 To 2 Step 0.6', '    Debug.Print i;', '  Next', '  Debug.Print', 'End Sub')))
+      .toEqual([' 1  2 ']);
+  });
+
+  test("M-4: a module's own enum members and constants shadow other modules' Public variables", async () => {
+    const mods: SourceModule[] = [
+      { name: 'Module1', kind: 'module', source: lines(
+        'Enum E', '  A', '  B = 3', 'End Enum', 'Const Limit = 1',
+        'Sub Main()', '  Init', '  Debug.Print B; Limit', '  Show2', 'End Sub',
+      ) },
+      { name: 'Module2', kind: 'module', source: lines(
+        'Public B As Integer', 'Public Limit As Integer',
+        'Sub Init()', '  B = 9: Limit = 7', 'End Sub', 'Sub Show2()', '  Debug.Print B; Limit', 'End Sub',
+      ) },
+    ];
+    expect(await run(mods)).toEqual([' 3  1 ', ' 9  7 ']);
+  });
+});

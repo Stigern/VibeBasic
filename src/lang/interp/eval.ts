@@ -72,8 +72,9 @@ export function constExpr(f: Frame, e: Expr): VBValue {
 
 /**
  * Resolves a name, in VB order: local → module (variables, constants,
- * procedures) → public globals → enum members, enum types and built-in
- * constants → built-in functions → standard module names → host objects.
+ * procedures, its own enum members and enum types) → public globals →
+ * other modules' public enum members/types and built-in constants →
+ * built-in functions → standard module names → host objects.
  */
 export function lookup(f: Frame, key: string, name: string): Binding | undefined {
   const local = f.locals.get(key);
@@ -87,13 +88,15 @@ export function lookup(f: Frame, key: string, name: string): Binding | undefined
   if (mc) return constVariable(rt, mc);
   const mp = m.procs.get(key);
   if (mp) return mp;
+  const me = m.enumMembers.get(key) ?? m.enums.get(key);
+  if (me) return me;
   const gv = g.vars.get(key);
   if (gv) return gv;
   const gc = g.consts.get(key);
   if (gc) return constVariable(rt, gc);
   const gp = g.procs.get(key);
   if (gp) return gp;
-  const en = m.enumMembers.get(key) ?? g.enumMembers.get(key) ?? m.enums.get(key) ?? g.enums.get(key) ?? constantFor(key);
+  const en = g.enumMembers.get(key) ?? g.enums.get(key) ?? constantFor(key);
   if (en) return en;
   const b = builtinFor(key);
   if (b) return b;

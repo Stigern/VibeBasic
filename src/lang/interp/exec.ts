@@ -11,7 +11,7 @@
 // Exit For/Do/Sub and GoTo travel as completion values, not exceptions.
 
 import type {
-  ArrayBound, CaseTest, Expr, ForEachStmt, ForStmt, MissingArg, ProcDecl, SelectStmt, Stmt, VarDecl, VBTypeName,
+  ArrayBound, CaseTest, ConstDecl, Expr, ForEachStmt, ForStmt, MissingArg, ProcDecl, SelectStmt, Stmt, VarDecl, VBTypeName,
 } from '../ast';
 import { VBRuntimeError } from '../errors';
 import { PrintLine } from '../printFormat';
@@ -268,6 +268,7 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBVal
   }
   run.frames.push(f);
   try {
+    yield* declareLocals(f);
     const c = yield* execBlock(f, proc.body);
     // a GoTo whose label is inside a block it is not in (e.g. into a loop body)
     if (c instanceof GotoJump) throw compileError('GoTo into a block is not supported');
@@ -306,28 +307,77 @@ export function* declareVariable(f: Frame, d: VarDecl): Gen<Variable> {
   return new Variable(d.name, type, new VBRef(rt.defaultFor(type, d.fixedLength)), { fixedLength: d.fixedLength });
 }
 
+type LocalDecl = { kind: 'dim'; decl: VarDecl } | { kind: 'const'; decl: ConstDecl };
+
+const localDeclCache = new WeakMap<ProcDecl, LocalDecl[]>();
+
+/** Every Dim/Static/Const anywhere in a procedure body, in source order. */
+function localDecls(p: ProcDecl): LocalDecl[] {
+  let list = localDeclCache.get(p);
+  if (list) return list;
+  const out: LocalDecl[] = [];
+  const walk = (body: Stmt[] | undefined) => {
+    if (!body) return;
+    for (const s of body) {
+      switch (s.kind) {
+        case 'dim': for (const d of s.decls) out.push({ kind: 'dim', decl: d }); break;
+        case 'const': for (const d of s.decls) out.push({ kind: 'const', decl: d }); break;
+        case 'if': s.branches.forEach(b => walk(b.body)); walk(s.elseBody); break;
+        case 'select': s.cases.forEach(c => walk(c.body)); walk(s.elseBody); break;
+        case 'for': case 'forEach': case 'do': case 'while': case 'with': walk(s.body); break;
+      }
+    }
+  };
+  walk(p.body);
+  list = out;
+  localDeclCache.set(p, list);
+  return list;
+}
+
 /**
- * `Dim`/`Static`. VB allocates locals once per call, so a Dim that runs again
- * (inside a loop) keeps the existing variable. Static variables (and all
- * locals of a `Static Sub`) live in the runtime's static store.
+ * VB declares a procedure's locals for the whole procedure, wherever the
+ * Dim/Static/Const line is (a branch not taken, after a GoTo, in a loop that
+ * never runs). This runs at procedure entry, in source order: fixed-array
+ * bounds and Const values are evaluated here, Static variables come from the
+ * static store (all locals of a `Static Sub`). A name that is already a
+ * parameter (or the function result) is left alone. The Dim/Const
+ * statements themselves do nothing when they run, so a Dim inside a loop
+ * keeps its value. Each declaration is guarded like a statement (its line,
+ * retry on Continue).
  */
-function* execDim(f: Frame, decls: VarDecl[]): Gen<void> {
+function* declareLocals(f: Frame): Gen<void> {
+  const proc = f.proc!;
   const rt = f.run.rt;
-  for (const d of decls) {
+  for (const item of localDecls(proc)) {
+    const d = item.decl;
     const key = lc(d.name);
     if (f.locals.has(key)) continue;
-    if (f.proc && (d.scope === 'static' || f.proc.isStatic)) {
-      const store = rt.staticStore(f.proc);
-      let v = store.get(key);
-      if (!v) {
-        v = yield* declareVariable(f, d);
-        store.set(key, v);
+    for (;;) {
+      f.line = d.line;
+      try {
+        if (item.kind === 'const') {
+          const value = yield* evalExpr(f, item.decl.value);
+          const type = rt.resolveType(item.decl.type, f.module);
+          f.locals.set(key, new Variable(d.name, type, new VBRef(storeValue(value, type)), { isConst: true }));
+        } else if (item.decl.scope === 'static' || proc.isStatic) {
+          const store = rt.staticStore(proc);
+          let v = store.get(key);
+          if (!v) {
+            v = yield* declareVariable(f, item.decl);
+            store.set(key, v);
+          }
+          f.locals.set(key, v);
+        } else {
+          f.locals.set(key, yield* declareVariable(f, item.decl));
+        }
+        break;
+      } catch (e) {
+        const r = yield* handleError(f, e);
+        if (r !== RETRY) throw new Error('declareLocals: unsupported error outcome'); // Task 8
       }
-      f.locals.set(key, v);
-    } else {
-      f.locals.set(key, yield* declareVariable(f, d));
     }
   }
+  f.line = proc.line;
 }
 
 // ---------------------------------------------------------------------------
@@ -386,17 +436,7 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
       return;
     }
     case 'exit': return s.what === 'for' ? 'exitFor' : s.what === 'do' ? 'exitDo' : 'exitProc';
-    case 'dim': yield* execDim(f, s.decls); return;
-    case 'const': {
-      for (const d of s.decls) {
-        const key = lc(d.name);
-        if (f.locals.has(key)) continue;
-        const value = yield* evalExpr(f, d.value);
-        const type = rt.resolveType(d.type, f.module);
-        f.locals.set(key, new Variable(d.name, type, new VBRef(storeValue(value, type)), { isConst: true }));
-      }
-      return;
-    }
+    case 'dim': case 'const': return; // declared at procedure entry (declareLocals)
     case 'redim': {
       for (const d of s.decls) {
         const bounds = yield* evalBounds(f, d.bounds);
@@ -542,11 +582,15 @@ function* execSelect(f: Frame, s: SelectStmt): Gen<Completion> {
   return s.elseBody ? yield* execBlock(f, s.elseBody) : undefined;
 }
 
+const NUMERIC_TYPES = new Set(['Integer', 'Long', 'Byte', 'Single', 'Double', 'Currency']);
+
 function* execFor(f: Frame, s: ForStmt): Gen<Completion> {
   const v = variableOf(f, s.variable);
   const from = yield* evalExpr(f, s.from);
-  const to = toNumber(yield* evalExpr(f, s.to));
-  const step = s.step ? toNumber(yield* evalExpr(f, s.step)) : 1;
+  // VB converts end and step to the counter's type once, before the loop (overflow 6 here)
+  const ct = NUMERIC_TYPES.has(v.type as string) ? v.type : 'Variant';
+  const to = toNumber(storeValue(yield* evalExpr(f, s.to), ct));
+  const step = s.step ? toNumber(storeValue(yield* evalExpr(f, s.step), ct)) : 1;
   v.set(from);
   for (;;) {
     const cur = toNumber(v.value);
@@ -573,7 +617,17 @@ function* execForEach(f: Frame, s: ForEachStmt): Gen<Completion> {
   const v = variableOf(f, s.variable);
   const coll = plainCollection(yield* evalExpr(f, s.collection));
   for (const item of coll) {
-    v.set(item);
+    // the element assignment belongs to the For Each statement; a failure is retried on its own
+    for (;;) {
+      f.line = s.line;
+      try {
+        v.set(item);
+        break;
+      } catch (e) {
+        const r = yield* handleError(f, e);
+        if (r !== RETRY) throw new Error('execForEach: unsupported error outcome'); // Task 8
+      }
+    }
     const c = yield* execBlock(f, s.body);
     if (c === 'exitFor') return;
     if (c !== undefined) return c;
