@@ -23,5 +23,6 @@ export interface FormHost {
   /** DriveListBox / DirListBox / FileListBox: the volumes and folder contents, read by the main window (the same call in the IDE and in made apps). */
   listVolumes(): Promise<Volume[]>;
   listDir(path: string): Promise<DirListing>;
-  runtimeErrorBox(o: { number: number; description: string; compile: boolean; mode: 'ide' | 'app'; title: string }): Promise<'end' | 'debug'>;
+  /** 'ai' only in the IDE: break mode on the line, then the Ask AI flow. */
+  runtimeErrorBox(o: { number: number; description: string; compile: boolean; mode: 'ide' | 'app'; title: string }): Promise<'end' | 'debug' | 'ai'>;
 }

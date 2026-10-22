@@ -13,7 +13,7 @@ export type DialogSpec =
   | { kind: 'font'; font: FontValue }
   | { kind: 'error'; info: RuntimeErrorInfo };
 
-/** msgbox -> vbOK..vbNo, input -> text ('' on Cancel), color -> the colour as text ('' on Cancel), font -> the FontValue as JSON ('' on Cancel), error -> 'end' | 'debug'. */
+/** msgbox -> vbOK..vbNo, input -> text ('' on Cancel), color -> the colour as text ('' on Cancel), font -> the FontValue as JSON ('' on Cancel), error -> 'end' | 'debug' | 'ai'. */
 export async function runDialog(doc: Document, spec: DialogSpec): Promise<number | string> {
   if (spec.kind === 'msgbox') return messageBox98(doc, spec);
   if (spec.kind === 'input') return inputBox98(doc, spec);
@@ -27,5 +27,5 @@ export async function runDialog(doc: Document, spec: DialogSpec): Promise<number
     content: messageContent(c.text, o.compile ? 'exclamation' : undefined),
     buttons: c.buttons.map((b, i) => ({ label: b.label, value: b.value, disabled: b.disabled, default: i === defIdx })),
   });
-  return v === 'debug' ? 'debug' : 'end';
+  return v === 'debug' || v === 'ai' ? v : 'end';
 }

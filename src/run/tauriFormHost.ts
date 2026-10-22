@@ -248,8 +248,9 @@ export class TauriFormHost implements FormHost {
     return r === '' ? null : JSON.parse(r) as FontValue;
   }
 
-  async runtimeErrorBox(o: RuntimeErrorInfo): Promise<'end' | 'debug'> {
-    return (await this.dialog({ kind: 'error', info: o }, 'end')) === 'debug' ? 'debug' : 'end';
+  async runtimeErrorBox(o: RuntimeErrorInfo): Promise<'end' | 'debug' | 'ai'> {
+    const r = await this.dialog({ kind: 'error', info: o }, 'end');
+    return r === 'debug' || r === 'ai' ? r : 'end';
   }
 
   /** End of the run: closes every form and dialog window and drops the event listeners. */

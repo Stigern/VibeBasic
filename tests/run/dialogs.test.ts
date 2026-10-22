@@ -11,7 +11,7 @@ afterEach(() => { document.body.innerHTML = ''; });
 describe('runtimeErrorContent', () => {
   test('ide runtime error content', () => expect(runtimeErrorContent({ number: 13, description: 'Type mismatch', compile: false, mode: 'ide', title: 'P' }))
     .toEqual({ title: 'VibeBasic', text: "Run-time error '13':\n\nType mismatch", buttons: [
-      { label: 'Continue', value: 'end', disabled: true }, { label: 'End', value: 'end' }, { label: 'Debug', value: 'debug' }, { label: 'Help', value: 'end', disabled: true }] }));
+      { label: 'Continue', value: 'end', disabled: true }, { label: 'End', value: 'end' }, { label: 'Debug', value: 'debug' }, { label: 'Ask AI', value: 'ai' }, { label: 'Help', value: 'end', disabled: true }] }));
   test('ide compile error breaks on OK', () => {
     const c = runtimeErrorContent({ number: 0, description: 'Expected: )', compile: true, mode: 'ide', title: 'P' });
     expect(c.text).toBe('Compile error:\n\nExpected: )');

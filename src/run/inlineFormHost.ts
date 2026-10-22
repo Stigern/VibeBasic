@@ -102,7 +102,7 @@ export class InlineFormHost implements FormHost {
     this.dialogs.clear();
   }
 
-  runtimeErrorBox(o: RuntimeErrorInfo): Promise<'end' | 'debug'> {
-    return this.withDialog(() => runDialog(this.doc, { kind: 'error', info: o })) as Promise<'end' | 'debug'>;
+  runtimeErrorBox(o: RuntimeErrorInfo): Promise<'end' | 'debug' | 'ai'> {
+    return this.withDialog(() => runDialog(this.doc, { kind: 'error', info: o })) as Promise<'end' | 'debug' | 'ai'>;
   }
 }

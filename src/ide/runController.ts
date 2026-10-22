@@ -7,6 +7,7 @@
 import { VBSyntaxError } from '../lang/errors';
 import type { BreakInfo } from '../lang/host';
 import { findSyntaxErrors } from '../lang/parser';
+import { listProcedures } from '../model/procedures';
 import { RunSession } from '../run/session';
 import type { FormHost } from '../run/formHost';
 import { compileErrorBox, messageBox98 } from '../ui98/dialogs';
@@ -18,6 +19,15 @@ export interface RunOptions {
   immediate?: { print(text: string, newline: boolean): void; show(): void; focus(): void };
   readFile?: (path: string) => Promise<Uint8Array>;
   doc?: Document;
+  /** Ask AI on an error: the error dialog's button (the program is in break mode on the line, or in design for a compile error before the start). */
+  onAskAi?: (fix: ErrorToFix) => void;
+}
+
+/** An error the AI should fix: the form or module, the error and (run-time errors) the variables of the stopped frame. */
+export interface ErrorToFix {
+  itemId: string;
+  error: { number: number; description: string; compile: boolean; line: number; procName: string | null };
+  vars: { name: string; value: string }[];
 }
 
 export class RunController {
@@ -25,6 +35,8 @@ export class RunController {
   private pendingBreak: ((a: 'continue' | 'end') => void) | null = null;
   private breakWin: CodeWindow | null = null;
   private errorWins: CodeWindow[] = [];
+  /** Set while in break mode on an unhandled error (Tools > Ask AI about this error). */
+  breakError: Omit<ErrorToFix, 'vars'> | null = null;
   private starting = false;
   /** The previous run's host teardown: a new run waits for it (Shift+F5), so it cannot destroy the new run's windows. */
   private lastDispose: Promise<void> = Promise.resolve();
@@ -53,7 +65,24 @@ export class RunController {
       w.gotoLine(e.line);
       this.errorWins.push(w);
     }
-    await compileErrorBox(this.doc, e.message);
+    const askAi = !!id && !!this.opts.onAskAi;
+    if (await compileErrorBox(this.doc, e.message, { askAi }) !== 'ai' || !id) return;
+    const code = [...this.ide.project.forms, ...this.ide.project.modules].find(x => x.id === id)?.code ?? '';
+    const procName = listProcedures(code).find(p => e.line >= p.line && e.line <= p.endLine)?.name ?? null;
+    this.opts.onAskAi?.({ itemId: id, error: { number: 0, description: e.message, compile: true, line: e.line, procName }, vars: [] });
+  }
+
+  /** The error of the current break (with the stopped frame's variables), or null when not stopped on an error. */
+  errorToFix(): ErrorToFix | null {
+    const b = this.breakError;
+    if (!b || this.ide.mode !== 'break') return null;
+    return { ...b, vars: b.error.compile ? [] : this.session?.variables() ?? [] };
+  }
+
+  /** End, then wait until the program and its windows are gone (at most 3 s for the windows). */
+  async endAndWait(): Promise<void> {
+    this.end();
+    await Promise.race([this.lastDispose, new Promise(r => setTimeout(r, 3000))]);
   }
 
   /** F5 / Ctrl+F5. In break mode F5 continues. */
@@ -130,7 +159,7 @@ export class RunController {
     await this.start(false);
   }
 
-  private async onBreak(info: BreakInfo): Promise<'continue' | 'end'> {
+  private async onBreak(info: BreakInfo & { askAi?: boolean }): Promise<'continue' | 'end'> {
     this.ide.setMode('break');
     const id = info.at.moduleName ? this.itemId(info.at.moduleName) : undefined;
     if (id) {
@@ -141,9 +170,16 @@ export class RunController {
     }
     this.opts.immediate?.show();
     this.opts.immediate?.focus();
+    const e = info.error;
+    this.breakError = info.reason === 'error' && e && id
+      ? { itemId: id, error: { number: e.number, description: e.description, compile: e.compile, line: info.at.line, procName: info.at.procName || null } }
+      : null;
     try {
-      return await new Promise<'continue' | 'end'>(resolve => { this.pendingBreak = resolve; });
+      const answer = new Promise<'continue' | 'end'>(resolve => { this.pendingBreak = resolve; });
+      if (info.askAi) { const fix = this.errorToFix(); if (fix) this.opts.onAskAi?.(fix); }
+      return await answer;
     } finally {
+      this.breakError = null;
       this.pendingBreak = null;
       this.clearBreakLine();
       if (this.ide.mode === 'break') this.ide.setMode('run');

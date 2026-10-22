@@ -8,7 +8,7 @@ import { TOOLBAR_ICONS } from './icons/toolbarIcons';
 import { IdeState, OPTION_EXPLICIT, type IdeOptions } from './ideState';
 import { buildLayout, type IdeLayout } from './layout';
 import { buildMenus, type IdeActions } from './menus';
-import { askAi } from '../ai/askDialog';
+import { askAi, askAiAboutError } from '../ai/askDialog';
 import { getCodeWindow, openCodeWindow, registerCodeActions } from './codeWindow';
 import { openDesigner, registerDesignerActions } from './designer';
 import { createPropertiesWindow, type PropertiesWindow } from './properties';
@@ -18,7 +18,7 @@ import { showProjectProperties } from './projectDialogs';
 import { showOptions } from './optionsDialog';
 import { makeAppFlow } from '../build/makeApp';
 import { FileController } from './fileController';
-import { RunController } from './runController';
+import { RunController, type ErrorToFix } from './runController';
 import { createImmediateWindow } from './immediate';
 import { InlineFormHost } from '../run/inlineFormHost';
 import { TauriFormHost } from '../run/tauriFormHost';
@@ -45,7 +45,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     viewToolbox: () => layout.setPaneVisible('toolbox', true),
     about: () => { void showAbout(doc); },
   };
-  const menus = buildMenus(actions, state);
+  const menus = buildMenus(actions, state, { breakOnError: () => !!run.rc?.breakError });
   let refresh = () => {};
   registerDesignerActions(state, actions, () => refresh());
   registerCodeActions(state, actions, { mdiHost: layout.mdiHost, actions });
@@ -74,10 +74,14 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     const host = new InlineFormHost(layer);
     return Object.assign(host, { dispose: () => { InlineFormHost.prototype.dispose.call(host); layer.remove(); } });
   };
+  const askAboutError = (fix: ErrorToFix) => {
+    void askAiAboutError(state, backend, fix, { openCode: id => openCodeWindow(state, id, env), end: () => rc.endAndWait() }, doc);
+  };
   const rc = new RunController(state, hostFactory, id => openCodeWindow(state, id, env), {
-    immediate, doc, readFile: p => backend.readBinaryFile(p),
+    immediate, doc, readFile: p => backend.readBinaryFile(p), onAskAi: askAboutError,
   });
   run.rc = rc;
+  actions.askAiAboutError = () => { const fix = rc.errorToFix(); if (fix) askAboutError(fix); };
   actions.start = () => { void rc.start(false); };
   actions.startFullCompile = () => { void rc.start(true); };
   actions.break = () => rc.breakNow();

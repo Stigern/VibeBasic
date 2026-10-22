@@ -9,7 +9,7 @@ import { messageBox98, showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
 import { createAiAnimation } from './aiAnimation';
 import { applyCodeProposal, extractCode } from './codeMode';
-import { buildCodeRequest, buildFormRequest } from './context';
+import { buildCodeRequest, buildFixRequest, buildFormRequest, type FixError } from './context';
 import { NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
 import { type PreviewResult, showCodePreview, showFormPreview } from './previewDialogs';
 import { type AiSettings, loadAiSettings } from './settings';
@@ -115,12 +115,8 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   const codeWin = view.kind === 'code' && itemId ? ui.codeWindowFor(itemId) : null;
   if (!itemId || !item || (view.kind === 'code' && !codeWin)) { await warn(doc, 'Open a form or a code window first.'); return; }
 
-  const settings = await loadAiSettings(backend);
-  if (!settings.model.trim()) {
-    await warn(doc, 'Set up the AI server first in Tools > Options > AI.');
-    await showOptions(ide, backend, doc, 'AI');
-    return;
-  }
+  const settings = await settingsOrSetup(ide, backend, doc);
+  if (!settings) return;
 
   const project = ide.project;
   const codeMode = view.kind === 'code';
@@ -132,6 +128,36 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   const session: AiSession = { ide, backend, settings, doc };
   if (codeMode) await runCodeConversation(session, { first, itemId, codeWin: codeWin! });
   else await runFormConversation(session, { first, itemId });
+}
+
+/** The AI settings, or null after telling the user to set up the server (and opening Options on the AI tab). */
+async function settingsOrSetup(ide: IdeState, backend: Backend, doc: Document): Promise<AiSettings | null> {
+  const settings = await loadAiSettings(backend);
+  if (settings.model.trim()) return settings;
+  await warn(doc, 'Set up the AI server first in Tools > Options > AI.');
+  await showOptions(ide, backend, doc, 'AI');
+  return null;
+}
+
+/** An error to fix with AI: where it happened and, for a run-time error, the variables of the stopped frame. */
+export interface ErrorToFix { itemId: string; error: FixError; vars: { name: string; value: string }[] }
+
+/**
+ * Ask AI on a run-time or compile error (the error dialog's Ask AI, Tools > Ask AI about this error): code mode with
+ * the error, the line and the variable values. The program stays in break mode until OK; OK ends it (`end` resolves
+ * once it has stopped), applies the fix to the module or form as one undo step and shows the code window at the line.
+ */
+export async function askAiAboutError(ide: IdeState, backend: Backend, fix: ErrorToFix,
+  ui: { openCode(itemId: string): CodeWindow; end(): Promise<void> }, doc: Document = document): Promise<void> {
+  if (!ide.project.forms.some(f => f.id === fix.itemId) && !ide.project.modules.some(m => m.id === fix.itemId)) return;
+  const settings = await settingsOrSetup(ide, backend, doc);
+  if (!settings) return;
+  const win = ui.openCode(fix.itemId);
+  win.gotoLine(fix.error.line);   // the cursor marks the failing procedure for the merge
+  const first = (() => { try { return buildFixRequest(ide.project, fix.itemId, fix.error, fix.error.compile ? [] : fix.vars); } catch { return null; } })();
+  if (!first) { await warn(doc, 'Could not build the request.'); return; }
+  const applied = await runCodeConversation({ ide, backend, settings, doc }, { first, itemId: fix.itemId, codeWin: win, beforeApply: ui.end });
+  if (applied) ui.openCode(fix.itemId).gotoLine(fix.error.line);
 }
 
 export interface AiSession { ide: IdeState; backend: Backend; settings: AiSettings; doc: Document }
@@ -163,7 +189,7 @@ type Understood<A> = { result: A | null; jsonReason: string | null };
 async function converse<A extends { notes: string[]; problems: string[] }>(
   s: AiSession, first: ChatMessage[], analyse: (text: string) => Understood<A>,
   preview: (a: A, reply: string, metrics: string) => Promise<PreviewResult>, apply: (a: A) => void | Promise<void>,
-): Promise<void> {
+): Promise<boolean> {
   const { ide, backend, settings, doc } = s;
   const project = ide.project;
   const effort = settings.thinking === 'server' ? undefined : settings.thinking;
@@ -200,31 +226,34 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
   };
 
   let cur = await round(first);
-  if (cur.kind === 'cancel') return;
-  if (cur.kind === 'error') { await warn(doc, cur.message); return; }
-  if (!cur.result) { await showNotUnderstood(doc, cur.reply); return; }
+  if (cur.kind === 'cancel') return false;
+  if (cur.kind === 'error') { await warn(doc, cur.message); return false; }
+  if (!cur.result) { await showNotUnderstood(doc, cur.reply); return false; }
   for (;;) {
     let out: PreviewResult;
     try { out = await preview(cur.result!, cur.reply, cur.metrics); }
-    catch (e) { await showNotUnderstood(doc, `${cur.reply}\n\nError: ${e instanceof Error ? e.message : String(e)}`); return; }
-    if (out === 'cancel') return;
-    if (out === 'ok') { await apply(cur.result!); return; }
+    catch (e) { await showNotUnderstood(doc, `${cur.reply}\n\nError: ${e instanceof Error ? e.message : String(e)}`); return false; }
+    if (out === 'cancel') return false;
+    if (out === 'ok') { await apply(cur.result!); return true; }
     // Change...: a new answer to the whole conversation. If it is not understood, the last proposal stays.
     const next = await round(trimConversation([...cur.messages, changeRequest(out.change)]));
-    if (ide.project !== project) return;
+    if (ide.project !== project) return false;
     if (next.kind === 'error') await warn(doc, next.message);
     else if (next.kind === 'done' && !next.result) await showNotUnderstood(doc, next.reply);
     else if (next.kind === 'done') cur = next;
   }
 }
 
-/** Code mode: `first` is the finished request; the proposal is checked against `codeWin` and applied there on OK. */
-export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[]; itemId: string; codeWin: CodeWindow }): Promise<void> {
+/**
+ * Code mode: `first` is the finished request; the proposal is checked against `codeWin` and applied there on OK
+ * (after `beforeApply`, which Ask AI on an error uses to end the program). True when a proposal was applied.
+ */
+export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[]; itemId: string; codeWin: CodeWindow; beforeApply?: () => Promise<void> }): Promise<boolean> {
   const { ide, doc } = s;
   const project = ide.project;
   const win = o.codeWin;
   const item = project.forms.find(f => f.id === o.itemId) ?? project.modules.find(m => m.id === o.itemId);
-  if (!item) return;
+  if (!item) return false;
   const form = project.forms.find(f => f.id === o.itemId) ?? null;
   const moduleName = item.name;
   type A = { applied: NonNullable<ReturnType<typeof applyCodeProposal>>; notes: string[]; problems: string[] };
@@ -240,17 +269,17 @@ export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[
     if (!applied) return none;
     return { result: { applied, notes, problems: validateCode(code, { moduleName, form, project }) }, jsonReason: null };
   };
-  await converse<A>(s, o.first, analyse,
+  return converse<A>(s, o.first, analyse,
     (a, _reply, metrics) => showCodePreview(doc, win.getSource().replace(/\r\n?/g, '\n'), a.applied.source, a.applied.changes, [...a.notes, ...a.problems], metrics),
-    a => win.applyChange(0, win.getSource().length, a.applied.source));
+    async a => { await o.beforeApply?.(); win.applyChange(0, win.getSource().length, a.applied.source); });
 }
 
 /** Form mode: `first` is the finished request; the proposal is applied to the form as one undo step on OK. */
-export async function runFormConversation(s: AiSession, o: { first: ChatMessage[]; itemId: string }): Promise<void> {
+export async function runFormConversation(s: AiSession, o: { first: ChatMessage[]; itemId: string }): Promise<boolean> {
   const { ide, doc } = s;
   const project = ide.project;
   const form = project.forms.find(f => f.id === o.itemId);
-  if (!form) return;
+  if (!form) return false;
   type A = { parsed: Extract<ReturnType<typeof parseFormOps>, { ok: true }>; notes: string[]; problems: string[] };
   const analyse = (text: string): Understood<A> => {
     const notes: string[] = [];
@@ -260,7 +289,7 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
     const problems = parsed.codeText === undefined ? [] : validateCode(parsed.codeText, { moduleName: form.name, form, extraControls: extra, project });
     return { result: { parsed, notes, problems }, jsonReason: null };
   };
-  await converse<A>(s, o.first, analyse,
+  return converse<A>(s, o.first, analyse,
     (a, _reply, metrics) => {
       const { parsed } = a;
       const code = parsed.code === null ? undefined

@@ -2,11 +2,23 @@
 
 All notable changes to VibeBasic. Format follows Keep a Changelog.
 
+## [0.7.0] - Unreleased
+
+### Added
+- Ask AI on errors: the run-time and compile error dialogs have an Ask AI button (also Tools > Ask AI about this error in break mode). The AI gets the error, the line, the code and the variable values, and proposes a fix in the preview; OK ends the program and applies the fix as one undo step. Made apps never show the button.
+- Change... in the AI previews continues the conversation with a new wish; nothing is applied before OK.
+- A 1998-style animation in the AI waiting dialog (thinking and writing).
+- The AI waiting dialog and preview show prompt tokens (cached) and the time taken.
+
+### Changed
+- A fixed AI system prompt with short VB6 examples, so the server can reuse its prefix cache; large modules send only the relevant procedures in full.
+- Smarter AI code check: unknown properties and methods (with a suggestion), unknown names, undeclared variables under Option Explicit and statements VibeBasic does not support; form mode retries once on invalid JSON.
+
 ## [0.6.0] - Unreleased
 
 ### Added
 - Movable and resizable toolbox.
-- New controls: Shape, Line, Slider, UpDown, StatusBar, TabStrip (more coming: TreeView, ListView, MSFlexGrid, RichTextBox, CommonDialog, DriveListBox, DirListBox, FileListBox).
+- New controls: Shape, Line, Slider, UpDown, StatusBar, TabStrip, TreeView, ListView, MSFlexGrid, RichTextBox, CommonDialog, DriveListBox, DirListBox and FileListBox.
 - Ask AI streams the model's thinking and answer live; Cancel stops the server.
 - AI check-and-fix loop and a Thinking level setting.
 - Version number in the window title and an About dialog with this changelog.

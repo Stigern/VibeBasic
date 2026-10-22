@@ -139,6 +139,34 @@ export function buildCodeRequest(p: Project, itemId: string, cursorLine: number,
   return [{ role: 'system', content: `${CODE_SYSTEM_PROMPT}${describeControlTypes()}` }, { role: 'user', content: user }];
 }
 
+export interface FixError { number: number; description: string; compile: boolean; line: number; procName: string | null }
+
+/**
+ * Debugging with AI: the code-mode system prompt; in the user message the form description, the code (the procedure
+ * with the error and its callers in full), the error, the line and the variable values, then `Fix the error.`
+ */
+export function buildFixRequest(p: Project, itemId: string, err: FixError, vars: { name: string; value: string }[]): ChatMessage[] {
+  const { form, module } = findItem(p, itemId);
+  const code = (form ?? module)?.code ?? '';
+  const lines = code.split(LINE_BREAK);
+  const procs = listProcedures(code);
+  const proc = err.procName ? procs.find(pr => pr.name.toLowerCase() === err.procName!.toLowerCase()) : undefined;
+  // the callers of the failing procedure: named in `mention`, so codeForPrompt keeps them whole
+  const callers = proc ? procs.filter(pr => pr !== proc && mentions(lines.slice(pr.line, pr.endLine).join('\n'), proc.name)).map(pr => pr.name) : [];
+  const context = form ? `Form description:\n${describeForm(form)}` : `Forms in the project:\n${describeProjectForms(p)}`;
+  const what = err.compile ? `Compile error: ${err.description}` : `Run-time error ${err.number}: ${err.description}`;
+  const lineText = (lines[err.line - 1] ?? '').trim();
+  const parts = [
+    context,
+    `Code of ${form ? `form ${form.name}` : `module ${module?.name ?? ''}`}:\n${codeForPrompt(code, { procName: proc?.name ?? null, mention: callers.join(' ') })}`,
+    `Error: ${what}`,
+    `Line ${err.line} in ${proc?.name ?? '(declarations)'}: ${lineText}`,
+  ];
+  if (!err.compile) parts.push(`Variable values:\n${vars.length ? vars.map(v => `${v.name} = ${v.value}`).join('\n') : '(none)'}`);
+  parts.push('Fix the error.');
+  return [{ role: 'system', content: `${CODE_SYSTEM_PROMPT}${describeControlTypes()}` }, { role: 'user', content: parts.join('\n\n') }];
+}
+
 export function buildFormRequest(p: Project, formId: string, userPrompt: string): ChatMessage[] {
   const form = p.forms.find(f => f.id === formId);
   if (!form) throw new Error(`Unknown form ${formId}`);
