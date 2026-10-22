@@ -147,7 +147,7 @@ function normalizeNewlines(s: string): string {
   return s.replace(/\r\n|\r/g, '\n');
 }
 
-function messageContent(prompt: string, icon: MsgIconName | undefined): HTMLElement {
+export function messageContent(prompt: string, icon: MsgIconName | undefined): HTMLElement {
   const text = h('div', { class: 'dlg98-text' }, normalizeNewlines(prompt));
   const row = h('div', { class: 'dlg98-message' });
   if (icon) {

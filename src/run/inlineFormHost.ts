@@ -2,8 +2,9 @@
 // (browser, tests). Dialogs are the plan 02 Win98 dialogs in the same document.
 
 import { formMetrics } from '../controls/render';
-import { inputBox98, messageBox98, showDialog98 } from '../ui98/dialogs';
+import { inputBox98, messageBox98, messageContent, showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
+import { runtimeErrorContent } from './errorDialog';
 import type { FormHost, FormWindow } from './formHost';
 import { mountFormWindow } from './formWindow';
 import type { FormSnapshot, FromWindow } from './protocol';
@@ -11,6 +12,8 @@ import type { FormSnapshot, FromWindow } from './protocol';
 export class InlineFormHost implements FormHost {
   private z = 1;
   private cascade = 0;
+  private openDialogs = 0;
+  private windows = new Set<{ sessionBlocked: boolean; apply(): void }>();
 
   constructor(private container: HTMLElement) {}
 
@@ -35,33 +38,47 @@ export class InlineFormHost implements FormHost {
     const mounted = mountFormWindow(wrapper, s, m => {
       if (listeners.length) for (const l of listeners) l(m); else early.push(m);
     });
+    // Effective blocked = requested by the session (modal form / break) OR a dialog is open.
+    const w = { sessionBlocked: false, apply: () => mounted.receive({ t: 'blocked', blocked: w.sessionBlocked || this.openDialogs > 0 }) };
+    this.windows.add(w);
     return {
-      send: m => mounted.receive(m),
+      send: m => {
+        if (m.t === 'blocked') { w.sessionBlocked = m.blocked; w.apply(); } else mounted.receive(m);
+      },
       onMessage: cb => {
         listeners.push(cb);
         for (const m of early.splice(0)) cb(m);
       },
-      close: async () => { mounted.dispose(); wrapper.remove(); },
+      close: async () => { this.windows.delete(w); mounted.dispose(); wrapper.remove(); },
     };
   }
 
+  /** Blocks every form window while a dialog is open; the dialog itself holds keyboard focus. */
+  private async withDialog<T>(show: () => Promise<T>): Promise<T> {
+    if (this.openDialogs++ === 0) for (const w of this.windows) w.apply();
+    try {
+      return await show();
+    } finally {
+      if (--this.openDialogs === 0) for (const w of this.windows) w.apply();
+    }
+  }
+
   messageBox(o: { prompt: string; title: string; buttons: number }): Promise<number> {
-    return messageBox98(this.doc, o);
+    return this.withDialog(() => messageBox98(this.doc, o));
   }
 
   inputBox(o: { prompt: string; title: string; defaultText: string }): Promise<string> {
-    return inputBox98(this.doc, o);
+    return this.withDialog(() => inputBox98(this.doc, o));
   }
 
-  /** Placeholder until the VB6-style run-time error dialog (oppgave 4). */
   async runtimeErrorBox(o: { number: number; description: string; compile: boolean; mode: 'ide' | 'app'; title: string }): Promise<'end' | 'debug'> {
-    const text = o.compile ? `Compile error:\n\n${o.description}` : `Run-time error '${o.number}':\n\n${o.description}`;
-    const content = h('div', { class: 'dlg98-text' }, text);
-    content.style.whiteSpace = 'pre-wrap';
-    const buttons = o.mode === 'ide'
-      ? [{ label: 'End', value: 'end', cancel: true }, { label: 'Debug', value: 'debug', default: true }]
-      : [{ label: 'OK', value: 'end', default: true, cancel: true }];
-    const v = await showDialog98(this.doc, { title: o.mode === 'ide' ? 'Microsoft Visual Basic' : o.title, content, buttons });
+    const c = runtimeErrorContent(o);
+    const defIdx = o.mode === 'ide' && !o.compile ? c.buttons.findIndex(b => b.value === 'debug') : 0;
+    const v = await this.withDialog(() => showDialog98(this.doc, {
+      title: c.title,
+      content: messageContent(c.text, o.compile ? 'exclamation' : undefined),
+      buttons: c.buttons.map((b, i) => ({ label: b.label, value: b.value, disabled: b.disabled, default: i === defIdx })),
+    }));
     return v === 'debug' ? 'debug' : 'end';
   }
 }
