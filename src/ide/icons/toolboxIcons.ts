@@ -41,5 +41,9 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
   ImageList: svg(box(1, 2, 9, 8) + '<path d="M2 9l3-4 2 2 1-1 2 3z" fill="#0000c0"/>' + box(6, 7, 9, 8) + '<path d="M7 14l3-4 2 2 1-1 2 3z" fill="#008000"/><circle cx="12.500" cy="9.500" r="1" fill="#c00000"/>'),
   SSTab: svg('<path d="M1.5 14.5v-9h13v9z" fill="#c0c0c0" stroke="#000"/><path d="M1.5 5.5v-3h4v3" fill="#fff" stroke="#000"/>'
     + '<path d="M5.5 5.5v-2h4v2M9.5 5.5v-2h5v2" fill="#c0c0c0" stroke="#000"/><path d="M3 8h6M3 10h8M3 12h5" stroke="#808080"/>'),
+  DTPicker: svg(box(1, 3, 14, 10) + box(11, 4, 3, 8, '#c0c0c0') + '<path d="M11.500 7h3l-1.500 2z" fill="#000"/><path d="M3 6h2M3 8h5M3 10h3" stroke="#000"/><rect x="3" y="5" width="2" height="2" fill="#000080"/>'),
+  MonthView: svg(box(1, 1, 14, 14) + '<rect x="2" y="2" width="12" height="3" fill="#000080"/><path d="M3 7h2M6 7h2M9 7h2M3 9h2M6 9h2M9 9h2M3 11h2M6 11h2M9 11h2M12 7h1M12 9h1" stroke="#808080"/>'
+    + '<circle cx="7" cy="10" r="1.800" fill="none" stroke="#c00000"/>'),
+  MaskedEdit: svg(box(1, 4, 14, 8) + '<path d="M3 9.500h2M6 9.500h2" stroke="#000"/><path d="M10 9.500h3" stroke="#808080"/><path d="M9.500 5.500h0M9 6v2M11 6v2M8.500 6.800h3M8.500 7.800h3" stroke="#000080" fill="none"/>'),
   Form: svg(box(1, 2, 14, 12, '#c0c0c0') + '<rect x="2" y="3" width="12" height="3" fill="#000080"/>'),
 };

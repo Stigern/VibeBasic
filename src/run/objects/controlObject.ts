@@ -3,11 +3,15 @@
 
 import type { VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
-import { Empty, Nothing, coerce, isObject, toBool, toStr, type VBValue } from '../../lang/values';
+import { Empty, Nothing, Null, NullT, coerce, isObject, toBool, toStr, type VBDate, type VBValue } from '../../lang/values';
 import { CONTROL_TYPES, getPropDef, type PropDef } from '../../model/controls';
 import { decodeRuns, encodeRuns, formatAt, formatRange, replaceRange, runsText, type RtfPatch, type Run } from '../../controls/richText';
 import type { DirListing, Volume } from '../../backend/backend';
+import { formatValue } from '../../lang/builtins/format';
+import { dateParts } from '../../lang/values';
+import { clampDate, dayOf, setPart, weekdayOf } from '../../model/dateControls';
 import { joinFields } from '../../model/fieldLines';
+import { clipText, fitText, fromText, maskedText, parseMask, typeChar } from '../../model/mask';
 import { flagOn, syncSSTab } from '../../model/ssTab';
 import { baseName, type FileDialogRequest } from '../commonDialog';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../../model/types';
@@ -71,7 +75,19 @@ class FontObject implements VBObject {
 
 const isListType = (t: string): boolean => t === 'ListBox' || t === 'ComboBox';
 const isBrowserType = (t: string): boolean => t === 'DirListBox' || t === 'FileListBox';
+/** DTPicker and MonthView: Value is a date serial (null: no date); Day ... DayOfWeek are parts of it. */
+const isDateType = (t: string): boolean => t === 'DTPicker' || t === 'MonthView';
+const DATE_PARTS = new Set(['Day', 'Month', 'Year', 'Hour', 'Minute', 'Second', 'DayOfWeek']);
+const dateValue = (serial: number): VBDate => ({ kind: 'date', serial });
 const num = (v: VBValue): number => coerce(v, 'Long') as number;
+/** MaskedEdit.Text = "...": the display string for it; 380 when it does not fit the Mask. */
+function fromTextOrFail(mask: string, prompt: string, text: string): string {
+  const slots = parseMask(mask);
+  if (slots.length === 0) return text;
+  const t = fromText(slots, prompt, text);
+  if (t === null) throw new VBRuntimeError(380);
+  return t;
+}
 const badIndex = (): VBRuntimeError => new VBRuntimeError(381, 'Invalid property array index');
 
 export class ControlObject implements VBObject {
@@ -118,6 +134,12 @@ export class ControlObject implements VBObject {
       this.reload();
     } else if (def.type === 'DriveListBox') this.loadVolumes();
     if (def.type === 'SSTab') syncSSTab(this.props, 'Tabs');
+    if (def.type === 'MonthView') {   // the selection starts out as the Value
+      const v = typeof this.props.Value === 'number' ? dayOf(this.props.Value) : dayOf(Number(CONTROL_TYPES.MonthView.props.find(p => p.name === 'Value')!.default));
+      this.props.Value = v;
+      this.props.SelStart = v; this.props.SelEnd = v;
+    }
+    if (def.type === 'MaskedEdit') this.props.Text = fitText(String(this.props.Mask ?? ''), String(this.props.PromptChar ?? '_'), String(this.props.Text ?? ''));
     if (def.type === 'StatusBar') {
       this.collections.set('panels', makePanels(this.lines('Panels'), (k, _i, at) => this.collectionChanged(k, at)));
     } else if (def.type === 'TabStrip') {
@@ -361,6 +383,8 @@ export class ControlObject implements VBObject {
       case 'ItemClick': return object('listitems');
       case 'ColumnClick': return object('columnheaders');
       case 'ButtonClick': return object('buttons');
+      case 'DateClick': case 'DateDblClick': return args.map(a => dateValue(Number(a)));
+      case 'SelChange': if (this.def.type === 'MonthView') return args.map(a => dateValue(Number(a))); break;
     }
     return args;
   }
@@ -437,6 +461,8 @@ export class ControlObject implements VBObject {
     const v = this.read(pd);
     if (pd.kind === 'font') return new FontObject(() => this.props.Font as FontValue, f => this.write(this.propDef('Font'), f));
     if (pd.kind === 'picture') return v ? new PictureObject(v as PictureRef) : Nothing;
+    if (pd.kind === 'date') return typeof v === 'number' ? dateValue(v) : Null;
+    if (v === null && isDateType(this.def.type)) return Null;   // Day ... of a DTPicker without a Value
     return v as VBValue;
   }
 
@@ -486,7 +512,39 @@ export class ControlObject implements VBObject {
       return;
     }
     if (args.length) throw new VBRuntimeError(450);
+    if (this.def.type === 'MaskedEdit' && pd.name === 'SelText' && String(this.props.Mask ?? '') !== '') { this.maskSelText(toStr(this.plain(value))); return; }
+    if (isDateType(this.def.type) && DATE_PARTS.has(pd.name)) { this.setDatePart(pd.name, num(this.plain(value))); return; }
     this.write(pd, this.convert(pd, value));
+  }
+
+  /** MaskedEdit.SelText = "x" with a Mask: the characters are typed over the selection (those that do not fit are left out). */
+  private maskSelText(text: string): void {
+    const slots = parseMask(String(this.props.Mask)), prompt = String(this.props.PromptChar ?? '_').charAt(0) || '_';
+    let t = String(this.props.Text ?? ''), pos = Number(this.props.SelStart), len = Number(this.props.SelLength);
+    for (const ch of text) {
+      const r = typeChar(slots, t, prompt, pos, len, ch, this.props.AllowPrompt === true);
+      if (!r.error) { t = r.text; pos = r.caret; len = 0; }
+    }
+    this.write(this.propDef('Text'), t);
+    this.write(this.propDef('SelStart'), pos);
+    this.write(this.propDef('SelLength'), 0);
+  }
+
+  /** DTPicker / MonthView Day, Month, Year, Hour, Minute, Second, DayOfWeek: changes that part of Value (380 when it does not fit). */
+  private setDatePart(name: string, n: number): void {
+    const cur = this.props.Value;
+    if (typeof cur !== 'number') throw new VBRuntimeError(94);
+    let next: number | null;
+    if (name === 'DayOfWeek') next = n >= 1 && n <= 7 ? cur + (n - weekdayOf(cur)) : null;
+    else next = setPart(cur, name as 'Day', n);
+    if (next === null) throw new VBRuntimeError(380);
+    this.write(this.propDef('Value'), this.clampToRange(next));
+  }
+
+  /** A date inside MinDate and MaxDate (MonthView: a whole day). */
+  private clampToRange(serial: number): number {
+    const s = this.def.type === 'MonthView' ? dayOf(serial) : serial;
+    return clampDate(s, Number(this.props.MinDate), Number(this.props.MaxDate));
   }
 
   callMethod(name: string, args: VBValue[]): VBValue | Promise<VBValue> {
@@ -533,7 +591,17 @@ export class ControlObject implements VBObject {
           const i = this.props.ListIndex as number;
           return i >= 0 ? this.list()[i] ?? '' : '';
         }
+        if (this.def.type === 'MaskedEdit') return this.maskValue('text');
         break;
+      case 'ClipText': case 'FormattedText': return this.maskValue(pd.name === 'ClipText' ? 'clip' : 'formatted');
+      case 'Day': case 'Month': case 'Year': case 'Hour': case 'Minute': case 'Second': case 'DayOfWeek': {
+        if (!isDateType(this.def.type)) break;
+        const v = this.props.Value;
+        if (typeof v !== 'number') return null;
+        if (pd.name === 'DayOfWeek') return weekdayOf(v);
+        const p = dateParts(v);
+        return ({ Day: p.d, Month: p.m, Year: p.y, Hour: p.h, Minute: p.n, Second: p.s } as Record<string, number>)[pd.name];
+      }
       case 'SelText': {
         const t = String(this.props.Text ?? ''), s = Number(this.props.SelStart), n = Number(this.props.SelLength);
         return t.substr(s, n);
@@ -588,7 +656,26 @@ export class ControlObject implements VBObject {
     }
     const v = this.plain(value);
     switch (pd.kind) {
-      case 'string': case 'text': return toStr(v);
+      case 'date': {
+        if (v instanceof NullT) {   // only a DTPicker with a CheckBox can be without a date
+          if (this.def.type === 'DTPicker' && pd.name === 'Value' && this.props.CheckBox === true) return null;
+          throw new VBRuntimeError(94);
+        }
+        const serial = (coerce(v, 'Date') as VBDate).serial;
+        if (pd.name === 'MinDate' && serial > Number(this.props.MaxDate)) throw new VBRuntimeError(380);
+        if (pd.name === 'MaxDate' && serial < Number(this.props.MinDate)) throw new VBRuntimeError(380);
+        if (pd.name === 'MinDate' || pd.name === 'MaxDate') return serial;
+        const day = this.clampToRange(serial);
+        if (pd.name === 'SelEnd' && this.props.MultiSelect === true && Math.abs(day - Number(this.props.SelStart)) + 1 > Number(this.props.MaxSelCount)) {
+          throw new VBRuntimeError(380);   // a range of at most MaxSelCount days
+        }
+        return day;
+      }
+      case 'string': case 'text':
+        if (this.def.type === 'MaskedEdit' && pd.name === 'Text') {   // the whole text with its literals, or just the entries
+          return fromTextOrFail(String(this.props.Mask ?? ''), String(this.props.PromptChar ?? '_'), toStr(v));
+        }
+        return toStr(v);
       case 'bool': return toBool(v);
       case 'color': return num(v);
       case 'enum': {
@@ -627,6 +714,11 @@ export class ControlObject implements VBObject {
     } else {
       this.props[name] = v;
       patch[name] = v;
+      if (isDateType(this.def.type)) this.syncDates(name, patch);
+      else if (this.def.type === 'MaskedEdit' && (name === 'Mask' || name === 'PromptChar')) {   // a new mask starts out empty
+        this.props.Text = fitText(String(this.props.Mask ?? ''), String(this.props.PromptChar ?? '_'), '');
+        patch.Text = this.props.Text;
+      }
       if (isBrowserType(this.def.type) && v !== old) {
         if (name === 'Path') { Object.assign(patch, { List: [], ListIndex: -1 }); Object.assign(this.props, { List: [], ListIndex: -1 }); this.reload(); }
         else if (this.def.type === 'FileListBox' && (name === 'Pattern' || name === 'Hidden' || name === 'Normal' || name === 'Archive')) Object.assign(patch, this.listProps());
@@ -644,6 +736,42 @@ export class ControlObject implements VBObject {
     if (this.grid && (name === 'Rows' || name === 'Cols' || name === 'FixedRows' || name === 'FixedCols')) this.gridResized();
     if (this.def.type === 'Timer' && (name === 'Enabled' || name === 'Interval')) this.ctx.timerChanged(this);
     this.ctx.propChanged?.(this, name === 'SelText' ? 'Text' : name, old);
+  }
+
+  /** DTPicker / MonthView: a date property was set; Value, SelStart and SelEnd stay in step and inside MinDate .. MaxDate. */
+  private syncDates(name: string, patch: Record<string, PropValue>): void {
+    const p = this.props;
+    const set = (k: string, v: PropValue) => { p[k] = v; patch[k] = v; };
+    const clampProp = (k: string) => { const v = p[k]; if (typeof v === 'number' && this.clampToRange(v) !== v) set(k, this.clampToRange(v)); };
+    if (name === 'MinDate' || name === 'MaxDate') {
+      clampProp('Value');
+      if (this.def.type === 'MonthView') { clampProp('SelStart'); clampProp('SelEnd'); }
+      return;
+    }
+    if (this.def.type !== 'MonthView') return;
+    const multi = p.MultiSelect === true;
+    if (name === 'Value') { set('SelStart', p.Value); set('SelEnd', p.Value); }
+    else if (name === 'SelStart') {   // the end stays when it still makes a range of at most MaxSelCount days
+      const span = Number(p.SelEnd) - Number(p.SelStart) + 1;
+      if (!multi || span < 1 || span > Number(p.MaxSelCount)) set('SelEnd', p.SelStart);
+      set('Value', p.SelStart);
+    }
+    else if (name === 'SelEnd') { if (!multi || Number(p.SelEnd) < Number(p.SelStart)) set('SelStart', p.SelEnd); set('Value', p.SelStart); }
+    else if (name === 'MultiSelect' && !multi) set('SelEnd', p.SelStart);
+  }
+
+  /** MaskedEdit: Text (with PromptInclude), ClipText (entries only) and FormattedText (the display, or the Format applied to the entries). */
+  private maskValue(kind: 'text' | 'clip' | 'formatted'): string {
+    const mask = String(this.props.Mask ?? ''), prompt = String(this.props.PromptChar ?? '_').charAt(0) || '_', shown = String(this.props.Text ?? '');
+    const slots = parseMask(mask);
+    if (slots.length === 0) return kind === 'clip' ? shown : kind === 'formatted' ? this.formatted(shown) : shown;
+    if (kind === 'clip') return clipText(slots, shown, prompt);
+    if (kind === 'formatted') return this.formatted(shown, clipText(slots, shown, prompt));
+    return maskedText(slots, shown, prompt, this.props.PromptInclude !== false);
+  }
+  private formatted(shown: string, entries = shown): string {
+    const fmt = String(this.props.Format ?? '');
+    return fmt === '' ? shown : formatValue(entries, fmt, Intl.DateTimeFormat().resolvedOptions().locale);
   }
 
   /** RichTextBox: SelBold ... describe the selection as it is now. */

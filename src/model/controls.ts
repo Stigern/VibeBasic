@@ -4,9 +4,12 @@
 
 import { KEYWORDS } from '../lang/tokens';
 import { syncSSTab } from './ssTab';
+import { MAX_DATE, MIN_DATE, nowSerial, systemStartOfWeek } from './dateControls';
+import { fitText } from './mask';
 import type { ControlDef, ControlType, FontValue, FormDef, PropValue, Project } from './types';
 
-export type PropKind = 'string' | 'text' | 'int' | 'bool' | 'color' | 'enum' | 'font' | 'picture' | 'list';
+export type PropKind = 'string' | 'text' | 'int' | 'bool' | 'color' | 'enum' | 'font' | 'picture' | 'list'
+  | 'date';   // a date serial (number; Null = null) shown as text in the Properties window
 export interface PropDef { name: string; kind: PropKind; default: PropValue; enumValues?: { value: number; label: string }[];
   designTime: boolean; runtime: 'rw' | 'ro' | 'none'; min?: number; max?: number }
 export interface EventDef { name: string; params: string }          // e.g. { name: 'KeyPress', params: 'KeyAscii As Integer' }
@@ -511,6 +514,66 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
     events: [evClick(), evDbl(), ev('ButtonClick', 'ByVal Button As MSComctlLib.Button'), ...evMouse()],
   }),
+
+  // MSCOMCT2.OCX. Value and the other dates are OLE serials (Null = null; only a CheckBox DTPicker may have no Value). Day ... DayOfWeek
+  // are derived from Value at run time. Format: dtpLongDate 0, dtpShortDate 1, dtpTime 2, dtpCustom 3 (CustomFormat).
+  DTPicker: def({
+    type: 'DTPicker', component: 'MSCOMCT2.OCX', namePrefix: 'DTPicker', defaultWidth: 2415, defaultHeight: 315, toolboxTooltip: 'DTPicker',
+    defaultEvent: 'Change', defaultMember: 'Value',
+    props: [
+      ...common(), font(),
+      p('Value', 'date', nowSerial()),
+      en('Format', 0, ['dtpLongDate', 'dtpShortDate', 'dtpTime', 'dtpCustom']), str('CustomFormat'),
+      p('MinDate', 'date', MIN_DATE), p('MaxDate', 'date', MAX_DATE),
+      bool('CheckBox', false), bool('UpDown', false),
+      rt('Day', 'int', 0), rt('Month', 'int', 0), rt('Year', 'int', 0), rt('Hour', 'int', 0), rt('Minute', 'int', 0), rt('Second', 'int', 0),
+      rt('DayOfWeek', 'int', 0),
+    ],
+    events: [evChange(), ev('CloseUp'), ev('DropDown'), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  // StartOfWeek: mvwSunday 1 ... mvwSaturday 7 (the default is the system's). SelStart / SelEnd are the selected range (Value is SelStart).
+  MonthView: def({
+    type: 'MonthView', component: 'MSCOMCT2.OCX', namePrefix: 'MonthView', defaultWidth: 2415, defaultHeight: 2340, toolboxTooltip: 'MonthView',
+    defaultEvent: 'DateClick', defaultMember: 'Value',
+    props: [
+      ...common(), font(),
+      p('Value', 'date', nowSerial(true)),
+      p('MinDate', 'date', MIN_DATE), p('MaxDate', 'date', MAX_DATE),
+      bool('ShowToday', true), bool('ShowWeekNumbers', false),
+      p('StartOfWeek', 'enum', systemStartOfWeek(Intl.DateTimeFormat().resolvedOptions().locale), {
+        enumValues: ['mvwSunday', 'mvwMonday', 'mvwTuesday', 'mvwWednesday', 'mvwThursday', 'mvwFriday', 'mvwSaturday'].map((l, i) => ({ value: i + 1, label: `${i + 1} - ${l}` })) }),
+      bool('MultiSelect', false), int('MaxSelCount', 7, { min: 1, max: 366 }),
+      int('MonthRows', 1, { min: 1, max: 12 }), int('MonthColumns', 1, { min: 1, max: 12 }),
+      rt('SelStart', 'date', null), rt('SelEnd', 'date', null),
+      rt('Day', 'int', 0), rt('Month', 'int', 0), rt('Year', 'int', 0), rt('DayOfWeek', 'int', 0),
+    ],
+    events: [
+      ev('DateClick', 'ByVal DateClicked As Date'), ev('DateDblClick', 'ByVal DateDblClicked As Date'),
+      ev('SelChange', 'StartDate As Date, EndDate As Date'), ...evFocus(), ...evKeys(), ...evMouse(),
+    ],
+  }),
+
+  // MSMASK32.OCX. Text holds the display string of the mask (literals and a PromptChar for every empty position); the run-time
+  // Text, ClipText and FormattedText are worked out from it (model/mask.ts). Without a Mask the control is a plain text field.
+  MaskedEdit: def({
+    type: 'MaskedEdit', component: 'MSMASK32.OCX', namePrefix: 'MaskEdBox', defaultWidth: 1215, defaultHeight: 315, toolboxTooltip: 'MaskedEdit',
+    defaultEvent: 'Change', defaultMember: 'Text',
+    props: [
+      ...common(), font(),
+      str('Mask'), str('PromptChar', '_'), bool('PromptInclude', true), bool('AllowPrompt', false), txt('Text'),
+      int('MaxLength', 64, { min: 0, max: 64 }), str('Format'), bool('AutoTab', false), bool('HideSelection', true),
+      color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT),
+      en('BorderStyle', 1, ['None', 'Fixed Single'], { runtime: 'ro' }),
+      rt('ClipText', 'string', '', 'ro'), rt('FormattedText', 'string', '', 'ro'),
+      rt('SelStart', 'int', 0), rt('SelLength', 'int', 0), rt('SelText', 'string', ''),
+    ],
+    events: [evChange(), ev('ValidationError', 'InvalidText As String, StartPosition As Integer'), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
+    onPropSet: (props, name) => {
+      if (name === 'Mask' || name === 'PromptChar') props.Text = fitText(String(props.Mask ?? ''), String(props.PromptChar ?? '_'), '');
+      else if (name === 'Text') props.Text = fitText(String(props.Mask ?? ''), String(props.PromptChar ?? '_'), String(props.Text ?? ''));
+    },
+  }),
 };
 
 /** VB6 toolbox order: every control type. The Toolbox shows the intrinsic ones, then the checked components' ones
@@ -518,7 +581,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
 export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
   'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar',
-  'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab',
+  'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit',
 ];
 
 // ---------------------------------------------------------------------------------------------------------------

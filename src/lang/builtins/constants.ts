@@ -99,3 +99,9 @@ group({
   tbrUnpressed: 0, tbrPressed: 1, tbrStandard: 0, tbrFlat: 1,
   vbAlignNone: 0, vbAlignTop: 1, vbAlignBottom: 2, vbAlignLeft: 3, vbAlignRight: 4,
 });
+
+// DTPicker (Format) and MonthView (StartOfWeek)
+group({
+  dtpLongDate: 0, dtpShortDate: 1, dtpTime: 2, dtpCustom: 3,
+  mvwSunday: 1, mvwMonday: 2, mvwTuesday: 3, mvwWednesday: 4, mvwThursday: 5, mvwFriday: 6, mvwSaturday: 7,
+});

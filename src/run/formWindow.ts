@@ -13,7 +13,7 @@ import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 type Props = Record<string, PropValue>;
 type Target = { id: string; def: ControlDef | null };
 
-const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'Toolbar', 'TreeView', 'ListView', 'MSFlexGrid', 'RichTextBox']);
+const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'Toolbar', 'DTPicker', 'TreeView', 'ListView', 'MSFlexGrid', 'RichTextBox']);
 const KEY_CODES: Record<string, number> = {
   Backspace: 8, Tab: 9, Enter: 13, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34, End: 35, Home: 36,
   ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46,
@@ -166,7 +166,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     const tg = targetOf(e.target);
     if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl) return;
     const type = tg.def.type, el = e.target as HTMLElement;
-    if (type === 'TextBox' || (type === 'ComboBox' && !(el as HTMLInputElement).readOnly)) {
+    if (type === 'TextBox' || type === 'MaskedEdit' || (type === 'ComboBox' && !(el as HTMLInputElement).readOnly)) {
       emit(tg.id, 'Change', [], { Text: (el as HTMLInputElement).value });
     } else if (type === 'RichTextBox') {
       emit(tg.id, 'Change', [], { Text: el.textContent ?? '', Runs: encodeRuns(readRuns(el)) });
@@ -178,6 +178,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     const type = tg.def.type, el = e.target as HTMLElement;
     if (type === 'ListBox' || type === 'FileListBox') emit(tg.id, 'Click', [], { ListIndex: (el as HTMLSelectElement).selectedIndex });
     else if (type === 'HScrollBar' || type === 'VScrollBar' || type === 'Slider' || type === 'UpDown') emit(tg.id, 'Change', [], { Value: Number(el.dataset.value) || 0 });
+    else if (type === 'DTPicker') emit(tg.id, 'Change', [], { Value: el.dataset.value ? Number(el.dataset.value) : null });
   });
   // UpDown arrows: UpClick / DownClick (then Change, from the `change` event above)
   for (const [dom, event] of [['vbupclick', 'UpClick'], ['vbdownclick', 'DownClick']] as const) {
@@ -225,6 +226,18 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   // DriveListBox / DirListBox: the drive picked, a folder clicked (its ListIndex) or opened by a double click (the new Path)
   custom('vbdrive', (id, d) => emit(id, 'Change', [], { Drive: String(d.drive) }));
   custom('vbdropdown', id => emit(id, 'DropDown'));
+  // DTPicker closed its calendar; MonthView: a selection by the user (then DateClick on the mouse release) and a double click on a day
+  custom('vbcloseup', id => emit(id, 'CloseUp'));
+  custom('vbmvselect', (id, d) => {
+    const cur = propsOf(id);
+    if (cur.SelStart === d.start && cur.SelEnd === d.end) return;
+    emit(id, 'SelChange', [Number(d.start), Number(d.end)], { SelStart: Number(d.start), SelEnd: Number(d.end), Value: Number(d.start) });
+  });
+  custom('vbdateclick', (id, d) => emit(id, 'DateClick', [Number(d.serial)]));
+  custom('vbdatedblclick', (id, d) => emit(id, 'DateDblClick', [Number(d.serial)]));
+  // MaskedEdit: a character the mask refuses, and a full mask with AutoTab (the focus moves on)
+  custom('vbvalidationerror', (id, d) => emit(id, 'ValidationError', [String(d.text), Number(d.pos)]));
+  custom('vbautotab', id => focusNext(id));
   custom('vbdirclick', (id, d) => emit(id, 'Click', [], { ListIndex: Number(d.index) }));
   custom('vbdiropen', (id, d) => emit(id, 'Change', [], { Path: String(d.path), List: [], ListIndex: -1 }));
   custom('vbcolclick', (id, d) => emit(id, 'ColumnClick', [Number(d.index)]));
@@ -250,7 +263,19 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   });
 
   // --- keyboard ---
+  /** The next control in tab order that can take the focus (MaskedEdit AutoTab). */
+  function focusNext(id: string): void {
+    const order = [...tabRank].sort((a, b) => a[1] - b[1]).map(([i]) => i);
+    const at = order.indexOf(id);
+    for (let k = 1; k < order.length; k++) {
+      const n = order[(at + k) % order.length];
+      if (usable(n) && (viewOf(n)?.inputEl?.tabIndex ?? -1) >= 0) { viewOf(n)!.inputEl!.focus(); return; }
+    }
+  }
+  /** A MaskedEdit with a Mask puts typed characters in itself (see calendar.ts). */
+  const isMasked = (el: EventTarget | null): el is HTMLInputElement => el instanceof HTMLInputElement && el.dataset.mask === '1';
   function insertKey(el: EventTarget | null, ascii: number): void {
+    if (isMasked(el)) { if (!el.readOnly) el.dispatchEvent(new CustomEvent('vbmaskkey', { detail: { ascii } })); return; }
     if (!isTextField(el) || el.readOnly) return;
     const start = el.selectionStart ?? el.value.length, end = el.selectionEnd ?? start;
     let text = String.fromCharCode(ascii), from = start;
@@ -287,6 +312,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     const ascii = keyAscii(e);
     const pc = ascii === null ? [] : chain.filter(id => handles(id, 'KeyPress'));
     if (pc.length) { if (isTextField(e.target)) e.preventDefault(); sendKeyPress(pc, ascii!, e.target); }
+    else if (ascii !== null && isMasked(e.target)) { e.preventDefault(); insertKey(e.target, ascii); }
     if (e.key === 'Enter' && !prevented && tg.def?.type !== 'CommandButton' && tg.def?.type !== 'RichTextBox' && !(e.target instanceof HTMLTextAreaElement)) clickButton('Default');
     else if (e.key === 'Escape' && !prevented) clickButton('Cancel');
   });

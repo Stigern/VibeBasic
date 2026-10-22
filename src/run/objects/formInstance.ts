@@ -273,7 +273,8 @@ export class FormInstance implements VBObject {
     }
     let ev: string | null = null;
     switch (c.def.type) {
-      case 'TextBox': if (prop === 'Text' && changed) ev = 'Change'; break;
+      case 'TextBox': case 'MaskedEdit': if (prop === 'Text' && changed) ev = 'Change'; break;
+      case 'DTPicker': if (prop === 'Value' && changed) ev = 'Change'; break;
       case 'ComboBox':
         if (prop === 'Text' && changed) ev = 'Change';
         else if (prop === 'ListIndex' && changed) ev = 'Click';

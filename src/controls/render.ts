@@ -16,6 +16,7 @@ import { findListImage, type ImageLookup, type ImageSource } from '../model/imag
 import { TBR_DROPDOWN, TBR_PLACEHOLDER, TBR_SEPARATOR, parseButton } from '../model/toolbar';
 import { flagOn, ssTabLayout } from '../model/ssTab';
 import { twipsToPx } from '../model/twips';
+import { dtPicker, maskedEdit, monthView } from './calendar';
 import { decodeRuns, encodeRuns, formatAt, readRuns, replaceRange, selectionOffsets, setSelectionOffsets, writeRuns, type Run, type RtfFormat, type RtfPatch } from './richText';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../model/types';
 import { h, mnemonicNodes } from '../ui98/dom';
@@ -101,7 +102,7 @@ const IMAGE_USERS = new Set<string>(['Toolbar', 'TreeView', 'ListView', 'TabStri
 type Keys = ReadonlySet<string> | null;                       // null = everything (first render / rebuild)
 const has = (k: Keys, ...names: string[]): boolean => k === null || names.some(n => k.has(n));
 
-interface Ctx {
+export interface Ctx {
   readonly type: ConcreteType;
   readonly mode: RenderMode;
   readonly el: HTMLElement;
@@ -123,7 +124,7 @@ interface Ctx {
   fire(type: string, detail?: unknown): void;
 }
 
-interface Renderer {
+export interface Renderer {
   /** Property names that need `build()` to run again when they change. */
   structural?: readonly string[];
   build(): void;
@@ -1421,6 +1422,9 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   SSTab: ssTab,
   ImageList: imageList,
   Toolbar: toolbar,
+  DTPicker: dtPicker,
+  MonthView: monthView,
+  MaskedEdit: maskedEdit,
 };
 
 // ---------------------------------------------------------------------------------------------------------------

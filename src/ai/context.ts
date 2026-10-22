@@ -31,7 +31,9 @@ export function describeControlTypes(): string {
     + ' A Toolbar sits at the top of the form, full width (Align = 1; only its Height matters); its Buttons are one per line "Caption|Key|Style|Image|ToolTipText"'
     + ' (Style 0 default, 1 check, 2 button group, 3 separator, 4 placeholder, 5 dropdown; Image is an index or key into its ImageList).'
     + ' An ImageList is invisible at run time; its pictures (ListImages) are added by the user in the Properties window or by code (ListImages.Add , "key", LoadPicture(path)),'
-    + ' so leave ListImages alone. A Toolbar, TreeView, TabStrip (ImageList) and ListView (Icons, SmallIcons) name an ImageList control by its Name; a TabStrip tab\'s line is "Caption|Key|Image".');
+    + ' so leave ListImages alone. A Toolbar, TreeView, TabStrip (ImageList) and ListView (Icons, SmallIcons) name an ImageList control by its Name; a TabStrip tab\'s line is "Caption|Key|Image".'
+    + ' The dates of a DTPicker and a MonthView (Value, MinDate, MaxDate) are written as text like "2026-10-22" in the form description and in "props"; Format is dtpLongDate 0, dtpShortDate 1, dtpTime 2, dtpCustom 3 (CustomFormat "dd.MM.yyyy": d M y h H m s t tokens); MonthView StartOfWeek is 1 (Sunday) to 7.'
+    + ' A MaskedEdit\'s Mask uses # digit, ? letter, A letter or digit, & any character, 9 / C / a optional, \\ escapes, other characters are literals; its Text is the whole display string ("__.__.____"), ClipText has the entries only.');
   return lines.join('\n');
 }
 
