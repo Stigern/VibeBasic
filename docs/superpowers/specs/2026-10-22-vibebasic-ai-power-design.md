@@ -4,7 +4,7 @@ Dato: 2026-10-22. Bygger på AI-delen av [2026-10-22-vibebasic-design.md](2026-1
 
 ## Hvorfor
 
-Brukeren koder med sin lokale Qwen (vLLM på AIComputer, 192.168.1.184, modellen `qwen38-27b`) og vil at AI-verktøyet skal bli raskere, gi bedre kode og hjelpe med feilsøking: «gjør AI-verktøyet kraftigere». Brukeren valgte alle fire forbedringene under.
+Brukeren koder mot a local OpenAI-compatible server (vLLM) og vil at AI-verktøyet skal bli raskere, gi bedre kode og hjelpe med feilsøking: «gjør AI-verktøyet kraftigere». Brukeren valgte alle fire forbedringene under.
 
 Det vi vet om oppsettet:
 - Serveren tar to forespørsler samtidig (`--max-num-seqs=2`) og har prefix caching på (`--enable-prefix-caching`). Det betyr at en lik begynnelse på prompten blir gjenbrukt og ikke regnet ut på nytt.

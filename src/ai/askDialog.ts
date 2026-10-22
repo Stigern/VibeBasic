@@ -8,7 +8,7 @@ import { listProcedures } from '../model/procedures';
 import { messageBox98, showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
 import { createAiAnimation } from './aiAnimation';
-import { applyCodeProposal, extractCode } from './codeMode';
+import { applyCodeProposal, extractCode, skippedProblem } from './codeMode';
 import { buildCodeRequest, buildFixRequest, buildFormRequest, type FixError } from './context';
 import { NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
 import { type PreviewResult, showCodePreview, showFormPreview } from './previewDialogs';
@@ -267,7 +267,9 @@ export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[
     const proc = listProcedures(before).find(p => win.getCursorLine() >= p.line && win.getCursorLine() <= p.endLine)?.name ?? null;
     const applied = applyCodeProposal(before, code, proc);
     if (!applied) return none;
-    return { result: { applied, notes, problems: validateCode(code, { moduleName, form, project }) }, jsonReason: null };
+    const problems = validateCode(code, { moduleName, form, project });
+    if (applied.skipped) problems.push(skippedProblem(applied.skipped));   // the retry asks for the changed procedures only
+    return { result: { applied, notes, problems }, jsonReason: null };
   };
   return converse<A>(s, o.first, analyse,
     (a, _reply, metrics) => showCodePreview(doc, win.getSource().replace(/\r\n?/g, '\n'), a.applied.source, a.applied.changes, [...a.notes, ...a.problems], metrics),
@@ -287,6 +289,7 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
     if (!parsed.ok) return { result: null, jsonReason: parsed.reason };
     const extra = parsed.ops.filter((o): o is Extract<typeof o, { op: 'add' }> => o.op === 'add').map(o => ({ name: o.name, type: o.type }));
     const problems = parsed.codeText === undefined ? [] : validateCode(parsed.codeText, { moduleName: form.name, form, extraControls: extra, project });
+    if (parsed.codeSkipped) problems.push(skippedProblem(parsed.codeSkipped));
     return { result: { parsed, notes, problems }, jsonReason: null };
   };
   return converse<A>(s, o.first, analyse,

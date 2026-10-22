@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { expect, test } from 'vitest';
-import { applyCodeProposal, diffLines, extractCode } from '../../src/ai/codeMode';
+import { applyCodeProposal, diffLines, extractCode, skippedProblem } from '../../src/ai/codeMode';
+import { codeForPrompt } from '../../src/ai/context';
+import { BODY_OMITTED } from '../../src/ai/omitted';
 import { showCodePreview } from '../../src/ai/previewDialogs';
 
 test('extract fenced vb', () => expect(extractCode('Her:\n```vb\nPrivate Sub A()\nEnd Sub\n```\nFerdig')).toBe('Private Sub A()\nEnd Sub'));
@@ -32,6 +34,27 @@ test('bare statements replace current body', () => {
   const r = applyCodeProposal('Private Sub Command1_Click()\nOld\nEnd Sub\n\nSub B()\nEnd Sub', 'Label1.Caption = "Hei"', 'Command1_Click')!;
   expect(r.source).toBe('Private Sub Command1_Click()\nLabel1.Caption = "Hei"\nEnd Sub\n\nSub B()\nEnd Sub');
   expect(r.changes).toEqual([{ name: 'Command1_Click', kind: 'body' }]);
+});
+test('procedures echoed back with their bodies omitted keep their real code; the reply names them for the retry', () => {
+  // a long module: the model is shown most procedures as heading + BODY_OMITTED and echoes the whole module back
+  const procs = Array.from({ length: 30 }, (_, i) => `Private Sub P${i}()\n${Array.from({ length: 15 }, (_, k) => `    x = x + ${i * 100 + k}`).join('\n')}\nEnd Sub`);
+  const source = `Option Explicit\nDim x As Long\n\n${procs.join('\n\n')}`;
+  const shown = codeForPrompt(source, { procName: 'P3', mention: '' });
+  expect(shown).toContain(`Private Sub P20()\n${BODY_OMITTED}\n`);   // heading and marker, no End Sub
+  const reply = shown.replace('    x = x + 300', '    x = x - 300')   // the one real change, in the procedure shown in full
+    .replace(`Private Sub P21()\n${BODY_OMITTED}`, "Private Sub P21()\n    ' ... unchanged");   // a stub in other words
+  const r = applyCodeProposal(source, reply, 'P3')!;
+  expect(r.changes).toEqual([{ name: 'P3', kind: 'replaced' }]);
+  expect(r.source).toBe(source.replace('    x = x + 300', '    x = x - 300'));
+  expect(r.skipped).toHaveLength(29);
+  expect(r.skipped).toContain('P20');
+  expect(r.skipped).toContain('P21');
+  expect(skippedProblem(['P1', 'P2'])).toMatch(/P1, P2.*only the procedures you changed/s);
+  // a stub alone changes nothing, but is still reported (so the one retry asks again)
+  const only = applyCodeProposal(source, `Private Sub P5()\n${BODY_OMITTED}\nEnd Sub`, null)!;
+  expect(only).toEqual({ source, changes: [], skipped: ['P5'] });
+  // an empty body is a real change
+  expect(applyCodeProposal(source, 'Private Sub P5()\nEnd Sub', null)!.changes).toEqual([{ name: 'P5', kind: 'replaced' }]);
 });
 test('bare statements without current proc is null', () => expect(applyCodeProposal('Option Explicit', 'x = 1', null)).toBeNull());
 

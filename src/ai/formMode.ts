@@ -17,7 +17,7 @@ export type FormOp =
   | { op: 'delete'; name: string; index: number | null }
   | { op: 'form'; props: Record<string, PropValue> };
 export type ParsedFormOps =
-  | { ok: true; ops: FormOp[]; code: string | null; warnings: string[]; codeChanges?: CodeApplyResult['changes']; codeText?: string }
+  | { ok: true; ops: FormOp[]; code: string | null; warnings: string[]; codeChanges?: CodeApplyResult['changes']; codeText?: string; codeSkipped?: string[] }
   | { ok: false; error: string; raw: string; /** Why the reply was not usable JSON (sent back to the model). */ reason: string };
 type Ok = Extract<ParsedFormOps, { ok: true }>;
 
@@ -207,15 +207,17 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
 
   let code: string | null = null;
   let codeChanges: CodeApplyResult['changes'] | undefined;
+  let codeSkipped: string[] | undefined;
   let text: string | undefined;
   if (typeof json.code === 'string' && json.code.trim()) {
     const extracted = json.code.includes('```') ? extractCode(json.code) ?? json.code : json.code;
     text = fixCode ? fixCode(extracted) : extracted;
     const r = applyCodeProposal(form.code, text, null);
-    if (r) { code = r.source; codeChanges = r.changes; } else warnings.push('Ignored code that could not be merged into the form.');
+    if (r?.skipped) { codeSkipped = r.skipped; warnings.push(`Kept ${r.skipped.join(', ')} as they are: the answer had them without their code.`); }
+    if (r && r.changes.length) { code = r.source; codeChanges = r.changes; } else if (!r) warnings.push('Ignored code that could not be merged into the form.');
   }
   if (!ops.length && code === null) return warnings.length ? { ...fail, raw: `${reply}\n\nIgnored:\n${warnings.join('\n')}` } : fail;
-  return { ok: true, ops, code, warnings, ...(codeChanges ? { codeChanges } : {}), ...(code !== null && text !== undefined ? { codeText: text } : {}) };
+  return { ok: true, ops, code, warnings, ...(codeChanges ? { codeChanges } : {}), ...(code !== null && text !== undefined ? { codeText: text } : {}), ...(codeSkipped ? { codeSkipped } : {}) };
 }
 
 const quote = (s: string) => `"${s.replace(/"/g, '""')}"`;

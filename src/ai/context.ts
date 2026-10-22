@@ -3,6 +3,7 @@ import { CONTROL_TYPES, type PropDef } from '../model/controls';
 import { listProcedures } from '../model/procedures';
 import type { ControlDef, ControlType, FormDef, FontValue, ModuleDef, Project, PropValue } from '../model/types';
 import type { ChatMessage } from './types';
+import { BODY_OMITTED } from './omitted';
 import { CODE_SYSTEM_PROMPT, FORM_SYSTEM_PROMPT } from './prompts';
 
 const COMMON = new Set(['left', 'top', 'width', 'height', 'visible', 'enabled', 'tabindex', 'tabstop', 'tag', 'tooltiptext']);
@@ -141,7 +142,7 @@ export function codeForPrompt(code: string, focus: { procName: string | null; me
   for (const p of procs) {
     while (next < p.line) out.push(lines[next++ - 1]);
     if (keep.has(p.name.toLowerCase())) out.push(...lines.slice(p.line - 1, p.endLine));
-    else out.push(lines[p.line - 1], "' ... (body omitted)");
+    else out.push(lines[p.line - 1], BODY_OMITTED);
     next = p.endLine + 1;
   }
   while (next <= lines.length) out.push(lines[next++ - 1]);
