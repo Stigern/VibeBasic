@@ -3,7 +3,8 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import type { Backend } from '../../src/backend/backend';
 import { newControl, newForm, newProject } from '../../src/model/controls';
 import type { ControlType, FontValue, PropValue } from '../../src/model/types';
-import { parseVbFilter } from '../../src/run/commonDialog';
+import { dialogFilters } from '../../src/backend/dialogFilters';
+import { filterIndexFor, parseVbFilter } from '../../src/run/commonDialog';
 import { InlineFormHost } from '../../src/run/inlineFormHost';
 import { RunSession } from '../../src/run/session';
 
@@ -167,4 +168,25 @@ test('RichTextBox: many Sel* writes in one procedure go out in one patch and are
   const bold = [...rtf.querySelectorAll<HTMLElement>('span')].filter(s => s.dataset.vbBold === '1').map(s => s.textContent);
   expect(bold).toEqual(['aa', 'cc', 'ee']);
   expect(r.out).toEqual([]);
+});
+
+test('"All files" is kept: listed last, and for the Mac dialog (merged filters) it lifts the restriction; FilterIndex follows the file', async () => {
+  const backend = { showOpenDialog: vi.fn(async () => '/Users/me/pic.png'), showSaveDialog: vi.fn(async () => '/Users/me/b.html') };
+  const r = await run([
+    'Private Sub Form_Load()',
+    '  CommonDialog1.ShowOpen',
+    '  Debug.Print CommonDialog1.FilterIndex;',
+    '  CommonDialog1.FilterIndex = 3',
+    '  CommonDialog1.ShowSave',
+    '  Debug.Print CommonDialog1.FilterIndex',
+    'End Sub'].join('\n'),
+  [['CommonDialog', 'CommonDialog1', { Filter: 'All (*.*)|*.*|Text (*.txt)|*.txt|Web|*.htm;*.html', FilterIndex: 2 }]], backend);
+  expect(backend.showOpenDialog).toHaveBeenCalledWith([
+    { name: 'Text (*.txt)', extensions: ['txt'] }, { name: 'Web', extensions: ['htm', 'html'] }, { name: 'All (*.*)', extensions: ['*'] }], '', '');
+  expect(r.out.join('')).toBe(' 1  3 ');   // pic.png: only "All" matches; b.html: Web, which was selected
+  expect(dialogFilters(parseVbFilter('Text|*.txt|All|*.*'))).toEqual([]);
+  expect(dialogFilters(parseVbFilter('Text|*.txt|Web|*.htm;*.html'))).toEqual([{ name: 'Text', extensions: ['txt'] }, { name: 'Web', extensions: ['htm', 'html'] }]);
+  expect(filterIndexFor('Text|*.txt|All|*.*', 1, '/a/b.TXT')).toBe(1);
+  expect(filterIndexFor('Text|*.txt|Web|*.htm', 1, '/a/b.htm')).toBe(2);
+  expect(filterIndexFor('Text|*.txt', 1, '/a/b.png')).toBe(1);
 });

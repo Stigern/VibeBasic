@@ -177,6 +177,18 @@ export class BrowserBackend implements Backend {
     return [{ name: '/', path: '/' }];
   }
 
+  async clipboardGetText(): Promise<string> {
+    const c = globalThis.navigator?.clipboard;
+    if (!c) throw new Error('no clipboard');
+    return c.readText();
+  }
+
+  async clipboardSetText(text: string): Promise<void> {
+    const c = globalThis.navigator?.clipboard;
+    if (!c) throw new Error('no clipboard');
+    await c.writeText(text);
+  }
+
   /** The files "written" in this browser (localStorage) make up the folders. */
   async listDir(path: string): Promise<DirListing> {
     const base = path.replace(/\/+$/, '') + '/';

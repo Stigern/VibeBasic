@@ -9,6 +9,7 @@ import { runFileDialog, type FileDialogRequest } from './commonDialog';
 import { runDialog } from './dialogSpec';
 import type { RuntimeErrorInfo } from './errorDialog';
 import type { FormHost, FormWindow } from './formHost';
+import type { ClipboardApi } from './objects/globalObjects';
 import { mountFormWindow } from './formWindow';
 import type { FormSnapshot, FromWindow } from './protocol';
 
@@ -86,6 +87,10 @@ export class InlineFormHost implements FormHost {
   listVolumes(): Promise<Volume[]> { return (this.backend ?? getBackend()).listVolumes(); }
   listDir(path: string): Promise<DirListing> { return (this.backend ?? getBackend()).listDir(path); }
   net(): NetApi { return this.backend ?? getBackend(); }
+  clipboard(): ClipboardApi {
+    const b = this.backend ?? getBackend();
+    return { getText: () => b.clipboardGetText(), setText: t => b.clipboardSetText(t) };
+  }
 
   async colorDialog(o: { color: number }): Promise<number | null> {
     const r = await this.withDialog(() => runDialog(this.doc, { kind: 'color', ...o }));

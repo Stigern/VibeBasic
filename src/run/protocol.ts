@@ -1,6 +1,6 @@
 // Messages between the run session (main window) and a form window renderer.
 
-import type { FormDef, PropValue } from '../model/types';
+import type { ControlDef, FormDef, PropValue } from '../model/types';
 
 export interface FormSnapshot {
   key: string; form: FormDef;
@@ -13,6 +13,8 @@ export type ToWindow =
   | { t: 'patch'; id: string | 'form'; props: Record<string, PropValue> }
   | { t: 'patches'; items: { id: string | 'form'; props: Record<string, PropValue> }[] }   // one flush, several controls
   | { t: 'focus'; id: string }
+  | { t: 'addControl'; def: ControlDef; handled: string[] }   // Load Command1(i): a new element (in front of the others)
+  | { t: 'removeControl'; id: string }                       // Unload Command1(i)
   | { t: 'show' } | { t: 'hide' }
   | { t: 'blocked'; blocked: boolean }            // modal form or break mode: ignore input
   | { t: 'keyResult'; requestId: number; keyAscii: number };
@@ -21,5 +23,6 @@ export type FromWindow =
   | { t: 'ready' }
   | { t: 'event'; id: string | 'form'; event: string; args: (number | string)[]; state?: Record<string, PropValue>; requestId?: number }
   | { t: 'state'; id: string; props: Record<string, PropValue> }   // the user changed something that has no handler
+  | { t: 'focused'; id: string }                                   // a control got the focus and has no GotFocus code (Me.ActiveControl)
   | { t: 'closeRequest' }
   | { t: 'resized'; width: number; height: number };               // twips

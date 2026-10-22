@@ -25,6 +25,8 @@ pub const APP_COMMANDS: &[&str] = &[
   "media_open",
   "media_read",
   "media_close",
+  "clipboard_get_text",
+  "clipboard_set_text",
   "make_app",
   "can_make_app",
   "get_embedded_project",

@@ -4,6 +4,7 @@ import type { DirListing, NetApi, Volume } from '../backend/backend';
 import type { FontValue } from '../model/types';
 import type { FileDialogRequest } from './commonDialog';
 import type { OpenedMedia } from './mediaSource';
+import type { ClipboardApi } from './objects/globalObjects';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 
 export interface FormWindow {
@@ -30,6 +31,8 @@ export interface FormHost {
   openMedia?(fullPath: string, mime: string): Promise<OpenedMedia>;
   /** Inet and Winsock: the network calls, made by the main window. Absent: the controls raise errors. */
   net?(): NetApi;
+  /** Clipboard: the system clipboard (text). Absent: the program keeps its own copy. */
+  clipboard?(): ClipboardApi;
   /** 'ai' only in the IDE: break mode on the line, then the Ask AI flow. */
   runtimeErrorBox(o: { number: number; description: string; compile: boolean; mode: 'ide' | 'app'; title: string }): Promise<'end' | 'debug' | 'ai'>;
 }

@@ -37,6 +37,8 @@
     "allow-media-open",
     "allow-media-read",
     "allow-media-close",
+    "allow-clipboard-get-text",
+    "allow-clipboard-set-text",
     "allow-make-app",
     "allow-can-make-app",
     "allow-get-embedded-project",

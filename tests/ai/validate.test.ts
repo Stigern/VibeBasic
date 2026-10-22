@@ -190,3 +190,12 @@ Private Sub Timer1_Timer()
 End Sub`;
   expect(inForm1(code)).toEqual([]);
 });
+
+test('run-time objects: Controls, Forms, Screen.ActiveControl and Clipboard are known in a form', () => {
+  expect(inForm1(sub([
+    '    Dim c As Control',
+    '    For Each c In Controls: c.Tag = "": Next',
+    '    Debug.Print Me.Controls.Count, Forms.Count, Me.ActiveControl.Name, Screen.ActiveForm.Caption, Screen.ActiveControl.Name',
+    '    Clipboard.SetText Clipboard.GetText & "x"',
+  ].join('\n')))).toEqual([]);
+});

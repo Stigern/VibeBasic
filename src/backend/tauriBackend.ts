@@ -4,12 +4,9 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import type { Backend, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { ChatMessage } from '../ai/types';
+import { dialogFilters } from './dialogFilters';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
 
-/** The plugin takes plain extensions: `*` (all files) is dropped, and so is a filter left with none; without a filter every file is allowed. */
-function dialogFilters(filters: FileFilter[]): FileFilter[] {
-  return filters.map(f => ({ name: f.name, extensions: f.extensions.filter(x => x !== '*' && x !== '') })).filter(f => f.extensions.length > 0);
-}
 
 const PROJECT_FILTER: FileFilter = { name: 'VibeBasic Project', extensions: ['vbb'] };
 
@@ -77,6 +74,15 @@ export class TauriBackend implements Backend {
 
   listVolumes(): Promise<Volume[]> {
     return call<Volume[]>('list_volumes', {});
+  }
+
+  /** pbpaste / pbcopy on the Rust side: navigator.clipboard wants a user gesture, which a Timer or Form_Load does not have. */
+  clipboardGetText(): Promise<string> {
+    return call<string>('clipboard_get_text', {});
+  }
+
+  clipboardSetText(text: string): Promise<void> {
+    return call<void>('clipboard_set_text', { text });
   }
 
   listDir(path: string): Promise<DirListing> {

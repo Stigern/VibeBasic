@@ -6,7 +6,7 @@ import type { AiChatOptions } from '../ai/sse';
 export interface FileFilter { name: string; extensions: string[] }
 /** A drive of DriveListBox: `path` is what `Drive1.Drive` returns ("/" is the startup disk). */
 export interface Volume { name: string; path: string }
-/** One folder: sub-folder names and files, sorted; the symlinked folders are left out. */
+/** One folder: sub-folder names (symlinked folders too, as plain names) and files, sorted. */
 export interface DirListing { dirs: string[]; files: { name: string; hidden: boolean }[] }
 
 /** Inet (OpenURL / Execute): one HTTP(S) request; `headers` are "Name: value" lines, `timeoutSecs` 0 = none. */
@@ -63,6 +63,9 @@ export interface Backend extends NetApi {
   listVolumes(): Promise<Volume[]>;
   /** DirListBox / FileListBox: the contents of one folder. Rejects with the error text when it can't be read. */
   listDir(path: string): Promise<DirListing>;
+  /** Clipboard object of a running program: the system clipboard as text. Rejects when it cannot be reached. */
+  clipboardGetText(): Promise<string>;
+  clipboardSetText(text: string): Promise<void>;
   readTextFile(path: string): Promise<string>;
   writeTextFile(path: string, text: string): Promise<void>;
   readBinaryFile(path: string): Promise<Uint8Array>;

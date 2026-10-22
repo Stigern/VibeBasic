@@ -5,12 +5,13 @@ import type { BreakInfo, CodeLocation, Host, VBObject } from '../lang/host';
 import { VBRuntimeError } from '../lang/errors';
 import { macrotask } from '../lang/interp/driver';
 import { Program, type SourceModule } from '../lang/interp/program';
-import type { VBRef, VBValue } from '../lang/values';
+import { Nothing, type VBRef, type VBValue } from '../lang/values';
 import type { PictureRef, Project } from '../model/types';
 import type { FormHost } from './formHost';
 import { NetSession } from './net';
 import { PatchQueue } from './patchQueue';
 import { AppObject, PictureObject, ScreenObject } from './objects/appObjects';
+import { ClipboardObject, ObjectList } from './objects/globalObjects';
 import type { ControlObject } from './objects/controlObject';
 import { FormInstance, type FormSession } from './objects/formInstance';
 
@@ -59,7 +60,17 @@ export class RunSession implements Host, FormSession {
   private _state: 'running' | 'break' | 'ended' = 'running';
   private readonly forms = new Map<string, FormInstance>();   // lower-case name
   private readonly app: AppObject;
-  private readonly screen = new ScreenObject();
+  /** The form activated last (Screen.ActiveForm); null when no form is shown. */
+  private activeForm: FormInstance | null = null;
+  private readonly screen = new ScreenObject({
+    form: () => this.activeForm ?? Nothing,
+    control: () => this.activeForm?.activeControl() ?? Nothing,
+  });
+  /** Forms: the loaded forms in the order they were loaded. */
+  private readonly formList = new ObjectList('Object',
+    () => [...this.forms.values()].filter(f => f.loaded).sort((a, b) => a.loadOrder - b.loadOrder), o => (o as FormInstance).name,
+    () => new VBRuntimeError(9));
+  private readonly clipboard = new ClipboardObject(() => this.formHost.clipboard?.());
   private readonly title: string;
   private modalStack: FormInstance[] = [];
   private timers = new Map<ControlObject, ReturnType<typeof setInterval>>();
@@ -147,10 +158,13 @@ export class RunSession implements Host, FormSession {
     }, interval));
   }
 
-  formUnloaded(_form: FormInstance): void {
+  formUnloaded(form: FormInstance): void {
+    if (this.activeForm === form) this.activeForm = null;
     this.updateBlocked();
     this.maybeEnd();
   }
+
+  formActivated(form: FormInstance): void { this.activeForm = form; }
 
   pushModal(form: FormInstance): void {
     if (!this.modalStack.includes(form)) this.modalStack.push(form);
@@ -190,6 +204,8 @@ export class RunSession implements Host, FormSession {
     if (f) return f;
     if (l === 'app') return this.app;
     if (l === 'screen') return this.screen;
+    if (l === 'forms') return this.formList;
+    if (l === 'clipboard') return this.clipboard;
     return undefined;
   }
 
