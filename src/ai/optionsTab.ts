@@ -29,7 +29,10 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
     try {
       const models = await backend.aiListModels(baseUrl.value.trim(), apiKey.value);
       model.setItems(models);
-      if (!model.getValue().trim() && models.length > 0) model.setValue(models[0]);
+      const typed = model.getValue().trim();
+      const match = models.find(m => m.toLowerCase() === typed.toLowerCase());
+      if (match) { if (match !== typed) model.setValue(match); }
+      else if (!typed && models.length > 0) model.setValue(models[0]);
       await messageBox98(doc, { prompt: `Connected. ${models.length} models found.`, title: 'VibeBasic', buttons: 64 });
     } catch (e) {
       await messageBox98(doc, { prompt: e instanceof Error ? e.message : String(e), title: 'VibeBasic', buttons: 48 });

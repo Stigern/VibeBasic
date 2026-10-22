@@ -65,6 +65,23 @@ test('test connection selects first model when Model is empty, keeps a chosen on
   await flush(); okButton().click(); await p2;
   expect(tab.controls.model.getValue()).toBe('b');
 });
+test('test connection fixes the case of a typed model name', async () => {
+  const b = fakeBackend(async () => ['qwen38-27b']);
+  const tab = buildAiTab(b, document);
+  await flush();
+  tab.controls.model.setValue('Qwen38-27b');
+  const p = tab.controls.testConnection();
+  await flush(); okButton().click(); await p;
+  expect(tab.controls.model.getValue()).toBe('qwen38-27b');
+});
+test('settings text fields have OS auto-capitalisation and correction off', () => {
+  const tab = buildAiTab(fakeBackend(), document);
+  for (const el of [tab.controls.baseUrl, tab.content.querySelector('.cb98-input')!]) {
+    expect(el.getAttribute('autocapitalize')).toBe('off');
+    expect(el.getAttribute('autocorrect')).toBe('off');
+    expect(el.getAttribute('spellcheck')).toBe('false');
+  }
+});
 test('apply before the load finished still saves the stored values', async () => {
   const b = fakeBackend();
   await saveAiSettings(b, { baseUrl: 'http://x/v1', model: 'm1', apiKey: 'k' });

@@ -3,6 +3,8 @@ const PROPS = ['value', 'checked', 'disabled', 'readOnly', 'selected', 'textCont
 /** Enumerated attributes where `false` must be rendered as the string "false" (not omitted). */
 const ENUMERATED = ['draggable', 'spellcheck', 'contenteditable'];
 
+const TEXT_INPUTS = ['text', 'password', 'search', 'url', 'email'];
+
 /**
  * Tiny DOM helper used by every ui98 widget.
  *
@@ -34,6 +36,13 @@ export function h<K extends keyof HTMLElementTagNameMap>(
     else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v as EventListener);
     else if (PROPS.includes(k) && k in el) (el as unknown as Record<string, unknown>)[k] = v;
     else el.setAttribute(k, v === true ? '' : String(v));
+  }
+  // VB6 never "corrects" typed text: turn off the OS's auto-capitalisation/correction on text fields
+  // (macOS turned a typed model name "qwen38-27b" into "Qwen38-27b").
+  if (el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && TEXT_INPUTS.includes(el.type))) {
+    for (const [k, v] of [['autocapitalize', 'off'], ['autocorrect', 'off'], ['spellcheck', 'false']]) {
+      if (!el.hasAttribute(k)) el.setAttribute(k, v);
+    }
   }
   for (const c of children) {
     if (c === null || c === undefined) continue;
