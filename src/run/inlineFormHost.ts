@@ -1,7 +1,7 @@
 // FormHost that shows every form as an absolutely positioned Win98 "window" div inside one container
 // (browser, tests). Dialogs are the plan 02 Win98 dialogs in the same document.
 
-import { getBackend, type Backend } from '../backend/backend';
+import { getBackend, type Backend, type DirListing, type Volume } from '../backend/backend';
 import { formMetrics } from '../controls/render';
 import type { FontValue } from '../model/types';
 import { h } from '../ui98/dom';
@@ -82,6 +82,9 @@ export class InlineFormHost implements FormHost {
   fileDialog(o: FileDialogRequest): Promise<string | null> {
     return this.withDialog(() => runFileDialog(this.backend ?? getBackend(), o));
   }
+
+  listVolumes(): Promise<Volume[]> { return (this.backend ?? getBackend()).listVolumes(); }
+  listDir(path: string): Promise<DirListing> { return (this.backend ?? getBackend()).listDir(path); }
 
   async colorDialog(o: { color: number }): Promise<number | null> {
     const r = await this.withDialog(() => runDialog(this.doc, { kind: 'color', ...o }));

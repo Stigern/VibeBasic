@@ -344,6 +344,116 @@ function comboBox(c: Ctx): Renderer {
   };
 }
 
+/** DriveListBox: a drop-down of the `Drives` lines ('path|name'); `Drive` is the chosen path. Run mode: a pick dispatches `vbdrive` ({ drive }). */
+function driveListBox(c: Ctx): Renderer {
+  let input: HTMLInputElement, list: HTMLElement, field: HTMLElement;
+  let open = false;
+  const drives = () => c.list('Drives').map(splitFields);
+  const label = (path: string): string => { const n = drives().find(d => d[0] === path)?.[1]; return path === '/' && n && n !== '/' ? `/ [${n}]` : path; };
+  const doc = () => c.el.ownerDocument;
+  const onOutside = (e: Event) => { if (!c.el.contains(e.target as Node)) close(); };
+  function close() { open = false; list.classList.remove('open'); doc().removeEventListener('mousedown', onOutside, true); }
+  function openList() {
+    if (c.mode !== 'run' || open) return;
+    open = true;
+    list.classList.add('open');
+    c.fire('vbdropdown');
+    doc().addEventListener('mousedown', onOutside, true);
+  }
+  function pick(path: string) {
+    close();
+    if (path === c.str('Drive')) return;
+    c.props.Drive = path;
+    input.value = label(path);
+    markSel();
+    c.fire('vbdrive', { drive: path });
+  }
+  const markSel = () => list.querySelectorAll<HTMLElement>('.vb-item').forEach(e => e.classList.toggle('sel', e.dataset.path === c.str('Drive')));
+  return {
+    build() {
+      if (open) close();
+      input = h('input', { type: 'text', class: 'vb-input', spellcheck: false, autocomplete: 'off' });
+      input.readOnly = true;
+      const btn = h('div', { class: 'vb-combo-btn' }, h('span', { class: 'vb-glyph' }));
+      field = h('div', { class: 'vb-combo-field' }, input, btn);
+      list = h('div', { class: 'vb-combo-list' });
+      c.el.replaceChildren(field, list);
+      c.setInput(input);
+      if (c.mode !== 'run') return;
+      const toggle = (e: Event) => { e.preventDefault(); input.focus(); open ? close() : openList(); };
+      btn.addEventListener('mousedown', toggle);
+      input.addEventListener('mousedown', toggle);
+      list.addEventListener('mousedown', e => {
+        const it = (e.target as Element).closest<HTMLElement>('.vb-item');
+        if (!it) return;
+        e.preventDefault();
+        pick(it.dataset.path!);
+      });
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && open) { e.preventDefault(); close(); }
+        else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const all = drives(), i = all.findIndex(d => d[0] === c.str('Drive'));
+          const next = all[Math.min(all.length - 1, Math.max(0, i + (e.key === 'ArrowDown' ? 1 : -1)))];
+          if (next) pick(next[0]);
+        }
+      });
+    },
+    patch(k) {
+      if (has(k, 'Drives')) {
+        list.replaceChildren(...drives().map(d => h('div', { class: 'vb-item', dataset: { path: d[0] } }, label(d[0]))));
+      }
+      if (has(k, 'Drive', 'Drives')) { input.value = label(c.str('Drive')); markSel(); }
+      if (has(k, 'BackColor')) { field.style.backgroundColor = c.color('BackColor'); list.style.backgroundColor = c.color('BackColor'); }
+    },
+    bg: () => null,
+  };
+}
+
+/** DirListBox: the folders above `Path` (each one level further in), the current folder, and the sub-folders from `List` (full paths) below it.
+ *  Run mode: a click dispatches `vbdirclick` ({ index }: the sub-folder number, or -1 current, -2 its parent ...); a double click on a folder
+ *  other than the current one dispatches `vbdiropen` ({ path }). */
+function dirListBox(c: Ctx): Renderer {
+  let root: HTMLElement;
+  let sel = -1;
+  const base = (p: string) => p.slice(p.lastIndexOf('/') + 1);
+  function paint() {
+    const path = c.str('Path') || '/', segs = path.split('/').filter(Boolean);
+    const chain = ['/', ...segs.map((_, i) => '/' + segs.slice(0, i + 1).join('/'))];
+    const row = (p: string, level: number, index: number, name: string, isOpen: boolean) =>
+      h('div', { class: index === sel ? 'dir-row sel' : 'dir-row', dataset: { path: p, index: String(index) }, style: { paddingLeft: `${level * 12 + 2}px` } },
+        h('span', { class: isOpen ? 'dir-ico open' : 'dir-ico' }), h('span', { class: 'dir-text' }, name));
+    const rows = chain.map((p, i) => row(p, i, -(chain.length - i), i === 0 ? '/' : base(p), true));
+    for (const [i, p] of c.list('List').entries()) rows.push(row(p, chain.length, i, base(p), false));
+    root.replaceChildren(...rows);
+  }
+  return {
+    build() {
+      root = h('div', { class: 'vb-dir', tabindex: '0' });
+      c.el.replaceChildren(root);
+      c.setInput(root);
+      if (c.mode !== 'run') return;
+      const rowOf = (e: Event) => { const r = (e.target as Element).closest<HTMLElement>('.dir-row'); return r && root.contains(r) && root.getAttribute('aria-disabled') !== 'true' ? r : null; };
+      root.addEventListener('click', e => {
+        const r = rowOf(e);
+        if (!r) return;
+        sel = Number(r.dataset.index);
+        c.props.ListIndex = sel;
+        paint();
+        c.fire('vbdirclick', { index: sel });
+      });
+      root.addEventListener('dblclick', e => {
+        const r = rowOf(e);
+        if (r && Number(r.dataset.index) !== -1) c.fire('vbdiropen', { path: r.dataset.path! });
+      });
+    },
+    patch(k) {
+      if (has(k, 'ListIndex')) sel = c.num('ListIndex');
+      if (has(k, 'Path', 'List', 'ListIndex')) paint();
+    },
+  };
+}
+
 function pictureBox(c: Ctx): Renderer {
   let host: HTMLElement;
   return {
@@ -1132,6 +1242,9 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   Frame: frame,
   ListBox: listBox,
   ComboBox: comboBox,
+  DriveListBox: driveListBox,
+  DirListBox: dirListBox,
+  FileListBox: listBox,
   PictureBox: pictureBox,
   Image: image,
   Timer: timer,

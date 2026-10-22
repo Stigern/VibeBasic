@@ -175,7 +175,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     const tg = targetOf(e.target);
     if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl) return;
     const type = tg.def.type, el = e.target as HTMLElement;
-    if (type === 'ListBox') emit(tg.id, 'Click', [], { ListIndex: (el as HTMLSelectElement).selectedIndex });
+    if (type === 'ListBox' || type === 'FileListBox') emit(tg.id, 'Click', [], { ListIndex: (el as HTMLSelectElement).selectedIndex });
     else if (type === 'HScrollBar' || type === 'VScrollBar' || type === 'Slider' || type === 'UpDown') emit(tg.id, 'Change', [], { Value: Number(el.dataset.value) || 0 });
   });
   // UpDown arrows: UpClick / DownClick (then Change, from the `change` event above)
@@ -199,7 +199,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     emit(tg.id, 'Click', [], { SelectedTab: Number(e.detail.index) });
   });
   // TreeView / ListView / MSFlexGrid: the renderer reports clicks by 1-based collection index (the run session maps them to objects)
-  const custom = (type: string, fn: (id: string, d: Record<string, number | boolean>) => void) => on<CustomEvent>(type, e => {
+  const custom = (type: string, fn: (id: string, d: Record<string, number | boolean | string>) => void) => on<CustomEvent>(type, e => {
     const tg = targetOf(e.target);
     if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl || !usable(tg.id)) return;
     fn(tg.id, e.detail);
@@ -207,6 +207,11 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   custom('vbnodeclick', (id, d) => emit(id, 'NodeClick', [Number(d.index)], { SelectedNode: Number(d.index) }));
   custom('vbnodetoggle', (id, d) => emit(id, d.expanded ? 'Expand' : 'Collapse', [Number(d.index)], { Toggled: `${d.index}|${d.expanded ? 1 : 0}` }));
   custom('vbitemclick', (id, d) => emit(id, 'ItemClick', [Number(d.index)], { SelectedIndex: Number(d.index) }));
+  // DriveListBox / DirListBox: the drive picked, a folder clicked (its ListIndex) or opened by a double click (the new Path)
+  custom('vbdrive', (id, d) => emit(id, 'Change', [], { Drive: String(d.drive) }));
+  custom('vbdropdown', id => emit(id, 'DropDown'));
+  custom('vbdirclick', (id, d) => emit(id, 'Click', [], { ListIndex: Number(d.index) }));
+  custom('vbdiropen', (id, d) => emit(id, 'Change', [], { Path: String(d.path), List: [], ListIndex: -1 }));
   custom('vbcolclick', (id, d) => emit(id, 'ColumnClick', [Number(d.index)]));
   custom('vbcellclick', (id, d) => {
     const cur = propsOf(id);

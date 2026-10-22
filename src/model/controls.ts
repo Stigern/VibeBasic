@@ -422,12 +422,48 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
     events: [evChange(), ev('SelChange'), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
+  // The drives, folders and files come from the backend at run time. Drive is the path of a volume ("/" is the startup disk);
+  // Drives ('path|name' lines), and a folder / file list (the full paths of the sub-folders, the file names) are the window's data.
+  DriveListBox: def({
+    type: 'DriveListBox', namePrefix: 'Drive', defaultWidth: 1215, defaultHeight: 315, toolboxTooltip: 'DriveListBox',
+    defaultEvent: 'Change', defaultMember: 'Drive',
+    props: [
+      ...common(), color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
+      rt('Drive', 'string', '/'), p('Drives', 'list', ['/|/'], { designTime: false, runtime: 'none' }),
+    ],
+    events: [evChange(), ev('DropDown'), ...evFocus(), ...evKeys()],
+  }),
+
+  // List(i): i >= 0 the sub-folders (full paths), -1 the current folder, -2 its parent ...; ListCount counts the sub-folders.
+  DirListBox: def({
+    type: 'DirListBox', namePrefix: 'Dir', defaultWidth: 1215, defaultHeight: 1935, toolboxTooltip: 'DirListBox',
+    defaultEvent: 'Change', defaultMember: 'Path',
+    props: [
+      ...common(), color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
+      rt('Path', 'string', ''), p('List', 'list', [], { designTime: false, runtime: 'ro' }),
+      rt('ListCount', 'int', 0, 'ro'), rt('ListIndex', 'int', -1),
+    ],
+    events: [evChange(), evClick(), ev('Scroll'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  // Pattern: "*.*" or several patterns separated by ";". Archive is the same as Normal (an ordinary file).
+  FileListBox: def({
+    type: 'FileListBox', namePrefix: 'File', defaultWidth: 1215, defaultHeight: 1935, toolboxTooltip: 'FileListBox',
+    defaultEvent: 'Click', defaultMember: 'FileName',
+    props: [
+      ...common(), str('Pattern', '*.*'), bool('Archive', true), bool('Hidden', false), bool('Normal', true),
+      color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
+      rt('Path', 'string', ''), rt('FileName', 'string', ''), p('List', 'list', [], { designTime: false, runtime: 'ro' }),
+      rt('ListCount', 'int', 0, 'ro'), rt('ListIndex', 'int', -1),
+    ],
+    events: [evClick(), evDbl(), ev('PathChange'), ev('PatternChange'), ev('Scroll'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
 };
 
 /** VB6 toolbox order. */
 export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
-  'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip',
+  'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip',
   'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox',
 ];
 

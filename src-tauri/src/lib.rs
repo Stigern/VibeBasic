@@ -15,6 +15,8 @@ pub fn run() {
       files::read_text_file,
       files::write_text_file,
       files::read_binary_file,
+      files::list_volumes,
+      files::list_dir,
       make_app::make_app,
       make_app::can_make_app,
       embedded::get_embedded_project,

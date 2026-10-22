@@ -19,6 +19,8 @@ export interface FormSession {
   readonly queue: PatchQueue;
   readonly formHost: FormHost;
   readonly mode: 'ide' | 'app';
+  /** The folder of the project (App.Path): where DirListBox and FileListBox start. */
+  readonly appPath: string;
   readonly assets: Record<string, string>;
   readonly ended: boolean;
   resolveAsset(ref: PictureRef): string | null;
@@ -74,6 +76,7 @@ export class FormInstance implements VBObject {
       timerChanged: c => this.s.syncTimer(this, c),
       propChanged: (c, p, old) => this.propChanged(c, p, old),
       dialogs: this.s.formHost,
+      files: { listVolumes: () => this.s.formHost.listVolumes(), listDir: p => this.s.formHost.listDir(p), defaultPath: this.s.appPath },
     };
     const formDef = { id: 'form', type: 'Form', name: this.def.name, index: null, parentId: null, props: this.def.props } as unknown as ControlDef;
     const st: FormState = { form: new ControlObject(formDef, this.key, this.s.queue, ctx), byId: new Map(), byName: new Map() };
@@ -279,6 +282,13 @@ export class FormInstance implements VBObject {
       case 'RichTextBox':
         if (prop === 'Text' && changed) ev = 'Change';
         else if ((prop === 'SelStart' || prop === 'SelLength') && changed) ev = 'SelChange';
+        break;
+      case 'DriveListBox': if (prop === 'Drive' && changed) ev = 'Change'; break;
+      case 'DirListBox': if (prop === 'Path' && changed) ev = 'Change'; break;
+      case 'FileListBox':
+        if (prop === 'Path' && changed) ev = 'PathChange';
+        else if (prop === 'Pattern' && changed) ev = 'PatternChange';
+        else if (prop === 'ListIndex' && changed) ev = 'Click';
         break;
       case 'MSFlexGrid': if ((prop === 'Row' || prop === 'Col') && changed) ev = 'RowColChange'; break;
       case 'TabStrip': if (prop === 'SelectedTab' && changed) ev = 'Click'; break;

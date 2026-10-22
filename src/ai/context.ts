@@ -24,7 +24,9 @@ export function describeControlTypes(): string {
     + ' fields separated by | : Panels "Text|Key|Width|Alignment(0 left, 1 center, 2 right)", Tabs "Caption|Key".'
     + ' A ListView\'s ColumnHeaders are lines "Text|Key|Width|Alignment(0 left, 1 right, 2 center)"; Nodes, ListItems and the cells of an MSFlexGrid (TextMatrix) are filled by code at run time.'
     + ' A CommonDialog is invisible at run time and has only Left and Top (no Width, Height, Enabled, TabIndex) and no Move, SetFocus, Refresh or ZOrder; code opens it with ShowOpen, ShowSave, ShowColor or ShowFont (ShowPrinter and ShowHelp do not work).'
-    + ' Its Filter looks like "Text (*.txt)|*.txt|All (*.*)|*.*".');
+    + ' Its Filter looks like "Text (*.txt)|*.txt|All (*.*)|*.*".'
+    + ' DriveListBox, DirListBox and FileListBox show the Mac\'s volumes, folders and files: Drive1.Drive is the path of a volume ("/" is the startup disk), Dir1.Path a folder, File1.Pattern "*.txt;*.bas".'
+    + ' The usual link is Drive1_Change: Dir1.Path = Drive1.Drive, and Dir1_Change: File1.Path = Dir1.Path; File1.FileName is the selected file. The lists are filled asynchronously, so a read of ListCount or List(i) waits for the folder.');
   return lines.join('\n');
 }
 

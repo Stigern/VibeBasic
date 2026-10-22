@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import type { Backend, FileFilter } from './backend';
+import type { Backend, DirListing, FileFilter, Volume } from './backend';
 import type { ChatMessage } from '../ai/types';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
 
@@ -60,6 +60,14 @@ export class TauriBackend implements Backend {
   async showSaveDialog(filters: FileFilter[], title: string, initDir: string, defaultName = ''): Promise<string | null> {
     const defaultPath = initDir ? (defaultName ? `${initDir.replace(/\/+$/, '')}/${defaultName}` : initDir) : defaultName || undefined;
     return (await save({ title: title || undefined, defaultPath, filters: dialogFilters(filters) })) ?? null;
+  }
+
+  listVolumes(): Promise<Volume[]> {
+    return call<Volume[]>('list_volumes', {});
+  }
+
+  listDir(path: string): Promise<DirListing> {
+    return call<DirListing>('list_dir', { path });
   }
 
   readTextFile(path: string): Promise<string> {

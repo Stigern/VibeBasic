@@ -4,6 +4,10 @@ import type { ChatMessage } from '../ai/types';
 import type { AiChatOptions } from '../ai/sse';
 
 export interface FileFilter { name: string; extensions: string[] }
+/** A drive of DriveListBox: `path` is what `Drive1.Drive` returns ("/" is the startup disk). */
+export interface Volume { name: string; path: string }
+/** One folder: sub-folder names and files, sorted; the symlinked folders are left out. */
+export interface DirListing { dirs: string[]; files: { name: string; hidden: boolean }[] }
 
 export interface Backend {
   readonly kind: 'tauri' | 'browser';
@@ -20,6 +24,10 @@ export interface Backend {
   showOpenDialog(filters: FileFilter[], title: string, initDir: string): Promise<string | null>;
   /** Generic save dialog (CommonDialog.ShowSave). `defaultName` is the file name suggested ('' for none). Null when cancelled. */
   showSaveDialog(filters: FileFilter[], title: string, initDir: string, defaultName?: string): Promise<string | null>;
+  /** DriveListBox: the startup disk "/" first, then /Volumes/*. */
+  listVolumes(): Promise<Volume[]>;
+  /** DirListBox / FileListBox: the contents of one folder. Rejects with the error text when it can't be read. */
+  listDir(path: string): Promise<DirListing>;
   readTextFile(path: string): Promise<string>;
   writeTextFile(path: string, text: string): Promise<void>;
   readBinaryFile(path: string): Promise<Uint8Array>;

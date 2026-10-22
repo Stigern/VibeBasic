@@ -85,7 +85,7 @@
 .vb-host { position: absolute; left: 0; top: 0; right: 0; bottom: 0; overflow: hidden; }
 
 /* ---------- ListBox ---------- */
-.vb-ListBox { background-color: #fff; box-shadow: var(--w98-sunken); padding: 2px; }
+.vb-ListBox, .vb-FileListBox { background-color: #fff; box-shadow: var(--w98-sunken); padding: 2px; }
 .vb-ctl.vb-ctl .vb-listbox {
   display: block; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none;
   background: transparent; outline: none; overflow-x: hidden; overflow-y: auto; -webkit-appearance: none; appearance: none;
@@ -94,7 +94,7 @@
 .vb-listbox option:checked { background: #000080 linear-gradient(#000080, #000080); color: #fff; }
 
 /* ---------- ComboBox ---------- */
-.vb-ComboBox { overflow: visible; }
+.vb-ComboBox, .vb-DriveListBox { overflow: visible; }
 .vb-combo-field {
   position: absolute; left: 0; top: 0; right: 0; bottom: 0; display: flex; align-items: stretch; padding: 2px;
   background-color: #fff; box-shadow: var(--w98-sunken); box-sizing: border-box;
@@ -106,7 +106,7 @@
 }
 .vb-combo-btn:active { box-shadow: var(--w98-pressed); }
 .vb-glyph { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 4px solid #000; }
-.vb-ComboBox.vb-disabled .vb-glyph { border-top-color: #808080; }
+.vb-ComboBox.vb-disabled .vb-glyph, .vb-DriveListBox.vb-disabled .vb-glyph { border-top-color: #808080; }
 .vb-combo-list {
   position: absolute; left: 0; right: 0; top: 21px; z-index: 9999; box-sizing: border-box; display: none;
   max-height: 134px; overflow-x: hidden; overflow-y: auto; background-color: #fff; border: 1px solid #000;
@@ -270,3 +270,13 @@
 .fg-lines3 td { border-right: 1px solid #808080; border-bottom: 1px solid #808080; box-shadow: inset 1px 1px #fff; }
 .fg-table td.fixed { background: #c0c0c0; box-shadow: inset 1px 1px #fff, inset -1px -1px #808080; border: 0; }
 .fg-table td.sel { background: #000080; color: #fff; }
+
+/* ---------- DriveListBox / DirListBox ---------- */
+.vb-DirListBox { background-color: #fff; box-shadow: var(--w98-sunken); }
+.vb-dir { position: absolute; left: 2px; top: 2px; right: 2px; bottom: 2px; overflow: auto; outline: none; box-sizing: border-box; }
+.dir-row { display: flex; align-items: center; height: 16px; white-space: pre; cursor: default; }
+.dir-ico { flex: none; width: 14px; height: 10px; margin-right: 4px; box-sizing: border-box; background: #ffff00; border: 1px solid #808000; }
+.dir-ico.open { background: #ffffc0; }
+.dir-text { padding: 0 2px; }
+.dir-row.sel .dir-text { background: #000080; color: #fff; }
+.vb-DirListBox:focus-within .dir-row.sel .dir-text { outline: 1px dotted #ff0; outline-offset: -1px; }

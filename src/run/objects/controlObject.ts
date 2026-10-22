@@ -6,6 +6,8 @@ import { VBRuntimeError } from '../../lang/errors';
 import { Empty, Nothing, coerce, isObject, toBool, toStr, type VBValue } from '../../lang/values';
 import { CONTROL_TYPES, getPropDef, type PropDef } from '../../model/controls';
 import { decodeRuns, encodeRuns, formatAt, formatRange, replaceRange, runsText, type RtfPatch, type Run } from '../../controls/richText';
+import type { DirListing, Volume } from '../../backend/backend';
+import { joinFields } from '../../model/fieldLines';
 import { baseName, type FileDialogRequest } from '../commonDialog';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../../model/types';
 import type { PatchQueue } from '../patchQueue';
@@ -13,6 +15,7 @@ import { PictureObject, type HasPictureRef } from './appObjects';
 import type { ChangeKind, CollectionObject, ItemObject } from './collectionObject';
 import { makePanels, makeTabs, panelLine, tabLine } from './commonCollections';
 import { DEFAULT_ALIGN, GridData } from './gridData';
+import { dirListItem, filterFiles, findVolume, joinPath, normalizePath, resolvePath, subDirs, type FileContext } from './fileControls';
 import { columnLine, listLine, makeColumns, makeListItems, makeNodes, nodeLines, TreeNode, type NodesCollection, type Picker } from './listCollections';
 
 export interface RunContext {
@@ -28,6 +31,8 @@ export interface RunContext {
     colorDialog(o: { color: number }): Promise<number | null>;
     fontDialog(o: { font: FontValue }): Promise<FontValue | null>;
   };
+  /** DriveListBox, DirListBox, FileListBox: the volumes and folder contents from the backend. */
+  files?: FileContext;
 }
 
 /** Any picture value (what LoadPicture returns, or what `Picture` reads) carries its asset reference. */
@@ -57,6 +62,7 @@ class FontObject implements VBObject {
 }
 
 const isListType = (t: string): boolean => t === 'ListBox' || t === 'ComboBox';
+const isBrowserType = (t: string): boolean => t === 'DirListBox' || t === 'FileListBox';
 const num = (v: VBValue): number => coerce(v, 'Long') as number;
 const badIndex = (): VBRuntimeError => new VBRuntimeError(381, 'Invalid property array index');
 
@@ -73,6 +79,13 @@ export class ControlObject implements VBObject {
   /** RichTextBox: the text with its formats (the window gets it as the prop `Runs`) and the format waiting at the insertion point. */
   private runs: Run[] = [];
   private pendingFmt: RtfPatch | null = null;
+  /** DirListBox / FileListBox: the last folder listing, the load in progress (reads of ListCount and List wait for it) and a FileName to select once it is there. */
+  private listing: DirListing | null = null;
+  private loading: Promise<void> | null = null;
+  private loadSeq = 0;
+  private pendingName: string | null = null;
+  /** DriveListBox: the volumes, once known. */
+  private volumes: Volume[] | null = null;
 
   constructor(readonly def: ControlDef, private formKey: string, private queue: PatchQueue, private ctx: RunContext) {
     const td = CONTROL_TYPES[def.type];
@@ -92,6 +105,10 @@ export class ControlObject implements VBObject {
       Object.assign(this.props, { SelBold: f.bold, SelItalic: f.italic, SelUnderline: f.underline,
         SelColor: this.props.ForeColor, SelFontName: f.name, SelFontSize: f.size });
     }
+    if (isBrowserType(def.type)) {
+      this.props.Path = normalizePath(toStr(this.props.Path as string) || this.ctx.files?.defaultPath || '/');
+      this.reload();
+    } else if (def.type === 'DriveListBox') this.loadVolumes();
     if (def.type === 'StatusBar') {
       this.collections.set('panels', makePanels(this.lines('Panels'), (k, _i, at) => this.collectionChanged(k, at)));
     } else if (def.type === 'TabStrip') {
@@ -111,6 +128,68 @@ export class ControlObject implements VBObject {
       this.props.Col = Math.min(Number(this.props.Col), this.grid.cols - 1);
       this.syncGrid();
     }
+  }
+
+  // -- DriveListBox, DirListBox and FileListBox ----------------------------------------------------------------
+
+  private loadVolumes(): void {
+    this.ctx.files?.listVolumes().then(v => {
+      if (!v.length) return;
+      this.volumes = v;
+      this.props.Drives = v.map(x => joinFields([x.path, x.name]));
+      this.send({ Drives: this.props.Drives });
+    }).catch(() => { /* the default drive "/" stays */ });
+  }
+
+  /** Reads the folder in `Path`; the lists follow when it is there (an unreadable folder is an empty list). */
+  private reload(): void {
+    const files = this.ctx.files;
+    if (!files) return;
+    const seq = ++this.loadSeq, path = String(this.props.Path);
+    const p: Promise<void> = new Promise<DirListing>(r => r(files.listDir(path)))
+      .catch((): DirListing => ({ dirs: [], files: [] }))
+      .then(l => {
+        if (seq !== this.loadSeq) return;
+        this.listing = l;
+        this.send(this.listProps());
+      })
+      .finally(() => { if (this.loading === p) this.loading = null; });
+    this.loading = p;
+  }
+
+  /** Resolves when no folder is being read (a newer read replaces an older one). */
+  private settled(): Promise<void> {
+    const p = this.loading;
+    return p ? p.then(() => this.settled()) : Promise.resolve();
+  }
+
+  /** List and ListIndex from the listing and the current Path / Pattern / Hidden / Normal / Archive; stored here, the caller sends them. */
+  private listProps(): Record<string, PropValue> {
+    const p = this.props, l = this.listing;
+    const list = !l ? [] : this.def.type === 'DirListBox' ? subDirs(String(p.Path), l.dirs)
+      : filterFiles(l.files, { pattern: toStr(p.Pattern as string), hidden: p.Hidden === true, normal: p.Normal === true, archive: p.Archive === true });
+    let index = -1;
+    if (this.pendingName !== null) { const n = this.pendingName.toLowerCase(); index = list.findIndex(x => x.toLowerCase() === n); this.pendingName = null; }
+    p.List = list;
+    p.ListIndex = index;
+    return { List: list, ListIndex: index };
+  }
+
+  /** FileListBox.FileName = "x" selects the file; "folder/x" also changes Path. */
+  private setFileName(name: string): void {
+    const slash = name.lastIndexOf('/');
+    if (slash >= 0) this.write(this.propDef('Path'), name.slice(0, slash) || '/');
+    this.pendingName = slash >= 0 ? name.slice(slash + 1) : name;
+    if (this.loading) return;
+    this.send(this.listProps());
+  }
+
+  /** Drive = "x": the volume it names (or holds); error 68 when there is none. */
+  private driveValue(v: string): string {
+    if (!this.volumes) return v;
+    const vol = findVolume(this.volumes, v);
+    if (!vol) throw new VBRuntimeError(68);
+    return vol.path;
   }
 
   // -- TreeView, ListView and MSFlexGrid: what the window gets ---------------------------------------------------
@@ -251,6 +330,7 @@ export class ControlObject implements VBObject {
 
   /** State reported by the window (user input). Updates the mirror without sending a patch back. */
   applyState(props: Record<string, PropValue>): void {
+    const oldPath = this.props.Path;
     for (const [k, v] of Object.entries(props)) {
       if (k === 'SelectedNode' || k === 'SelectedIndex') this.selItem = this.collections.get(k === 'SelectedNode' ? 'nodes' : 'listitems')?.find(Number(v)) ?? null;
       else if (k === 'Toggled') {   // 'index|0 or 1': a node was expanded / collapsed by a click on the +/- box
@@ -262,6 +342,7 @@ export class ControlObject implements VBObject {
       }
       this.props[getPropDef(this.def.type, k)?.name ?? k] = v;
     }
+    if (isBrowserType(this.def.type) && 'Path' in props && this.props.Path !== oldPath) this.reload();   // a folder opened by a double click
     if (this.def.type === 'RichTextBox') {   // the user typed, or moved the selection
       if ('Runs' in props) this.runs = decodeRuns(String(props.Runs ?? '')) ?? (this.props.Text ? [{ text: String(this.props.Text), fmt: {} }] : []);
       if ('SelStart' in props || 'SelLength' in props) this.pendingFmt = null;
@@ -295,6 +376,15 @@ export class ControlObject implements VBObject {
       return this.selItem?.owner ? this.selItem : Nothing;
     }
     if (this.grid) { const v = this.gridGet(l, args); if (v !== undefined) return v; }
+    if (isBrowserType(this.def.type) && this.loading && (pd.name === 'List' || pd.name === 'ListCount')) {
+      return this.settled().then(() => this.getMember(name, args)) as unknown as VBValue;   // the interpreter waits for a Promise
+    }
+    if (this.def.type === 'DirListBox' && pd.name === 'List') {
+      if (args.length !== 1) throw new VBRuntimeError(450);
+      const v = dirListItem(String(this.props.Path), this.list(), num(args[0]));
+      if (v === undefined) throw badIndex();
+      return v;
+    }
     if (pd.kind === 'list') return this.getListItem(args);
     if (pd.name === 'Selected') return this.selected(args);
     if (args.length) throw new VBRuntimeError(450);
@@ -319,6 +409,11 @@ export class ControlObject implements VBObject {
       const tab = this.collections.get('tabs')?.items().find(t => t === value);
       if (!tab) throw new VBRuntimeError(5);
       this.selectTab(tab.index);
+      return;
+    }
+    if (pd.name === 'FileName' && this.def.type === 'FileListBox') {
+      if (args.length) throw new VBRuntimeError(450);
+      this.setFileName(toStr(this.plain(value)));
       return;
     }
     if (this.grid && this.gridSet(name.toLowerCase(), args, value)) return;
@@ -359,6 +454,10 @@ export class ControlObject implements VBObject {
       case 'showopen': case 'showsave': return this.showFile(l === 'showopen');
       case 'showcolor': return this.showColor();
       case 'showfont': return this.showFont();
+      case 'refresh':
+        if (!isBrowserType(this.def.type)) return Empty;
+        this.reload();
+        return this.settled().then(() => Empty);
       default: return Empty;   // Refresh, ZOrder: nothing to do in the renderer
     }
   }
@@ -393,6 +492,9 @@ export class ControlObject implements VBObject {
         return t.substr(s, n);
       }
       case 'Name': return this.def.name;
+      case 'FileName':
+        if (this.def.type === 'FileListBox') { const i = this.props.ListIndex as number; return i >= 0 ? this.list()[i] ?? '' : ''; }
+        break;
     }
     return this.props[pd.name];
   }
@@ -458,6 +560,8 @@ export class ControlObject implements VBObject {
     const patch: Record<string, PropValue> = {};
     const name = pd.name;
     const old = this.props[name === 'SelText' ? 'Text' : name];
+    if (name === 'Path' && isBrowserType(this.def.type)) v = resolvePath(String(old), String(v));
+    else if (name === 'Drive' && this.def.type === 'DriveListBox') v = this.driveValue(String(v));
     if (this.def.type === 'RichTextBox' && this.writeRich(pd, v, patch)) {
       // handled: the text with its formats is kept here, the window gets it as Runs
     } else if (name === 'SelText') {
@@ -469,6 +573,10 @@ export class ControlObject implements VBObject {
     } else {
       this.props[name] = v;
       patch[name] = v;
+      if (isBrowserType(this.def.type) && v !== old) {
+        if (name === 'Path') { Object.assign(patch, { List: [], ListIndex: -1 }); Object.assign(this.props, { List: [], ListIndex: -1 }); this.reload(); }
+        else if (this.def.type === 'FileListBox' && (name === 'Pattern' || name === 'Hidden' || name === 'Normal' || name === 'Archive')) Object.assign(patch, this.listProps());
+      }
       if (name === 'ListIndex') {
         const i = v as number;
         if (this.def.type === 'ComboBox') { this.props.Text = i >= 0 ? this.list()[i] : ''; patch.Text = this.props.Text; }

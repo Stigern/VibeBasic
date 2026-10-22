@@ -4,7 +4,8 @@ export type ControlType = 'Form' | 'CommandButton' | 'Label' | 'TextBox' | 'Chec
   | 'ListBox' | 'ComboBox' | 'PictureBox' | 'Image' | 'Timer' | 'HScrollBar' | 'VScrollBar' | 'ProgressBar'
   | 'Shape' | 'Line' | 'Slider' | 'UpDown' | 'StatusBar' | 'TabStrip'
   | 'TreeView' | 'ListView' | 'MSFlexGrid'
-  | 'CommonDialog' | 'RichTextBox';
+  | 'CommonDialog' | 'RichTextBox'
+  | 'DriveListBox' | 'DirListBox' | 'FileListBox';
 export interface FontValue { name: string; size: number; bold: boolean; italic: boolean; underline: boolean }
 export interface PictureRef { asset: string }                 // key in Project.assets
 export type PropValue = string | number | boolean | string[] | FontValue | PictureRef | null;

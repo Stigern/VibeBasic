@@ -13,7 +13,7 @@
 
 import { emitTo, listen } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { getBackend } from '../backend/backend';
+import { getBackend, type DirListing, type Volume } from '../backend/backend';
 import type { FontValue } from '../model/types';
 import { runFileDialog, type FileDialogRequest } from './commonDialog';
 import type { DialogSpec } from './dialogSpec';
@@ -233,6 +233,10 @@ export class TauriFormHost implements FormHost {
       if (--this.openDialogs === 0) for (const f of this.forms) f.apply();
     }
   }
+
+  /** The file controls: the calls go from this (main) window, so the form windows need no permissions for them. */
+  listVolumes(): Promise<Volume[]> { return getBackend().listVolumes(); }
+  listDir(path: string): Promise<DirListing> { return getBackend().listDir(path); }
 
   async colorDialog(o: { color: number }): Promise<number | null> {
     const r = String(await this.dialog({ kind: 'color', ...o }, ''));
