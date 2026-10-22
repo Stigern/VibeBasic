@@ -148,6 +148,35 @@ export function moveResizeCmd(formId: string, rects: Rect[]): Command {
   };
 }
 
+/** Moves controls into another container (or the form: `parentId` null). Left/Top are relative to the new parent. */
+export function reparentCmd(formId: string, items: { id: string; parentId: string | null; left: number; top: number }[]): Command {
+  const changes = items.map(i => ({ ...i }));
+  let old: { id: string; parentId: string | null; left: PropValue | undefined; top: PropValue | undefined }[] = [];
+  return {
+    label: changes.length === 1 ? 'Move control' : `Move ${changes.length} controls`,
+    do(p) {
+      const f = formOf(p, formId);
+      const targets = changes.map(ch => controlOf(f, ch.id));
+      for (const ch of changes) {
+        if (ch.parentId === null) continue;
+        controlOf(f, ch.parentId);
+        if (withDescendants(f, [ch.id]).has(ch.parentId)) throw new Error('A control cannot be placed inside itself');
+      }
+      old = targets.map(c => ({ id: c.id, parentId: c.parentId, left: c.props.Left, top: c.props.Top }));
+      changes.forEach((ch, i) => { targets[i].parentId = ch.parentId; targets[i].props.Left = ch.left; targets[i].props.Top = ch.top; });
+    },
+    undo(p) {
+      const f = formOf(p, formId);
+      const targets = old.map(o => controlOf(f, o.id));
+      for (let i = old.length - 1; i >= 0; i--) {
+        targets[i].parentId = old[i].parentId;
+        targets[i].props.Left = old[i].left as PropValue;
+        targets[i].props.Top = old[i].top as PropValue;
+      }
+    },
+  };
+}
+
 export function setPropertyCmd(formId: string, targetId: string | 'form', name: string, value: PropValue): Command {
   const newValue = clone(value);
   let had = false;

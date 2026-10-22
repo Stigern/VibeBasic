@@ -1,0 +1,554 @@
+// The interactive form designer: an MDI window around a design-mode FormSurface plus a selection overlay.
+// Pointer gestures preview with ghost outlines and commit ONE command on release; the surface follows the model
+// through 'project' events (so undo/redo and the Properties window need no special handling here).
+import { formMetrics, renderFormSurface, type FormSurface } from '../controls/render';
+import {
+  addControlsCmd, compositeCmd, deleteControlsCmd, moveResizeCmd, renameCmd, reparentCmd, setPropertyCmd, zOrderCmd, type Command,
+} from '../model/commands';
+import { CONTROL_TYPES, newControl, nextDefaultName, newId } from '../model/controls';
+import { pxToTwips, twipsToPx } from '../model/twips';
+import type { ControlDef, ControlType, FormDef, PropValue } from '../model/types';
+import { messageBox98, vbYes } from '../ui98/dialogs';
+import { h } from '../ui98/dom';
+import { createMdiWindow, type MdiWindow } from '../ui98/mdiWindow';
+import { clipboardHasControls, getClipboard, setClipboard } from './clipboard';
+import {
+  absoluteRect, alignRects, computeMove, computeResize, containerAt, controlsInRect, hasSize, hitTest, sizeOf,
+  type AlignHow, type Handle, type Rect, type SnapOpts,
+} from './designerLogic';
+import type { IdeState } from './ideState';
+import type { IdeActions } from './menus';
+import './designer.css';
+
+export interface DesignerEnv { mdiHost: HTMLElement; actions?: IdeActions }
+interface Designer { win: MdiWindow; formId: string; placeCentered(tool: ControlType): void }
+
+/** Window frame around the body (borders + title bar) and the margin that keeps the form's own handles visible. */
+const MDI_CHROME_W = 8, MDI_CHROME_H = 30, STAGE_PAD = 6, DRAG_THRESHOLD = 3, VB_YESNO = 4, VB_QUESTION = 32;
+const designers = new WeakMap<IdeState, Map<string, Designer>>();
+const registryOf = (ide: IdeState): Map<string, Designer> => {
+  let m = designers.get(ide);
+  if (!m) designers.set(ide, m = new Map());
+  return m;
+};
+
+const formOf = (ide: IdeState, id: string): FormDef | undefined => ide.project.forms.find(f => f.id === id);
+const snapOpts = (ide: IdeState): SnapOpts => ({ grid: ide.options.gridWidth, gridY: ide.options.gridHeight, snap: ide.options.alignToGrid });
+const isEditable = (t: EventTarget | null): boolean => {
+  const e = t as HTMLElement | null;
+  return !!e && (e.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(e.tagName ?? ''));
+};
+const relRect = (c: ControlDef): Rect => ({ left: Number(c.props.Left) || 0, top: Number(c.props.Top) || 0, ...sizeOf(c) });
+
+/** Selected ids that still exist, minus those whose ancestor is also selected (the ancestor carries them). */
+function topLevelOf(form: FormDef, ids: string[]): string[] {
+  const set = new Set(ids), map = new Map(form.controls.map(c => [c.id, c]));
+  return ids.filter(id => {
+    for (let p = map.get(id)?.parentId, n = 0; p && n < 64; p = map.get(p)?.parentId, n++) if (set.has(p)) return false;
+    return map.has(id);
+  });
+}
+
+export function placeControlCentered(ide: IdeState, tool: ControlType | 'Pointer'): void {
+  if (tool === 'Pointer' || ide.activeView.kind !== 'designer') return;
+  registryOf(ide).get(ide.activeView.formId)?.placeCentered(tool);
+}
+
+export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): MdiWindow {
+  const reg = registryOf(ide);
+  const existing = reg.get(formId);
+  if (existing) {
+    existing.win.activate();
+    ide.setActiveView({ kind: 'designer', formId });
+    return existing.win;
+  }
+  const form0 = formOf(ide, formId);
+  if (!form0) throw new Error(`Form not found: ${formId}`);
+  const getForm = (): FormDef | undefined => formOf(ide, formId);
+  const assets = (ref: { asset: string }): string | null => {
+    const a = ide.project.assets[ref.asset];
+    return a ? `data:${a.mime};base64,${a.dataBase64}` : null;
+  };
+  const grid = () => ({ showGrid: ide.options.showGrid, gridX: ide.options.gridWidth, gridY: ide.options.gridHeight });
+  const surface: FormSurface = renderFormSurface(structuredClone(form0), 'design', assets, grid());
+  const stage = h('div', { class: 'dsg-stage', tabindex: '0' });
+  const overlay = h('div', { class: 'dsg-overlay' });
+  stage.append(surface.el, overlay);
+  const title = () => `${ide.project.name} - ${getForm()?.name ?? ''} (Form)`;
+  const open = reg.size;
+  const win = createMdiWindow(env.mdiHost, { title: title(), x: 20 + 24 * open, y: 20 + 24 * open, width: 0, height: 0, resizable: true });
+  win.body.appendChild(stage);
+  let closed = false;
+
+  const layoutStage = () => {
+    const m = formMetrics(getForm()?.props ?? {});
+    stage.style.width = `${m.outerWidth + STAGE_PAD}px`;
+    stage.style.height = `${m.outerHeight + STAGE_PAD}px`;
+  };
+  layoutStage();
+  {
+    const m = formMetrics(form0.props);
+    win.el.style.width = `${m.outerWidth + STAGE_PAD + MDI_CHROME_W}px`;
+    win.el.style.height = `${m.outerHeight + STAGE_PAD + MDI_CHROME_H}px`;
+  }
+
+  // ---- model -> surface sync ----------------------------------------------------------------------------------
+  const snapshot = (c: ControlDef) => JSON.stringify(c.props);
+  let lastForm = JSON.stringify(form0.props);
+  const last = new Map(form0.controls.map(c => [c.id, { json: snapshot(c), props: structuredClone(c.props) }]));
+  let lastStruct = form0.controls.map(c => `${c.id}:${c.parentId}`).join('|');
+  const dflt = (type: ControlType, k: string): PropValue =>
+    CONTROL_TYPES[type].props.find(p => p.name === k)?.default ?? null;
+  const diff = (type: ControlType, a: Record<string, PropValue>, b: Record<string, PropValue>): Record<string, PropValue> => {
+    const out: Record<string, PropValue> = {};
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) out[k] = structuredClone(k in b ? b[k] : dflt(type, k));
+    }
+    return out;
+  };
+  function sync(): void {
+    if (closed) return;
+    const form = getForm();
+    if (!form) { win.close(); return; }
+    win.setTitle(title());
+    const cur = new Set(form.controls.map(c => c.id));
+    for (const id of [...last.keys()]) if (!cur.has(id)) { surface.removeControl(id); last.delete(id); }
+    form.controls.forEach((c, i) => {
+      const prev = last.get(c.id);
+      if (!prev) { surface.addControl(structuredClone(c), i); }
+      else if (prev.json !== snapshot(c)) { const d = diff(c.type, prev.props, c.props); if (Object.keys(d).length) surface.update(c.id, d); }
+      last.set(c.id, { json: snapshot(c), props: structuredClone(c.props) });
+    });
+    const struct = form.controls.map(c => `${c.id}:${c.parentId}`).join('|');
+    if (struct !== lastStruct) { surface.reorder(structuredClone(form.controls)); lastStruct = struct; }
+    const fj = JSON.stringify(form.props);
+    if (fj !== lastForm) {
+      surface.update('form', diff('Form', JSON.parse(lastForm), form.props));
+      lastForm = fj;
+      layoutStage();
+    }
+    if (ide.selection?.formId === formId) {
+      const ids = ide.selection.ids.filter(i => cur.has(i));
+      if (ids.length !== ide.selection.ids.length) { ide.setSelection({ formId, ids }); return; }
+    }
+    drawOverlay();
+  }
+
+  // ---- selection ----------------------------------------------------------------------------------------------
+  const selectedIds = (): string[] => (ide.selection?.formId === formId ? ide.selection.ids : []);
+  const select = (ids: string[]) => ide.setSelection({ formId, ids });
+  const activate = () => {
+    if (ide.activeView.kind !== 'designer' || ide.activeView.formId !== formId) ide.setActiveView({ kind: 'designer', formId });
+    if (ide.selection?.formId !== formId) select([]);
+  };
+  const origin = () => {
+    const m = formMetrics(getForm()?.props ?? {});
+    return { x: m.border, y: m.border + m.titleHeight, m };
+  };
+
+  // ---- overlay ------------------------------------------------------------------------------------------------
+  let ghosts: Rect[] | null = null;   // preview rects in form client twips, or form outer rect when `ghostForm`
+  let ghostForm = false;
+  const HANDLES: Handle[] = ['nw', 'n', 'ne', 'w', 'e', 'sw', 's', 'se'];
+  const CURSORS: Record<Handle, string> = { n: 'ns', s: 'ns', e: 'ew', w: 'ew', ne: 'nesw', sw: 'nesw', nw: 'nwse', se: 'nwse' };
+  function drawOverlay(): void {
+    overlay.textContent = '';
+    const form = getForm();
+    if (!form || closed) return;
+    const o = origin();
+    const box = (cls: string, x: number, y: number, w: number, hh: number) =>
+      overlay.appendChild(h('div', { class: cls, style: { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${hh}px` } }));
+    if (ghosts) {
+      for (const g of ghosts) {
+        if (ghostForm) box('dsg-ghost', 0, 0, twipsToPx(g.width), twipsToPx(g.height));
+        else box('dsg-ghost', o.x + twipsToPx(g.left), o.y + twipsToPx(g.top), twipsToPx(g.width), twipsToPx(g.height));
+      }
+      return;
+    }
+    if (ide.selection?.formId !== formId) return;
+    const handle = (hd: Handle, cx: number, cy: number, cls: string, id: string) =>
+      overlay.appendChild(h('div', {
+        class: `dsg-h ${cls}`, 'data-handle': hd, 'data-id': id,
+        style: { left: `${cx - 3}px`, top: `${cy - 3}px`, cursor: `${CURSORS[hd]}-resize` },
+      }));
+    const ids = selectedIds();
+    if (!ids.length) {   // the form: right, bottom and corner handles
+      const w = o.m.outerWidth, hh = o.m.outerHeight;
+      handle('e', w, hh / 2, 'filled', 'form'); handle('s', w / 2, hh, 'filled', 'form'); handle('se', w, hh, 'filled', 'form');
+      return;
+    }
+    const primary = ids[ids.length - 1];
+    for (const id of ids) {
+      const c = form.controls.find(x => x.id === id);
+      if (!c) continue;
+      const r = absoluteRect(form, id);
+      const x = o.x + twipsToPx(r.left), y = o.y + twipsToPx(r.top), w = twipsToPx(r.width), hh = twipsToPx(r.height);
+      box('dsg-sel', x, y, w, hh);
+      if (!hasSize(c)) continue;   // Timer: fixed size
+      const filled = ids.length === 1 || id === primary ? 'filled' : 'hollow';
+      const xs = { w: x, e: x + w, c: x + w / 2 }, ys = { n: y, s: y + hh, c: y + hh / 2 };
+      for (const hd of HANDLES) {
+        handle(hd, hd.includes('w') ? xs.w : hd.includes('e') ? xs.e : xs.c, hd.includes('n') ? ys.n : hd.includes('s') ? ys.s : ys.c, filled, id);
+      }
+    }
+  }
+
+  // ---- pointer gestures ---------------------------------------------------------------------------------------
+  const toTwips = (e: MouseEvent) => {
+    const r = surface.clientEl.getBoundingClientRect();
+    return { x: pxToTwips(e.clientX - r.left), y: pxToTwips(e.clientY - r.top) };
+  };
+  const doc = stage.ownerDocument;
+  let cancel: (() => void) | null = null;
+  /** Runs a drag: `move` gets the total pixel delta and the event; `up(moved)` commits. Escape cancels. */
+  function track(e: MouseEvent, move: (dx: number, dy: number, ev: MouseEvent) => void, up: (moved: boolean, ev: MouseEvent) => void): void {
+    const sx = e.clientX, sy = e.clientY;
+    let moved = false;
+    const end = () => {
+      doc.removeEventListener('pointermove', onMove, true);
+      doc.removeEventListener('pointerup', onUp, true);
+      doc.removeEventListener('keydown', onKey, true);
+      cancel = null;
+      ghosts = null; ghostForm = false;
+    };
+    const onMove = (ev: Event) => {
+      const m = ev as MouseEvent;
+      if (!moved && Math.hypot(m.clientX - sx, m.clientY - sy) < DRAG_THRESHOLD) return;
+      moved = true;
+      move(m.clientX - sx, m.clientY - sy, m);
+      drawOverlay();
+    };
+    const onUp = (ev: Event) => { end(); up(moved, ev as MouseEvent); drawOverlay(); };
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { end(); drawOverlay(); } };
+    cancel = () => { end(); drawOverlay(); };
+    doc.addEventListener('pointermove', onMove, true);
+    doc.addEventListener('pointerup', onUp, true);
+    doc.addEventListener('keydown', onKey, true);
+  }
+
+  function startDraw(e: MouseEvent, tool: Exclude<ControlType, 'Form'>, form: FormDef): void {
+    const p0 = toTwips(e), so = snapOpts(ide);
+    const sx = (v: number) => Math.round(v / so.grid) * so.grid, sy = (v: number) => Math.round(v / (so.gridY ?? so.grid)) * (so.gridY ?? so.grid);
+    const rectFor = (p: { x: number; y: number }, moved: boolean): Rect => {
+      const x0 = so.snap ? sx(p0.x) : p0.x, y0 = so.snap ? sy(p0.y) : p0.y;
+      const x1 = so.snap ? sx(p.x) : p.x, y1 = so.snap ? sy(p.y) : p.y;
+      const w = Math.abs(x1 - x0), hh = Math.abs(y1 - y0);
+      if (!moved || !w || !hh) return { left: x0, top: y0, width: CONTROL_TYPES[tool].defaultWidth, height: CONTROL_TYPES[tool].defaultHeight };
+      return { left: Math.min(x0, x1), top: Math.min(y0, y1), width: w, height: hh };
+    };
+    track(e, (_dx, _dy, ev) => { ghosts = [rectFor(toTwips(ev), true)]; },
+      (moved, ev) => {
+        const r = rectFor(toTwips(ev), moved);
+        const parentId = containerAt(form, p0.x, p0.y, []);
+        const po = parentId ? absoluteRect(form, parentId) : { left: 0, top: 0 };
+        const def = newControl(form, tool, { left: r.left - po.left, top: r.top - po.top, width: r.width, height: r.height }, parentId);
+        ide.stack.execute(addControlsCmd(formId, [def]));
+        select([def.id]);
+        ide.setTool('Pointer');
+      });
+  }
+
+  function startMove(e: MouseEvent, form: FormDef, primaryId: string): void {
+    const ids = topLevelOf(form, selectedIds());
+    const movable = [primaryId, ...ids.filter(i => i !== primaryId)].filter(i => ids.includes(i));
+    if (!movable.length) return;
+    const orig = movable.map(id => ({ id, abs: absoluteRect(form, id), parentId: form.controls.find(c => c.id === id)!.parentId }));
+    let result: { parentId: string | null; rects: Rect[] } | null = null;
+    track(e, (dx, dy, ev) => {
+      const p = toTwips(ev);
+      const parentId = containerAt(form, p.x, p.y, movable);
+      const po = parentId ? absoluteRect(form, parentId) : { left: 0, top: 0 };
+      const rel = orig.map(o => ({ ...o.abs, left: o.abs.left - po.left, top: o.abs.top - po.top }));
+      const rects = computeMove(rel, pxToTwips(dx), pxToTwips(dy), snapOpts(ide));
+      result = { parentId, rects };
+      ghosts = rects.map(r => ({ ...r, left: r.left + po.left, top: r.top + po.top }));
+    }, moved => {
+      if (!moved || !result) return;
+      const { parentId, rects } = result as { parentId: string | null; rects: Rect[] };
+      const sameParent = orig.every(o => o.parentId === parentId);
+      const unchanged = sameParent && orig.every((o, i) => {
+        const c = form.controls.find(x => x.id === o.id)!;
+        return Number(c.props.Left) === rects[i].left && Number(c.props.Top) === rects[i].top;
+      });
+      if (unchanged) return;
+      ide.stack.execute(sameParent
+        ? moveResizeCmd(formId, orig.map((o, i) => ({ id: o.id, ...rects[i] })))
+        : reparentCmd(formId, orig.map((o, i) => ({ id: o.id, parentId, left: rects[i].left, top: rects[i].top }))));
+    });
+  }
+
+  /** Resizes every selected sized control by what the primary's handle did. */
+  function resizedRects(form: FormDef, hd: Handle, primaryId: string, dx: number, dy: number): { id: string; rect: Rect }[] {
+    const so = snapOpts(ide);
+    const ids = topLevelOf(form, selectedIds()).filter(i => hasSize(form.controls.find(c => c.id === i)!));
+    const prim = form.controls.find(c => c.id === primaryId)!;
+    const pr = relRect(prim), nr = computeResize(pr, hd, dx, dy, so);
+    return ids.map(id => {
+      const r = relRect(form.controls.find(c => c.id === id)!);
+      if (id === primaryId) return { id, rect: nr };
+      return { id, rect: {
+        left: r.left + nr.left - pr.left, top: r.top + nr.top - pr.top,
+        width: Math.max(so.grid, r.width + nr.width - pr.width), height: Math.max(so.gridY ?? so.grid, r.height + nr.height - pr.height) } };
+    });
+  }
+
+  function startResize(e: MouseEvent, form: FormDef, hd: Handle, id: string): void {
+    if (ide.controlsLocked) return;
+    if (id === 'form') {
+      const fr: Rect = { left: 0, top: 0, width: Number(form.props.Width) || 0, height: Number(form.props.Height) || 0 };
+      let nr = fr;
+      track(e, (dx, dy) => {
+        nr = computeResize(fr, hd, pxToTwips(dx), pxToTwips(dy), snapOpts(ide));
+        ghosts = [nr]; ghostForm = true;
+      }, moved => {
+        if (!moved) return;
+        const cmds: Command[] = [];
+        if (nr.width !== fr.width) cmds.push(setPropertyCmd(formId, 'form', 'Width', nr.width));
+        if (nr.height !== fr.height) cmds.push(setPropertyCmd(formId, 'form', 'Height', nr.height));
+        if (cmds.length) ide.stack.execute(cmds.length === 1 ? cmds[0] : compositeCmd('Resize form', cmds));
+      });
+      return;
+    }
+    let res: { id: string; rect: Rect }[] = [];
+    track(e, (dx, dy) => {
+      res = resizedRects(form, hd, id, pxToTwips(dx), pxToTwips(dy));
+      ghosts = res.map(r => {
+        const a = absoluteRect(form, r.id), c = relRect(form.controls.find(x => x.id === r.id)!);
+        return { ...r.rect, left: r.rect.left + a.left - c.left, top: r.rect.top + a.top - c.top };
+      });
+    }, moved => { if (moved && res.length) ide.stack.execute(moveResizeCmd(formId, res.map(r => ({ id: r.id, ...r.rect })))); });
+  }
+
+  function startBand(e: MouseEvent, form: FormDef): void {
+    const p0 = toTwips(e);
+    const rectOf = (ev: MouseEvent): Rect => {
+      const p = toTwips(ev);
+      return { left: Math.min(p0.x, p.x), top: Math.min(p0.y, p.y), width: Math.abs(p.x - p0.x), height: Math.abs(p.y - p0.y) };
+    };
+    track(e, (_dx, _dy, ev) => { ghosts = [rectOf(ev)]; },
+      (moved, ev) => select(moved ? controlsInRect(form, rectOf(ev), null) : []));
+  }
+
+  stage.addEventListener('pointerdown', ev => {
+    const e = ev as PointerEvent;
+    if (e.button !== 0 || ide.mode !== 'design' || cancel) return;
+    const form = getForm();
+    if (!form) return;
+    stage.focus({ preventScroll: true });
+    activate();
+    const tgt = e.target as Element;
+    const hEl = tgt.closest?.('[data-handle]') as HTMLElement | null;
+    if (hEl) { e.preventDefault(); startResize(e, form, hEl.dataset.handle as Handle, hEl.dataset.id ?? ''); return; }
+    const p = toTwips(e), m = origin().m;
+    const inClient = p.x >= 0 && p.y >= 0 && p.x < pxToTwips(m.clientWidth) && p.y < pxToTwips(m.clientHeight);
+    if (!inClient) { select([]); return; }
+    e.preventDefault();
+    if (ide.currentTool !== 'Pointer') { startDraw(e, ide.currentTool as Exclude<ControlType, 'Form'>, form); return; }
+    const hit = hitTest(form, p.x, p.y);
+    if (!hit) { startBand(e, form); return; }
+    const ids = selectedIds();
+    const parentOf = (id: string) => form.controls.find(c => c.id === id)?.parentId ?? null;
+    if (e.ctrlKey || e.shiftKey || e.metaKey) {
+      select(ids.includes(hit) ? ids.filter(i => i !== hit)
+        : [...ids.filter(i => parentOf(i) === parentOf(hit)), hit]);
+      return;
+    }
+    if (!ids.includes(hit)) select([hit]);
+    else if (ids[ids.length - 1] !== hit) select([...ids.filter(i => i !== hit), hit]);
+    if (!ide.controlsLocked) startMove(e, form, hit);
+  });
+
+  stage.addEventListener('dblclick', ev => {
+    const form = getForm();
+    if (!form || ide.mode !== 'design' || (ev.target as Element).closest?.('[data-handle]')) return;
+    const p = toTwips(ev as MouseEvent), hit = hitTest(form, p.x, p.y);
+    const c = hit ? form.controls.find(x => x.id === hit) : undefined;
+    if (hit) select([hit]);
+    env.actions?.viewCode?.(form.id, c ? c.name : 'Form', CONTROL_TYPES[c ? c.type : 'Form'].defaultEvent);
+  });
+
+  stage.addEventListener('keydown', ev => {
+    const form = getForm();
+    if (!form || ide.mode !== 'design' || isEditable(ev.target) || ide.controlsLocked) return;
+    const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[ev.key];
+    const ctrl = ev.ctrlKey || ev.metaKey;
+    if (!dir || (!ctrl && !ev.shiftKey)) return;
+    const ids = topLevelOf(form, selectedIds());
+    if (!ids.length) return;
+    ev.preventDefault();
+    const so = snapOpts(ide), gy = so.gridY ?? so.grid;
+    const defs = ids.map(i => form.controls.find(c => c.id === i)!);
+    if (ctrl) {
+      ide.stack.execute(moveResizeCmd(formId, defs.map(c => {
+        const r = relRect(c);
+        return { id: c.id, ...r, left: r.left + dir[0] * so.grid, top: r.top + dir[1] * gy };
+      })));
+    } else {
+      const sized = defs.filter(hasSize);
+      if (!sized.length) return;
+      ide.stack.execute(moveResizeCmd(formId, sized.map(c => {
+        const r = relRect(c);
+        return { id: c.id, ...r, width: Math.max(so.grid, r.width + dir[0] * so.grid), height: Math.max(gy, r.height + dir[1] * gy) };
+      })));
+    }
+  });
+
+  const placeCentered = (tool: ControlType) => {
+    const form = getForm();
+    if (!form || tool === 'Form') return;
+    const td = CONTROL_TYPES[tool], m = formMetrics(form.props), so = snapOpts(ide);
+    const snapv = (v: number, g: number) => (so.snap ? Math.round(v / g) * g : v);
+    const left = snapv((pxToTwips(m.clientWidth) - td.defaultWidth) / 2, so.grid);
+    const top = snapv((pxToTwips(m.clientHeight) - td.defaultHeight) / 2, so.gridY ?? so.grid);
+    const def = newControl(form, tool, { left, top }, null);
+    ide.stack.execute(addControlsCmd(formId, [def]));
+    select([def.id]);
+    ide.setTool('Pointer');
+  };
+
+  // ---- wiring -------------------------------------------------------------------------------------------------
+  const isActive = () => ide.activeView.kind === 'designer' && ide.activeView.formId === formId;
+  ide.on('project', sync);
+  ide.on('selection', () => { if (!closed) drawOverlay(); });
+  ide.on('activeView', () => { if (!closed) surface.setActive(isActive()); });
+  ide.on('options', () => { if (!closed) surface.setGrid(grid()); });
+  ide.on('tool', () => { if (!closed) stage.classList.toggle('dsg-draw', ide.currentTool !== 'Pointer'); });
+  win.el.addEventListener('mousedown', activate, true);
+  win.onClose = () => {
+    cancel?.();
+    closed = true;
+    reg.delete(formId);
+    if (isActive()) ide.setActiveView({ kind: 'none' });
+    return true;
+  };
+  reg.set(formId, { win, formId, placeCentered });
+  win.activate();
+  activate();
+  drawOverlay();
+  return win;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Paste
+
+/** Pastes copies of `defs` into the form: new ids, top-level controls (those whose parent is not in `defs`) with their
+ *  group's top-left corner at (0,0). A name that already exists asks whether to create a control array. */
+export async function pasteControls(ide: IdeState, formId: string, defs: ControlDef[]): Promise<void> {
+  const form = formOf(ide, formId);
+  if (!form || !defs.length) return;
+  const idMap = new Map(defs.map(d => [d.id, newId()]));
+  const top = defs.filter(d => !d.parentId || !idMap.has(d.parentId));
+  const minL = Math.min(...top.map(d => Number(d.props.Left) || 0)), minT = Math.min(...top.map(d => Number(d.props.Top) || 0));
+  const work: ControlDef[] = form.controls.map(c => ({ ...c }));
+  const renames: Command[] = [];
+  const answers = new Map<string, boolean>();
+  const fresh: ControlDef[] = [];
+  const lowestFree = (name: string): number => {
+    const used = new Set(work.filter(w => w.name.toLowerCase() === name.toLowerCase()).map(w => w.index));
+    let i = 0;
+    while (used.has(i)) i++;
+    return i;
+  };
+  for (const d of defs) {
+    const nd: ControlDef = structuredClone(d);
+    nd.id = idMap.get(d.id)!;
+    nd.parentId = d.parentId && idMap.has(d.parentId) ? idMap.get(d.parentId)! : null;
+    if (top.includes(d)) { nd.props.Left = (Number(d.props.Left) || 0) - minL; nd.props.Top = (Number(d.props.Top) || 0) - minT; }
+    const same = work.filter(w => w.name.toLowerCase() === d.name.toLowerCase());
+    const fresh_ = () => { nd.name = nextDefaultName({ ...form, controls: work }, d.type); nd.index = null; };
+    if (same.length) {
+      const sameType = same[0].type === d.type, isArray = same.some(s => s.index !== null);
+      let join = sameType && isArray;
+      if (sameType && !isArray) {
+        const key = d.name.toLowerCase();
+        if (!answers.has(key)) {
+          const r = await messageBox98(document, {
+            prompt: `You already have a control named '${same[0].name}'. Do you want to create a control array?`,
+            title: 'VibeBasic', buttons: VB_YESNO | VB_QUESTION,
+          });
+          answers.set(key, r === vbYes);
+          if (r === vbYes) { renames.push(renameCmd(formId, same[0].id, same[0].name, 0)); same[0].index = 0; }
+        }
+        join = answers.get(key) === true;
+      }
+      if (join) { nd.name = same[0].name; nd.index = lowestFree(nd.name); } else fresh_();
+    }
+    work.push(nd);
+    fresh.push(nd);
+  }
+  const add = addControlsCmd(formId, fresh);
+  ide.stack.execute(renames.length ? compositeCmd('Paste', [...renames, add]) : add);
+  ide.setSelection({ formId, ids: top.map(d => idMap.get(d.id)!) });
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// IDE actions (Edit and Format menus)
+
+export function registerDesignerActions(ide: IdeState, actions: IdeActions, refresh: () => void = () => {}): void {
+  const ctx = (): { form: FormDef; ids: string[] } | null => {
+    if (ide.mode !== 'design' || ide.activeView.kind !== 'designer') return null;
+    const form = formOf(ide, ide.activeView.formId);
+    if (!form || ide.selection?.formId !== form.id) return null;
+    return { form, ids: ide.selection.ids.filter(i => form.controls.some(c => c.id === i)) };
+  };
+  const withIds = (min: number, f: (form: FormDef, ids: string[]) => void) => () => {
+    const c = ctx();
+    if (c && c.ids.length >= min) f(c.form, c.ids);
+  };
+  const copy = (form: FormDef, ids: string[]) => {
+    const tops = topLevelOf(form, ids);
+    const all = new Set(tops);
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const c of form.controls) if (c.parentId && all.has(c.parentId) && !all.has(c.id)) { all.add(c.id); grew = true; }
+    }
+    setClipboard(form.controls.filter(c => all.has(c.id)).map(c => {
+      const d = structuredClone(c);
+      if (tops.includes(c.id)) { const a = absoluteRect(form, c.id); d.parentId = null; d.props.Left = a.left; d.props.Top = a.top; }
+      return d;
+    }));
+    refresh();
+  };
+  const del = (form: FormDef, ids: string[]) => { ide.stack.execute(deleteControlsCmd(form.id, topLevelOf(form, ids))); ide.setSelection({ formId: form.id, ids: [] }); };
+  actions.copy = withIds(1, copy);
+  actions.cut = withIds(1, (f, ids) => { copy(f, ids); del(f, ids); });
+  actions.delete = withIds(1, del);
+  actions.paste = () => {
+    const c = ctx();
+    if (c && clipboardHasControls()) void pasteControls(ide, c.form.id, getClipboard());
+  };
+  actions.selectAll = () => {
+    const c = ctx();
+    if (!c) return;
+    const parent = c.ids.length ? c.form.controls.find(x => x.id === c.ids[0])?.parentId ?? null : null;
+    ide.setSelection({ formId: c.form.id, ids: c.form.controls.filter(x => x.parentId === parent).map(x => x.id) });
+  };
+  const absOf = (form: FormDef, ids: string[]) => ids.map(id => absoluteRect(form, id));
+  const align = (how: AlignHow) => withIds(2, (form, ids) => {
+    const abs = absOf(form, ids), out = alignRects(abs, how);
+    ide.stack.execute(moveResizeCmd(form.id, ids.map((id, i) => {
+      const c = form.controls.find(x => x.id === id)!, r = relRect(c);
+      return { id, ...r, left: r.left + out[i].left - abs[i].left, top: r.top + out[i].top - abs[i].top };
+    })));
+  });
+  Object.assign(actions, {
+    alignLefts: align('lefts'), alignCenters: align('centers'), alignRights: align('rights'),
+    alignTops: align('tops'), alignMiddles: align('middles'), alignBottoms: align('bottoms'),
+  });
+  const same = (w: boolean, hh: boolean) => withIds(2, (form, ids) => {
+    const defs = ids.map(id => form.controls.find(c => c.id === id)!);
+    const p = relRect(defs[defs.length - 1]);
+    const sized = defs.filter(hasSize);
+    if (sized.length < 2) return;
+    ide.stack.execute(moveResizeCmd(form.id, sized.map(c => {
+      const r = relRect(c);
+      return { id: c.id, ...r, width: w ? p.width : r.width, height: hh ? p.height : r.height };
+    })));
+  });
+  actions.sameWidth = same(true, false);
+  actions.sameHeight = same(false, true);
+  actions.sameBoth = same(true, true);
+  actions.bringToFront = withIds(1, (f, ids) => ide.stack.execute(zOrderCmd(f.id, ids, 'front')));
+  actions.sendToBack = withIds(1, (f, ids) => ide.stack.execute(zOrderCmd(f.id, ids, 'back')));
+  actions.lockControls = () => { ide.controlsLocked = !ide.controlsLocked; refresh(); };
+}

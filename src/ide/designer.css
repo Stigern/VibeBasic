@@ -1,0 +1,9 @@
+.dsg-stage { position: relative; outline: none; }
+.dsg-stage.dsg-draw { cursor: crosshair; }
+.dsg-overlay { position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none; z-index: 10; }
+.dsg-overlay > div { position: absolute; box-sizing: border-box; }
+.dsg-h { width: 6px; height: 6px; border: 1px solid #000; pointer-events: auto; }
+.dsg-h.filled { background: #000; }
+.dsg-h.hollow { background: #fff; }
+.dsg-sel { border: 1px dotted #000; }
+.dsg-ghost { border: 1px dashed #000; outline: 1px dashed #fff; }

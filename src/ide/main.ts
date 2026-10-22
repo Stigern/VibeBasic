@@ -1,9 +1,6 @@
 // IDE shell: builds the main window and wires menus, toolbar, Toolbox and the first designer window.
 import type { Backend } from '../backend/backend';
-import { formMetrics, renderFormSurface } from '../controls/render';
 import { newProject } from '../model/controls';
-import type { FormDef } from '../model/types';
-import { createMdiWindow, type MdiWindow } from '../ui98/mdiWindow';
 import { bindShortcuts, createMenubar } from '../ui98/menubar';
 import { createToolbar, type ToolbarItem } from '../ui98/toolbar';
 import { messageBox98, vbOK } from '../ui98/dialogs';
@@ -11,6 +8,7 @@ import { TOOLBAR_ICONS } from './icons/toolbarIcons';
 import { IdeState } from './ideState';
 import { buildLayout, type IdeLayout } from './layout';
 import { buildMenus, type IdeActions } from './menus';
+import { openDesigner, registerDesignerActions } from './designer';
 import { createToolbox } from './toolbox';
 
 export interface Ide { state: IdeState; layout: IdeLayout; actions: IdeActions; menus: ReturnType<typeof buildMenus>; refresh(): void }
@@ -33,6 +31,8 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     about: () => { void messageBox98(doc, { prompt: ABOUT_TEXT, title: 'About VibeBasic', buttons: vbOK }); },
   };
   const menus = buildMenus(actions, state);
+  let refresh = () => {};
+  registerDesignerActions(state, actions, () => refresh());
   const menubar = createMenubar(layout.menubarHost, menus);
 
   const tb = (icon: string, title: string, name: string, pred?: () => boolean): ToolbarItem => ({
@@ -50,32 +50,16 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   createToolbox(layout.toolboxHost, state);
   bindShortcuts(menus, window);
 
-  const refresh = () => { menubar.refresh(); toolbar.refresh(); };
+  refresh = () => { menubar.refresh(); toolbar.refresh(); };
   const updateTitle = () => {
     void backend.setWindowTitle(`${state.project.name} - VibeBasic [${state.mode}]`);
   };
   state.on('project', () => { refresh(); updateTitle(); });
   state.on('mode', () => { refresh(); updateTitle(); });
+  state.on('selection', () => refresh());
+  state.on('activeView', () => refresh());
   updateTitle();
 
-  openFormWindow(state, layout, state.project.forms[0]);
+  openDesigner(state, state.project.forms[0].id, { mdiHost: layout.mdiHost, actions });
   return { state, layout, actions, menus, refresh };
-}
-
-/** Placeholder designer window (Task 7 replaces it with the interactive designer): the form in design mode with grid. */
-export function openFormWindow(state: IdeState, layout: IdeLayout, form: FormDef): MdiWindow {
-  const o = state.options;
-  const surface = renderFormSurface(form, 'design', () => null,
-    { showGrid: o.showGrid, gridX: o.gridWidth, gridY: o.gridHeight });
-  const win = createMdiWindow(layout.mdiHost, {
-    title: `${state.project.name} - ${form.name} (Form)`, x: 20, y: 20, width: 0, height: 0, resizable: true,
-  });
-  win.body.appendChild(surface.el);
-  const m = formMetrics(form.props);
-  win.el.style.width = `${m.outerWidth + 8}px`;
-  win.el.style.height = `${m.outerHeight + 30}px`;
-  win.activate();
-  state.setActiveView({ kind: 'designer', formId: form.id });
-  state.setSelection({ formId: form.id, ids: [] });
-  return win;
 }

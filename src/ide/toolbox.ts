@@ -1,5 +1,6 @@
 import { CONTROL_TYPES, TOOLBOX_ORDER } from '../model/controls';
 import { h } from '../ui98/dom';
+import { placeControlCentered } from './designer';
 import type { IdeState } from './ideState';
 import { TOOLBOX_ICONS } from './icons/toolboxIcons';
 
@@ -12,6 +13,7 @@ export function createToolbox(host: HTMLElement, ide: IdeState): { refresh(): vo
     const btn = h('div', { class: 'tbx98-btn', role: 'button', title, 'data-tool': tool });
     btn.innerHTML = TOOLBOX_ICONS[tool];
     btn.addEventListener('click', () => ide.setTool(tool));
+    btn.addEventListener('dblclick', () => placeControlCentered(ide, tool));
     grid.appendChild(btn);
     buttons.set(tool, btn);
   }
