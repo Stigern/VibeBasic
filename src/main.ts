@@ -1,6 +1,6 @@
 import { getBackend } from './backend/backend';
+import { startIde } from './ide/main';
 
-const app = document.getElementById('app');
-if (app) app.textContent = 'VibeBasic';
-
-void getBackend().showMainWindow();
+const backend = getBackend();
+startIde(backend);
+void backend.showMainWindow();

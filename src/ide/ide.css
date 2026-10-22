@@ -1,0 +1,21 @@
+.ide98 { position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--w98-face); }
+.ide98-main { flex: 1; min-height: 0; display: flex; }
+.ide98-toolbox { flex: none; width: 58px; display: flex; flex-direction: column; }
+.ide98-center { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ide98-mdi { flex: 1; min-height: 0; position: relative; overflow: hidden; background: #808080; box-shadow: var(--w98-sunken); }
+.ide98-right { flex: none; width: 220px; display: flex; flex-direction: column; }
+.ide98-pane { display: flex; flex-direction: column; min-height: 0; }
+.ide98-pane.hidden { display: none; }
+.ide98-pane > .title-bar { flex: none; }
+.ide98-pane-body { flex: 1; min-height: 0; overflow: auto; background: var(--w98-face); }
+.ide98-project { flex: 0 0 45%; }
+.ide98-properties { flex: 1; }
+.ide98-split { flex: none; height: 5px; cursor: row-resize; background: var(--w98-face); }
+.ide98-immediate { flex: none; height: 130px; }
+.ide98-immediate-split { flex: none; height: 4px; cursor: row-resize; }
+.ide98-status { flex: none; height: 18px; box-shadow: var(--w98-sunken); padding: 2px 4px; box-sizing: border-box; }
+.tbx98-grid { display: grid; grid-template-columns: 24px 24px; gap: 0; padding: 4px; justify-content: center; align-content: start; }
+.tbx98-btn { box-sizing: border-box; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border: 1px solid transparent; }
+.tbx98-btn:hover { border-color: #fff #808080 #808080 #fff; }
+.tbx98-btn.checked { border-color: #808080 #fff #fff #808080; background: repeating-conic-gradient(#fff 0% 25%, var(--w98-face) 0% 50%) 0 0 / 2px 2px; }
+.tbx98-btn svg { display: block; width: 16px; height: 16px; }
