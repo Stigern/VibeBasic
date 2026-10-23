@@ -460,7 +460,8 @@ export class RunSession implements Host, FormSession {
 
   /** New ADODB.Connection / Recordset / Command: on the program's databases (a path relative to App.Path). */
   createObject(progId: string): VBObject | undefined {
-    return createAdoObject(progId, { connect: path => this.db().connect(this.resolvePath(path)) });
+    // each Connection code makes has a SQLite connection (and transaction) of its own, as two ADO connections do
+    return createAdoObject(progId, { connect: path => this.db().connectOwn(this.resolvePath(path)) });
   }
 
   /** Command$: in the IDE the project's Command Line Arguments; in a made app its arguments or the file opened with it. */

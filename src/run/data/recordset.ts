@@ -798,7 +798,12 @@ export class RecordsetObject implements VBObject {
         const n = toNumber(coerce(args[0], 'Long'));
         return done(this.moveTo(ACT.bookmark, () => this.movePos(n, args[1])));
       }
-      case 'addnew': return done(this.addNew());
+      case 'addnew': {   // AddNew [FieldList, Values]: with values the new record is posted at once
+        if (args.length > 2) throw new VBRuntimeError(450);
+        if (args[0] === undefined) return done(this.addNew());
+        const fields = this.fieldList(args);
+        return done(this.addNew().then(() => { this.assign(fields); return this.update(); }));
+      }
       case 'edit': {
         this.checkWritable();
         this.current();
@@ -806,7 +811,11 @@ export class RecordsetObject implements VBObject {
         this.buffer.clear();
         return Empty;
       }
-      case 'update': return done(this.update());
+      case 'update': {   // Update [Fields, Values]
+        if (args.length > 2) throw new VBRuntimeError(450);
+        if (args[0] !== undefined) this.assign(this.fieldList(args));
+        return done(this.update());
+      }
       case 'cancelupdate': return done(this.cancelUpdate());
       case 'delete': return done(this.deleteCurrent());
       case 'requery': return done(this.requery());
@@ -845,6 +854,23 @@ export class RecordsetObject implements VBObject {
     }
     await this.moveTo(ACT.bookmark, () => from + n);
     return out;
+  }
+
+  /** AddNew / Update's FieldList and Values: one name (or index) and value, or two arrays of the same length (else 3001). */
+  private fieldList(args: VBValue[]): [VBValue, VBValue][] {
+    const [names, values] = args;
+    if (values === undefined) throw new VBRuntimeError(450);
+    if (!(names instanceof VBArray)) return [[names, values]];
+    const items = (a: VBArray): VBValue[] => (a.bounds.length === 1 ? a.values() : []);
+    const n = items(names);
+    const v = values instanceof VBArray ? items(values) : [];
+    if (!(values instanceof VBArray) || n.length !== v.length || names.bounds.length !== 1)
+      throw new VBRuntimeError(3001, 'Arguments are of the wrong type, are out of acceptable range, or are in conflict with one another.');
+    return n.map((x, i) => [x, v[i]]);
+  }
+
+  private assign(fields: [VBValue, VBValue][]): void {
+    for (const [name, value] of fields) this.setField(this.fieldIndex(name), value);
   }
 
   private async addNew(): Promise<void> {
