@@ -134,7 +134,9 @@ export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, 
   /** The bytes of an opened media file. */
   mediaRead?(token: string): Promise<Uint8Array>;
   mediaClose?(token: string): Promise<void>;
-  /** Small JSON settings (IDE options ...) kept in localStorage under `vibebasic.settings:<key>`. Null when absent. */
+  /** Small JSON settings (IDE options ...) kept in localStorage under `vibebasic.settings:<key>`. Null when absent. In the
+   *  desktop app the 'ai' settings (with the API key) are kept by the Rust side instead, out of reach of the form windows,
+   *  which share the localStorage (src/backend/aiSettingsStore.ts). */
   loadSettings<T>(key: string): Promise<T | null>;
   saveSettings(key: string, v: unknown): Promise<void>;
   setWindowTitle(title: string): Promise<void>;

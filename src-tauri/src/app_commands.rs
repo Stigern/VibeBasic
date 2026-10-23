@@ -7,6 +7,8 @@ pub const APP_COMMANDS: &[&str] = &[
   "ai_list_models",
   "ai_chat",
   "ai_cancel",
+  "ai_settings_get",
+  "ai_settings_set",
   "read_text_file",
   "write_text_file",
   "read_binary_file",

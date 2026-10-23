@@ -7,6 +7,7 @@ import type { AiModel, ChatMessage } from '../ai/types';
 import { dialogFilters } from './dialogFilters';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
 import type { FileAccess, FileMode, FileStat } from '../lang/fileio/fsApi';
+import { AI_SETTINGS_KEY, loadAiSettingsFrom, saveAiSettingsTo, type AiSettingsIo } from './aiSettingsStore';
 
 
 const PROJECT_FILTER: FileFilter = { name: 'VibeBasic Project', extensions: ['vbb'] };
@@ -22,6 +23,16 @@ async function call<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
 /** A raw IPC response (tauri::ipc::Response) is an ArrayBuffer; older shapes are a number array. */
 function bytesOf(r: number[] | ArrayBuffer | Uint8Array): Uint8Array {
   return r instanceof Uint8Array ? r : new Uint8Array(r);
+}
+
+/** The AI settings live on the Rust side (ai_settings.rs), not in localStorage, which the form windows share. */
+const aiSettingsIo: AiSettingsIo = {
+  get: () => call<unknown>('ai_settings_get', {}),
+  set: v => call<void>('ai_settings_set', { settings: v }),
+};
+
+function legacyStorage(): Pick<Storage, 'getItem' | 'removeItem'> | null {
+  try { return localStorage; } catch { return null; }
 }
 
 /** "7|path: the file is too big" -> an Error with the text and `vbNumber` 7 (the IDE shows the text, a running program
@@ -190,6 +201,7 @@ export class TauriBackend implements Backend {
   async mediaClose(token: string): Promise<void> { await call<void>('media_close', { token }); }
 
   async loadSettings<T>(key: string): Promise<T | null> {
+    if (key === AI_SETTINGS_KEY) return loadAiSettingsFrom<T>(aiSettingsIo, legacyStorage());
     try {
       const raw = localStorage.getItem('vibebasic.settings:' + key);
       return raw === null ? null : (JSON.parse(raw) as T);
@@ -197,6 +209,7 @@ export class TauriBackend implements Backend {
   }
 
   async saveSettings(key: string, v: unknown): Promise<void> {
+    if (key === AI_SETTINGS_KEY) return saveAiSettingsTo(aiSettingsIo, legacyStorage(), v);
     try { localStorage.setItem('vibebasic.settings:' + key, JSON.stringify(v)); } catch { /* storage unavailable */ }
   }
 

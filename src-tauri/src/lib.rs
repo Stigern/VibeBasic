@@ -1,4 +1,5 @@
 mod ai;
+mod ai_settings;
 mod clipboard;
 mod comm;
 mod db;
@@ -28,6 +29,8 @@ pub fn run() {
       ai::ai_list_models,
       ai::ai_chat,
       ai::ai_cancel,
+      ai_settings::ai_settings_get,
+      ai_settings::ai_settings_set,
       files::read_text_file,
       files::write_text_file,
       files::read_binary_file,

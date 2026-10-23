@@ -19,6 +19,8 @@
     "allow-ai-list-models",
     "allow-ai-chat",
     "allow-ai-cancel",
+    "allow-ai-settings-get",
+    "allow-ai-settings-set",
     "allow-read-text-file",
     "allow-write-text-file",
     "allow-read-binary-file",
