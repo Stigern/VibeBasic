@@ -1,10 +1,22 @@
 // Which parts of a project refer to an asset (a key in Project.assets): Picture-type properties ({ asset } values) and the
 // ListImages lines of ImageLists ('Key|asset|Tag'). An asset may be deleted only when nothing refers to it any more.
 import { parseListImage } from './imageList';
-import type { Project, PropValue } from './types';
+import type { ControlDef, Project, PropValue } from './types';
 
 const isRef = (v: PropValue | undefined): v is { asset: string } =>
   typeof v === 'object' && v !== null && !Array.isArray(v) && typeof (v as { asset?: unknown }).asset === 'string';
+
+/** The assets a control names (its picture properties and, for an ImageList, its ListImages lines), each once. */
+export function controlAssetIds(c: ControlDef): string[] {
+  const ids = new Set<string>();
+  for (const v of Object.values(c.props)) if (isRef(v)) ids.add(v.asset);
+  const lines = c.type === 'ImageList' ? c.props.ListImages : undefined;
+  if (Array.isArray(lines)) for (const l of lines) { const a = parseListImage(String(l)).asset; if (a) ids.add(a); }
+  return [...ids];
+}
+
+/** The asset a property value names, or null. */
+export const assetOf = (v: PropValue | undefined): string | null => (isRef(v) ? v.asset : null);
 
 /** How many times the forms of `p` name asset `id` (each picture property and each ListImages line counts once). The project
  *  icon is not counted. */

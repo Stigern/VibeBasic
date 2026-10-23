@@ -205,6 +205,28 @@ describe('RunSession', () => {
   });
 });
 
+test('Beep reuses one AudioContext per session and closes it when the session ends', async () => {
+  const made: { close: ReturnType<typeof vi.fn> }[] = [];
+  class FakeAudio {
+    currentTime = 0;
+    destination = {};
+    close = vi.fn(async () => {});
+    constructor() { made.push(this); }
+    createOscillator() { return { frequency: { value: 0 }, connect: (g: unknown) => g, start() {}, stop() {} }; }
+    createGain() { return { gain: { value: 0 }, connect: (d: unknown) => d }; }
+  }
+  vi.stubGlobal('AudioContext', FakeAudio);
+  try {
+    const s = await start(project([{ name: 'Form1', code: 'Private Sub Form_Load()\n    Beep\n    Beep\nEnd Sub' }]));
+    await settle(s);
+    expect(made).toHaveLength(1);
+    s.end();
+    expect(made[0].close).toHaveBeenCalledTimes(1);
+    s.beep();   // after the end: no new context
+    expect(made).toHaveLength(1);
+  } finally { vi.unstubAllGlobals(); }
+});
+
 test('App.EXEName is the project name in the IDE and cb.appName in a made app', async () => {
   const mk = () => { const p = newProject(); p.name = 'Proj'; p.forms = [newForm('Form1', 'Private Sub Form_Load()\nDebug.Print App.EXEName\nEnd Sub')]; p.startupForm = 'Form1'; return p; };
   await start(mk());

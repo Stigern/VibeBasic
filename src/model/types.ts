@@ -9,9 +9,12 @@ export type ControlType = 'Form' | 'CommandButton' | 'Label' | 'TextBox' | 'Chec
   | 'SSTab'
   | 'ImageList' | 'Toolbar'
   | 'DTPicker' | 'MonthView' | 'MaskedEdit'
-  | 'WebBrowser' | 'Inet' | 'Winsock'
+  | 'WebBrowser' | 'Inet' | 'Winsock' | 'MSComm' | 'SysInfo'
   | 'MSChart'
-  | 'MMControl' | 'MediaPlayer' | 'Agent';
+  | 'MMControl' | 'MediaPlayer' | 'Agent'
+  | 'Data' | 'Adodc' | 'DataGrid' | 'DataList' | 'DataCombo'
+  | 'SSPanel' | 'SSCommand' | 'SSCheck' | 'SSOption' | 'SSFrame' | 'SSRibbon'
+  | 'Animation' | 'ImageCombo' | 'CoolBar' | 'FlatScrollBar' | 'Calendar';
 export interface FontValue { name: string; size: number; bold: boolean; italic: boolean; underline: boolean }
 export interface PictureRef { asset: string }                 // key in Project.assets
 export type PropValue = string | number | boolean | string[] | FontValue | PictureRef | null;

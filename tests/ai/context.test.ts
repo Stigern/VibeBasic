@@ -60,6 +60,27 @@ test('form request', () => {
   expect(m[1].content).toContain('Private Sub Command1_Click()');
 });
 test('control types one line per type', () => expect(describeControlTypes()).toContain('CommandButton: Caption, '));
+test('enum properties list their values; the whole system prompt stays within budget', () => {
+  const t = describeControlTypes();
+  expect(t).toContain('Alignment(0 Left,1 Right,2 Center)');
+  expect(t).toContain('ScrollBars(0 None,1 Horizontal,2 Vertical,3 Both)');
+  expect(t).toContain('Style(0 Dropdown Combo,1 Simple Combo,2 Dropdown List)');
+  // looks and layout enums by name only (budget with the 0.8 controls)
+  expect(t).toContain('Label: Caption, Alignment(0 Left,1 Right,2 Center), AutoSize, BackStyle, BackColor, ForeColor, BorderStyle, ');
+  expect(t).not.toContain('Font3D(');
+  expect(t).not.toMatch(/\d - /);
+  expect(t).toContain('MultiLine,');   // booleans stay plain
+  // the standard events as one word each, spelled out once
+  expect(t).toContain('CommandButton: Caption, BackColor, Default, Cancel, Style(0 Standard,1 Graphical), Picture, Font, Value | events: Click, +focus, +keys, +mouse');
+  expect(t).toContain('Timer: Interval | events: Timer');
+  expect(t).toContain('+mouse MouseDown, MouseMove and MouseUp');
+  expect(t).not.toContain('events: \n');
+  const p = project();
+  for (const content of [buildCodeRequest(p, 'm1', 1, 'x')[0].content, buildFormRequest(p, p.forms[0].id, 'x')[0].content]) {
+    // card + control types + rules, at about 3.5 characters per token. 7,000 before the 0.8 components (about 25 more controls)
+    expect(content.length / 3.5).toBeLessThanOrEqual(9000);
+  }
+});
 test('system prompts contain format rules', () => { expect(CODE_SYSTEM_PROMPT).toContain('```vb'); expect(FORM_SYSTEM_PROMPT).toContain('"ops"'); });
 
 test('system prompts are identical for different projects', () => {
@@ -115,6 +136,14 @@ test('language reference: stable, within budget, in both system prompts', () => 
   expect(buildLanguageReference()).toBe(LANGUAGE_REFERENCE);
   for (const name of ['Len', 'Mid', 'MsgBox']) expect(LANGUAGE_REFERENCE).toMatch(new RegExp(`\\b${name}\\b`));
   expect(LANGUAGE_REFERENCE).toContain('vb* (');
+  // 0.8: file I/O and the registry settings are available, Shell is not
+  for (const name of ['SaveSetting', 'GetSetting', 'DeleteSetting', 'FreeFile', 'EOF', 'Kill']) expect(LANGUAGE_REFERENCE).toMatch(new RegExp(`[:,] ${name}\\b`));
+  expect(LANGUAGE_REFERENCE).toContain('Files: Open path For Input|Output|Append|Binary|Random As #n');
+  expect(LANGUAGE_REFERENCE).not.toMatch(/file I\/O|Keep data in variables/i);
+  expect(LANGUAGE_REFERENCE).toMatch(/Not available: .*Shell \(programs cannot be started\)/);
+  // review 08 language additions: built-ins come from the table, statements from the card's own line
+  for (const name of ['IsMissing', 'FormatNumber', 'FormatCurrency', 'FormatPercent', 'Filter', 'CDec', 'IsError', 'CVErr', 'Erl']) expect(LANGUAGE_REFERENCE).toMatch(new RegExp(`[:,] ${name}\\b`));
+  for (const text of ['Mid(s, i, n) = x', 'LSet / RSet', 'Error n', 'New Collection', 'As Long() returns an array']) expect(LANGUAGE_REFERENCE).toContain(text);
   expect(LANGUAGE_REFERENCE.length / 3.5).toBeLessThanOrEqual(1500);
   const p = project();
   expect(buildCodeRequest(p, 'm1', 1, 'x')[0].content).toContain(LANGUAGE_REFERENCE);
@@ -138,6 +167,17 @@ test('project symbols: Public items of the other modules and forms, after the fo
   expect(u.indexOf('Project symbols')).toBeLessThan(u.indexOf('Code of form'));
   expect(buildFormRequest(p, p.forms[0].id, 'x')[1].content).toContain('Module1: Public Function Add(');
   expect(describeProjectSymbols(p, p.forms[0].id, true, 60).split('\n').pop()).toMatch(/more not shown/);
+});
+
+test('project symbols: typed array returns, fixed-length strings and As New are written as declared (review 08 final #7)', () => {
+  const p = project();
+  p.modules[0].code = 'Public Name As String * 20\nPublic Items As New Collection\nPublic Codes() As Long\nPublic Function Nums() As Integer()\nEnd Function\nPublic Function Any_()\nEnd Function';
+  const s = describeProjectSymbols(p, p.forms[0].id);
+  expect(s).toContain('Module1: Public Name As String * 20');
+  expect(s).toContain('Module1: Public Items As New Collection');
+  expect(s).toContain('Module1: Public Codes() As Long');
+  expect(s).toContain('Module1: Public Function Nums() As Integer()');
+  expect(s).toMatch(/^Module1: Public Function Any_\(\)$/m);
 });
 
 test('a known context size raises the trim threshold', () => {

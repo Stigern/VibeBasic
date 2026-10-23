@@ -51,13 +51,13 @@ export function bytesString(b: Uint8Array): string {
   for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
   return s;
 }
-function byteArray(b: Uint8Array): VBArray {
+export function byteArray(b: Uint8Array): VBArray {
   const a = new VBArray('Byte', [[0, b.length - 1]]);
   b.forEach((x, i) => a.set([i], x));
   return a;
 }
 /** SendData / Execute data: a Byte array as it is, anything else as its string. */
-function toBytes(v: VBValue): Uint8Array {
+export function toBytes(v: VBValue): Uint8Array {
   if (v instanceof VBArray) return Uint8Array.from(v.values(), x => Number(x) & 255);
   return stringBytes(toStr(v));
 }

@@ -2,10 +2,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import type { Backend, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
+import type { Backend, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DbValue, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import { dialogFilters } from './dialogFilters';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
+import type { FileAccess, FileMode, FileStat } from '../lang/fileio/fsApi';
+import { AI_SETTINGS_KEY, loadAiSettingsFrom, saveAiSettingsTo, type AiSettingsIo } from './aiSettingsStore';
 
 
 const PROJECT_FILTER: FileFilter = { name: 'VibeBasic Project', extensions: ['vbb'] };
@@ -16,6 +18,28 @@ async function call<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
   } catch (e) {
     throw new Error(typeof e === 'string' ? e : e instanceof Error ? e.message : String(e));
   }
+}
+
+/** A raw IPC response (tauri::ipc::Response) is an ArrayBuffer; older shapes are a number array. */
+function bytesOf(r: number[] | ArrayBuffer | Uint8Array): Uint8Array {
+  return r instanceof Uint8Array ? r : new Uint8Array(r);
+}
+
+/** The AI settings live on the Rust side (ai_settings.rs), not in localStorage, which the form windows share. */
+const aiSettingsIo: AiSettingsIo = {
+  get: () => call<unknown>('ai_settings_get', {}),
+  set: v => call<void>('ai_settings_set', { settings: v }),
+};
+
+function legacyStorage(): Pick<Storage, 'getItem' | 'removeItem'> | null {
+  try { return localStorage; } catch { return null; }
+}
+
+/** "7|path: the file is too big" -> an Error with the text and `vbNumber` 7 (the IDE shows the text, a running program
+ *  raises the number). */
+function numbered(e: unknown): never {
+  const m = /^(\d+)\|([\s\S]*)$/.exec(e instanceof Error ? e.message : String(e));
+  throw m ? Object.assign(new Error(m[2]), { vbNumber: Number(m[1]) }) : e;
 }
 
 function toBase64(bytes: Uint8Array): string {
@@ -29,6 +53,7 @@ function fromBase64(b64: string): Uint8Array {
   return out;
 }
 
+type RawCommEvent = Exclude<CommEvent, { kind: 'data' }> | { kind: 'data'; id: number; data: string };
 type RawSocketEvent = Exclude<SocketEvent, { kind: 'data' }> | { kind: 'data'; id: number; data: string; remoteIp: string; remotePort: number };
 
 export class TauriBackend implements Backend {
@@ -115,26 +140,68 @@ export class TauriBackend implements Backend {
   }
 
   readTextFile(path: string): Promise<string> {
-    return call<string>('read_text_file', { path });
+    return call<string>('read_text_file', { path }).catch(numbered);
   }
 
   async writeTextFile(path: string, text: string): Promise<void> {
     await call<void>('write_text_file', { path, text });
   }
 
+  /** Raw bytes. A file over the size cap rejects with an Error whose `vbNumber` is 7 (Out of memory). */
   async readBinaryFile(path: string): Promise<Uint8Array> {
-    const r = await call<number[] | ArrayBuffer | Uint8Array>('read_binary_file', { path });
-    return r instanceof Uint8Array ? r : new Uint8Array(r);
+    return bytesOf(await call<number[] | ArrayBuffer | Uint8Array>('read_binary_file', { path }).catch(numbered));
   }
+
+  // the files of a running program (src-tauri/src/fileio.rs); rejections are "number|description"
+  fioOpen(path: string, mode: FileMode, access: FileAccess): Promise<{ id: number; len: number }> { return call('fio_open', { path, mode, access }); }
+  async fioRead(id: number, pos: number, len: number): Promise<Uint8Array> { return bytesOf(await call<ArrayBuffer>('fio_read', { id, pos, len })); }
+  async fioWrite(id: number, pos: number, data: Uint8Array): Promise<void> { await call<void>('fio_write', { id, pos, data: toBase64(data) }); }
+  async fioClose(id: number): Promise<void> { await call<void>('fio_close', { id }); }
+  async fioReset(): Promise<void> { await call<void>('fio_reset', {}); }
+  async fsKill(path: string): Promise<void> { await call<void>('fs_kill', { path }); }
+  async fsRename(from: string, to: string): Promise<void> { await call<void>('fs_rename', { from, to }); }
+  async fsMkDir(path: string): Promise<void> { await call<void>('fs_mkdir', { path }); }
+  async fsRmDir(path: string): Promise<void> { await call<void>('fs_rmdir', { path }); }
+  async fsCopy(from: string, to: string): Promise<void> { await call<void>('fs_copy', { from, to }); }
+  async fsSetAttr(path: string, attr: number): Promise<void> { await call<void>('fs_set_attr', { path, attr }); }
+  fsStat(path: string): Promise<FileStat | null> { return call('fs_stat', { path }); }
+  settingGet(appName: string, section: string, key: string): Promise<string | null> { return call('setting_get', { appName, section, key }); }
+  async settingSave(appName: string, section: string, key: string, value: string): Promise<void> { await call<void>('setting_save', { appName, section, key, value }); }
+  async settingDelete(appName: string, section: string, key: string | null): Promise<void> { await call<void>('setting_delete', { appName, section, key }); }
+  settingAll(appName: string, section: string): Promise<[string, string][]> { return call('setting_all', { appName, section }); }
+
+  dbOpen(path: string): Promise<number> { return call('db_open', { path }); }
+  dbQuery(id: number, sql: string, params: DbValue[]): Promise<DbQueryResult> { return call('db_query', { id, sql, params }); }
+  dbExecute(id: number, sql: string, params: DbValue[]): Promise<DbExecResult> { return call('db_execute', { id, sql, params }); }
+  async dbClose(id: number): Promise<void> { await call<void>('db_close', { id }); }
+  async dbReset(): Promise<void> { await call<void>('db_reset', {}); }
+
+  // -- MSComm and SysInfo (comm.rs, sysinfo.rs) --
+  commList(): Promise<string[]> { return call('comm_list', {}); }
+  commOpen(id: number, path: string, settings: string, handshaking: number, dtr: boolean, rts: boolean): Promise<CommLines> {
+    return call('comm_open', { id, path, settings, handshaking, dtr, rts });
+  }
+  async commConfigure(id: number, settings: string, handshaking: number): Promise<void> { await call<void>('comm_configure', { id, settings, handshaking }); }
+  async commWrite(id: number, data: Uint8Array): Promise<void> { await call<void>('comm_write', { id, data: toBase64(data) }); }
+  async commSetLines(id: number, dtr: boolean | null, rts: boolean | null, brk: boolean | null): Promise<void> { await call<void>('comm_set_lines', { id, dtr, rts, brk }); }
+  async commClose(id: number): Promise<void> { await call<void>('comm_close', { id }); }
+  async commReset(): Promise<void> { await call<void>('comm_reset', {}); }
+  onCommEvent(handler: (e: CommEvent) => void): Promise<() => void> {
+    return listen<RawCommEvent>('vb:comm', e => {
+      const p = e.payload;
+      handler(p.kind === 'data' ? { ...p, data: fromBase64(p.data) } : p);
+    });
+  }
+  sysInfo(): Promise<SysInfoData> { return call('sys_info', {}); }
 
   mediaOpen(path: string): Promise<string> { return call<string>('media_open', { path }); }
   async mediaRead(token: string): Promise<Uint8Array> {
-    const r = await call<number[] | ArrayBuffer | Uint8Array>('media_read', { token });
-    return r instanceof Uint8Array ? r : new Uint8Array(r);
+    return bytesOf(await call<number[] | ArrayBuffer | Uint8Array>('media_read', { token }));
   }
   async mediaClose(token: string): Promise<void> { await call<void>('media_close', { token }); }
 
   async loadSettings<T>(key: string): Promise<T | null> {
+    if (key === AI_SETTINGS_KEY) return loadAiSettingsFrom<T>(aiSettingsIo, legacyStorage());
     try {
       const raw = localStorage.getItem('vibebasic.settings:' + key);
       return raw === null ? null : (JSON.parse(raw) as T);
@@ -142,6 +209,7 @@ export class TauriBackend implements Backend {
   }
 
   async saveSettings(key: string, v: unknown): Promise<void> {
+    if (key === AI_SETTINGS_KEY) return saveAiSettingsTo(aiSettingsIo, legacyStorage(), v);
     try { localStorage.setItem('vibebasic.settings:' + key, JSON.stringify(v)); } catch { /* storage unavailable */ }
   }
 
@@ -178,26 +246,31 @@ export class TauriBackend implements Backend {
   }
 
   async aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string, opts?: AiChatOptions): Promise<string> {
-    const args = { baseUrl, apiKey, model, messages, reasoningEffort: reasoningEffort || null };
+    const args = { baseUrl, apiKey, model, messages, reasoningEffort: reasoningEffort || null, responseFormat: opts?.responseFormat ?? null, structuredOutputs: opts?.structuredOutputs ?? null, maxTokens: opts?.maxTokens ?? null };
     if (!opts?.onDelta && !opts?.signal) return call<string>('ai_chat', args);
     if (opts.signal?.aborted) throw new Error('cancelled');
     const streamId = `ai-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-    const unlisten = await listen<{ id: string; kind: AiDeltaKind; text: string }>('ai:delta', e => {
-      if (e.payload.id === streamId) opts.onDelta?.(e.payload.kind, e.payload.text);
-    });
-    const unlistenUsage = await listen<{ id: string; prompt_tokens: number; completion_tokens: number; cached_tokens?: number | null }>('ai:usage', e => {
-      const p = e.payload;
-      if (p.id !== streamId) return;
-      opts.onUsage?.({ promptTokens: p.prompt_tokens, completionTokens: p.completion_tokens, ...(typeof p.cached_tokens === 'number' ? { cachedTokens: p.cached_tokens } : {}) });
-    });
+    // Attach the abort listener first: an abort during the listen() round trips below must still reach Rust
+    // (it remembers a cancel that arrives before the request starts).
     const onAbort = () => { void invoke('ai_cancel', { streamId }).catch(() => {}); };
     opts.signal?.addEventListener('abort', onAbort);
+    let unlisten: (() => void) | undefined;
+    let unlistenUsage: (() => void) | undefined;
     try {
+      unlisten = await listen<{ id: string; kind: AiDeltaKind; text: string }>('ai:delta', e => {
+        if (e.payload.id === streamId) opts.onDelta?.(e.payload.kind, e.payload.text);
+      });
+      unlistenUsage = await listen<{ id: string; prompt_tokens: number; completion_tokens: number; cached_tokens?: number | null }>('ai:usage', e => {
+        const p = e.payload;
+        if (p.id !== streamId) return;
+        opts.onUsage?.({ promptTokens: p.prompt_tokens, completionTokens: p.completion_tokens, ...(typeof p.cached_tokens === 'number' ? { cachedTokens: p.cached_tokens } : {}) });
+      });
+      if (opts.signal?.aborted) throw new Error('cancelled');
       return await call<string>('ai_chat', { ...args, streamId });
     } finally {
       opts.signal?.removeEventListener('abort', onAbort);
-      unlisten();
-      unlistenUsage();
+      unlisten?.();
+      unlistenUsage?.();
     }
   }
 

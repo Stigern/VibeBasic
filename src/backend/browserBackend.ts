@@ -1,6 +1,8 @@
-import type { Backend, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
+import type { Backend, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { AiModel, ChatMessage } from '../ai/types';
-import { readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
+import { AI_CUT_OFF, readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
+import { MemoryFs } from '../lang/fileio/memoryFs';
+import type { FileAccess, FileMode, FileStat } from '../lang/fileio/fsApi';
 
 const AI_CONNECT_ERROR = (baseUrl: string) =>
   `Could not connect to ${baseUrl}. Check that the AI server is running and can be reached from this Mac. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0.`;
@@ -53,8 +55,9 @@ function httpError(res: Response, text: string, url: string): Error {
 const STREAM_IDLE_SECS = 90;
 const STREAM_TOTAL_SECS = 20 * 60;
 
-/** The answer text from the parts of a reply: content, else the thinking, else the "unreadable" error. */
+/** The answer text from the parts of a reply: content, else the thinking, else the "unreadable" error. Cut off at max_tokens: the error. */
 function answerText(content: string, reasoning: string, finish: string | undefined): string {
+  if (finish === 'length') throw new Error(AI_CUT_OFF);
   if (content.trim()) return content.trim();
   if (reasoning.trim()) return reasoning.trim();
   throw new Error(`${AI_UNREADABLE} (Details: the reply had no text; finish_reason = ${finish ?? 'none'}.)`);
@@ -117,7 +120,7 @@ async function aiStream(baseUrl: string, apiKey: string, body: string, opts: AiC
     if (reason === 'cancel') throw new Error('cancelled');
     if (reason === 'idle') throw new Error(`The AI server stopped sending for ${STREAM_IDLE_SECS} seconds.`);
     if (reason === 'total') throw new Error(`The AI server did not finish within ${STREAM_TOTAL_SECS / 60} minutes.`);
-    if (e instanceof Error && e.message.startsWith('The AI server')) throw e;
+    if (e instanceof Error && (e.message.startsWith('The AI server') || e.message === AI_CUT_OFF)) throw e;
     throw new Error(AI_CONNECT_ERROR(baseUrl));
   } finally {
     clearTimeout(idleTimer);
@@ -130,6 +133,50 @@ const FS_PREFIX = 'vibebasic.fs:';
 /** Development only: files live in localStorage under `vibebasic.fs:<path>`, dialogs are window.prompt. */
 export class BrowserBackend implements Backend {
   readonly kind = 'browser' as const;
+  /** The files of a running program and SaveSetting: in memory, as long as the page lives (development only). */
+  private readonly memFs = new MemoryFs();
+
+  fioOpen(path: string, mode: FileMode, access: FileAccess): Promise<{ id: number; len: number }> { return this.memFs.fioOpen(path, mode, access); }
+  fioRead(id: number, pos: number, len: number): Promise<Uint8Array> { return this.memFs.fioRead(id, pos, len); }
+  fioWrite(id: number, pos: number, data: Uint8Array): Promise<void> { return this.memFs.fioWrite(id, pos, data); }
+  fioClose(id: number): Promise<void> { return this.memFs.fioClose(id); }
+  fioReset(): Promise<void> { return this.memFs.fioReset(); }
+  fsKill(path: string): Promise<void> { return this.memFs.fsKill(path); }
+  fsRename(from: string, to: string): Promise<void> { return this.memFs.fsRename(from, to); }
+  fsMkDir(path: string): Promise<void> { return this.memFs.fsMkDir(path); }
+  fsRmDir(path: string): Promise<void> { return this.memFs.fsRmDir(path); }
+  fsCopy(from: string, to: string): Promise<void> { return this.memFs.fsCopy(from, to); }
+  fsSetAttr(path: string, attr: number): Promise<void> { return this.memFs.fsSetAttr(path, attr); }
+  fsStat(path: string): Promise<FileStat | null> { return this.memFs.fsStat(path); }
+  settingGet(app: string, section: string, key: string): Promise<string | null> { return this.memFs.settingGet(app, section, key); }
+  settingSave(app: string, section: string, key: string, value: string): Promise<void> { return this.memFs.settingSave(app, section, key, value); }
+  settingDelete(app: string, section: string, key: string | null): Promise<void> { return this.memFs.settingDelete(app, section, key); }
+  settingAll(app: string, section: string): Promise<[string, string][]> { return this.memFs.settingAll(app, section); }
+
+  // Databases need the desktop app (SQLite runs on the Rust side).
+  async dbOpen(): Promise<number> { throw new Error('3024|Databases need the VibeBasic desktop app'); }
+  async dbQuery(): Promise<DbQueryResult> { throw new Error('3420|Object invalid or no longer set.'); }
+  async dbExecute(): Promise<DbExecResult> { throw new Error('3420|Object invalid or no longer set.'); }
+  async dbClose(): Promise<void> { /* nothing is open */ }
+  async dbReset(): Promise<void> { /* nothing is open */ }
+
+  // MSComm: no serial ports in a browser (so every CommPort is 8002); SysInfo: the browser's screen, power unknown
+  async commList(): Promise<string[]> { return []; }
+  async commOpen(): Promise<CommLines> { throw new Error('8002|Invalid port number'); }
+  async commConfigure(): Promise<void> { throw new Error('8018|Operation valid only when the port is open'); }
+  async commWrite(): Promise<void> { throw new Error('8018|Operation valid only when the port is open'); }
+  async commSetLines(): Promise<void> { throw new Error('8018|Operation valid only when the port is open'); }
+  async commClose(): Promise<void> { /* nothing is open */ }
+  async commReset(): Promise<void> { /* nothing is open */ }
+  async onCommEvent(_handler: (e: CommEvent) => void): Promise<() => void> { return () => {}; }
+  async sysInfo(): Promise<SysInfoData> {
+    const s = globalThis.screen as (Screen & { availLeft?: number; availTop?: number }) | undefined;
+    return {
+      osVersion: '', osBuild: '',
+      workLeft: s?.availLeft ?? 0, workTop: s?.availTop ?? 0, workWidth: s?.availWidth ?? 0, workHeight: s?.availHeight ?? 0,
+      acStatus: 255, batteryLifePercent: 255, batteryLifeTime: -1, batteryFullTime: -1, batteryStatus: 255,
+    };
+  }
 
   async showMainWindow(): Promise<void> {
     // Ingenting å gjøre i nettleseren.
@@ -296,7 +343,7 @@ export class BrowserBackend implements Backend {
     for (const m of v.data as Record<string, unknown>[]) {
       if (typeof m?.id !== 'string') continue;
       const n = [m.max_model_len, m.context_length].find((x): x is number => typeof x === 'number' && x > 0);
-      out.push(n === undefined ? { id: m.id } : { id: m.id, contextTokens: n });
+      out.push({ id: m.id, ...(n === undefined ? {} : { contextTokens: n }), ...(typeof m.owned_by === 'string' ? { ownedBy: m.owned_by } : {}) });
     }
     return out;
   }
@@ -304,10 +351,16 @@ export class BrowserBackend implements Backend {
   async aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string, opts?: AiChatOptions): Promise<string> {
     const effort = reasoningEffort?.trim();
     const streaming = !!opts?.onDelta;
-    const body = JSON.stringify({ model, messages, temperature: 0.2, stream: streaming, ...(streaming ? { stream_options: { include_usage: true } } : {}), ...(effort ? { chat_template_kwargs: { reasoning_effort: effort } } : {}) });
+    const body = JSON.stringify({
+      model, messages, temperature: 0.2, stream: streaming, ...(streaming ? { stream_options: { include_usage: true } } : {}),
+      ...(effort ? { chat_template_kwargs: { reasoning_effort: effort } } : {}),
+      ...(opts?.maxTokens ? { max_tokens: opts.maxTokens } : {}), ...(opts?.responseFormat !== undefined ? { response_format: opts.responseFormat } : {}),
+      ...(opts?.structuredOutputs !== undefined ? { structured_outputs: opts.structuredOutputs } : {}),
+    });
     if (streaming) return aiStream(baseUrl, apiKey, body, opts!);
     const v = (await aiRequest(baseUrl, apiKey, 'chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, 600)) as
-      { choices?: { message?: { content?: unknown } }[] } | null;
+      { choices?: { message?: { content?: unknown }; finish_reason?: unknown }[] } | null;
+    if (v?.choices?.[0]?.finish_reason === 'length') throw new Error(AI_CUT_OFF);
     const content = v?.choices?.[0]?.message?.content;
     if (typeof content !== 'string') throw new Error(AI_UNREADABLE);
     return content;

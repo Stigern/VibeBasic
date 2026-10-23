@@ -2,6 +2,7 @@ import { BrowserBackend } from './browserBackend';
 import { TauriBackend } from './tauriBackend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import type { AiChatOptions } from '../ai/sse';
+import type { FileSystemApi } from '../lang/fileio/fsApi';
 
 export interface FileFilter { name: string; extensions: string[] }
 /** A drive of DriveListBox: `path` is what `Drive1.Drive` returns ("/" is the startup disk). */
@@ -44,7 +45,65 @@ export interface NetApi {
   onSocketEvent(handler: (e: SocketEvent) => void): Promise<() => void>;
 }
 
-export interface Backend extends NetApi {
+/** MSComm: the modem status lines (CTSHolding, DSRHolding, CDHolding; RI raises comEvRing). */
+export interface CommLines { cts: boolean; dsr: boolean; cd: boolean; ring: boolean }
+/** What an open serial port reports on its own (the "vb:comm" events of the Rust side). `error`: reading failed (unplugged), the port is closed. */
+export type CommEvent =
+  | { kind: 'data'; id: number; data: Uint8Array }
+  | ({ kind: 'lines'; id: number } & CommLines)
+  | { kind: 'error'; id: number; number: number; description: string };
+
+/**
+ * MSComm: the serial ports (src-tauri/src/comm.rs), used by the main window for a running program. Port ids are chosen by the
+ * caller. The calls reject with "number|description" (8002|Invalid port number, 8005|Port already open, 8018 ...).
+ */
+export interface SerialApi {
+  /** The /dev/cu.* devices, sorted (CommPort n is the n-th). */
+  commList(): Promise<string[]>;
+  /** `settings` "9600,n,8,1"; `handshaking` 0-3. Resolves with the modem lines. */
+  commOpen(id: number, path: string, settings: string, handshaking: number, dtr: boolean, rts: boolean): Promise<CommLines>;
+  commConfigure(id: number, settings: string, handshaking: number): Promise<void>;
+  commWrite(id: number, data: Uint8Array): Promise<void>;
+  /** DTREnable, RTSEnable, Break; null leaves a line as it is. */
+  commSetLines(id: number, dtr: boolean | null, rts: boolean | null, brk: boolean | null): Promise<void>;
+  commClose(id: number): Promise<void>;
+  /** Closes every port (the end of a run). */
+  commReset(): Promise<void>;
+  /** Resolves with the function that stops listening. */
+  onCommEvent(handler: (e: CommEvent) => void): Promise<() => void>;
+}
+
+/** SysInfo: the macOS version, the main screen's visible frame (points) and the power state with VB6's values (255 / -1 unknown). */
+export interface SysInfoData {
+  osVersion: string; osBuild: string;
+  workLeft: number; workTop: number; workWidth: number; workHeight: number;
+  acStatus: number; batteryLifePercent: number; batteryLifeTime: number; batteryFullTime: number; batteryStatus: number;
+}
+export interface SystemApi { sysInfo(): Promise<SysInfoData> }
+
+/** A database value as the Rust side sends it: SQLite NULL, a number, a string, or the bytes of a BLOB. */
+export type DbValue = null | number | string | { blob: string };
+/** The rows of a query; `types` are the declared column types ('' for an expression). */
+export interface DbQueryResult { columns: string[]; types: string[]; rows: DbValue[][] }
+export interface DbExecResult { rowsAffected: number; lastInsertRowid: number }
+
+/**
+ * Data control, ADO Data Control, Recordset: SQLite databases (src-tauri/src/db.rs), used by the main window for a running
+ * program. A missing database file is created. Every call rejects with "number|description" (DAO error numbers:
+ * 3078|no such table ..., 3022 duplicate key, 3044 invalid path).
+ */
+export interface DatabaseApi {
+  dbOpen(path: string): Promise<number>;
+  dbQuery(id: number, sql: string, params: DbValue[]): Promise<DbQueryResult>;
+  /** Without params the SQL may hold several statements. */
+  dbExecute(id: number, sql: string, params: DbValue[]): Promise<DbExecResult>;
+  dbClose(id: number): Promise<void>;
+  /** Closes every connection (the end of a run). */
+  dbReset(): Promise<void>;
+}
+
+/** FileSystemApi: the files of a running program (Open, Kill, Dir ...) and SaveSetting, made by the main window. */
+export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, SystemApi {
   readonly kind: 'tauri' | 'browser';
   showMainWindow(): Promise<void>;
   /** Open dialog filtered to *.vbb. Null when cancelled. */
@@ -75,7 +134,9 @@ export interface Backend extends NetApi {
   /** The bytes of an opened media file. */
   mediaRead?(token: string): Promise<Uint8Array>;
   mediaClose?(token: string): Promise<void>;
-  /** Small JSON settings (IDE options ...) kept in localStorage under `vibebasic.settings:<key>`. Null when absent. */
+  /** Small JSON settings (IDE options ...) kept in localStorage under `vibebasic.settings:<key>`. Null when absent. In the
+   *  desktop app the 'ai' settings (with the API key) are kept by the Rust side instead, out of reach of the form windows,
+   *  which share the localStorage (src/backend/aiSettingsStore.ts). */
   loadSettings<T>(key: string): Promise<T | null>;
   saveSettings(key: string, v: unknown): Promise<void>;
   setWindowTitle(title: string): Promise<void>;

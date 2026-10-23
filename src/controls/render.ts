@@ -5,7 +5,7 @@
 //  - every control is `div.vb-ctl.vb-<Type>.vb-<mode>[data-control-id]`, absolutely positioned in its parent host;
 //  - `inputEl` is the real interactive element (button / input / textarea / select, or the focusable scroll bar
 //    widget). In design mode it is inert (pointer-events: none, tabIndex -1). Plan 03 attaches DOM events to it;
-//  - Frame and PictureBox expose `childHost`; Form and PictureBox also own an empty `div.draw-layer` that the
+//  - Frame, PictureBox, SSPanel and SSFrame expose `childHost`; Form and PictureBox also own an empty `div.draw-layer` that the
 //    drawing methods of phase 6 will fill, below all child controls.
 import './controls.css';
 import { vbColorToCss } from '../model/colors';
@@ -13,14 +13,23 @@ import { CONTROL_TYPES } from '../model/controls';
 import { joinFields, splitFields } from '../model/fieldLines';
 import { dockEdge, isDocked } from '../model/geometry';
 import { findListImage, type ImageLookup, type ImageSource } from '../model/imageList';
+import { parseBand } from '../model/coolbar';
 import { TBR_DROPDOWN, TBR_PLACEHOLDER, TBR_SEPARATOR, parseButton } from '../model/toolbar';
 import { flagOn, ssTabLayout } from '../model/ssTab';
 import { twipsToPx } from '../model/twips';
 import { msChart } from './chart';
-import { mediaPlayer, mmControl } from './media';
+import { domPos, domText } from './textPos';
+import { animation, mediaPlayer, mmControl } from './media';
+import { imageCombo } from './imageCombo';
+import { coolBar } from './coolbar';
+import { calendar } from './mscal';
 import { agentControl } from './agent';
 import { dtPicker, maskedEdit, monthView } from './calendar';
 import { inetIcon, webBrowser, winsockIcon } from './webBrowser';
+import { msCommIcon, sysInfoIcon } from './systemIcons';
+import { dataBar, dataGrid } from './dataControls';
+import { ssCommand, ssFrame, ssPanel, ssRibbon } from './sheridan';
+import { font3dShadow } from '../model/sheridan';
 import { decodeRuns, encodeRuns, formatAt, readRuns, replaceRange, selectionOffsets, setSelectionOffsets, writeRuns, type Run, type RtfFormat, type RtfPatch } from './richText';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../model/types';
 import { h, mnemonicNodes } from '../ui98/dom';
@@ -42,7 +51,12 @@ export interface ControlView {
   update(changed: Record<string, PropValue>): void;
   /** The control goes away (see Renderer.destroy). */
   destroy?(): void;
+  /** A CoolBar: the controls of the form its bands name (by name; null for an unknown one) are handed over to be hosted in the bands. */
+  adopt?(find: (name: string) => BandChild | null): void;
 }
+
+/** A control a CoolBar band hosts: its element and its size on the form (px). */
+export interface BandChild { el: HTMLElement; width: number; height: number }
 
 export interface FormSurface {
   /** The whole window: border, title bar and client area. */
@@ -105,7 +119,7 @@ for (const [t, td] of Object.entries(CONTROL_TYPES)) {
 
 /** Pseudo property: the ImageList a control uses changed (the form surface sends it to the controls that name it). */
 export const IMAGES_CHANGED = '*images';
-const IMAGE_USERS = new Set<string>(['Toolbar', 'TreeView', 'ListView', 'TabStrip']);
+const IMAGE_USERS = new Set<string>(['Toolbar', 'TreeView', 'ListView', 'TabStrip', 'ImageCombo', 'CoolBar']);
 
 type Keys = ReadonlySet<string> | null;                       // null = everything (first render / rebuild)
 const has = (k: Keys, ...names: string[]): boolean => k === null || names.some(n => k.has(n));
@@ -143,6 +157,8 @@ export interface Renderer {
   overlay?: boolean;
   /** The control is removed or its form closes: free what build() made outside the DOM (Blob URLs ...). */
   destroy?(): void;
+  /** CoolBar: see ControlView.adopt. */
+  adopt?(find: (name: string) => BandChild | null): void;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -191,6 +207,8 @@ function label(c: Ctx): Renderer {
 
 function textBox(c: Ctx): Renderer {
   let input: HTMLInputElement | HTMLTextAreaElement;
+  /** A selection set by code while the field has no focus: applied when it gets it (selecting an unfocused field may focus it). */
+  let pendingSel: [number, number] | null = null;
   return {
     structural: ['MultiLine'],
     build() {
@@ -198,9 +216,18 @@ function textBox(c: Ctx): Renderer {
       else input = h('input', { type: 'text', class: 'vb-input vb-single', spellcheck: false, autocomplete: 'off' });
       c.el.replaceChildren(input);
       c.setInput(input);
+      pendingSel = null;
+      input.addEventListener('focus', () => { if (pendingSel) { const [a, b] = pendingSel; pendingSel = null; input.setSelectionRange(a, b); } });
     },
     patch(k) {
-      if (has(k, 'Text') && input.value !== c.str('Text')) input.value = c.str('Text');
+      const multi = input instanceof HTMLTextAreaElement;
+      // the field holds LF line breaks (VB: CR LF); compared as the field holds it, so a CR LF text is not written back on every patch
+      if (has(k, 'Text') && input.value !== domText(c.str('Text'), multi)) input.value = domText(c.str('Text'), multi);
+      if (k !== null && has(k, 'SelStart', 'SelLength')) {   // set by code (the program sends both): select in the field
+        const t = c.str('Text'), s = Math.min(Math.max(0, c.num('SelStart')), t.length), e = Math.min(t.length, s + Math.max(0, c.num('SelLength')));
+        const range: [number, number] = [domPos(t, s, multi), domPos(t, e, multi)];
+        if (input.ownerDocument.activeElement === input) { pendingSel = null; input.setSelectionRange(...range); } else pendingSel = range;
+      }
       if (input instanceof HTMLInputElement) {
         if (has(k, 'PasswordChar')) input.type = c.str('PasswordChar') ? 'password' : 'text';
       } else if (has(k, 'ScrollBars')) {
@@ -248,6 +275,18 @@ function checkOrOption(c: Ctx, kind: 'checkbox' | 'radio'): Renderer {
   };
 }
 
+/** SSCheck and SSOption: the CheckBox / OptionButton look with a Boolean Value and Font3D on the caption. */
+function ssToggle(c: Ctx, kind: 'checkbox' | 'radio'): Renderer {
+  const base = checkOrOption(c, kind);
+  return {
+    ...base,
+    patch(k) {
+      base.patch(k);
+      if (has(k, 'Font3D')) c.el.querySelector<HTMLElement>('.vb-opt-text')!.style.textShadow = font3dShadow(c.num('Font3D'));
+    },
+  };
+}
+
 function frame(c: Ctx): Renderer {
   let legend: HTMLElement;
   return {
@@ -277,16 +316,21 @@ function listBox(c: Ctx): Renderer {
       c.setInput(sel);
     },
     patch(k) {
+      if (has(k, 'MultiSelect')) sel.multiple = c.num('MultiSelect') > 0;
       if (has(k, 'List', 'Sorted')) {
         const keep = k === null ? -1 : sel.selectedIndex;
         const items = c.list('List');
         if (c.bool('Sorted')) items.sort((a, b) => a.localeCompare(b));
         sel.replaceChildren(...items.map(t => h('option', {}, t)));
-        sel.selectedIndex = keep < items.length ? keep : -1;
+        if (!sel.multiple) sel.selectedIndex = keep < items.length ? keep : -1;
       }
-      if (has(k, 'MultiSelect')) sel.multiple = c.num('MultiSelect') > 0;
       if (has(k, 'Height')) sel.size = Math.max(2, Math.floor((twipsToPx(c.num('Height')) - 4) / 13));
-      if (has(k, 'ListIndex')) sel.selectedIndex = c.num('ListIndex');
+      if (sel.multiple) {   // MultiSelect: SelFlags ('0' / '1' per item) is the selection; ListIndex is only the focus
+        if (has(k, 'List', 'Sorted', 'MultiSelect', 'SelFlags')) {
+          const f = c.str('SelFlags');
+          [...sel.options].forEach((o, i) => { o.selected = f[i] === '1'; });
+        }
+      } else if (has(k, 'ListIndex', 'MultiSelect')) sel.selectedIndex = c.num('ListIndex');
     },
   };
 }
@@ -319,7 +363,8 @@ function comboBox(c: Ctx): Renderer {
     c.props.Text = items[i];
     markSel();
     close();
-    c.fire('input');
+    input.dataset.vbPick = String(i);   // the text comes from the list (a typed text has no ListIndex)
+    try { c.fire('input'); } finally { delete input.dataset.vbPick; }
     c.fire('change');
     c.el.dispatchEvent(new CustomEvent('vbselect', { bubbles: true, detail: { index: i } }));
   }
@@ -761,6 +806,7 @@ function scrollBar(c: Ctx, horizontal: boolean): Renderer {
         if ((e as MouseEvent).button !== 0 || root.getAttribute('aria-disabled') === 'true') return;
         e.preventDefault();
         root.focus();
+        if (c.el.classList.contains(dir < 0 ? 'fsb-no-dec' : 'fsb-no-inc')) return;   // FlatScrollBar.Arrows
         stopRepeat();
         set(value + dir * small());
         repeatTimer = setTimeout(() => { repeatInterval = setInterval(() => set(value + dir * small()), 50); }, 400);
@@ -1419,6 +1465,24 @@ function toolbar(c: Ctx): Renderer {
   };
 }
 
+/** FlatScrollBar: the scroll bar widget, flat or 3-D (Appearance), with one arrow or both (Arrows), horizontal or vertical (Orientation). */
+function flatScrollBar(c: Ctx): Renderer {
+  let inner = scrollBar(c, c.num('Orientation') === 1);
+  return {
+    structural: ['Orientation'],
+    build() {
+      c.el.classList.remove('vb-horizontal', 'vb-vertical');
+      inner = scrollBar(c, c.num('Orientation') === 1);
+      inner.build();
+    },
+    patch(k) {
+      if (has(k, 'Appearance')) { c.el.classList.toggle('fsb-flat', c.num('Appearance') === 1); c.el.classList.toggle('fsb-track3d', c.num('Appearance') === 2); }
+      if (has(k, 'Arrows')) { c.el.classList.toggle('fsb-no-dec', c.num('Arrows') === 2); c.el.classList.toggle('fsb-no-inc', c.num('Arrows') === 1); }
+      inner.patch(k);
+    },
+  };
+}
+
 const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   CommandButton: commandButton,
   Label: label,
@@ -1457,10 +1521,28 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   WebBrowser: webBrowser,
   Inet: inetIcon,
   Winsock: winsockIcon,
+  MSComm: msCommIcon,
+  SysInfo: sysInfoIcon,
   MSChart: msChart,
   MMControl: mmControl,
   MediaPlayer: mediaPlayer,
   Agent: agentControl,
+  Data: dataBar,
+  Adodc: dataBar,
+  DataGrid: dataGrid,
+  DataList: listBox,
+  DataCombo: comboBox,
+  SSPanel: ssPanel,
+  SSCommand: ssCommand,
+  SSCheck: c => ssToggle(c, 'checkbox'),
+  SSOption: c => ssToggle(c, 'radio'),
+  SSFrame: ssFrame,
+  SSRibbon: ssRibbon,
+  Animation: animation,
+  ImageCombo: imageCombo,
+  CoolBar: coolBar,
+  FlatScrollBar: flatScrollBar,
+  Calendar: calendar,
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1471,7 +1553,7 @@ export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetRe
   const defaults = DEFAULTS[def.type];
   const el = h('div', { class: `vb-ctl vb-${def.type} vb-${mode}`, dataset: { controlId: def.id } });
   const props: Record<string, PropValue> = { ...def.props };
-  const view: ControlView = { el, update, destroy: () => r.destroy?.() };
+  const view: ControlView = { el, update, destroy: () => r.destroy?.(), adopt: f => r.adopt?.(f) };
 
   const get = (n: string): PropValue => (props[n] !== undefined ? props[n] : defaults[n] ?? null);
   const ctx: Ctx = {
@@ -1537,7 +1619,7 @@ export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetRe
     if (ie) {
       if (mode === 'design') { ie.tabIndex = -1; ie.style.pointerEvents = 'none'; }
       else {
-        ie.tabIndex = props.TabStop === false || def.type === 'StatusBar' || def.type === 'Toolbar' || def.type === 'Agent' ? -1 : 0;
+        ie.tabIndex = props.TabStop === false || def.type === 'StatusBar' || def.type === 'Toolbar' || def.type === 'CoolBar' || def.type === 'Agent' || def.type === 'Data' || def.type === 'Adodc' ? -1 : 0;
         if ('disabled' in ie) (ie as HTMLButtonElement).disabled = disabled;
         else ie.setAttribute('aria-disabled', String(disabled));
       }
@@ -1682,7 +1764,7 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
     for (const [id, d] of defs) {
       const v = views.get(id);
       const edge = dockEdge(d);
-      if (!v || !edge) continue;
+      if (!v || !edge || adopted.has(id)) continue;   // a control a CoolBar hosts sits in its band
       const hPx = parseFloat(v.el.style.height) || twipsToPx(CONTROL_TYPES[d.type].defaultHeight);
       v.el.style.left = '0px';
       v.el.style.width = `${m.clientWidth}px`;
@@ -1719,6 +1801,35 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
       if (e && e.parentElement === host) { ref = e; break; }
     }
     host.insertBefore(view.el, ref);
+  }
+
+  // CoolBar: run mode hands the element of each control a band names (Child) over to the band; the others stay where they are.
+  const adopted = new Map<string, string>();   // child id -> CoolBar id
+  function bandsChanged(): void {
+    if (mode !== 'run') return;
+    const byName = new Map<string, ControlDef>();
+    for (const d of defs.values()) if (d.type !== 'CoolBar') byName.set(d.name.toLowerCase(), d);
+    const was = new Set(adopted.keys());
+    adopted.clear();
+    for (const d of defs.values()) {
+      if (d.type !== 'CoolBar') continue;
+      const lines = Array.isArray(d.props.Bands) ? d.props.Bands.map(String) : [];
+      for (const l of lines) {
+        const ch = byName.get(parseBand(l).child.toLowerCase());
+        if (ch && !adopted.has(ch.id) && ch.parentId === d.parentId) adopted.set(ch.id, d.id);
+      }
+    }
+    for (const d of defs.values()) {
+      if (d.type !== 'CoolBar') continue;
+      views.get(d.id)?.adopt?.(name => {
+        const ch = byName.get(name.toLowerCase());
+        const v = ch && adopted.get(ch.id) === d.id ? views.get(ch.id) : undefined;
+        if (!ch || !v) return null;
+        const px = (k: string, dflt: number): number => twipsToPx(typeof ch.props[k] === 'number' ? ch.props[k] as number : dflt);
+        return { el: v.el, width: px('Width', CONTROL_TYPES[ch.type].defaultWidth), height: px('Height', CONTROL_TYPES[ch.type].defaultHeight) };
+      });
+    }
+    for (const id of was) if (!adopted.has(id) && defs.has(id)) place(id);   // a band lost its child: back on the form
   }
 
   /** An ImageList's pictures by index or key (its current props, also after a change); null for an unknown list or image. */
@@ -1758,12 +1869,13 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
         if ('Align' in changed && !isDocked(d)) views.get(id)?.update({ Left: d.props.Left ?? 0, Top: d.props.Top ?? 0, Width: d.props.Width ?? 0, Height: d.props.Height ?? 0 });
         if (isDocked(d)) dock();
         if (d.type === 'ImageList') imagesChanged();
+        if (d.type === 'CoolBar' || adopted.has(id) || ['Left', 'Top', 'Width', 'Height', 'Align'].some(k => k in changed)) bandsChanged();
         return;
       }
       const keys = new Set(Object.keys(changed));
       Object.assign(props, changed);
       const chrome = ['Width', 'Height', 'BorderStyle', 'ControlBox', 'MinButton', 'MaxButton', 'Icon'];
-      if (chrome.some(k => keys.has(k))) { layoutChrome(); dock(); }
+      if (chrome.some(k => keys.has(k))) { layoutChrome(); dock(); bandsChanged(); }
       else if (keys.has('Caption')) { const t = el.querySelector('.title-bar-text'); if (t) t.textContent = str('Caption'); }
       patchClient(keys);
     },
@@ -1772,6 +1884,7 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
       if (!d || d.name === name) return;
       defs.set(id, { ...d, name });
       if (d.type === 'ImageList') imagesChanged();
+      bandsChanged();
     },
     addControl(def, index) {
       add(def, index);
@@ -1779,6 +1892,7 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
       place(def.id);
       for (const d of defs.values()) if (d.parentId === def.id) place(d.id);   // children that arrived before their parent
       dock();
+      bandsChanged();
     },
     removeControl(id) {
       const doomed = new Set<string>([id]);
@@ -1790,12 +1904,14 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
       for (const d of doomed) { views.get(d)?.destroy?.(); views.get(d)?.el.remove(); views.delete(d); defs.delete(d); }
       order = order.filter(o => !doomed.has(o));
       if (hadImages) imagesChanged();
+      bandsChanged();
     },
     reorder(controls) {
       for (const d of controls) if (views.has(d.id)) defs.set(d.id, d);
       order = controls.map(d => d.id).filter(i => views.has(i));
       for (const i of order) hostOf(defs.get(i)!).appendChild(views.get(i)!.el);
       dock();
+      bandsChanged();
     },
     setGrid(o) {
       Object.assign(grid, Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)));
@@ -1815,5 +1931,6 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
   for (const d of form.controls) add(d);
   for (const id of [...order]) place(id);
   dock();
+  bandsChanged();
   return surface;
 }

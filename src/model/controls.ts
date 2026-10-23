@@ -54,6 +54,9 @@ const list = () => p('List', 'list', []);
 const rt = (name: string, kind: PropKind, def: PropValue, runtime: 'rw' | 'ro' = 'rw'): PropDef =>
   ({ name, kind, default: def, designTime: false, runtime });
 
+/** Data binding (Data control / Adodc): DataSource names the data control, DataField the field; DataChanged is set by an edit. */
+const dataBind = (): PropDef[] => [str('DataSource'), str('DataField'), rt('DataChanged', 'bool', false)];
+
 /** Left Top Width Height Visible Enabled TabIndex TabStop Tag ToolTipText */
 const common = (): PropDef[] => [
   int('Left', 0), int('Top', 0), int('Width', 0), int('Height', 0),
@@ -104,6 +107,11 @@ const SHAPE_ONLY_METHODS = (): MethodDef[] => [
 /** MMControl's buttons, left to right (each has <Name>Enabled, <Name>Visible, <Name>Click and <Name>Completed). */
 export const MCI_BUTTONS = ['Prev', 'Next', 'Play', 'Pause', 'Back', 'Step', 'Stop', 'Record', 'Eject'] as const;
 const AGENT_MOUSE = 'ByVal CharacterID As String, ByVal Button As Integer, ByVal Shift As Integer, ByVal x As Integer, ByVal y As Integer';
+
+
+const SS_ALIGNMENTS = ['Left Top', 'Left Middle', 'Left Bottom', 'Right Top', 'Right Middle', 'Right Bottom', 'Center Top', 'Center Middle', 'Center Bottom'];
+const SS_BEVELS = ['None', 'Inset', 'Raised'];
+const SS_FONT3D = ['None', 'Raised with light shading', 'Raised with heavy shading', 'Inset with light shading', 'Inset with heavy shading'];
 
 const def = (d: Omit<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'> &
   Partial<Pick<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'>>): ControlTypeDef =>
@@ -157,7 +165,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       en('Alignment', 0, ['Left Justify', 'Right Justify', 'Center']),
       bool('AutoSize', false), en('BackStyle', 1, ['Transparent', 'Opaque']),
       color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT),
-      en('BorderStyle', 0, ['None', 'Fixed Single']), bool('WordWrap', false), font(),
+      en('BorderStyle', 0, ['None', 'Fixed Single']), bool('WordWrap', false), font(), ...dataBind(),
     ],
     events: [evClick(), evDbl(), evChange(), ...evMouse()],
   }),
@@ -172,7 +180,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       en('Alignment', 0, ['Left Justify', 'Right Justify', 'Center'], { runtime: 'ro' }),
       color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT),
       en('BorderStyle', 1, ['None', 'Fixed Single'], { runtime: 'ro' }), font(),
-      rt('SelStart', 'int', 0), rt('SelLength', 'int', 0), rt('SelText', 'string', ''),
+      rt('SelStart', 'int', 0), rt('SelLength', 'int', 0), rt('SelText', 'string', ''), ...dataBind(),
     ],
     events: [evChange(), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
@@ -183,7 +191,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     props: [
       ...common(), str('Caption'), en('Value', 0, ['Unchecked', 'Checked', 'Grayed']),
       en('Alignment', 0, ['Left Justify', 'Right Justify'], { runtime: 'ro' }),
-      color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(),
+      color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(), ...dataBind(),
     ],
     events: [evClick(), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
@@ -217,7 +225,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       en('MultiSelect', 0, ['None', 'Simple', 'Extended'], { runtime: 'ro' }),
       color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
       rt('ListIndex', 'int', -1), rt('ListCount', 'int', 0, 'ro'), rt('Text', 'string', '', 'ro'),
-      rt('Selected', 'bool', false), rt('NewIndex', 'int', -1, 'ro'),
+      rt('Selected', 'bool', false), rt('NewIndex', 'int', -1, 'ro'), rt('SelCount', 'int', 0, 'ro'), rt('ItemData', 'int', 0), ...dataBind(),
     ],
     events: [evClick(), evDbl(), ev('Scroll'), ...evFocus(), ...evKeys(), ...evMouse()],
     methods: [...baseMethods(), ...listMethods()],
@@ -230,7 +238,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       ...common(), txt('Text'), en('Style', 0, ['Dropdown Combo', 'Simple Combo', 'Dropdown List'], { runtime: 'ro' }),
       list(), bool('Sorted', false, { runtime: 'ro' }),
       color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
-      rt('ListIndex', 'int', -1), rt('ListCount', 'int', 0, 'ro'), rt('NewIndex', 'int', -1, 'ro'),
+      rt('ListIndex', 'int', -1), rt('ListCount', 'int', 0, 'ro'), rt('NewIndex', 'int', -1, 'ro'), rt('ItemData', 'int', 0), ...dataBind(),
     ],
     events: [evChange(), evClick(), evDbl(), ev('DropDown'), ...evFocus(), ...evKeys()],
     methods: [...baseMethods(), ...listMethods()],
@@ -341,7 +349,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       en('Style', 0, ['sbrNormal', 'sbrSimple']), str('SimpleText'),
       p('Panels', 'list', [''], { runtime: 'ro' }),
     ],
-    events: [evClick(), evDbl(), ev('PanelClick', 'ByVal Panel As Panel'), ...evMouse()],
+    events: [evClick(), evDbl(), ev('PanelClick', 'ByVal Panel As MSComctlLib.Panel'), ...evMouse()],
   }),
 
   TabStrip: def({
@@ -520,6 +528,37 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     events: [evClick(), evDbl(), ev('ButtonClick', 'ByVal Button As MSComctlLib.Button'), ...evMouse()],
   }),
 
+  // MSCOMCTL.OCX. A combo box whose items carry pictures of an ImageList. ComboItems are lines 'Text|Key|Image|SelImage|Indentation'
+  // (see model/imageCombo.ts); at run time they seed the collection. SelectedIndex (1-based, 0 = none) is window state.
+  ImageCombo: def({
+    type: 'ImageCombo', component: 'MSCOMCTL.OCX', namePrefix: 'ImageCombo', defaultWidth: 2415, defaultHeight: 315, toolboxTooltip: 'ImageCombo',
+    defaultEvent: 'Click', defaultMember: 'Text',
+    props: [
+      ...common(), font(), str('ImageList'), str('Text'), bool('Locked', false),
+      color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT),
+      p('ComboItems', 'list', [], { runtime: 'ro' }),
+      rt('SelectedItem', 'string', ''),
+      p('SelectedIndex', 'int', 0, { designTime: false, runtime: 'none' }),
+    ],
+    events: [evChange(), evClick(), evDbl(), ev('Dropdown'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  // COMCT332.OCX. A rebar: the bands are lines 'Caption|Key|Image|NewRow|Style|Child|MinWidth|Width|Visible' (see model/coolbar.ts); Child names a
+  // control of the form that the band hosts. Docks like a Toolbar (Align top by default); its Height follows the rows of bands at run time.
+  CoolBar: def({
+    type: 'CoolBar', component: 'COMCT332.OCX', namePrefix: 'CoolBar', defaultWidth: 4800, defaultHeight: 390, toolboxTooltip: 'CoolBar',
+    defaultEvent: 'HeightChanged', defaultMember: null,
+    props: [
+      int('Left', 0), int('Top', 0), int('Width', 0), int('Height', 0), bool('Visible', true), bool('Enabled', true),
+      str('Tag'), str('ToolTipText'),
+      en('Align', 1, ['vbAlignNone', 'vbAlignTop', 'vbAlignBottom']),
+      str('ImageList'), bool('BandBorders', true), bool('FixedOrder', false), bool('VariantHeight', true),
+      color('BackColor', BTN_FACE),
+      p('Bands', 'list', [], { runtime: 'ro' }),
+    ],
+    events: [evClick(), evDbl(), ev('HeightChanged', 'ByVal NewHeight As Single'), ...evMouse()],
+  }),
+
   // MSCOMCT2.OCX. Value and the other dates are OLE serials (Null = null; only a CheckBox DTPicker may have no Value). Day ... DayOfWeek
   // are derived from Value at run time. Format: dtpLongDate 0, dtpShortDate 1, dtpTime 2, dtpCustom 3 (CustomFormat).
   DTPicker: def({
@@ -532,7 +571,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       p('MinDate', 'date', MIN_DATE), p('MaxDate', 'date', MAX_DATE),
       bool('CheckBox', false), bool('UpDown', false),
       rt('Day', 'int', 0), rt('Month', 'int', 0), rt('Year', 'int', 0), rt('Hour', 'int', 0), rt('Minute', 'int', 0), rt('Second', 'int', 0),
-      rt('DayOfWeek', 'int', 0),
+      rt('DayOfWeek', 'int', 0), ...dataBind(),
     ],
     events: [evChange(), ev('CloseUp'), ev('DropDown'), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
@@ -559,6 +598,38 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
   }),
 
+  // MSCOMCT2.OCX. Like HScrollBar / VScrollBar (Orientation chooses), flat or 3-D. A Value outside Min .. Max is clamped.
+  FlatScrollBar: def({
+    type: 'FlatScrollBar', component: 'MSCOMCT2.OCX', namePrefix: 'FlatScrollBar', defaultWidth: 2415, defaultHeight: 255, toolboxTooltip: 'FlatScrollBar',
+    defaultEvent: 'Change', defaultMember: 'Value',
+    props: [
+      ...common(),
+      int('Min', 0, { min: -2147483647, max: 2147483647 }), int('Max', 32767, { min: -2147483647, max: 2147483647 }),
+      int('Value', 0, { min: -2147483647, max: 2147483647 }),
+      int('SmallChange', 1, { min: 1, max: 2147483647 }), int('LargeChange', 1, { min: 1, max: 2147483647 }),
+      en('Orientation', 1, ['cc2OrientationVertical', 'cc2OrientationHorizontal']),
+      en('Appearance', 0, ['fsb3D', 'fsbFlat', 'fsbTrack3D']),
+      en('Arrows', 0, ['fsbBoth', 'fsbLeftUp', 'fsbRightDown']),
+    ],
+    events: [evChange(), ev('Scroll'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  // MSCOMCT2.OCX. Plays an animated GIF, APNG, WebP or a short MP4 / WebM (no sound); AVI files give error 35752. Open reads the file through the
+  // media path of MMControl (see run/objects/animationControl.ts); MediaSrc and MediaCmd are what the window gets. Frames are numbered from 0.
+  Animation: def({
+    type: 'Animation', component: 'MSCOMCT2.OCX', namePrefix: 'Animation', defaultWidth: 1935, defaultHeight: 1455, toolboxTooltip: 'Animation',
+    defaultEvent: 'Click', defaultMember: null,
+    props: [
+      ...common(),
+      bool('AutoPlay', false), bool('Center', false),
+      en('BackStyle', 1, ['cc2BackstyleTransparent', 'cc2BackstyleOpaque']), color('BackColor', BTN_FACE),
+      p('MediaSrc', 'string', '', { designTime: false, runtime: 'none' }), p('MediaCmd', 'string', '', { designTime: false, runtime: 'none' }),
+    ],
+    events: [evClick(), evDbl(), ev('Start'), ev('Stop'), ...evMouse()],
+    methods: [...baseMethods(), { name: 'Open', params: 'bstrFilename As String' }, { name: 'Play', params: '[Repeat], [Start], [End]' },
+      { name: 'Stop', params: '' }, { name: 'Close', params: '' }],
+  }),
+
   // MSMASK32.OCX. Text holds the display string of the mask (literals and a PromptChar for every empty position); the run-time
   // Text, ClipText and FormattedText are worked out from it (model/mask.ts). Without a Mask the control is a plain text field.
   MaskedEdit: def({
@@ -571,7 +642,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT),
       en('BorderStyle', 1, ['None', 'Fixed Single'], { runtime: 'ro' }),
       rt('ClipText', 'string', '', 'ro'), rt('FormattedText', 'string', '', 'ro'),
-      rt('SelStart', 'int', 0), rt('SelLength', 'int', 0), rt('SelText', 'string', ''),
+      rt('SelStart', 'int', 0), rt('SelLength', 'int', 0), rt('SelText', 'string', ''), ...dataBind(),
     ],
     events: [evChange(), ev('ValidationError', 'InvalidText As String, StartPosition As Integer'), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
     onPropSet: (props, name) => {
@@ -645,6 +716,231 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       { name: 'Connect', params: '[RemoteHost], [RemotePort]' }, { name: 'GetData', params: 'data, [type], [maxLen]' }, { name: 'Listen', params: '' },
       { name: 'PeekData', params: 'data, [type], [maxLen]' }, { name: 'SendData', params: 'data' },
     ],
+  }),
+
+  // MSCOMM32.OCX. Invisible at run time. The serial ports of the Rust side (serialport crate). CommPort n is the n-th of the sorted
+  // /dev/cu.* devices; PortName (a VibeBasic extension) names the device itself ("/dev/cu.usbmodem1101") and wins when it is set.
+  // Settings "baud,parity,data,stop". OnComm sets CommEvent (comEvReceive once InBufferCount reaches RThreshold, comEvSend, comEvCTS ...).
+  MSComm: def({
+    type: 'MSComm', component: 'MSCOMM32.OCX', namePrefix: 'MSComm', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true, toolboxTooltip: 'MSComm',
+    defaultEvent: 'OnComm', defaultMember: null, methods: [],
+    props: [
+      int('Left', 0), int('Top', 0), str('Tag'),
+      int('CommPort', 1, { min: 1, max: 255 }), str('PortName'), str('Settings', '9600,n,8,1'),
+      en('Handshaking', 0, ['comNone', 'comXOnXoff', 'comRTS', 'comRTSXOnXOff']),
+      bool('DTREnable', true), bool('RTSEnable', false), bool('EOFEnable', false), bool('NullDiscard', false),
+      int('InBufferSize', 1024, { min: 1, max: 32767 }), int('OutBufferSize', 512, { min: 1, max: 32767 }),
+      int('InputLen', 0, { min: 0 }), en('InputMode', 0, ['comInputModeText', 'comInputModeBinary']), str('ParityReplace', '?'),
+      int('RThreshold', 0, { min: 0 }), int('SThreshold', 0, { min: 0 }),
+      rt('PortOpen', 'bool', false), rt('Input', 'string', '', 'ro'), rt('Output', 'string', ''),
+      rt('InBufferCount', 'int', 0), rt('OutBufferCount', 'int', 0), rt('CommEvent', 'int', 0, 'ro'), rt('CommID', 'int', 0, 'ro'),
+      rt('CDHolding', 'bool', false, 'ro'), rt('CTSHolding', 'bool', false, 'ro'), rt('DSRHolding', 'bool', false, 'ro'), rt('Break', 'bool', false),
+    ],
+    events: [ev('OnComm')],
+  }),
+
+  // SYSINFO.OCX. Invisible at run time. OSPlatform 2 (the NT family), OSVersion / OSBuild the macOS version, WorkArea* the main screen's
+  // visible frame in twips, the power state from the Rust side (pmset; 255 / -1 when unknown). Only DisplayChanged is raised.
+  SysInfo: def({
+    type: 'SysInfo', component: 'SYSINFO.OCX', namePrefix: 'SysInfo', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true, toolboxTooltip: 'SysInfo',
+    defaultEvent: 'DisplayChanged', defaultMember: null, methods: [],
+    props: [
+      int('Left', 0), int('Top', 0), str('Tag'),
+      rt('OSPlatform', 'int', 2, 'ro'), rt('OSVersion', 'string', '', 'ro'), rt('OSBuild', 'string', '', 'ro'), rt('ScrollBarSize', 'int', 240, 'ro'),
+      rt('WorkAreaLeft', 'int', 0, 'ro'), rt('WorkAreaTop', 'int', 0, 'ro'), rt('WorkAreaWidth', 'int', 0, 'ro'), rt('WorkAreaHeight', 'int', 0, 'ro'),
+      rt('ACStatus', 'int', 255, 'ro'), rt('BatteryFullTime', 'int', -1, 'ro'), rt('BatteryLifePercent', 'int', 255, 'ro'),
+      rt('BatteryLifeTime', 'int', -1, 'ro'), rt('BatteryStatus', 'int', 255, 'ro'),
+    ],
+    events: [
+      ev('ConfigChangeCancelled'), ev('ConfigChanged', 'ByVal OldConfigNum As Long, ByVal NewConfigNum As Long'),
+      ev('DeviceArrival', 'ByVal DeviceType As Long, ByVal DeviceID As Long, ByVal DeviceName As String, ByVal DeviceData As Long'),
+      ev('DeviceOtherEvent', 'ByVal DeviceType As Long, ByVal EventName As String, ByVal DataPointer As Long'),
+      ev('DeviceQueryRemove', 'ByVal DeviceType As Long, ByVal DeviceID As Long, ByVal DeviceName As String, ByVal DeviceData As Long, Cancel As Boolean'),
+      ev('DeviceQueryRemoveFailed', 'ByVal DeviceType As Long, ByVal DeviceID As Long, ByVal DeviceName As String, ByVal DeviceData As Long'),
+      ev('DeviceRemoveComplete', 'ByVal DeviceType As Long, ByVal DeviceID As Long, ByVal DeviceName As String, ByVal DeviceData As Long'),
+      ev('DeviceRemovePending', 'ByVal DeviceType As Long, ByVal DeviceID As Long, ByVal DeviceName As String, ByVal DeviceData As Long'),
+      ev('DevModeChanged'), ev('DisplayChanged'), ev('PowerQuerySuspend', 'Cancel As Boolean'), ev('PowerResume'), ev('PowerStatusChanged'),
+      ev('PowerSuspend'), ev('QueryChangeConfig', 'Cancel As Boolean'), ev('SettingChanged', 'ByVal Item As Integer'), ev('SysColorsChanged'), ev('TimeChanged'),
+    ],
+  }),
+
+  // The Data control (intrinsic, DAO): the arrow bar |< < Caption > >|. DatabaseName is a SQLite file (.db), relative to App.Path;
+  // RecordSource a table name or a SELECT. Recordset and Database are objects at run time (run/data/). The controls whose
+  // DataSource names it show the current record.
+  Data: def({
+    type: 'Data', namePrefix: 'Data', defaultWidth: 1935, defaultHeight: 345, toolboxTooltip: 'Data',
+    defaultEvent: 'Validate', defaultMember: 'Caption',
+    props: [
+      int('Left', 0), int('Top', 0), int('Width', 0), int('Height', 0), bool('Visible', true), bool('Enabled', true), str('Tag'), str('ToolTipText'),
+      str('Caption'), str('DatabaseName'), str('RecordSource'), str('Connect', 'Access'),
+      en('RecordsetType', 1, ['Table', 'Dynaset', 'Snapshot']), bool('ReadOnly', false), bool('Exclusive', false), int('Options', 0),
+      en('BOFAction', 0, ['Move First', 'BOF']), en('EOFAction', 0, ['Move Last', 'EOF', 'Add New']),
+      color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
+      rt('Recordset', 'string', ''), rt('Database', 'string', '', 'ro'), rt('EditMode', 'int', 0, 'ro'),
+    ],
+    events: [ev('Validate', 'Action As Integer, Save As Integer'), ev('Reposition'), ev('Error', 'DataErr As Integer, Response As Integer'), ...evMouse()],
+    methods: [
+      { name: 'Move', params: MOVE }, { name: 'Refresh', params: '' }, { name: 'ZOrder', params: '[Position]' },
+      { name: 'UpdateControls', params: '' }, { name: 'UpdateRecord', params: '' },
+    ],
+  }),
+
+  // MSADODC.OCX. The same arrow bar; ConnectionString is "Provider=...;Data Source=file.db" (the Data Source is a SQLite file, relative
+  // to App.Path). Recordset is an ADO recordset (ActiveConnection.Execute runs SQL).
+  Adodc: def({
+    type: 'Adodc', component: 'MSADODC.OCX', namePrefix: 'Adodc', defaultWidth: 2400, defaultHeight: 330, toolboxTooltip: 'Adodc',
+    defaultEvent: 'WillMove', defaultMember: null,
+    props: [
+      int('Left', 0), int('Top', 0), int('Width', 0), int('Height', 0), bool('Visible', true), bool('Enabled', true), str('Tag'), str('ToolTipText'),
+      str('Caption'), str('ConnectionString'), str('RecordSource'),
+      p('CommandType', 'enum', 8, { enumValues: [[1, 'adCmdText'], [2, 'adCmdTable'], [4, 'adCmdStoredProc'], [8, 'adCmdUnknown']].map(([value, l]) => ({ value: value as number, label: `${value} - ${l}` })) }),
+      en('BOFAction', 0, ['adDoMoveFirst', 'adStayBOF']), en('EOFAction', 0, ['adDoMoveLast', 'adStayEOF', 'adDoAddNew']),
+      p('CursorLocation', 'enum', 3, { enumValues: [{ value: 2, label: '2 - adUseServer' }, { value: 3, label: '3 - adUseClient' }] }),
+      en('CursorType', 3, ['adOpenForwardOnly', 'adOpenKeyset', 'adOpenDynamic', 'adOpenStatic']),
+      p('LockType', 'enum', 3, { enumValues: [[1, 'adLockReadOnly'], [2, 'adLockPessimistic'], [3, 'adLockOptimistic'], [4, 'adLockBatchOptimistic']].map(([value, l]) => ({ value: value as number, label: `${value} - ${l}` })) }),
+      int('MaxRecords', 0, { min: 0 }), int('CommandTimeout', 30, { min: 0 }), int('ConnectionTimeout', 15, { min: 0 }),
+      str('UserName'), str('Password'),
+      color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
+      rt('Recordset', 'string', ''),
+    ],
+    events: [
+      ev('WillMove', 'ByVal adReason As ADODB.EventReasonEnum, adStatus As ADODB.EventStatusEnum, ByVal pRecordset As ADODB.Recordset'),
+      ev('MoveComplete', 'ByVal adReason As ADODB.EventReasonEnum, ByVal pError As ADODB.Error, adStatus As ADODB.EventStatusEnum, ByVal pRecordset As ADODB.Recordset'),
+      ev('Error', 'ByVal ErrorNumber As Long, Description As String, ByVal Scode As Long, ByVal Source As String, ByVal HelpFile As String, ByVal HelpContext As Long, fCancelDisplay As Boolean'),
+      ...evMouse(),
+    ],
+    methods: [{ name: 'Move', params: MOVE }, { name: 'Refresh', params: '' }, { name: 'ZOrder', params: '[Position]' }],
+  }),
+
+  // MSDATGRD.OCX. The records of the DataSource (a Data control or Adodc) with column headers and a record selector column; the
+  // current row is the recordset's current record. Columns(i) (0-based) has Caption, Width, DataField, Visible, Alignment, Locked,
+  // NumberFormat and Value. GridCols / GridRows / GridRow / GridCol / GridEdit are what the window shows (run/data/dataGrid.ts).
+  DataGrid: def({
+    type: 'DataGrid', component: 'MSDATGRD.OCX', namePrefix: 'DataGrid', defaultWidth: 4815, defaultHeight: 2415, toolboxTooltip: 'DataGrid',
+    defaultEvent: 'Click', defaultMember: null,
+    props: [
+      ...common(), font(), str('DataSource'), str('Caption'),
+      bool('AllowUpdate', true), bool('AllowAddNew', false), bool('AllowDelete', false),
+      bool('ColumnHeaders', true), bool('RecordSelectors', true), int('HeadLines', 1, { min: 0, max: 10 }), int('DefColWidth', 0, { min: 0 }),
+      en('BorderStyle', 1, ['dbgNoBorder', 'dbgFixedSingle']), color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT),
+      rt('Row', 'int', 0), rt('Col', 'int', 0), rt('Text', 'string', ''), rt('Columns', 'string', '', 'ro'), rt('Bookmark', 'int', 0, 'ro'),
+      rt('ApproxCount', 'int', 0, 'ro'), rt('VisibleRows', 'int', 0, 'ro'), rt('VisibleCols', 'int', 0, 'ro'),
+      p('GridCols', 'list', [], { designTime: false, runtime: 'none' }), p('GridRows', 'list', [], { designTime: false, runtime: 'none' }),
+      p('GridRow', 'int', -1, { designTime: false, runtime: 'none' }), p('GridCol', 'int', 0, { designTime: false, runtime: 'none' }),
+      p('GridEdit', 'string', '', { designTime: false, runtime: 'none' }),
+    ],
+    events: [
+      ev('RowColChange', 'LastRow As Variant, ByVal LastCol As Integer'), ev('AfterColUpdate', 'ByVal ColIndex As Integer'),
+      ev('BeforeColUpdate', 'ByVal ColIndex As Integer, OldValue As Variant, Cancel As Integer'), ev('BeforeUpdate', 'Cancel As Integer'), ev('AfterUpdate'),
+      ev('AfterInsert'), ev('BeforeDelete', 'Cancel As Integer'), ev('AfterDelete'), ev('HeadClick', 'ByVal ColIndex As Integer'),
+      ev('Error', 'ByVal DataError As Integer, Response As Integer'), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse(),
+    ],
+    methods: [...baseMethods(), { name: 'ReBind', params: '' }],
+  }),
+
+  // MSDATLST.OCX. The list is the ListField of the RowSource's records; BoundText is the BoundColumn of the chosen one (the ListField
+  // when BoundColumn is empty). DataSource / DataField bind BoundText to a field. List / ListIndex are what the window shows.
+  DataList: def({
+    type: 'DataList', component: 'MSDATLST.OCX', namePrefix: 'DataList', defaultWidth: 1935, defaultHeight: 1425, toolboxTooltip: 'DataList',
+    defaultEvent: 'Click', defaultMember: 'BoundText',
+    props: [
+      ...common(), font(), color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT),
+      str('RowSource'), str('ListField'), str('BoundColumn'), str('DataSource'), str('DataField'),
+      en('MatchEntry', 0, ['dblBasicMatching', 'dblExtendedMatching']), bool('Locked', false),
+      rt('BoundText', 'string', ''), rt('Text', 'string', ''), rt('SelectedItem', 'string', '', 'ro'), rt('MatchedWithList', 'bool', false, 'ro'),
+      rt('VisibleCount', 'int', 0, 'ro'), rt('DataChanged', 'bool', false),
+      p('List', 'list', [], { designTime: false, runtime: 'none' }), p('ListIndex', 'int', -1, { designTime: false, runtime: 'none' }),
+    ],
+    events: [ev('Click', 'Area As Integer'), ev('DblClick', 'Area As Integer'), ...evFocus(), ...evKeys(), ...evMouse()],
+    methods: [...baseMethods(), { name: 'ReFill', params: '' }],
+  }),
+
+  DataCombo: def({
+    type: 'DataCombo', component: 'MSDATLST.OCX', namePrefix: 'DataCombo', defaultWidth: 1935, defaultHeight: 315, toolboxTooltip: 'DataCombo',
+    defaultEvent: 'Click', defaultMember: 'Text',
+    props: [
+      ...common(), font(), color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), txt('Text'),
+      en('Style', 0, ['dbcDropdownCombo', 'dbcSimpleCombo', 'dbcDropdownList'], { runtime: 'ro' }),
+      str('RowSource'), str('ListField'), str('BoundColumn'), str('DataSource'), str('DataField'),
+      en('MatchEntry', 0, ['dblBasicMatching', 'dblExtendedMatching']), bool('Locked', false),
+      rt('BoundText', 'string', ''), rt('SelectedItem', 'string', '', 'ro'), rt('MatchedWithList', 'bool', false, 'ro'),
+      rt('VisibleCount', 'int', 0, 'ro'), rt('DataChanged', 'bool', false),
+      p('List', 'list', [], { designTime: false, runtime: 'none' }), p('ListIndex', 'int', -1, { designTime: false, runtime: 'none' }),
+    ],
+    events: [evChange(), ev('Click', 'Area As Integer'), ev('DblClick', 'Area As Integer'), ...evFocus(), ...evKeys(), ...evMouse()],
+    methods: [...baseMethods(), { name: 'ReFill', params: '' }],
+  }),
+
+  // THREED32.OCX (Sheridan 3D Controls). All six draw Win98 bevels (model/sheridan.ts); Font3D is a one-pixel light / dark text shadow.
+  // SSPanel is a container like Frame. FloodType / FloodPercent fill the panel like a progress bar (FloodShowPct writes the percentage).
+  SSPanel: def({
+    type: 'SSPanel', component: 'THREED32.OCX', namePrefix: 'SSPanel', defaultWidth: 1815, defaultHeight: 855, isContainer: true,
+    toolboxTooltip: 'SSPanel', defaultEvent: 'Click', defaultMember: 'Caption',
+    props: [
+      ...common(), str('Caption'), en('Alignment', 7, SS_ALIGNMENTS),
+      en('BevelOuter', 2, SS_BEVELS), en('BevelInner', 0, SS_BEVELS), int('BevelWidth', 1, { min: 1, max: 10 }), int('BorderWidth', 0, { min: 0, max: 30 }),
+      en('Font3D', 0, SS_FONT3D),
+      en('FloodType', 0, ['None', 'Left to Right', 'Right to Left', 'Top to Bottom', 'Bottom to Top', 'Widening Circle']),
+      int('FloodPercent', 0, { min: 0, max: 100 }), color('FloodColor', 0x800000), bool('FloodShowPct', true),
+      en('AutoSize', 0, ['None', 'Width To Caption', 'Height To Caption']), bool('RoundedCorners', true), bool('Outline', false),
+      color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(),
+    ],
+    events: [evClick(), evDbl(), ...evMouse()],
+  }),
+
+  SSCommand: def({
+    type: 'SSCommand', component: 'THREED32.OCX', namePrefix: 'SSCommand', defaultWidth: 1215, defaultHeight: 495, toolboxTooltip: 'SSCommand',
+    defaultEvent: 'Click', defaultMember: 'Value',
+    props: [
+      ...common(), str('Caption'), picture(), en('AutoSize', 0, ['None', 'Adjust Picture To Button', 'Adjust Button To Picture']),
+      int('BevelWidth', 2, { min: 1, max: 10 }), en('Font3D', 0, SS_FONT3D), bool('Outline', false), bool('RoundedCorners', true),
+      color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(), rt('Value', 'bool', false),
+    ],
+    events: [evClick(), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  SSCheck: def({
+    type: 'SSCheck', component: 'THREED32.OCX', namePrefix: 'SSCheck', defaultWidth: 1215, defaultHeight: 255, toolboxTooltip: 'SSCheck',
+    defaultEvent: 'Click', defaultMember: 'Value',
+    props: [
+      ...common(), str('Caption'), bool('Value', false), en('Alignment', 0, ['Left Justify', 'Right Justify']), en('Font3D', 0, SS_FONT3D),
+      color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(),
+    ],
+    events: [ev('Click', 'Value As Integer'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  SSOption: def({
+    type: 'SSOption', component: 'THREED32.OCX', namePrefix: 'SSOption', defaultWidth: 1215, defaultHeight: 255, toolboxTooltip: 'SSOption',
+    defaultEvent: 'Click', defaultMember: 'Value',
+    props: [
+      ...common(), str('Caption'), bool('Value', false), en('Alignment', 0, ['Left Justify', 'Right Justify']), en('Font3D', 0, SS_FONT3D),
+      color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(),
+    ],
+    events: [ev('Click', 'Value As Integer'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  SSFrame: def({
+    type: 'SSFrame', component: 'THREED32.OCX', namePrefix: 'SSFrame', defaultWidth: 1815, defaultHeight: 1335, isContainer: true,
+    toolboxTooltip: 'SSFrame', defaultEvent: 'Click', defaultMember: 'Caption',
+    props: [
+      ...common(), str('Caption'), en('Alignment', 0, ['Left Justify', 'Right Justify', 'Center']), en('ShadowStyle', 0, ['Inset', 'Raised']),
+      en('Font3D', 0, SS_FONT3D), color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(),
+    ],
+    events: [evClick(), evDbl(), ...evMouse()],
+  }),
+
+  // A toggle button: Value is True while it is down. Ribbons of one container with the same GroupNumber (above 0) work like option
+  // buttons; GroupAllowAllUp lets a click on the one that is down release it.
+  SSRibbon: def({
+    type: 'SSRibbon', component: 'THREED32.OCX', namePrefix: 'SSRibbon', defaultWidth: 495, defaultHeight: 495, toolboxTooltip: 'SSRibbon',
+    defaultEvent: 'Click', defaultMember: 'Value',
+    props: [
+      ...common(), str('Caption'), bool('Value', false), int('GroupNumber', 0, { min: 0, max: 32767 }), bool('GroupAllowAllUp', true),
+      picture('PictureUp'), picture('PictureDn'), int('BevelWidth', 1, { min: 1, max: 10 }), en('Font3D', 0, SS_FONT3D),
+      bool('Outline', false), bool('RoundedCorners', true),
+      color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(),
+    ],
+    events: [ev('Click', 'Value As Integer'), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
 
   // MSCHRT20.OCX. A table of RowCount x ColumnCount numbers: a column is a series, a row a data point (as MSChart's default). Row and Column
@@ -732,15 +1028,44 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       ev('BalloonShow', 'ByVal CharacterID As String'), ev('BalloonHide', 'ByVal CharacterID As String'),
     ],
   }),
+
+  // MSCAL.OCX (Calendar Control 8.0, the Access calendar): a grid of the days of one month. Value is an OLE serial; Day, Month and Year are parts of
+  // it. DayLength / MonthLength: 1 short, 2 medium, 3 long names. FirstDay 1 (Sunday) ... 7 (the default is the system's). GridCellEffect: 0 flat,
+  // 1 raised, 2 sunken. BeforeUpdate(Cancel) comes before every change of Value (user or code), then AfterUpdate; NewMonth / NewYear when the
+  // month / year of Value changed.
+  Calendar: def({
+    type: 'Calendar', component: 'MSCAL.OCX', namePrefix: 'Calendar', defaultWidth: 4800, defaultHeight: 3600, toolboxTooltip: 'Calendar',
+    defaultEvent: 'Click', defaultMember: 'Value',
+    props: [
+      ...common(),
+      p('Value', 'date', nowSerial(true)),
+      p('DayLength', 'enum', 2, { enumValues: ['Short', 'Medium', 'Long'].map((l, i) => ({ value: i + 1, label: `${i + 1} - ${l}` })) }),
+      p('MonthLength', 'enum', 3, { enumValues: ['Short', 'Medium', 'Long'].map((l, i) => ({ value: i + 1, label: `${i + 1} - ${l}` })) }),
+      p('FirstDay', 'enum', systemStartOfWeek(Intl.DateTimeFormat().resolvedOptions().locale), {
+        enumValues: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((l, i) => ({ value: i + 1, label: `${i + 1} - ${l}` })) }),
+      en('GridCellEffect', 1, ['Flat', 'Raised', 'Sunken']),
+      bool('ShowDateSelectors', true), bool('ShowDays', true), bool('ShowHorizontalGrid', true), bool('ShowTitle', true), bool('ShowVerticalGrid', true),
+      color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), color('GridLinesColor', sys(0x80000010)),
+      color('DayFontColor', WIN_TEXT), color('TitleFontColor', WIN_TEXT),
+      p('TitleFont', 'font', { ...DEFAULT_FONT, bold: true }), p('DayFont', 'font', DEFAULT_FONT), p('GridFont', 'font', DEFAULT_FONT),
+      rt('Day', 'int', 0), rt('Month', 'int', 0), rt('Year', 'int', 0),
+    ],
+    events: [
+      evClick(), evDbl(), ev('AfterUpdate'), ev('BeforeUpdate', 'Cancel As Integer'), ev('NewMonth'), ev('NewYear'), ...evFocus(), ...evKeys(),
+    ],
+    methods: [...baseMethods(), ...['Next', 'Previous'].flatMap(d => ['Day', 'Week', 'Month', 'Year'].map(u => ({ name: `${d}${u}`, params: '' }))),
+      { name: 'Today', params: '' }],
+  }),
 };
 
 /** VB6 toolbox order: every control type. The Toolbox shows the intrinsic ones, then the checked components' ones
  *  (components.ts toolboxTools), each in this order. */
 export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
-  'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar',
-  'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit',
-  'WebBrowser', 'Inet', 'Winsock', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent',
+  'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'Data', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar',
+  'TreeView', 'ListView', 'ImageList', 'ImageCombo', 'CoolBar', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'FlatScrollBar', 'Animation', 'MaskedEdit', 'Calendar',
+  'WebBrowser', 'Inet', 'Winsock', 'MSComm', 'SysInfo', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Adodc', 'DataGrid', 'DataList', 'DataCombo',
+  'SSPanel', 'SSCommand', 'SSCheck', 'SSOption', 'SSFrame', 'SSRibbon',
 ];
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -796,8 +1121,8 @@ export function newControl(form: FormDef, type: Exclude<ControlType, 'Form'>,
     props.Height = rect.height ?? td.defaultHeight;
   }
   if ('Caption' in props && type !== 'SSTab') props.Caption = name;   // an SSTab's Caption is its first tab's
-  if (type === 'TextBox' || type === 'ComboBox') props.Text = name;
-  if ('TabIndex' in props) props.TabIndex = form.controls.filter(c => 'TabIndex' in c.props).length;
+  if (type === 'TextBox' || type === 'ComboBox' || type === 'DataCombo' || type === 'ImageCombo') props.Text = name;
+  if ('TabIndex' in props) props.TabIndex = form.controls.reduce((m, c) => (typeof c.props.TabIndex === 'number' ? Math.max(m, c.props.TabIndex + 1) : m), 0);
   return { id: newId(), type, name, index: null, parentId, props };
 }
 

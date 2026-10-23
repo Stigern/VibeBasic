@@ -42,7 +42,7 @@ export function probeLength(src: string, video: boolean, timeoutMs = 4000): Prom
 }
 
 /** Opens and probes `path`: the open file (its `src` for the window) and the length. Throws 53 (missing) or 'cannot play'. */
-async function openMedia(h: RichHost, path: string, video: boolean): Promise<{ media: OpenedMedia; length: number }> {
+export async function openMedia(h: RichHost, path: string, video: boolean): Promise<{ media: OpenedMedia; length: number }> {
   const mime = mediaMime(path);
   const media = await h.openMedia(path, mime);
   try {
@@ -170,7 +170,7 @@ export class MediaClock {
 }
 
 /** The window's own reports about its media element (not clicks): true when `a` was one. */
-function windowReport(clock: MediaClock, a: Record<string, string | number>): boolean {
+export function windowReport(clock: MediaClock, a: Record<string, string | number>): boolean {
   if (a.verb === 'ended') { clock.windowEnded(); return true; }
   if (a.verb === 'duration') { clock.windowLength(Number(a.ms)); return true; }
   return false;

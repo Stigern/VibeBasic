@@ -226,6 +226,25 @@ test('a breakpoint follows its line when a line is inserted above it', () => {
   expect(ide.hasBreakpoints).toBe(false);
 });
 
+test('applying a whole-module AI change keeps the breakpoints of untouched procedures (review 08 final #2)', async () => {
+  const { applyCodeProposal } = await import('../../src/ai/codeMode');
+  const before = 'Private Sub Form_Load()\n  x = 1\n  y = 2\nEnd Sub\n\nPrivate Sub Helper()\n  w = 0\nEnd Sub\n\nPrivate Sub Command1_Click()\n  z = 3\nEnd Sub\n';
+  set(before, 0);
+  for (const n of [2, 3, 7, 11]) expect(cw.toggleBreakpoint(n)).toBe(true);
+  // the AI answer changes Form_Load's y line and Command1_Click; Helper, between them, is untouched
+  const proposal = 'Private Sub Form_Load()\r\n  x = 1\r\n  y = 20\r\nEnd Sub\r\nPrivate Sub Command1_Click()\r\n  MsgBox "a"\r\n  z = 4\r\nEnd Sub';
+  const applied = applyCodeProposal(cw.getSource(), proposal, 'Command1_Click');
+  expect(applied).not.toBeNull();
+  cw.applyChange(0, cw.getSource().length, applied!.source);
+  expect(cw.getSource()).toBe(applied!.source);
+  // x = 1 and w = 0 are untouched and y = 2 was edited in place: they keep theirs; z = 3 was replaced by two lines
+  expect(cw.breakpointLines()).toEqual([2, 3, 7]);
+  expect(view.state.selection.main.head).toBe(0);
+  // a line the change removes as a whole loses its breakpoint
+  cw.applyChange(0, cw.getSource().length, cw.getSource().replace('  x = 1\n', ''));
+  expect(cw.breakpointLines()).toEqual([2, 6]);
+});
+
 test('F9 on a comment, blank, Dim or Sub header line does nothing', () => {
   set("Dim a\nPrivate Sub Form_Load()\n  ' note\n\n  Dim b As Integer\n  b = 1\nEnd Sub\n");
   const actions: IdeActions = {};
@@ -234,4 +253,36 @@ test('F9 on a comment, blank, Dim or Sub header line does nothing', () => {
   expect(cw.breakpointLines()).toEqual([]);
   toLine(6); actions.toggleBreakpoint();
   expect(cw.breakpointLines()).toEqual([6]);
+});
+
+test('deleting the line of a breakpoint removes the breakpoint instead of moving it (review08 #5)', () => {
+  set('Private Sub Form_Load()\n  x = 1\n  y = 2\nEnd Sub\n');
+  expect(cw.toggleBreakpoint(2)).toBe(true);
+  const l2 = () => view.state.doc.line(2);
+  view.dispatch({ changes: { from: l2().from, to: l2().to + 1 } });   // the whole line with its line break
+  expect(view.state.doc.line(2).text).toBe('  y = 2');
+  expect(cw.breakpointLines()).toEqual([]);
+  expect(cw.toggleBreakpoint(2)).toBe(true);
+  view.dispatch({ changes: { from: view.state.doc.line(1).to, to: l2().to } });   // from the end of the line above
+  expect(cw.breakpointLines()).toEqual([]);
+  set('Private Sub Form_Load()\n  x = 1\n  y = 2\nEnd Sub\n');
+  expect(cw.toggleBreakpoint(3)).toBe(true);
+  view.dispatch({ changes: { from: l2().from + 2, to: l2().to, insert: 'x = 10' } });   // editing another line keeps it
+  view.dispatch({ changes: { from: view.state.doc.line(3).from, to: view.state.doc.line(3).to, insert: '  y = 3' } });   // retyped in place
+  expect(cw.breakpointLines()).toEqual([3]);
+});
+
+test('in break mode neither the event dropdown nor leaving a line changes the code (review08 #12)', () => {
+  const code = 'Private Sub Form_Load()\ntext1.text="x"\nx = \nEnd Sub';
+  set(code, 'Private Sub Form_Load()\ntext1.text="x"'.length);
+  ide.stack.markSaved();
+  ide.setMode('break');
+  toLine(3);                                   // leaves the unprettified line 2
+  toLine(1);                                   // leaves the bad line 3
+  cw.gotoProcedure('Command1', 'Click');       // no stub
+  expect(cw.getSource()).toBe(code);
+  expect(ide.stack.isDirty).toBe(false);
+  expect(box).not.toHaveBeenCalled();
+  cw.gotoProcedure('Form', 'Load');            // an existing procedure is still shown
+  expect(cw.getCursorLine()).toBe(2);
 });

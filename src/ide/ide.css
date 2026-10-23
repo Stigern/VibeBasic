@@ -80,6 +80,7 @@
 .dlgform98-row > span { flex: 0 0 130px; }
 .dlgform98-row > input, .dlgform98-row > .cb98 { flex: 1; min-width: 0; }
 .dlgform98-row > input.dlgform98-num { flex: 0 0 70px; }
+.dlgform98-row > select.dlgform98-select { flex: 1; min-width: 0; }
 .dlgform98-check { display: flex; align-items: center; gap: 6px; }
 
 /* Project > Components */

@@ -4,6 +4,7 @@
 
 import type { VBValue } from './values';
 import type { VBRuntimeError } from './errors';
+import type { FileSystemApi } from './fileio/fsApi';
 
 /**
  * A host object (form, control, App …). Contract the interpreter relies on:
@@ -17,6 +18,8 @@ import type { VBRuntimeError } from './errors';
 export interface VBObject {
   readonly vbTypeName: string;            // "TextBox", "Form" …
   readonly defaultMember?: string;        // "Text" for TextBox, "Caption" for Label
+  /** Method arguments are passed as they are: an object argument is not turned into its default member (Collection.Add). */
+  readonly rawArgs?: boolean;
   hasMember(name: string): boolean;
   getMember(name: string, args: VBValue[]): VBValue;              // also indexed: List1.List(2)
   /** A Promise: the write finishes later and the statement waits for it. */
@@ -55,10 +58,14 @@ export interface Host {
   /** One Debug.Print statement; `newline` is false after a trailing `;` or `,`. */
   debugPrint(text: string, newline: boolean): void;
   doEvents(): Promise<void>;
+  /** Beep: the system beep (a short tone); a host without sound may leave it out. */
+  beep?(): void;
   loadPicture(path: string): Promise<VBValue>;
   /** An unhandled run-time (or compile) error; `'end'` ends the program, `'debug'` enters break mode. */
   onRuntimeError(err: VBRuntimeError, at: CodeLocation): Promise<'end' | 'debug'>;
   onBreak(info: BreakInfo): Promise<'continue' | 'end'>;
   /** The program has ended (called once). */
   onEnd(): void;
+  /** File I/O and SaveSetting (Open, Kill, Dir ...). Absent: those statements raise error 68, Device unavailable. */
+  fileSystem?(): FileSystemApi | undefined;
 }

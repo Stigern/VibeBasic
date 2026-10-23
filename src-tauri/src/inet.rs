@@ -11,6 +11,8 @@ use tauri::State;
 use tokio::task::AbortHandle;
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
+/// A bigger answer is refused (35756) rather than read into memory whole: the body travels to the window as base64.
+pub const MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +46,10 @@ fn fail(number: u32, description: &str) -> String {
 
 /// Sends one request and reads the whole answer. Any HTTP status is a success (OpenURL returns the error page too).
 pub async fn request(r: &InetRequest) -> Result<InetResponse, String> {
+  request_limited(r, MAX_BODY_BYTES).await
+}
+
+async fn request_limited(r: &InetRequest, max_body: usize) -> Result<InetResponse, String> {
   let url = reqwest::Url::parse(r.url.trim()).map_err(|_| fail(35752, "URL is malformed"))?;
   if url.scheme() != "http" && url.scheme() != "https" {
     return Err(fail(35753, "Protocol not supported for this method"));
@@ -77,7 +83,7 @@ pub async fn request(r: &InetRequest) -> Result<InetResponse, String> {
       fail(35756, "Request to remote computer failed")
     }
   };
-  let resp = req.send().await.map_err(map)?;
+  let mut resp = req.send().await.map_err(map)?;
   let status = resp.status();
   let version = format!("{:?}", resp.version());
   let headers = resp
@@ -85,7 +91,17 @@ pub async fn request(r: &InetRequest) -> Result<InetResponse, String> {
     .iter()
     .map(|(k, v)| (k.as_str().to_string(), String::from_utf8_lossy(v.as_bytes()).to_string()))
     .collect();
-  let body = resp.bytes().await.map_err(map)?;
+  let too_big = || fail(35756, &format!("Request to remote computer failed: the answer is bigger than {} MB", max_body / (1024 * 1024)));
+  if resp.content_length().is_some_and(|n| n > max_body as u64) {
+    return Err(too_big());
+  }
+  let mut body: Vec<u8> = Vec::new();
+  while let Some(chunk) = resp.chunk().await.map_err(map)? {
+    if body.len() + chunk.len() > max_body {
+      return Err(too_big());
+    }
+    body.extend_from_slice(&chunk);
+  }
   Ok(InetResponse {
     status: status.as_u16(),
     status_text: status.canonical_reason().unwrap_or("").to_string(),
@@ -186,5 +202,18 @@ mod tests {
   async fn bad_urls_and_schemes_are_inet_errors() {
     assert!(request(&req("not a url".into(), "GET")).await.unwrap_err().starts_with("35752|"));
     assert!(request(&req("ftp://example.com/x".into(), "GET")).await.unwrap_err().starts_with("35753|"));
+  }
+
+  /// M2: an answer over the cap is 35756, not read into memory whole.
+  #[tokio::test]
+  async fn a_body_over_the_cap_is_refused() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+      when.method(GET).path("/big");
+      then.status(200).body(vec![b'x'; 5000]);
+    });
+    let r = req(server.url("/big"), "GET");
+    assert!(request_limited(&r, 4096).await.unwrap_err().starts_with("35756|"));
+    assert_eq!(B64.decode(request_limited(&r, 5000).await.unwrap().body).unwrap().len(), 5000);
   }
 }

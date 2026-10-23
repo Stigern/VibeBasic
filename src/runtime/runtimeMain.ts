@@ -21,22 +21,64 @@ async function fatalError(backend: Backend, text: string, host: Pick<TauriFormHo
   await backend.quitApp();
 }
 
-/** Cmd+Q state: a quit asked for before the session exists is applied as soon as it does. */
-const quit: { session: RunSession | null; backend: Backend | null; pending: boolean; fallback: ReturnType<typeof setTimeout> | null } =
-  { session: null, backend: null, pending: false, fallback: null };
+/** Cmd+Q state: a quit asked for before the session exists is applied as soon as it does. `dialogs`: dialogs open (MsgBox ...). */
+const quit: {
+  session: RunSession | null; backend: Backend | null; pending: boolean; asking: boolean; dialogs: number;
+  fallback: ReturnType<typeof setTimeout> | null;
+} = { session: null, backend: null, pending: false, asking: false, dialogs: 0, fallback: null };
 
-/** Cmd+Q: ends the program cleanly (onEnded then quits); a timer quits anyway if the program never reports back. */
+/** How long a program may take to answer Cmd+Q (not counting the time a dialog of it is open) before the app quits anyway. */
+const QUIT_FALLBACK_MS = 1500;
+
+function armFallback(backend: Backend): void {
+  if (quit.fallback) clearTimeout(quit.fallback);
+  quit.fallback = setTimeout(() => {
+    quit.fallback = null;
+    if (!quit.asking) return;
+    if (quit.dialogs > 0) armFallback(backend);   // "Save changes?": the user answers, however long that takes
+    else void backend.quitApp();                  // the program hangs
+  }, QUIT_FALLBACK_MS);
+}
+
+/**
+ * Cmd+Q: every form gets QueryUnload (UnloadMode vbAppWindows) and Unload, then the program ends (onEnded quits the app). A form
+ * that sets Cancel keeps the app running. A program that does not answer (a loop) is quit after QUIT_FALLBACK_MS; a second
+ * Cmd+Q while no dialog of it is open quits at once.
+ */
 export function requestQuit(): void {
   const { session, backend } = quit;
   if (!session || !backend) { quit.pending = true; return; }
   if (session.ended) { void backend.quitApp(); return; }
-  session.end();
-  if (!session.ended) quit.fallback ??= setTimeout(() => { void backend.quitApp(); }, 1500);
+  if (quit.asking) { if (quit.dialogs === 0) void backend.quitApp(); return; }
+  quit.asking = true;
+  armFallback(backend);
+  void session.quit().catch(() => false).then(done => {
+    quit.asking = false;
+    if (!done && quit.fallback) { clearTimeout(quit.fallback); quit.fallback = null; }
+  });
 }
 
 function sessionEnded(): void {
   if (quit.fallback) clearTimeout(quit.fallback);
   quit.fallback = null;
+  quit.asking = false;
+}
+
+const DIALOGS = new Set<PropertyKey>(['messageBox', 'inputBox', 'fileDialog', 'colorDialog', 'fontDialog', 'runtimeErrorBox']);
+/** The host as the session sees it: it counts the program's dialogs that are open (Cmd+Q waits while one is). */
+function countingDialogs(host: TauriFormHost): TauriFormHost {
+  return new Proxy(host, {
+    get(t, k) {
+      const v: unknown = Reflect.get(t, k, t);
+      if (typeof v !== 'function') return v;
+      const f = v as (...a: unknown[]) => unknown;
+      if (!DIALOGS.has(k)) return f.bind(t);
+      return (...a: unknown[]) => {
+        quit.dialogs++;
+        return Promise.resolve(f.apply(t, a)).finally(() => { quit.dialogs--; });
+      };
+    },
+  });
 }
 
 export async function startRuntime(project: Project, backend: Backend, host: TauriFormHost = new TauriFormHost()): Promise<void> {
@@ -44,10 +86,11 @@ export async function startRuntime(project: Project, backend: Backend, host: Tau
   const appName = await backend.getAppName().catch(() => '');
   let session: RunSession;
   try {
-    session = new RunSession(project, host, {
+    session = new RunSession(project, countingDialogs(host), {
       debugPrint: () => {},
       onBreak: async () => 'end',
-      onEnded: () => { sessionEnded(); void host.dispose().finally(() => backend.quitApp()); },
+      // the text Print # left in buffers is on disk before the app quits
+      onEnded: () => { sessionEnded(); void session.filesClosed.then(() => host.dispose()).finally(() => backend.quitApp()); },
       readFile: p => backend.readBinaryFile(p),
       appPath,
       appName,

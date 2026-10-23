@@ -21,6 +21,9 @@ group({
   vbBack: '\b', vbFormFeed: '\f', vbVerticalTab: '\v', vbNullChar: '\0',
 });
 
+// File attributes (Dir, GetAttr, SetAttr)
+group({ vbNormal: 0, vbReadOnly: 1, vbHidden: 2, vbSystem: 4, vbVolume: 8, vbDirectory: 16, vbArchive: 32, vbAlias: 64 });
+
 // Colours (VB6 Long: &H00BBGGRR)
 group({
   vbBlack: 0, vbRed: 0xff, vbGreen: 0xff00, vbYellow: 0xffff,
@@ -45,11 +48,15 @@ group({ vbShiftMask: 1, vbCtrlMask: 2, vbAltMask: 4, vbLeftButton: 1, vbRightBut
 group({
   vbUnchecked: 0, vbChecked: 1, vbGrayed: 2,
   vbModal: 1, vbModeless: 0,
+  vbUpperCase: 1, vbLowerCase: 2, vbProperCase: 3, vbWide: 4, vbNarrow: 8, vbUnicode: 64, vbFromUnicode: 128,
   vbTextCompare: 1, vbBinaryCompare: 0, vbUseCompareOption: -1,
 });
 
 // Misc
-group({ vbTrue: -1, vbFalse: 0, vbObjectError: -2147221504 });
+group({ vbTrue: -1, vbFalse: 0, vbUseDefault: -2, vbObjectError: -2147221504 });   // vbTrue/vbFalse/vbUseDefault: Tristate
+
+// FirstWeekOfYear (DatePart, DateDiff, Format)
+group({ vbUseSystem: 0, vbFirstJan1: 1, vbFirstFourDays: 2, vbFirstFullWeek: 3 });
 
 // Weekdays (Weekday, WeekdayName, DateDiff)
 group({
@@ -93,6 +100,11 @@ group({ sbrNormal: 0, sbrSimple: 1, sbrText: 0, sbrLeft: 0, sbrCenter: 1, sbrRig
 // SSTab
 group({ ssStyleTabbedDialog: 0, ssStylePropertyPage: 1 });
 
+// Sheridan 3D Controls (THREED32.OCX): SSPanel Alignment
+group({
+  ssLeftTop: 0, ssLeftMiddle: 1, ssLeftBottom: 2, ssRightTop: 3, ssRightMiddle: 4, ssRightBottom: 5, ssCenterTop: 6, ssCenterMiddle: 7, ssCenterBottom: 8,
+});
+
 // Toolbar (Button.Style, Button.Value, Toolbar.Style) and Align
 group({
   tbrDefault: 0, tbrCheck: 1, tbrButtonGroup: 2, tbrSeparator: 3, tbrPlaceholder: 4, tbrDropdown: 5,
@@ -104,6 +116,12 @@ group({
 group({
   dtpLongDate: 0, dtpShortDate: 1, dtpTime: 2, dtpCustom: 3,
   mvwSunday: 1, mvwMonday: 2, mvwTuesday: 3, mvwWednesday: 4, mvwThursday: 5, mvwFriday: 6, mvwSaturday: 7,
+});
+
+// MSCOMCT2.OCX: FlatScrollBar (Orientation, Appearance, Arrows), Animation (BackStyle); COMCT332.OCX: CoolBar bands
+group({
+  cc2OrientationVertical: 0, cc2OrientationHorizontal: 1, fsb3D: 0, fsbFlat: 1, fsbTrack3D: 2, fsbBoth: 0, fsbLeftUp: 1, fsbRightDown: 2,
+  cc2BackstyleTransparent: 0, cc2BackstyleOpaque: 1, cbrDefault: 0, cbrFixedSize: 1,
 });
 
 // Inet (MSINET.OCX): StateChanged states, protocols, access types, data types
@@ -127,6 +145,17 @@ group({
   sckNetworkUnreachable: 10051, sckNetReset: 10052, sckConnectAborted: 10053, sckConnectionReset: 10054, sckNoBufferSpace: 10055,
   sckAlreadyConnected: 10056, sckNotConnected: 10057, sckSocketShutdown: 10058, sckTimedout: 10060, sckConnectionRefused: 10061,
   sckNotInitialized: 10093, sckHostNotFound: 11001, sckHostNotFoundTryAgain: 11002, sckNonRecoverableError: 11003, sckNoData: 11004,
+});
+
+// MSComm (MSCOMM32.OCX): OnComm's CommEvent values, handshaking, input modes and error numbers
+group({
+  comEvSend: 1, comEvReceive: 2, comEvCTS: 3, comEvDSR: 4, comEvCD: 5, comEvRing: 6, comEvEOF: 7,
+  comEventBreak: 1001, comEventCTSTO: 1002, comEventDSRTO: 1003, comEventFrame: 1004, comEventOverrun: 1006, comEventCDTO: 1007,
+  comEventRxOver: 1008, comEventRxParity: 1009, comEventTxFull: 1010, comEventDCB: 1011,
+  comNone: 0, comXOnXoff: 1, comRTS: 2, comRTSXOnXOff: 3,
+  comInputModeText: 0, comInputModeBinary: 1,
+  comInvalidPropertyValue: 380, comSetNotSupported: 383, comGetNotSupported: 394, comPortOpen: 8000, comPortInvalid: 8002,
+  comPortAlreadyOpen: 8005, comNoOpen: 8012, comSetCommStateFailed: 8015, comPortNotOpen: 8018, comReadError: 8020, comDCBError: 8021,
 });
 
 // WebBrowser (SHDOCVW.DLL): Navigate flags
@@ -157,3 +186,40 @@ group({
 
 // Clipboard formats (GetFormat, GetText, SetText): only vbCFText is supported
 group({ vbCFText: 1, vbCFBitmap: 2, vbCFMetafile: 3, vbCFDIB: 8, vbCFPalette: 9, vbCFEMetafile: 14, vbCFFiles: 15, vbCFLink: -16640, vbCFRTF: -16639 });
+
+// Data control (DAO): Validate's Action, Error's Response, BOFAction / EOFAction, RecordsetType, EditMode, OpenRecordset, Field.Type
+group({
+  vbDataActionCancel: 0, vbDataActionMoveFirst: 1, vbDataActionMovePrevious: 2, vbDataActionMoveNext: 3, vbDataActionMoveLast: 4,
+  vbDataActionAddNew: 5, vbDataActionUpdate: 6, vbDataActionDelete: 7, vbDataActionFind: 8, vbDataActionBookmark: 9,
+  vbDataActionClose: 10, vbDataActionUnload: 11,
+  vbDataErrContinue: 0, vbDataErrDisplay: 1,
+  vbBOFActionMoveFirst: 0, vbBOFActionBOF: 1, vbEOFActionMoveLast: 0, vbEOFActionEOF: 1, vbEOFActionAddNew: 2,
+  vbRSTypeTable: 0, vbRSTypeDynaset: 1, vbRSTypeSnapShot: 2,
+  dbOpenTable: 1, dbOpenDynaset: 2, dbOpenSnapshot: 4, dbOpenForwardOnly: 8,
+  dbEditNone: 0, dbEditInProgress: 1, dbEditAdd: 2,
+  dbBoolean: 1, dbByte: 2, dbInteger: 3, dbLong: 4, dbCurrency: 5, dbSingle: 6, dbDouble: 7, dbDate: 8, dbBinary: 9, dbText: 10,
+  dbLongBinary: 11, dbMemo: 12,
+});
+
+// ADO (Adodc, Recordset, Connection): EventReasonEnum, EventStatusEnum, Find, Move, EditMode, CommandType, cursors, State, Field.Type
+group({
+  adRsnAddNew: 1, adRsnDelete: 2, adRsnUpdate: 3, adRsnUndoUpdate: 4, adRsnUndoAddNew: 5, adRsnUndoDelete: 6, adRsnRequery: 7,
+  adRsnResynch: 8, adRsnClose: 9, adRsnMove: 10, adRsnFirstChange: 11, adRsnMoveFirst: 12, adRsnMoveNext: 13, adRsnMovePrevious: 14, adRsnMoveLast: 15,
+  adStatusOK: 1, adStatusErrorsOccurred: 2, adStatusCantDeny: 3, adStatusCancel: 4, adStatusUnwantedEvent: 5,
+  adSearchForward: 1, adSearchBackward: -1, adBookmarkCurrent: 0, adBookmarkFirst: 1, adBookmarkLast: 2,
+  adEditNone: 0, adEditInProgress: 1, adEditAdd: 2, adEditDelete: 4,
+  adCmdText: 1, adCmdTable: 2, adCmdStoredProc: 4, adCmdUnknown: 8, adCmdTableDirect: 512,
+  adStateClosed: 0, adStateOpen: 1, adPosUnknown: -1, adPosBOF: -2, adPosEOF: -3,
+  adUseServer: 2, adUseClient: 3, adOpenForwardOnly: 0, adOpenKeyset: 1, adOpenDynamic: 2, adOpenStatic: 3,
+  adLockReadOnly: 1, adLockPessimistic: 2, adLockOptimistic: 3, adLockBatchOptimistic: 4,
+  adDoMoveFirst: 0, adStayBOF: 1, adDoMoveLast: 0, adStayEOF: 1, adDoAddNew: 2,
+  adSmallInt: 2, adInteger: 3, adSingle: 4, adDouble: 5, adCurrency: 6, adDate: 7, adBoolean: 11, adVariant: 12, adTinyInt: 16,
+  adBigInt: 20, adVarWChar: 202, adLongVarWChar: 203, adLongVarBinary: 205,
+});
+
+// DataGrid (MSDATGRD.OCX), DataList / DataCombo (MSDATLST.OCX)
+group({
+  dbgLeft: 0, dbgRight: 1, dbgCenter: 2, dbgGeneral: 3, dbgNoBorder: 0, dbgFixedSingle: 1,
+  dbcAreaButton: 0, dbcAreaEdit: 1, dbcAreaList: 2, dbcDropdownCombo: 0, dbcSimpleCombo: 1, dbcDropdownList: 2,
+  dblBasicMatching: 0, dblExtendedMatching: 1,
+});

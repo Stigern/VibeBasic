@@ -2,7 +2,7 @@
 // tables (built-in functions and constants, the parser's type and unsupported-word tables), so a new built-in shows up
 // by itself. Everything is sorted: the card, and with it the system prompt, is byte-identical on every build (prefix caching).
 import { BUILTINS, CANONICAL_NAMES, CONSTANTS } from '../lang/builtins';
-import { HASH_STATEMENTS, TYPE_KEYWORDS, UNSUPPORTED_IDENTS, UNSUPPORTED_KEYWORDS } from '../lang/parseStatements';
+import { TYPE_KEYWORDS, UNSUPPORTED_IDENTS, UNSUPPORTED_KEYWORDS } from '../lang/parseStatements';
 import { BUILTIN_OBJECTS } from './knownNames';
 
 const byName = (a: string, b: string): number => a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0;
@@ -13,6 +13,7 @@ const cap = (s: string): string => s[0].toUpperCase() + s.slice(1);
 function functionLines(): string[] {
   const groups = new Map<string, { min: number; max: number; names: string[] }>();
   for (const [key, b] of BUILTINS) {
+    if (key === 'shell') continue;   // exists only to raise a clear error; the card lists it as not available
     const sig = b.maxArgs >= 100 ? `${b.minArgs}+` : b.minArgs === b.maxArgs ? `${b.minArgs}` : `${b.minArgs}-${b.maxArgs}`;
     const g = groups.get(sig) ?? { min: b.minArgs, max: b.maxArgs, names: [] };
     g.names.push(canonical(key));
@@ -45,26 +46,29 @@ const STATEMENTS = 'Option Explicit; Dim / Private / Public / Static x As Type, 
   + ' [Public|Private] Sub / Function (ByVal, ByRef, Optional p = default) ... End Sub / End Function; Call; Set obj = ...;'
   + ' If ... Then ... ElseIf ... Else ... End If (and one-line If); Select Case (Case 1, 2 To 5, Is > 3, Case Else); For ... To ... Step ... Next; For Each x In ... Next;'
   + ' Do [While|Until] ... Loop [While|Until]; While ... Wend; With ... End With; Exit Sub / Function / For / Do;'
-  + ' On Error GoTo label / Resume Next / GoTo 0; Resume [Next]; GoTo label; Load / Unload; End; Stop; Debug.Print; : joins statements, _ continues a line.';
+  + ' On Error GoTo label / Resume Next / GoTo 0; Resume [Next]; GoTo label; Load / Unload; End; Stop; Debug.Print; : joins statements, _ continues a line.'
+  + ' Files: Open path For Input|Output|Append|Binary|Random As #n [Len = n]; Close [#n]; Print #n, a; b; Write #n, a, b; Input #n, a, b;'
+  + ' Line Input #n, s; Get / Put #n, [pos], var; Seek #n, pos; Name old As new (paths may use \\ or /, relative to CurDir = App.Path at start).'
+  + ' Also: Mid(s, i, n) = x; LSet / RSet s = x; Error n (Erl gives the last line number); Dim c As New Collection / Set c = New Collection (Add, Item, Count, Remove);'
+  + ' Function F() As Long() returns an array; IsMissing(v) for an Optional Variant; !Name also works inside With rs.';
 
 /** Builds the card from the language's tables (exported for the stability test). */
 export function buildLanguageReference(): string {
   const types = Object.values(TYPE_KEYWORDS).map(String).sort(byName);
   const objects = [...BUILTIN_OBJECTS].map(cap).sort(byName);
   const words = Object.values(UNSUPPORTED_KEYWORDS).sort(byName);
-  const fileIo = Object.values(HASH_STATEMENTS).sort(byName).map(w => `${w} #`);
   const drawing = Object.values(UNSUPPORTED_IDENTS).sort(byName);
   return [
     'Language reference (VibeBasic dialect of VB6):',
     `Statements: ${STATEMENTS}`,
-    `Types: ${types.join(', ')} (suffixes % & ! # $). Operators: + - * / \\ Mod ^ &, = <> < > <= >=, Like, Is, Not, And, Or, Xor, Eqv, Imp.`,
+    `Types: ${types.join(', ')} (suffixes % & ! # $). Operators: + - * / \\ Mod ^ &, = <> < > <= >=, Like, Is, Not, And, Or, Xor, Eqv, Imp; rs!Name is rs("Name") (a Recordset field).`,
     `Objects: ${objects.join(', ')}.`,
     'Built-in functions by argument count (String functions also have a $ form, e.g. Left$):',
     ...functionLines(),
     'Constant groups (prefix, count, examples):',
     ...constantGroups(),
-    `Not available: ${words.join(', ')}; file I/O (${fileIo.join(', ')}); ${drawing.join(' / ')} on forms; class modules;`
-      + ' CreateObject / GetObject (no COM automation); named arguments (x:=1). Keep data in variables.',
+    `Not available: ${words.join(', ')}; ${drawing.join(' / ')} on forms; class modules;`
+      + ' CreateObject / GetObject (no COM automation); Shell (programs cannot be started); named arguments (x:=1).',
   ].join('\n');
 }
 

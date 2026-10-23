@@ -132,3 +132,50 @@ test('test connection stores the context size; old settings without it load as u
   await flush();
   expect((await loadAiSettings(b)).contextTokens).toBe(262144);
 });
+
+test('Fast follow-up rounds: on for old settings, saved only when turned off', async () => {
+  const b = fakeBackend();
+  b.store.set('ai', { baseUrl: 'http://x/v1', model: 'm', apiKey: '', thinking: 'low' });
+  expect((await loadAiSettings(b)).fastFollowUp).toBeUndefined();
+  const tab = buildAiTab(b, document);
+  await flush();
+  expect(tab.controls.fast.checked).toBe(true);
+  expect(tab.content.textContent).toContain('Fast follow-up rounds');
+  tab.controls.fast.checked = false;
+  tab.controls.fast.dispatchEvent(new Event('change'));
+  tab.apply();
+  await flush();
+  expect((await loadAiSettings(b)).fastFollowUp).toBe(false);
+});
+
+test('test connection records the server kind: owned_by "vllm" is vllm, anything else openai; old settings have none', async () => {
+  for (const [ownedBy, kind] of [['vllm', 'vllm'], ['ollama', 'openai'], [undefined, 'openai']] as const) {
+    const b = fakeBackend(async () => [{ id: 'q', ...(ownedBy ? { ownedBy } : {}) }]);
+    b.store.set('ai', { baseUrl: 'http://x/v1', model: 'q', apiKey: '', thinking: 'server' });
+    expect((await loadAiSettings(b)).serverKind).toBeUndefined();
+    const tab = buildAiTab(b, document);
+    await flush();
+    const p = tab.controls.testConnection();
+    await flush(); okButton().click(); await p;
+    tab.apply();
+    await flush();
+    expect((await loadAiSettings(b)).serverKind).toBe(kind);
+  }
+});
+test('test connection probes vision with one tiny picture and stores it; Send form picture Off is saved', async () => {
+  const b = { ...fakeBackend(async () => [{ id: 'vl', ownedBy: 'vllm' }]), aiChat: vi.fn(async () => 'OK') };
+  const tab = buildAiTab(b, document);
+  await flush();
+  tab.controls.model.setValue('vl');
+  const p = tab.controls.testConnection();
+  await vi.waitFor(() => expect(document.body.textContent).toContain('vl can see pictures.'));
+  okButton().click(); await p;
+  expect((b.aiChat.mock.calls as unknown as any[][])[0][3][0].content[1].type).toBe('image_url');
+  tab.controls.picture.setValue('Off');
+  tab.apply(); await flush();
+  expect(b.store.get('ai')).toMatchObject({ model: 'vl', serverKind: 'vllm', vision: true, formPicture: 'off' });
+  // old settings: unknown vision, picture Auto
+  const old = fakeBackend(); old.store.set('ai', { baseUrl: 'http://x/v1', model: 'm', apiKey: '', thinking: 'low' });
+  const s = await loadAiSettings(old);
+  expect(s.vision).toBeUndefined(); expect(s.formPicture).toBeUndefined();
+});

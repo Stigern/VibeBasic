@@ -17,6 +17,9 @@ import { KEYWORDS, type Token, type TokenKind } from './tokens';
 
 type Suffix = NonNullable<Token['suffix']>;
 
+/** What a date literal has besides digits: a date separator or a colon between digits, or a month name. */
+const DATE_SHAPE = /\d\s*[/-]\s*\d|\d\s*:\s*\d|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i;
+
 const isDigit = (c: string) => c >= '0' && c <= '9';
 const isIdentStart = (c: string) => /\p{L}/u.test(c);
 const isIdentPart = (c: string) => /[\p{L}\p{N}_]/u.test(c);
@@ -136,7 +139,8 @@ export function tokenize(src: string): Token[] {
       let p = pos + 1;
       while (p < n && src[p] !== '#' && !newlineLen(p)) p++;
       const inner = src.slice(pos + 1, p);
-      if (src[p] === '#' && /\d/.test(inner) && /^[\w/\-:.,\s]+$/.test(inner)) {
+      // a date or time (`#1/2/2000#`, `#12:30 PM#`, `#1 Jan 2000#`); `#1, #2` (file numbers) is not one
+      if (src[p] === '#' && /\d/.test(inner) && /^[\w/\-:.,\s]+$/.test(inner) && DATE_SHAPE.test(inner)) {
         push('date', src.slice(pos, p + 1), start, { value: inner.trim() });
         pos = p + 1;
         continue;
@@ -153,7 +157,9 @@ export function tokenize(src: string): Token[] {
       const word = src.slice(pos, p);
       const lower = word.toLowerCase();
       let suffix: Suffix | undefined;
-      if (p < n && isSuffix(src[p])) suffix = src[p++] as Suffix;
+      // `rs!Name` / `rs![Order Date]`: a `!` right before a name is the bang operator, not the Single suffix
+      const bang = src[p] === '!' && p + 1 < n && (isIdentStart(src[p + 1]) || src[p + 1] === '[');
+      if (p < n && isSuffix(src[p]) && !bang) suffix = src[p++] as Suffix;
       // `Rem` comment at statement start
       if (lower === 'rem' && !suffix && atStatementStart()) {
         let e = p;
@@ -162,7 +168,7 @@ export function tokenize(src: string): Token[] {
         pos = e;
         continue;
       }
-      const afterDot = out.length > 0 && out[out.length - 1].kind === 'op' && out[out.length - 1].text === '.'
+      const afterDot = out.length > 0 && out[out.length - 1].kind === 'op' && (out[out.length - 1].text === '.' || out[out.length - 1].text === '!')
         && out[out.length - 1].line === line && out[out.length - 1].col === colAt(pos) - 1;
       const isKeyword = !suffix && !afterDot && KEYWORDS.has(lower);
       push(isKeyword ? 'keyword' : 'ident', src.slice(pos, p), start, suffix ? { suffix } : {});
@@ -178,6 +184,14 @@ export function tokenize(src: string): Token[] {
       continue;
     }
     if (c === ':') { push('colon', ':', start); pos++; continue; }
+    if (c === '!' && src[pos + 1] === '[') {   // `rs![Order Date]`: the bracketed name is one identifier
+      const close = src.indexOf(']', pos + 2);
+      if (close < 0 || src.slice(pos + 2, close).includes('\n')) fail("Expected: ']'", pos + 1);
+      push('op', '!', start);
+      out.push({ kind: 'ident', text: src.slice(pos + 2, close), line, col: colAt(pos + 1) });
+      pos = close + 1;
+      continue;
+    }
     if ('+-*/\\^&=<>(),;.!'.includes(c)) { push('op', c, start); pos++; continue; }
 
     fail(`Invalid character '${c}'`, pos);

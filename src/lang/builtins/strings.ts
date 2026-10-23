@@ -3,7 +3,7 @@
 // Functions that VB6 lets take Null (Left, UCase, ...) return Null for Null.
 
 import { VBRuntimeError } from '../errors';
-import { Null, VBArray, toStr } from '../values';
+import { Null, VBArray, VBRecord, toBool, toStr } from '../values';
 import { def, intArg, isNullV, isTextCompare, optInt, repeat } from './util';
 
 // ---- Windows-1252 ----
@@ -32,7 +32,8 @@ export function asc1252(c: string): number {
 
 // ---- length, slicing ----
 
-def('Len', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).length));
+/** Len of a user-type variable is its size in a file (Open ... Len = Len(rec)). */
+def('Len', 1, 1, (a, ctx) => (isNullV(a[0]) ? Null : a[0] instanceof VBRecord && ctx.files ? ctx.files.recordLength(a[0]) : toStr(a[0]).length));
 
 def('Left', 2, 2, a => {
   if (isNullV(a[0])) return Null;
@@ -61,6 +62,17 @@ def('Mid', 2, 3, a => {
 
 def('UCase', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).toUpperCase()));
 def('LCase', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).toLowerCase()));
+
+/** StrConv: vbUpperCase 1, vbLowerCase 2, vbProperCase 3; the others (vbWide, vbNarrow, vbUnicode, vbFromUnicode) leave the text as it is. */
+def('StrConv', 2, 3, a => {
+  if (isNullV(a[0])) return Null;
+  const s = toStr(a[0]);
+  const conv = intArg(a[1]);
+  if (conv === 1) return s.toUpperCase();
+  if (conv === 2) return s.toLowerCase();
+  if (conv === 3) return s.toLowerCase().replace(/(^|[^\p{L}\p{N}'])(\p{L})/gu, (_m, pre: string, ch: string) => pre + ch.toUpperCase());
+  return s;
+});
 def('Trim', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).replace(/^ +| +$/g, '')));
 def('LTrim', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).replace(/^ +/, '')));
 def('RTrim', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).replace(/ +$/, '')));
@@ -203,6 +215,20 @@ def('Split', 1, 4, a => {
   const arr = new VBArray('String', [[0, parts.length - 1]]);
   parts.forEach((p, i) => arr.set([i], p));
   return arr;
+});
+
+/** Filter(strings, match[, include[, compare]]): the elements that contain `match` (or, with include False, do not). */
+def('Filter', 2, 4, a => {
+  const arr = a[0];
+  if (isNullV(arr) || isNullV(a[1])) throw new VBRuntimeError(94);
+  if (!(arr instanceof VBArray) || arr.bounds.length !== 1) throw new VBRuntimeError(13);
+  const text = isTextCompare(a[3]);
+  const match = fold(toStr(a[1]), text);
+  const include = a[2] === undefined || toBool(a[2]);
+  const hits = arr.values().map(v => toStr(v)).filter(v => fold(v, text).includes(match) === include);
+  const out = new VBArray('String', [[0, hits.length - 1]]);
+  hits.forEach((h, i) => out.set([i], h));
+  return out;
 });
 
 def('Join', 1, 2, a => {

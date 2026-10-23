@@ -20,21 +20,25 @@ export class ErrObject implements VBObject {
   number = 0;
   description = '';
   source = '';
+  /** `Erl`: the line number label before the statement that failed (0: none). */
+  erl = 0;
 
   /** `appTitle` is the default Source (the project name, as in VB6). */
   constructor(readonly appTitle = 'Project1') {}
 
   /** Fills Err from a caught (or unhandled) error. */
-  setFrom(err: VBRuntimeError): void {
+  setFrom(err: VBRuntimeError, erl = 0): void {
     this.number = err.number;
     this.description = err.description;
     this.source = err.source ?? this.appTitle;
+    this.erl = erl;
   }
 
   clear(): void {
     this.number = 0;
     this.description = '';
     this.source = '';
+    this.erl = 0;
   }
 
   /**
@@ -97,6 +101,9 @@ export function errOf(ctx: BuiltinCtx): ErrObject {
 }
 
 def('Err', 0, 0, (_a, ctx) => errOf(ctx));
+
+/** `Erl`: the line number label before the statement of the last error (0 when that line has none). */
+def('Erl', 0, 0, (_a, ctx) => errOf(ctx).erl);
 
 /** `Error(n)`: VB's text for error n (`''` for 0); `Error` alone: the current Err.Description. */
 def('Error', 0, 1, (a, ctx) => {

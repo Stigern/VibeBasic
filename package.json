@@ -1,7 +1,7 @@
 {
   "name": "vibebasic",
   "private": true,
-  "version": "0.7.5",
+  "version": "0.8.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,7 @@
     "test": "vitest run",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "tauri": "tauri",
+    "build:app": "scripts/build-app.sh",
     "version": "node scripts/sync-version.mjs && git add src-tauri/Cargo.toml src-tauri/Cargo.lock"
   },
   "devDependencies": {

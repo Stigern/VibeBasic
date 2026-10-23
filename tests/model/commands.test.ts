@@ -482,3 +482,19 @@ test('moveResizeCmd moves a Line by shifting X1..Y2 and undoes it', () => {
   expect(line.props).toMatchObject({ X1: 100, Y1: 100, X2: 600, Y2: 400 });
   expect(project.forms[0].controls[0]).toBe(line);
 });
+
+test('undo / redo of Add Module and Add Form keeps the code typed in since (review08 #1)', () => {
+  const { project, stack } = setup();
+  stack.execute(addModuleCmd({ id: 'm1', name: 'Module1', code: '' }));
+  stack.execute(addFormCmd({ id: 'f2', name: 'Form2', props: {}, controls: [], code: '' }));
+  project.modules[0].code = 'Public Function Twice(x)\n    Twice = x * 2\nEnd Function\n';  // the code window writes here directly
+  project.forms[1].code = 'Private Sub Form_Load()\nEnd Sub\n';
+  stack.undo(); stack.undo();
+  expect(project.modules).toHaveLength(0);
+  expect(project.forms).toHaveLength(1);
+  stack.redo(); stack.redo();
+  expect(project.modules[0].code).toContain('Twice = x * 2');
+  expect(project.forms[1].code).toContain('Form_Load');
+  stack.undo(); stack.redo();   // a second round keeps it too
+  expect(project.forms[1].code).toContain('Form_Load');
+});

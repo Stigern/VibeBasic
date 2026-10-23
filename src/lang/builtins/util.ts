@@ -3,6 +3,7 @@
 
 import type { Host } from '../host';
 import type { ErrObject } from './err';
+import type { FileIO } from '../fileio/fileIO';
 import { VBRuntimeError } from '../errors';
 import { NullT, bankers, toNumber, type VBValue } from '../values';
 
@@ -16,6 +17,8 @@ export interface BuiltinCtx {
   rnd?: RndState;
   /** The program's `Err` object (created on first use if absent). */
   err?: ErrObject;
+  /** The program's open files and CurDir (file I/O built-ins raise 68 without it). */
+  files?: FileIO;
 }
 
 /** VB's fixed Rnd sequence: every fresh program (without Randomize) starts the same. */
@@ -31,8 +34,17 @@ export const newRndState = (): RndState => ({ state: 0x2545f491, last: 0.7055475
 export type Builtin = {
   minArgs: number;
   maxArgs: number;
-  fn: (args: VBValue[], ctx: BuiltinCtx) => VBValue | Promise<VBValue>;
+  /** `types[i]`: the type the code gives argument i (a typed variable or expression), for TypeName/VarType; see `types`. */
+  fn: (args: VBValue[], ctx: BuiltinCtx, types?: (string | undefined)[]) => VBValue | Promise<VBValue>;
+  /** Gets a missing Optional argument (`Missing`) as it is; other built-ins see it as omitted. */
+  raw?: boolean;
+  /** Called with the arguments' types from the code (interp/staticTypes.ts `reportedType`). */
+  types?: boolean;
+  /** Numeric: a Single argument comes exact (Sqr(s)); other built-ins get a Single as its 7 shown digits (CStr(s)). */
+  num?: boolean;
 };
+
+export interface DefOptions { raw?: boolean; types?: boolean; num?: boolean }
 
 /** Built-in functions by lower-case name. */
 export const BUILTINS = new Map<string, Builtin>();
@@ -54,15 +66,16 @@ export const CANONICAL_NAMES = new Map<string, string>();
  */
 export function def(
   names: string | string[], minArgs: number, maxArgs: number,
-  fn: (args: VBValue[], ctx: BuiltinCtx) => VBValue | Promise<VBValue>,
+  fn: (args: VBValue[], ctx: BuiltinCtx, types?: (string | undefined)[]) => VBValue | Promise<VBValue>,
+  opts: DefOptions = {},
 ): void {
-  const impl: Builtin['fn'] = (args, ctx) => {
+  const impl: Builtin['fn'] = (args, ctx, types) => {
     if (args.length < minArgs || args.length > maxArgs) throw new VBRuntimeError(450);
     for (let i = 0; i < minArgs; i++) if (args[i] === undefined) throw new VBRuntimeError(450);
-    return fn(args, ctx);
+    return fn(args, ctx, types);
   };
   for (const n of Array.isArray(names) ? names : [names]) {
-    BUILTINS.set(n.toLowerCase(), { minArgs, maxArgs, fn: impl });
+    BUILTINS.set(n.toLowerCase(), { minArgs, maxArgs, fn: impl, ...opts });
     CANONICAL_NAMES.set(n.toLowerCase(), n);
   }
 }

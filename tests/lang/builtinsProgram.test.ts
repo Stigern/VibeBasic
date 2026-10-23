@@ -226,11 +226,52 @@ Debug.Print Format(CDate("2026-10-22"), "yyyy-mm-dd"); " "; Format(CDate("10/22/
 
   test('the parser of one Program does not leak into another', async () => {
     const host = new TestHost();
-    const src = 'Sub Main()\nDebug.Print IsDate("22.10.2026")\nEnd Sub\n';
+    // a Norwegian month name: en-US reads 22.10.2026 too (VB6 swaps day and month when the month is out of range)
+    const src = 'Sub Main()\nDebug.Print IsDate("22. okt. 2026")\nEnd Sub\n';
     const us = new Program([{ name: 'Module1', kind: 'module', source: src }], host, { locale: 'en-US' });
     const no = new Program([{ name: 'Module1', kind: 'module', source: src }], host, { locale: 'nb-NO' });
     await no.runEvent('Module1', 'Main');
     await us.runEvent('Module1', 'Main');
     expect(host.lines()).toEqual(['True', 'False']);
   });
+});
+
+test('ParamArray collects the remaining arguments in a 0-based Variant array', async () => {
+  const src = `Sub Show(ByVal head As String, ParamArray args() As Variant)
+Debug.Print head; LBound(args); UBound(args)
+Dim i As Integer, t As Long
+For i = LBound(args) To UBound(args)
+t = t + args(i)
+Next
+Debug.Print t
+End Sub
+Sub Main()
+Show "a", 1, 2, 3
+Show "b"
+End Sub
+`;
+  const host = new TestHost();
+  const prog = new Program([{ name: 'Module1', kind: 'module', source: src }], host, { locale: 'en-US' });
+  await prog.runEvent('Module1', 'Main');
+  expect(host.lines()).toEqual(['a 0  2 ', ' 6 ', 'b 0 -1 ', ' 0 ']);
+});
+
+test('ParamArray with a parenthesised ByRef first argument: the first is a copy, the rest are collected', async () => {
+  const src = `Sub Bump(n As Long, ParamArray more() As Variant)
+n = n + 100
+Debug.Print UBound(more); more(0)
+End Sub
+Sub Main()
+Dim x As Long, s As Single
+x = 1: s = 0.1
+Bump x, 7
+Debug.Print x
+Bump (x), s
+Debug.Print x
+End Sub
+`;
+  const host = new TestHost();
+  const prog = new Program([{ name: 'Module1', kind: 'module', source: src }], host, { locale: 'en-US' });
+  await prog.runEvent('Module1', 'Main');
+  expect(host.lines()).toEqual([' 0  7 ', ' 101 ', ' 0  .1 ', ' 101 ']);
 });

@@ -53,8 +53,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "12.0",
-      "signingIdentity": "Apple Development: Stig Joran Moen (KPD3KXHZ2Q)"
+      "minimumSystemVersion": "12.0"
     }
   }
 }

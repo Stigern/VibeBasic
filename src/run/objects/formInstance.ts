@@ -12,6 +12,9 @@ import type { FormHost, FormWindow } from '../formHost';
 import { localMedia } from '../mediaSource';
 import type { PatchQueue } from '../patchQueue';
 import type { NetSession } from '../net';
+import type { CommSession } from '../comm';
+import type { SystemApi } from '../../backend/backend';
+import type { DbSession } from '../data/dbSession';
 import type { FormSnapshot, FromWindow, ToWindow } from '../protocol';
 import { ControlArrayObject, ControlObject, type ElementFactory, type RunContext } from './controlObject';
 import { ObjectList } from './globalObjects';
@@ -32,8 +35,11 @@ export interface FormSession {
   fire(moduleName: string, proc: string, args: VBRef[]): Promise<void>;
   syncTimer(form: FormInstance, timer: ControlObject): void;
   formUnloaded(form: FormInstance): void;
-  /** The form became the active one (shown, or the user focused it): Screen.ActiveForm. */
-  formActivated(form: FormInstance): void;
+  /** The form became the active one (shown, or the user focused it): Screen.ActiveForm; Deactivate on the form that was active,
+   *  then Activate on this one (nothing when it already is the active one). */
+  formActivated(form: FormInstance): Promise<void>;
+  /** The form was hidden or unloaded: when it was the active one, the form below it becomes active. */
+  formLeft(form: FormInstance, hidden: boolean): void;
   pushModal(form: FormInstance): void;
   popModal(form: FormInstance): void;
   updateBlocked(): void;
@@ -43,6 +49,13 @@ export interface FormSession {
   readFile(path: string): Promise<Uint8Array>;
   /** The full path of a file of the program. */
   resolvePath(path: string): string;
+  /** Data control, Adodc: the run's databases (made on first use; throws when the host has none). */
+  db(): DbSession;
+  /** MSComm: the run's serial ports (made on first use; throws 8002 when the host has none). */
+  comm(): CommSession;
+  /** SysInfo: the system's state, or null when the host cannot tell. */
+  system(): SystemApi | null;
+  msgBox(prompt: string, buttons: number, title: string): Promise<number>;
 }
 
 interface FormState {
@@ -68,6 +81,7 @@ export class FormInstance implements VBObject {
   private st: FormState | null = null;
   private window: FormWindow | null = null;
   private opening: Promise<void> | null = null;
+  private readonly quiet = new Set<ControlObject>();   // an option or ribbon released by its group: no Click
   private early: ToWindow[] | null = null;        // messages queued while the window opens
   private loadDone: Promise<void> | null = null;
   private unloading = false;
@@ -107,6 +121,13 @@ export class FormInstance implements VBObject {
       },
       raise: (c, event, args) => (this.st?.byId.get(c.def.id) === c && !this.s.ended ? this.fireControl(c, event, args) : Promise.resolve()),
       focused: c => this.setActive(c.def.id),
+      db: () => this.s.db(),
+      comm: () => this.s.comm(),
+      system: () => this.s.system(),
+      resolveDbPath: p => this.s.program.resolvePath(p),
+      controls: () => this.controls(),
+      msgBox: (p, b, t) => this.s.msgBox(p, b, t),
+      inProgramScope: fn => this.s.program.inScope(fn),
     };
     // Load Name(i) / Unload Name(i). A control without a view (Winsock, Timer ...) starts from the design-time properties
     // of the lowest element; a visible one from its current properties, hidden (Visible = False) and last in the tab
@@ -121,6 +142,7 @@ export class FormInstance implements VBObject {
         }
         const def: ControlDef = { ...t.def, id: `${t.def.id}~${index}`, index, props };
         const c = new ControlObject(def, this.key, this.s.queue, ctx);
+        if (!invisible) c.copyItemData(t);
         this.state().byId.set(def.id, c);
         if (def.type === 'Timer') this.s.syncTimer(this, c);
         if (!invisible) this.s.queue.send(this.key, { t: 'addControl', def: { ...def, props: copyProps(c.props) }, handled: this.handledEvents(def) });
@@ -166,7 +188,7 @@ export class FormInstance implements VBObject {
 
   private setActive(id: string | null): void {
     this.activeId = id;
-    if (this.visible) this.s.formActivated(this);
+    if (this.visible) void this.s.formActivated(this);
   }
 
   timers(): ControlObject[] {
@@ -185,13 +207,16 @@ export class FormInstance implements VBObject {
     for (const t of this.timers()) this.s.syncTimer(this, t);
     // Form_Load starts once Form_Initialize has finished; without an Initialize handler it starts at once,
     // so a member access that loads the form runs Load nested in the accessing statement.
-    const runLoad = (): Promise<void> => (this.loaded && !this.s.ended ? this.s.fire(this.name, 'Form_Load', []) : Promise.resolve());
+    // after Form_Load the Data controls open their recordsets (not waited for: the form shows meanwhile)
+    const dataLoad = (): void => { if (this.loaded && !this.s.ended) for (const c of this.controls()) void c.formLoaded(); };
+    const runLoad = (): Promise<void> => (this.loaded && !this.s.ended ? this.s.fire(this.name, 'Form_Load', []).then(dataLoad) : Promise.resolve());
     return this.loadDone = this.s.program.hasProcedure(this.name, 'Form_Initialize')
       ? this.s.fire(this.name, 'Form_Initialize', []).then(runLoad)
       : runLoad();
   }
 
-  private autoLoad(): void {
+  /** VB6 loads a form when code touches one of its properties or controls (not its Public variables and procedures). */
+  autoLoad(): void {
     if (!this.loaded && !this.s.ended) void this.load();
   }
 
@@ -212,10 +237,8 @@ export class FormInstance implements VBObject {
       if (!wasVisible) this.deliver({ t: 'show' });
       if (modal) this.s.pushModal(this);
     }
-    if (!wasVisible && this.loaded) {
-      this.s.formActivated(this);
-      await this.s.fire(this.name, 'Form_Activate', []);
-    }
+    if (this.loaded && this.visible) await this.s.formActivated(this);
+    if (!wasVisible && this.loaded && this.visible) this.deliver({ t: 'focusInitial' });
     if (modal && this.visible && this.loaded) await new Promise<void>(r => this.modalWaiters.push(r));
   }
 
@@ -238,19 +261,28 @@ export class FormInstance implements VBObject {
     if (this.st) this.st.form.props.Visible = false;
     this.deliver({ t: 'hide' });
     this.releaseModal();
+    this.s.formLeft(this, true);
   }
 
-  /** QueryUnload(Cancel, UnloadMode) then Unload(Cancel); false when cancelled. */
-  async unload(mode: 0 | 1): Promise<boolean> {
+  /** QueryUnload(Cancel, UnloadMode); false when cancelled (or the program ended meanwhile). */
+  async queryUnload(mode: number): Promise<boolean> {
+    if (!this.loaded) return true;
+    const cancel = new VBRef(0);
+    await this.s.fire(this.name, 'Form_QueryUnload', [cancel, new VBRef(mode)]);
+    return !this.s.ended && !toBool(cancel.value);
+  }
+
+  /** QueryUnload(Cancel, UnloadMode) (unless `queried`: the app is quitting and asked every form first) then Unload(Cancel);
+   *  false when cancelled. UnloadMode: vbFormControlMenu 0, vbFormCode 1, vbAppWindows 2. */
+  async unload(mode: number, queried = false): Promise<boolean> {
     if (!this.loaded || this.unloading) return true;
     this.unloading = true;
     try {
-      const cancel = new VBRef(0);
-      await this.s.fire(this.name, 'Form_QueryUnload', [cancel, new VBRef(mode)]);
-      if (this.s.ended || toBool(cancel.value)) return false;
+      if (!queried && !(await this.queryUnload(mode))) return false;
       const cancel2 = new VBRef(0);
       await this.s.fire(this.name, 'Form_Unload', [cancel2]);
       if (this.s.ended || toBool(cancel2.value)) return false;
+      if (this.st) await Promise.all(this.controls().map(c => c.beforeUnload()));   // Data controls save the bound changes
     } finally {
       this.unloading = false;
     }
@@ -320,7 +352,9 @@ export class FormInstance implements VBObject {
     switch (m.t) {
       case 'ready': this.s.queue.flush(); break;
       case 'focused': this.setActive(m.id); break;
+      case 'activated': if (this.visible && !this.blocked) void this.s.formActivated(this); break;
       case 'state': st.byId.get(m.id)?.applyState(m.props); break;
+      case 'moved': st.form.applyState({ Left: m.left, Top: m.top }); break;
       case 'resized':
         st.form.applyState({ Width: m.width, Height: m.height });
         void this.s.fire(this.name, 'Form_Resize', []);
@@ -364,8 +398,8 @@ export class FormInstance implements VBObject {
         if (prop === 'Text' && changed) ev = 'Change';
         else if (prop === 'ListIndex' && changed) ev = 'Click';
         break;
-      case 'ListBox': if (prop === 'ListIndex' && changed) ev = 'Click'; break;
-      case 'HScrollBar': case 'VScrollBar': if (prop === 'Value' && changed) ev = 'Change'; break;
+      case 'ListBox': if ((prop === 'ListIndex' || prop === 'SelFlags') && changed) ev = 'Click'; break;
+      case 'HScrollBar': case 'VScrollBar': case 'FlatScrollBar': if (prop === 'Value' && changed) ev = 'Change'; break;
       case 'RichTextBox':
         if (prop === 'Text' && changed) ev = 'Change';
         else if ((prop === 'SelStart' || prop === 'SelLength') && changed) ev = 'SelChange';
@@ -390,9 +424,22 @@ export class FormInstance implements VBObject {
           if (changed) ev = 'Click';
         }
         break;
-      case 'CommandButton':
+      case 'CommandButton': case 'SSCommand':
         if (prop === 'Value' && v === true) { c.props.Value = false; ev = 'Click'; }
         break;
+      // Sheridan 3D: Click(Value As Integer) gets the new Value (True = -1). Option and ribbon groups release the others silently.
+      case 'SSCheck': if (prop === 'Value' && changed) { void this.fireControl(c, 'Click', [new VBRef(v === true ? -1 : 0)]); return; } break;
+      case 'SSOption': case 'SSRibbon': {
+        const group = (o: ControlObject): boolean => o !== c && o.def.type === c.def.type && o.def.parentId === c.def.parentId && o.props.Value === true
+          && (c.def.type === 'SSOption' || (Number(o.props.GroupNumber) || 0) === (Number(c.props.GroupNumber) || 0));
+        if (prop === 'Value' && v === true && (c.def.type === 'SSOption' || Number(c.props.GroupNumber) > 0)) {
+          for (const o of this.st?.byId.values() ?? []) if (group(o)) { this.quiet.add(o); o.setMember('Value', [], false); this.quiet.delete(o); }
+        }
+        if (prop === 'Value' && changed && !this.quiet.has(c) && (v === true || c.def.type === 'SSRibbon')) {
+          void this.fireControl(c, 'Click', [new VBRef(v === true ? -1 : 0)]);
+        }
+        return;
+      }
     }
     if (ev) void this.fireControl(c, ev, []);
   }
@@ -413,12 +460,27 @@ export class FormInstance implements VBObject {
     return this.s.program.hasPublicMember(this.name, name);
   }
 
+  /** A Public member of the form's code that no property, control or built-in member of the form hides. Using one does not
+   *  load the form (its module-level values live on after Unload, as in VB6): `frmLogin.OK` after the dialog has closed. */
+  private codeMember(name: string): 'proc' | 'var' | null {
+    const l = lc(name);
+    if (this.controlNames.has(l) || l === 'scalewidth' || l === 'scaleheight' || l === 'visible' || FORM_METHODS.has(l) || FORM_OBJECTS.has(l)
+      || getPropDef('Form', name)) return null;
+    return this.publicMember(name);
+  }
+
   private callPublic(name: string, args: VBValue[]): Promise<VBValue> {
-    this.autoLoad();
     return this.s.program.callPublic(this.name, name, args);
   }
 
   getMember(name: string, args: VBValue[]): VBValue {
+    const pm = this.codeMember(name);
+    if (pm === 'var') {
+      const v = this.s.program.getPublicVar(this.name, name);
+      return args.length && v instanceof VBArray ? v.get(args.map(a => Number(coerce(a, 'Long')))) : v;
+    }
+    // `x = Form2.GetCount` (no parentheses): the interpreter awaits a Promise from getMember
+    if (pm === 'proc') return this.callPublic(name, args) as unknown as VBValue;
     this.autoLoad();
     const st = this.state();
     const l = lc(name);
@@ -441,19 +503,18 @@ export class FormInstance implements VBObject {
       if (args.length) throw new VBRuntimeError(450);
       return l === 'count' ? this.controls().length : this.activeControl();
     }
-    if (!getPropDef('Form', name)) {
-      const pm = this.publicMember(name);
-      if (pm === 'var') {
-        const v = this.s.program.getPublicVar(this.name, name);
-        return args.length && v instanceof VBArray ? v.get(args.map(a => Number(coerce(a, 'Long')))) : v;
-      }
-      // `x = Form2.GetCount` (no parentheses): the interpreter awaits a Promise from getMember
-      if (pm === 'proc') return this.callPublic(name, args) as unknown as VBValue;
-    }
     return st.form.getMember(name, args);
   }
 
   setMember(name: string, args: VBValue[], value: VBValue): void {
+    if (this.codeMember(name) === 'var') {
+      if (args.length) {
+        const arr = this.s.program.getPublicVar(this.name, name);
+        if (!(arr instanceof VBArray)) throw new VBRuntimeError(13);
+        arr.set(args.map(a => Number(coerce(a, 'Long'))), value);
+      } else this.s.program.setPublicVar(this.name, name, value);
+      return;
+    }
     this.autoLoad();
     const st = this.state();
     const l = lc(name);
@@ -469,14 +530,6 @@ export class FormInstance implements VBObject {
       if (toBool(value)) void this.show(false); else this.hide();
       return;
     }
-    if (!getPropDef('Form', name) && this.publicMember(name) === 'var') {
-      if (args.length) {
-        const arr = this.s.program.getPublicVar(this.name, name);
-        if (!(arr instanceof VBArray)) throw new VBRuntimeError(13);
-        arr.set(args.map(a => Number(coerce(a, 'Long'))), value);
-      } else this.s.program.setPublicVar(this.name, name, value);
-      return;
-    }
     st.form.setMember(name, args, value);
   }
 
@@ -490,7 +543,7 @@ export class FormInstance implements VBObject {
       case 'load': return this.load().then(() => Empty);
       case 'unload': return this.unload(1).then(() => Empty);
     }
-    if (!FORM_METHODS.has(l) && !getPropDef('Form', name) && this.publicMember(name) === 'proc') return this.callPublic(name, args);
+    if (this.codeMember(name) === 'proc') return this.callPublic(name, args);
     return this.callSync(l, args);
   }
 

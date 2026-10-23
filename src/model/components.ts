@@ -14,6 +14,7 @@ const SYSTEM = 'C:\\WINDOWS\\SYSTEM';
 export const COMPONENTS: readonly ComponentDef[] = [
   { file: 'MSCOMCTL.OCX', name: 'Microsoft Windows Common Controls 6.0 (SP6)' },
   { file: 'MSCOMCT2.OCX', name: 'Microsoft Windows Common Controls-2 6.0' },
+  { file: 'COMCT332.OCX', name: 'Microsoft Windows Common Controls-3 6.0' },
   { file: 'COMDLG32.OCX', name: 'Microsoft Common Dialog Control 6.0' },
   { file: 'RICHTX32.OCX', name: 'Microsoft Rich Textbox Control 6.0' },
   { file: 'MSFLXGRD.OCX', name: 'Microsoft FlexGrid Control 6.0' },
@@ -21,10 +22,17 @@ export const COMPONENTS: readonly ComponentDef[] = [
   { file: 'SHDOCVW.DLL', name: 'Microsoft Internet Controls' },
   { file: 'MSINET.OCX', name: 'Microsoft Internet Transfer Control 6.0' },
   { file: 'MSWINSCK.OCX', name: 'Microsoft Winsock Control 6.0' },
+  { file: 'MSCOMM32.OCX', name: 'Microsoft Comm Control 6.0' },
+  { file: 'SYSINFO.OCX', name: 'Microsoft SysInfo Control 6.0' },
   { file: 'MSCHRT20.OCX', name: 'Microsoft Chart Control 6.0' },
   { file: 'MSMASK32.OCX', name: 'Microsoft Masked Edit Control 6.0' },
+  { file: 'MSCAL.OCX', name: 'Calendar Control 8.0', dir: 'C:\\PROGRAM FILES\\MICROSOFT OFFICE\\OFFICE' },
   { file: 'MCI32.OCX', name: 'Microsoft Multimedia Control 6.0' },
   { file: 'MSDXM.OCX', name: 'Windows Media Player' },
+  { file: 'MSADODC.OCX', name: 'Microsoft ADO Data Control 6.0 (SP6) (OLEDB)' },
+  { file: 'MSDATGRD.OCX', name: 'Microsoft DataGrid Control 6.0 (SP6) (OLEDB)' },
+  { file: 'MSDATLST.OCX', name: 'Microsoft DataList Controls 6.0 (SP6) (OLEDB)' },
+  { file: 'THREED32.OCX', name: 'Sheridan 3D Controls' },
   { file: 'AGENTCTL.DLL', name: 'Microsoft Agent Control 2.0', dir: 'C:\\WINDOWS\\MSAGENT' },
 ];
 

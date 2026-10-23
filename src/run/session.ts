@@ -9,6 +9,9 @@ import { Nothing, type VBRef, type VBValue } from '../lang/values';
 import type { PictureRef, Project } from '../model/types';
 import type { FormHost } from './formHost';
 import { NetSession } from './net';
+import { DbSession } from './data/dbSession';
+import { CommSession } from './comm';
+import type { SystemApi } from '../backend/backend';
 import { PatchQueue } from './patchQueue';
 import { AppObject, PictureObject, ScreenObject } from './objects/appObjects';
 import { ClipboardObject, ObjectList } from './objects/globalObjects';
@@ -62,6 +65,8 @@ export class RunSession implements Host, FormSession {
   private readonly app: AppObject;
   /** The form activated last (Screen.ActiveForm); null when no form is shown. */
   private activeForm: FormInstance | null = null;
+  /** The shown forms in the order they were last activated (the next one to activate when the active form goes). */
+  private activation: FormInstance[] = [];
   private readonly screen = new ScreenObject({
     form: () => this.activeForm ?? Nothing,
     control: () => this.activeForm?.activeControl() ?? Nothing,
@@ -73,11 +78,14 @@ export class RunSession implements Host, FormSession {
   private readonly clipboard = new ClipboardObject(() => this.formHost.clipboard?.());
   private readonly title: string;
   private modalStack: FormInstance[] = [];
+  private audio?: AudioContext;
   private timers = new Map<ControlObject, ReturnType<typeof setInterval>>();
   private timerBusy = new Set<ControlObject>();
   private lastYield = -Infinity;   // performance.now() of the last real DoEvents yield
   private askAiOnBreak = false;    // the error dialog answered 'ai': the next onBreak (on that error) starts the AI flow
   private netSession: NetSession | null = null;
+  private dbSession: DbSession | null = null;
+  private commSession: CommSession | null = null;
 
   constructor(private project: Project, readonly formHost: FormHost, private cb: SessionCallbacks, readonly mode: 'ide' | 'app') {
     for (const [k, a] of Object.entries(project.assets)) this.assets[k] = `data:${a.mime};base64,${a.dataBase64}`;
@@ -89,7 +97,7 @@ export class RunSession implements Host, FormSession {
       ...project.forms.map(f => ({ name: f.name, kind: 'form' as const, source: f.code })),
       ...project.modules.map(m => ({ name: m.name, kind: 'module' as const, source: m.code })),
     ];
-    this.program = new Program(modules, this, { appTitle: this.title });
+    this.program = new Program(modules, this, { appTitle: this.title, appPath: cb.appPath });
   }
 
   get appPath(): string { return this.cb.appPath; }
@@ -105,6 +113,22 @@ export class RunSession implements Host, FormSession {
   }
 
   end(): void { this.program.end(); }
+
+  /** Resolves when the files left open at the end are written and closed. */
+  get filesClosed(): Promise<void> { return this.program.filesClosed; }
+
+  /**
+   * The app is asked to quit (Cmd+Q): as when Windows closes a VB6 app, every loaded form gets QueryUnload with UnloadMode
+   * vbAppWindows (2), newest first, then each one unloads, and the program ends. False when a form cancelled (the app stays).
+   */
+  async quit(): Promise<boolean> {
+    if (this.ended) return true;
+    const loaded = () => [...this.forms.values()].filter(f => f.loaded).sort((a, b) => b.loadOrder - a.loadOrder);
+    for (const f of loaded()) if (!(await f.queryUnload(2))) return this.ended;
+    for (const f of loaded()) if (!(await f.unload(2, true))) return this.ended;
+    this.end();
+    return true;
+  }
   pause(): void { this.program.requestPause(); }
 
   // Debugging (IDE only: a made app never breaks on a breakpoint or a step)
@@ -142,6 +166,25 @@ export class RunSession implements Host, FormSession {
     return this.netSession = new NetSession(api);
   }
 
+  /** Data control, Adodc: made when the first database opens; every connection is closed at the end of the program. */
+  db(): DbSession {
+    if (this.dbSession) return this.dbSession;
+    const api = this.formHost.database?.();
+    if (!api) throw new VBRuntimeError(429, 'ActiveX component can\'t create object');
+    return this.dbSession = new DbSession(api);
+  }
+
+  /** MSComm: made when the first port opens; every port is closed at the end of the program. */
+  comm(): CommSession {
+    if (this.commSession) return this.commSession;
+    const api = this.formHost.serial?.();
+    if (!api) throw new VBRuntimeError(8002, 'Invalid port number');
+    return this.commSession = new CommSession(api);
+  }
+
+  /** SysInfo: the OS version, work area and power state (null: none here, the values are unknown). */
+  system(): SystemApi | null { return this.formHost.system?.() ?? null; }
+
   resolveAsset(ref: PictureRef): string | null {
     return this.assets[ref.asset] ?? (ref.asset.startsWith('data:') ? ref.asset : null);
   }
@@ -159,12 +202,30 @@ export class RunSession implements Host, FormSession {
   }
 
   formUnloaded(form: FormInstance): void {
-    if (this.activeForm === form) this.activeForm = null;
+    this.formLeft(form, false);
     this.updateBlocked();
     this.maybeEnd();
   }
 
-  formActivated(form: FormInstance): void { this.activeForm = form; }
+  async formActivated(form: FormInstance): Promise<void> {
+    if (this.activeForm === form || this.ended) return;
+    const old = this.activeForm;
+    this.activeForm = form;
+    this.activation = [...this.activation.filter(f => f !== form), form];
+    if (old?.loaded) await this.fire(old.name, 'Form_Deactivate', []);
+    if (form.loaded && this.activeForm === form) await this.fire(form.name, 'Form_Activate', []);
+  }
+
+  /** Hide raises Deactivate (Unload does not, as in VB6); the modal form on top, or else the form active before, is activated. */
+  formLeft(form: FormInstance, hidden: boolean): void {
+    this.activation = this.activation.filter(f => f !== form);
+    if (this.activeForm !== form || this.ended) return;
+    this.activeForm = null;
+    if (hidden && form.loaded) void this.fire(form.name, 'Form_Deactivate', []);
+    const top = this.modalStack[this.modalStack.length - 1];
+    const next = top?.visible ? top : [...this.activation].reverse().find(f => f.loaded && f.visible);
+    if (next) void this.formActivated(next);
+  }
 
   pushModal(form: FormInstance): void {
     if (!this.modalStack.includes(form)) this.modalStack.push(form);
@@ -198,7 +259,7 @@ export class RunSession implements Host, FormSession {
     if (own) {
       if (l === 'me') return own;
       const c = own.control(name);
-      if (c) return c;
+      if (c) { own.autoLoad(); return c; }   // the form's own code touches a control: VB6 loads the form (again, after Unload Me)
     }
     const f = this.forms.get(l);
     if (f) return f;
@@ -221,6 +282,9 @@ export class RunSession implements Host, FormSession {
 
   debugPrint(text: string, newline: boolean): void { this.cb.debugPrint(text, newline); }
 
+  /** Open, Kill, Dir, SaveSetting ...: through the form host (the main window's backend). */
+  fileSystem() { return this.formHost.fileSystem?.(); }
+
   /**
    * DoEvents. Queued VB events are pumped by the driver on every await; the window (UI, timers, IPC) gets a real
    * macrotask at most every DOEVENTS_MS, so `For i = 1 To 20000: DoEvents: Next` does not take 20000 timer turns.
@@ -233,21 +297,38 @@ export class RunSession implements Host, FormSession {
     this.lastYield = performance.now();
   }
 
-  /** A file of the program (relative paths are from App.Path; VB code builds Windows paths: App.Path & "\pic.bmp"). 53 when it cannot be read. */
+  /** Beep: a short tone through Web Audio; silent when there is no audio (never throws). One AudioContext per session, closed at the end. */
+  beep(): void {
+    if (this.ended) return;
+    try {
+      const Ctx = (globalThis as { AudioContext?: typeof AudioContext }).AudioContext;
+      if (!Ctx) return;
+      this.audio ??= new Ctx();
+      const osc = this.audio.createOscillator();
+      const gain = this.audio.createGain();
+      osc.frequency.value = 800;
+      gain.gain.value = 0.1;
+      osc.connect(gain).connect(this.audio.destination);
+      osc.start();
+      osc.stop(this.audio.currentTime + 0.15);
+    } catch { /* no sound */ }
+  }
+
+  /** A file of the program, found as Open finds it (relative paths are from CurDir, which starts as App.Path; `\` separators and
+   *  a drive letter are fine: App.Path & "\pic.bmp", "C:\pics\a.bmp"). 53 when it cannot be read, 7 when it is too big (the
+   *  rejection's `vbNumber`). */
   async readFile(path: string): Promise<Uint8Array> {
     const full = this.resolvePath(path);
     try {
       return await this.cb.readFile(full);
-    } catch {
-      throw new VBRuntimeError(53);
+    } catch (e) {
+      const n = (e as { vbNumber?: unknown } | null)?.vbNumber;
+      throw new VBRuntimeError(n === 7 ? 7 : 53);
     }
   }
 
-  /** The full path of a file of the program (relative paths are from App.Path). */
-  resolvePath(path: string): string {
-    const p = path.replace(/\\/g, '/');
-    return p.startsWith('/') || /^[A-Za-z]:\//.test(p) ? p : `${this.cb.appPath.replace(/\\/g, '/').replace(/\/+$/, '')}/${p}`;
-  }
+  /** The full path of a file of the program, as Open resolves it (CurDir; the drive letter dropped). */
+  resolvePath(path: string): string { return this.program.resolvePath(path); }
 
   async loadPicture(path: string): Promise<VBValue> {
     if (path === '') return new PictureObject(null);
@@ -294,6 +375,9 @@ export class RunSession implements Host, FormSession {
     this.modalStack = [];
     for (const f of this.forms.values()) if (f.loaded || f.hasWindow()) f.teardown();
     this.netSession?.shutdown();   // every socket closed, every Inet request aborted
+    this.dbSession?.shutdown();    // every database connection closed
+    this.commSession?.shutdown();  // every serial port closed
+    if (this.audio) { this.audio.close().catch(() => { /* already closed */ }); this.audio = undefined; }
     this.cb.onEnded();
   }
 }

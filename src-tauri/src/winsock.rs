@@ -19,6 +19,8 @@ const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STA
 const CONNECT_TIMEOUT_SECS: u64 = 30;
 /// Incoming connections nobody accepted are kept at most this many (the oldest are dropped).
 const MAX_PENDING: usize = 64;
+/// SendData fails with 10060 when the peer takes none of the data for this long (it stopped reading).
+const SEND_STALL: Duration = Duration::from_secs(60);
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -88,8 +90,11 @@ async fn resolve(host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
   if addrs.is_empty() { Err(host_not_found()) } else { Ok(addrs) }
 }
 
+/// Set to true (or dropped) when the socket closes: a SendData still writing gives up and drops the write half.
+type Closed = tokio::sync::watch::Sender<bool>;
+
 enum Sock {
-  Tcp { writer: Arc<tokio::sync::Mutex<OwnedWriteHalf>>, reader: AbortHandle },
+  Tcp { writer: Arc<tokio::sync::Mutex<OwnedWriteHalf>>, reader: AbortHandle, closed: Closed },
   Listener { task: AbortHandle },
   Udp { sock: Arc<UdpSocket>, reader: AbortHandle },
 }
@@ -97,7 +102,10 @@ enum Sock {
 impl Sock {
   fn stop(&self) {
     match self {
-      Sock::Tcp { reader, .. } => reader.abort(),
+      Sock::Tcp { reader, closed, .. } => {
+        reader.abort();
+        let _ = closed.send(true);
+      }
       Sock::Listener { task } => task.abort(),
       Sock::Udp { reader, .. } => reader.abort(),
     }
@@ -188,7 +196,8 @@ impl Sockets {
       }
     });
     // the reader task is aborted (and the write half dropped) when the socket was closed meanwhile: the connection closes
-    self.put(id, ticket, Sock::Tcp { writer: Arc::new(tokio::sync::Mutex::new(wr)), reader: task.abort_handle() })?;
+    let (closed, _) = tokio::sync::watch::channel(false);
+    self.put(id, ticket, Sock::Tcp { writer: Arc::new(tokio::sync::Mutex::new(wr)), reader: task.abort_handle(), closed })?;
     Ok(info)
   }
 
@@ -309,17 +318,42 @@ impl Sockets {
 
   /// SendData: the whole buffer on a TCP connection, or one datagram to host:port on a UDP socket.
   pub async fn send(&self, id: u32, data: &[u8], host: &str, port: u16) -> Result<(), String> {
+    self.send_with_stall(id, data, host, port, SEND_STALL).await
+  }
+
+  /// A TCP send gives up when Close or End comes (the write half is dropped right away), or with 10060 when no byte has
+  /// gone out for `stall`.
+  async fn send_with_stall(&self, id: u32, data: &[u8], host: &str, port: u16, stall: Duration) -> Result<(), String> {
     enum Target {
-      Tcp(Arc<tokio::sync::Mutex<OwnedWriteHalf>>),
+      Tcp(Arc<tokio::sync::Mutex<OwnedWriteHalf>>, tokio::sync::watch::Receiver<bool>),
       Udp(Arc<UdpSocket>),
     }
     let t = match self.0.lock().unwrap().socks.get(&id) {
-      Some(Sock::Tcp { writer, .. }) => Target::Tcp(writer.clone()),
+      Some(Sock::Tcp { writer, closed, .. }) => Target::Tcp(writer.clone(), closed.subscribe()),
       Some(Sock::Udp { sock, .. }) => Target::Udp(sock.clone()),
       _ => return Err(bad_state()),
     };
     match t {
-      Target::Tcp(w) => w.lock().await.write_all(data).await.map_err(io_err),
+      Target::Tcp(w, mut closed) => {
+        let write = async {
+          let mut w = w.lock().await;
+          let mut rest = data;
+          while !rest.is_empty() {
+            match tokio::time::timeout(stall, w.write(rest)).await {
+              Err(_) => return Err("10060|Connection is aborted due to timeout or other failure".to_string()),
+              Ok(Ok(0)) => return Err(io_err(std::io::ErrorKind::WriteZero.into())),
+              Ok(Ok(n)) => rest = &rest[n..],
+              Ok(Err(e)) => return Err(io_err(e)),
+            }
+          }
+          Ok(())
+        };
+        tokio::select! {
+          r = write => r,
+          // true, or the sender dropped with the socket
+          _ = closed.wait_for(|c| *c) => Err(cancelled()),
+        }
+      }
       Target::Udp(s) => {
         let addrs = resolve(host, port).await?;
         let addr = addrs.iter().find(|a| a.is_ipv4()).unwrap_or(&addrs[0]);
@@ -359,7 +393,7 @@ pub fn local_ip() -> String {
 
 fn emitter(app: tauri::AppHandle) -> Emit {
   Arc::new(move |e: SockEvent| {
-    let _ = app.emit("vb:socket", e);
+    let _ = app.emit_to("main", "vb:socket", e);
   })
 }
 
@@ -517,6 +551,41 @@ mod tests {
       }
       other => panic!("{other:?}"),
     }
+    s.close_all();
+  }
+
+  /// M4: a send to a peer that stopped reading ends when the socket is closed, and on its own after the stall timeout.
+  #[tokio::test(flavor = "multi_thread")]
+  async fn a_blocked_send_ends_on_close_or_after_the_stall_timeout() {
+    let s = Sockets::default();
+    let (emit, mut rx) = collector();
+    let server = s.listen(1, 0, "127.0.0.1", emit.clone()).await.unwrap();
+    s.connect(2, "127.0.0.1", server.local_port, emit.clone()).await.unwrap();
+    let SockEvent::ConnectionRequest { request_id, .. } = next(&mut rx).await else { panic!("no ConnectionRequest") };
+    // the server side takes the connection but its reader is stopped: nobody reads, the TCP window fills
+    s.accept(3, request_id, emit.clone()).await.unwrap();
+    if let Some(Sock::Tcp { reader, .. }) = s.0.lock().unwrap().socks.get(&3) {
+      reader.abort();
+    }
+    let big = vec![7u8; 64 * 1024 * 1024];
+    let sender = s.clone();
+    let data = big.clone();
+    let send = tokio::spawn(async move { sender.send(2, &data, "", 0).await });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!send.is_finished(), "the send should be stuck on the full window");
+    s.close(2);
+    let r = tokio::time::timeout(Duration::from_secs(5), send).await.expect("Close did not end the send").unwrap();
+    assert!(r.unwrap_err().starts_with("10053|"));
+
+    // the stall timeout, without a Close
+    s.connect(4, "127.0.0.1", server.local_port, emit.clone()).await.unwrap();
+    let SockEvent::ConnectionRequest { request_id, .. } = next(&mut rx).await else { panic!("no ConnectionRequest") };
+    s.accept(5, request_id, emit.clone()).await.unwrap();
+    if let Some(Sock::Tcp { reader, .. }) = s.0.lock().unwrap().socks.get(&5) {
+      reader.abort();
+    }
+    let r = tokio::time::timeout(Duration::from_secs(10), s.send_with_stall(4, &big, "", 0, Duration::from_millis(300))).await.expect("no stall timeout");
+    assert!(r.unwrap_err().starts_with("10060|"));
     s.close_all();
   }
 }

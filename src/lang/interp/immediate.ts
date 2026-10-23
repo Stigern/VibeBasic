@@ -6,7 +6,7 @@ import { VBRuntimeError, VBSyntaxError, internalError } from '../errors';
 import { parseModule } from '../parser';
 import { PrintLine } from '../printFormat';
 import { EndSignal, runGenerator, type Gen } from './driver';
-import { evalExpr } from './eval';
+import { printItems } from './fileStmts';
 import { execBlock, isStackOverflow } from './exec';
 import type { Runtime } from './program';
 import { Frame, ModuleScope, Run } from './scope';
@@ -93,12 +93,8 @@ export async function runImmediate(rt: Runtime, text: string): Promise<string> {
     const first = body[0];
     if (print && first?.kind === 'debugPrint') {
       // the `?` part is returned, not printed
-      const line = new PrintLine(0);
-      for (const it of first.items) {
-        if (it.expr) line.addItem(yield* evalExpr(f, it.expr));
-        if (it.sep === ';') line.addSemicolon();
-        else if (it.sep === ',') line.addComma();
-      }
+      const line = new PrintLine(0, '\n');
+      yield* printItems(f, first.items, line);
       out = line.text();
       rest = 1;
     }

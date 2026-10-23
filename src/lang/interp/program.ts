@@ -1,11 +1,13 @@
 // Public API of the interpreter (Program) and its shared state (Runtime).
 
 import type { ProcDecl, TypeDecl, VBTypeName } from '../ast';
-import { VBRuntimeError, internalError } from '../errors';
+import { VBRuntimeError, VBSyntaxError, internalError } from '../errors';
+import { compileProblems } from '../compileCheck';
 import { ErrObject, type BuiltinCtx } from '../builtins';
 import type { CodeLocation, Host } from '../host';
 import { generalDateText, localeDateParser } from '../builtins/format';
 import { newRndState } from '../builtins/util';
+import { FileIO } from '../fileio/fileIO';
 import { parseModule } from '../parser';
 import {
   Empty, VBArray, VBRecord, VBRef, defaultValue, setDateTextFormatter, setDateTextParser, toNumber, type DateTextFormatter,
@@ -42,6 +44,8 @@ export interface ProgramOptions {
   locale?: string;
   /** Default MsgBox/InputBox title (default 'Project1'). */
   appTitle?: string;
+  /** App.Path: where CurDir starts (default '/'). */
+  appPath?: string;
 }
 
 export type ProgramState = 'idle' | 'running' | 'break' | 'ended';
@@ -101,6 +105,10 @@ export class Runtime {
   lastSlice = 0;
   readonly locale: string;
   readonly builtinCtx: BuiltinCtx;
+  /** Open, Close, Print # ... and CurDir. */
+  readonly files: FileIO;
+  /** Resolves once the files open at the end are written and closed (a made app quits only then). */
+  filesClosed: Promise<void> = Promise.resolve();
   /** Makes this program's locale (date text and parsing) current while its code runs; pass to `runGenerator`. */
   readonly scope: ExecScope;
   private readonly dateText: DateTextFormatter;
@@ -122,7 +130,8 @@ export class Runtime {
     this.locale = opts.locale ?? Intl.DateTimeFormat().resolvedOptions().locale;
     const appTitle = opts.appTitle ?? 'Project1';
     this.err = new ErrObject(appTitle);
-    this.builtinCtx = { host, locale: this.locale, appTitle, rnd: newRndState(), err: this.err };
+    this.files = new FileIO(() => host.fileSystem?.(), opts.appPath ?? '/', this);
+    this.builtinCtx = { host, locale: this.locale, appTitle, rnd: newRndState(), err: this.err, files: this.files };
     this.dateText = v => generalDateText(v.serial, this.locale);
     this.dateParse = localeDateParser(this.locale);
     this.scope = {
@@ -142,6 +151,13 @@ export class Runtime {
       this.modules.set(m.key, m);
       this.moduleList.push(m);
       if (m.kind === 'module') this.globals.addModule(m);
+    }
+    // the compile errors VB6 finds before the program starts (a ByRef type mismatch, New of a record ...)
+    const problem = compileProblems(this.moduleList.map(m => ({ name: m.name, kind: m.kind, ast: m.ast })))[0];
+    if (problem) {
+      const e = new VBSyntaxError(problem.message, problem.line, 1);
+      e.moduleName = problem.module;
+      throw e;
     }
   }
 
@@ -196,6 +212,8 @@ export class Runtime {
     else if ('objectType' in t) {
       const key = lc(name);
       if (m.enums.has(key) || this.globals.enums.has(key) || this.moduleList.some(o => o.enums.has(key))) r = 'Long';
+      // an enum of a type library (ADODB.EventReasonEnum, MSComctlLib.ListLabelEditConstants): a Long
+      else if (/\.\w*(enum|constants)$/i.test(name)) r = 'Long';
     } else throw VBRuntimeError.compile('User-defined type not defined');
     this.resolvedTypes.set(t, r);
     return r;
@@ -240,7 +258,8 @@ export class Runtime {
     const info = this.typeInfo(typeName);
     const fields = new Map<string, VBValue>();
     for (const [k, fi] of info.fields) {
-      if (fi.isArray) fields.set(k, fi.bounds ? this.newArray(fi.type, fi.bounds, true) : this.unallocatedArray(fi.type));
+      if (fi.isArray && fi.fixedLength !== undefined) fields.set(k, VBArray.fixedString(fi.bounds ?? null, fi.fixedLength, !!fi.bounds));
+      else if (fi.isArray) fields.set(k, fi.bounds ? this.newArray(fi.type, fi.bounds, true) : this.unallocatedArray(fi.type));
       else fields.set(k, this.defaultFor(fi.type, fi.fixedLength));
     }
     return new VBRecord(info.decl.name, fields);
@@ -254,12 +273,13 @@ export class Runtime {
     return undefined;
   }
 
-  newArray(t: VBTypeName, bounds: [number, number][], fixed: boolean): VBArray {
-    return new VBArray(t, bounds, fixed, this.elementInit(t));
+  /** `init` makes each element (`Dim a(3) As New Collection`); by default the type's default value. */
+  newArray(t: VBTypeName, bounds: [number, number][], fixed: boolean, init?: () => VBValue): VBArray {
+    return new VBArray(t, bounds, fixed, init ?? this.elementInit(t));
   }
 
-  unallocatedArray(t: VBTypeName): VBArray {
-    return VBArray.unallocated(t, this.elementInit(t));
+  unallocatedArray(t: VBTypeName, init?: () => VBValue): VBArray {
+    return VBArray.unallocated(t, init ?? this.elementInit(t));
   }
 
   /** Initial value of a variable of type `t` (`String * n` starts as n spaces). */
@@ -291,6 +311,7 @@ export class Runtime {
     this.abortListeners.clear();
     for (const cancel of cancels) cancel(new EndSignal());
     this.drainEvents(); // each queued runEvent sees 'ended' and resolves
+    this.filesClosed = this.files.closeAll().catch(() => {}); // buffered Print # text is written, every file closed
     try {
       this.host.onEnd();
     } catch (e) {
@@ -531,6 +552,18 @@ export class Program {
   }
 
   get state(): ProgramState { return this.rt.state; }
+
+  /** A path of the program as a full Mac path, like Open resolves it (relative to CurDir, which starts as App.Path). */
+  resolvePath(path: string): string { return this.rt.files.resolve(path); }
+
+  /** Resolves when the files the program left open at End are written and closed. */
+  get filesClosed(): Promise<void> { return this.rt.filesClosed; }
+
+  /** Runs `fn` with the program's locale current (date text and parsing), for work outside its code: data binding after an await. */
+  inScope<T>(fn: () => T): T {
+    const restore = this.rt.scope.activate();
+    try { return fn(); } finally { restore(); }
+  }
 
   hasProcedure(moduleName: string, procName: string): boolean {
     return this.rt.modules.get(lc(moduleName))?.procs.has(lc(procName)) ?? false;

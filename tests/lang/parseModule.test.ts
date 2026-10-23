@@ -18,7 +18,7 @@ test('type and enum', () => {
   const m = parseModule('Type P\n X As Integer\nEnd Type\nEnum Farge\n Rod = 1\n Bla\nEnd Enum', 'M');
   expect(m.types[0].name).toBe('P'); expect(m.enums[0].members).toEqual([{ name: 'Rod', value: 1 }, { name: 'Bla', value: 2 }]);
 });
-test('unsupported statement', () => expect(() => parseModule('Sub A()\nOpen "f" For Input As #1\nEnd Sub', 'M')).toThrow('Not supported in VibeBasic: Open'));
+test('unsupported statement', () => expect(() => parseModule('Sub A()\nGoSub X\nEnd Sub', 'M')).toThrow('Not supported in VibeBasic: GoSub'));
 test('line check ignores block matching', () => { expect(checkLineSyntax('If x Then')).toBeNull(); expect(checkLineSyntax('End If')).toBeNull(); expect(checkLineSyntax('x = ')?.message).toBe('Expected: expression'); });
 test('collects several errors with lines', () => {
   expect(findSyntaxErrors('Sub A()\nx = \ny = 1 2\nEnd Sub', 'M').map(e => e.line)).toEqual([2, 3]);
@@ -421,15 +421,21 @@ describe('syntax errors', () => {
   test('lexer errors surface', () => expect(berr('x = "abc')).toBe('Unterminated string'));
   test('Not supported statements', () => {
     expect(berr('Print "hi"')).toBe('Not supported in VibeBasic: Print');
-    expect(berr('Print #1, "x"')).toBe('Not supported in VibeBasic: Print');
-    expect(berr('Line Input #1, s')).toBe('Not supported in VibeBasic: Line Input');
     expect(berr('Line (0, 0)-(10, 10)')).toBe('Not supported in VibeBasic: Line');
     expect(berr('Circle (5, 5), 3')).toBe('Not supported in VibeBasic: Circle');
     expect(berr('PSet (5, 5)')).toBe('Not supported in VibeBasic: PSet');
     expect(berr('RaiseEvent Foo')).toBe('Not supported in VibeBasic: RaiseEvent');
-    expect(berr('Close #1')).toBe('Not supported in VibeBasic: Close');
     expect(berr('GoSub Foo')).toBe('Not supported in VibeBasic: GoSub');
-    expect(berr('Input #1, x')).toBe('Not supported in VibeBasic: Input');
+  });
+  test('file I/O statements', () => {
+    const b = body('Open App.Path & "\\x.dat" For Random Access Read Write Lock Write As #f Len = 20\nClose\nClose #1, 2\n'
+      + 'Print #1, a; Spc(2); Tab(5); b, Tab\nWrite #1, a, b;\nInput #1, a, b(1)\nLine Input #1, s\nGet #1, , r\nPut 1, 3, r\n'
+      + 'Seek #1, 10\nSeek 1, 10\nName "a" As "b"\nName = 5');
+    expect(b.map(s => s.kind)).toEqual(['open', 'close', 'close', 'printFile', 'writeFile', 'inputFile', 'lineInput', 'getFile', 'putFile',
+      'seekFile', 'seekFile', 'name', 'assign']);
+    expect(b[0]).toMatchObject({ mode: 'random', access: 'readwrite', recLen: { kind: 'number', value: 20 } });
+    expect((b[3] as { items: unknown[] }).items).toHaveLength(5);
+    expect(berr('Open "f" For Reading As #1')).toBe('Expected: Input, Output, Append, Binary or Random');
   });
   test('variables named Line/Print are still assignable', () => {
     expect(body('Line = 5\nPrint.x = 1').map(s => s.kind)).toEqual(['assign', 'assign']);
@@ -445,6 +451,7 @@ describe('checkLineSyntax', () => {
     'Sub A()', 'Private Sub Command1_Click(Index As Integer)', 'Public Function F(x) As Long', 'Type P', 'Public Enum E',
     'Static Sub A()', 'X As Integer', 'V(1 To 3) As Integer', 'Rod = 1', 'Dim x As Integer', 'Option Explicit', 'Private x As Long', 'Const A = 1',
     'x = 1: y = 2', "' just a comment", '', 'Retry:', 'Debug.Print a; b', 'Foo 1, 2', 'End', 'Exit Sub',
+    'Open "f" For Input As #1', 'Close #1, #2', 'Line Input #1, s', 'Get #1, , x',
   ])('valid: %s', line => expect(checkLineSyntax(line)).toBeNull());
 
   test.each([
@@ -453,7 +460,7 @@ describe('checkLineSyntax', () => {
     ['If x', 'Expected: Then'],
     ['For i = 1', 'Expected: To'],
     ['Print "x"', 'Not supported in VibeBasic: Print'],
-    ['Open "f" For Input As #1', 'Not supported in VibeBasic: Open'],
+    ['GoSub Foo', 'Not supported in VibeBasic: GoSub'],
     ['x = f(1', 'Expected: )'],
     ['x = "abc', 'Unterminated string'],
     ['End If x', 'Expected: end of statement'],

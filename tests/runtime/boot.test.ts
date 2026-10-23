@@ -117,3 +117,30 @@ test('startRuntime asks the backend for the bundle name', async () => {
   await startRuntime(p, b, fakeHost());
   expect(getAppName).toHaveBeenCalled();
 });
+
+// Review 08 final #8: the API key older versions left in the localStorage the form windows share is moved at start.
+test('AI settings left in localStorage are moved to the Rust store at start, before a made app runs', async () => {
+  const { LEGACY_AI_KEY, loadAiSettingsFrom } = await import('../../src/backend/aiSettingsStore');
+  const old = { baseUrl: 'http://x/v1', model: 'm', apiKey: 'secret', thinking: 'low' };
+  for (const embedded of [null, serializeProject(newProject())]) {
+    localStorage.setItem(LEGACY_AI_KEY, JSON.stringify(old));
+    let stored: unknown = null;
+    const io = { get: async () => stored, set: async (v: unknown) => { stored = v; } };
+    const { b } = fakeBackend(embedded);
+    Object.assign(b, { kind: 'tauri', loadSettings: (key: string) => (key === 'ai' ? loadAiSettingsFrom(io, localStorage) : Promise.resolve(null)) });
+    let atRuntimeStart: string | null | undefined;
+    const deps = { startIde: vi.fn(), startRuntime: vi.fn(async () => { atRuntimeStart = localStorage.getItem(LEGACY_AI_KEY); }), showError: vi.fn(async () => {}) };
+    await boot(b, deps);
+    await vi.waitFor(() => expect(localStorage.getItem(LEGACY_AI_KEY)).toBeNull());
+    expect(stored).toEqual(old);
+    if (embedded !== null) expect(atRuntimeStart).toBeNull();
+  }
+  // the store cannot be written: the old copy stays for the next start
+  localStorage.setItem(LEGACY_AI_KEY, JSON.stringify(old));
+  const { b } = fakeBackend(null);
+  Object.assign(b, { kind: 'tauri', loadSettings: () => loadAiSettingsFrom({ get: async () => null, set: async () => { throw new Error('no'); } }, localStorage) });
+  await boot(b, { startIde: vi.fn(), startRuntime: vi.fn(async () => {}), showError: vi.fn(async () => {}) });
+  await tick();
+  expect(localStorage.getItem(LEGACY_AI_KEY)).not.toBeNull();
+  localStorage.removeItem(LEGACY_AI_KEY);
+});

@@ -2,7 +2,7 @@
 
 import { VBRuntimeError } from '../errors';
 import { plain } from '../interp/operators';
-import { Null, bankers, isDate, toNumber, type VBValue } from '../values';
+import { Null, bankers, isDate, toNumber, toSingle, type VBValue } from '../values';
 import { def, intArg, isNullV, newRndState, type BuiltinCtx, type RndState } from './util';
 
 const finite = (n: number): number => {
@@ -93,14 +93,15 @@ function seedFrom(r: RndState, n: number): void {
 
 const rndOf = (ctx: BuiltinCtx): RndState => (ctx.rnd ??= newRndState());
 
+/** A Single in [0, 1). */
 def('Rnd', 0, 1, (a, ctx) => {
   const r = rndOf(ctx);
   const x = a[0] === undefined ? 1 : toNumber(a[0]);
-  if (x === 0) return r.last;
+  if (x === 0) return toSingle(r.last);
   if (x < 0) seedFrom(r, x);
-  else if (r.first) { r.first = false; return r.last; }
+  else if (r.first) { r.first = false; return toSingle(r.last); }
   r.last = nextRandom(r);
-  return r.last;
+  return Math.min(toSingle(r.last), Math.fround(0.99999994));   // the Single nearest a value just below 1 may be 1
 });
 
 def('Randomize', 0, 1, (a, ctx) => {

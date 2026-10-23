@@ -233,7 +233,8 @@ function collect(menus: MenuDef[] | MenuItem[], out: { sc: ParsedShortcut; item:
   for (const m of menus) {
     const items = 'items' in m ? m.items : [m as MenuItem];
     for (const it of items) {
-      if (it.shortcut) out.push({ sc: parseShortcut(it.shortcut), item: it });
+      // a two-key chord ("Ctrl+M, Ctrl+L") is only shown; the focused widget's own keymap handles it
+      if (it.shortcut && !/,\s/.test(it.shortcut)) out.push({ sc: parseShortcut(it.shortcut), item: it });
       if (it.submenu) collect(it.submenu, out);
     }
   }

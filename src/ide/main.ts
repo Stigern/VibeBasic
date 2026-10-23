@@ -9,6 +9,7 @@ import { IdeState, OPTION_EXPLICIT, type IdeOptions } from './ideState';
 import { buildLayout, type IdeLayout } from './layout';
 import { buildMenus, type IdeActions } from './menus';
 import { askAi, askAiAboutError } from '../ai/askDialog';
+import { showAiLog } from '../ai/aiLog';
 import { getCodeWindow, openCodeWindow, registerCodeActions } from './codeWindow';
 import { openDesigner, registerDesignerActions } from './designer';
 import { createPropertiesWindow, type PropertiesWindow } from './properties';
@@ -55,20 +56,22 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   actions.components = () => { if (state.mode === 'design') void showComponents(state, doc); };
   actions.options = () => { void showOptions(state, backend, doc); };
   actions.askAi = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc); };
+  actions.aiLog = () => { void showAiLog(doc, text => backend.clipboardSetText(text)); };
   const fc = new FileController(state, backend, doc);
   fc.onProjectReplaced = () => {
     const id = state.project.forms.find(f => f.name === state.project.startupForm)?.id ?? state.project.forms[0]?.id;
     if (id) openDesigner(state, id, env);
   };
-  actions.newProject = () => { if (state.mode === 'design') void fc.newProject(); };
-  actions.openProject = () => { if (state.mode === 'design') void fc.open(); };
-  // a value typed in the Properties window but not yet entered goes into the project first (false: it was invalid)
+  // a value typed in the Properties window but not yet entered goes into the project first (false: it was invalid). New, Open,
+  // Exit and closing the window do so too, so "Save changes?" asks about it instead of the value being lost.
   const committed = (): boolean => propsWin?.commitPendingEdit() ?? true;
+  actions.newProject = () => { if (state.mode === 'design' && committed()) void fc.newProject(); };
+  actions.openProject = () => { if (state.mode === 'design' && committed()) void fc.open(); };
   actions.saveProject = () => { if (committed()) void fc.save(); };
   actions.saveProjectAs = () => { if (committed()) void fc.saveAs(); };
   actions.makeApp = () => { if (state.mode === 'design' && committed()) void makeAppFlow(state, backend); };
-  actions.exit = () => { void fc.exit(); };
-  backend.onCloseRequested(() => fc.confirmDiscard());
+  actions.exit = () => { if (committed()) void fc.exit(); };
+  backend.onCloseRequested(async () => committed() && fc.confirmDiscard());
   // Form windows: real Tauri windows in the app, a floating layer over the MDI area in the browser
   const hostFactory = (): FormHost => {
     if (backend.kind === 'tauri') return new TauriFormHost();

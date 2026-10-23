@@ -102,11 +102,107 @@ test('Option Explicit: undeclared variables', () => {
 });
 
 test('unsupported functions and statements', () => {
-  expect(inForm1(sub('    SaveSetting "App", "S", "K", Text1(0).Text'))).toEqual(['SaveSetting is not supported in VibeBasic. Use a module-level variable instead.']);
+  expect(inForm1(sub('    Shell "notepad.exe"'))).toEqual(['Shell is not supported in VibeBasic. Programs cannot be started.']);
+  expect(inForm1(sub('    Label1.Caption = StrConv("a b", vbProperCase) & Environ("HOME")\n    Beep'))).toEqual([]);
   expect(validateCode('Sub Main()\n    Dim o\n    Set o = CreateObject("Scripting.Dictionary")\nEnd Sub', { moduleName: 'Module2', form: null }))
     .toEqual(['CreateObject is not supported in VibeBasic.']);
-  expect(validateCode('Sub Main()\n    Print #1, "x"\nEnd Sub', { moduleName: 'Module2', form: null }))
-    .toEqual(['Line 2: Print # is not supported in VibeBasic. There is no file I/O; keep the data in variables instead.']);
+  // file I/O and the settings are supported
+  expect(inForm1(sub('    SaveSetting "App", "S", "K", Text1(0).Text'))).toEqual([]);
+  expect(validateCode('Sub Main()\n    Open "x" For Output As #1\n    Print #1, "x"\n    Close #1\nEnd Sub', { moduleName: 'Module2', form: null })).toEqual([]);
+});
+
+test('file I/O and the settings functions are fine under Option Explicit (0.8 file I/O)', () => {
+  const body = [
+    '    Dim f As Integer, s As String, n As Long',
+    '    f = FreeFile',
+    '    Open App.Path & "\\data.txt" For Output As #f',
+    '    Print #f, "a"; 1',
+    '    Write #f, "b", 2',
+    '    Close #f',
+    '    Open App.Path & "\\data.txt" For Input As #f',
+    '    Do While Not EOF(f)',
+    '        Line Input #f, s',
+    '    Loop',
+    '    Close',
+    '    Open "x.bin" For Binary As #1',
+    '    Get #1, 1, n',
+    '    Put #1, , n',
+    '    Seek #1, 1',
+    '    Close #1',
+    '    Name "x.bin" As "y.bin"',
+    '    If Dir("y.bin") <> "" Then Kill "y.bin"',
+    '    SaveSetting "App", "S", "K", Text1(0).Text',
+    '    Text1(1).Text = GetSetting("App", "S", "K", "")',
+    '    DeleteSetting "App", "S"',
+  ].join('\n');
+  expect(inForm1(sub(body))).toEqual([]);
+  // a bad name inside each file statement is found (review 08 final #1)
+  const bad: [string, string][] = [
+    ['Print #1, zz', 'Variable not defined: zz'],
+    ['Print #1, Label1.Text', 'A Label has no Text property. Did you mean Caption?'],
+    ['Print #1, Spc(zz); "a"', 'Variable not defined: zz'],
+    ['Write #zz, 1', 'Variable not defined: zz'],
+    ['Input #1, zz', 'Variable not defined: zz'],
+    ['Line Input #1, Label1.Text', 'A Label has no Text property. Did you mean Caption?'],
+    ['Open zz For Output As #1', 'Variable not defined: zz'],
+    ['Open "a" For Random As #1 Len = zz', 'Variable not defined: zz'],
+    ['Get #1, , zz', 'Variable not defined: zz'],
+    ['Put #1, zz, 1', 'Variable not defined: zz'],
+    ['Seek #1, zz', 'Variable not defined: zz'],
+    ['Close #zz', 'Variable not defined: zz'],
+    ['Name zz As "b"', 'Variable not defined: zz'],
+    ['Name "a" As Twice(1, 2)', 'Twice takes 1 argument, not 2.'],
+  ];
+  for (const [line, problem] of bad) expect(inForm1(sub(`    ${line}`)), line).toEqual([problem]);
+});
+
+test('the review 08 language additions are known names under Option Explicit', () => {
+  const code = [
+    'Option Explicit',
+    'Private Function Nums() As Integer()',
+    '    Dim a() As Integer',
+    '    ReDim a(2)',
+    '    Nums = a',
+    'End Function',
+    'Private Sub Show(Optional ByVal v As Variant)',
+    '    If IsMissing(v) Then Debug.Print "none"',
+    'End Sub',
+    'Private Sub Main()',
+    '    Dim s As String, t As String * 5, c As New Collection, d As Collection, v As Variant, x() As String',
+    '    On Error GoTo Bad',
+    '    s = "hello"',
+    '10  Mid(s, 1, 2) = "HE"',
+    '    LSet t = s',
+    '    RSet t = s',
+    '    Set d = New Collection',
+    '    c.Add 1, "a"',
+    '    Debug.Print FormatNumber(1234.5, 2), FormatCurrency(3), FormatPercent(0.5), CDec(1.5)',
+    '    x = Filter(Split("a,b", ","), "a")',
+    '    v = CVErr(5)',
+    '    If IsError(v) Then Error 5',
+    '    Show',
+    '    Exit Sub',
+    'Bad:',
+    '    Debug.Print Erl, Err.Number',
+    'End Sub',
+  ].join('\n');
+  expect(validateCode(code, { moduleName: 'Module1', form: null })).toEqual([]);
+  const p = project();
+  expect(validateCode(code, { moduleName: 'Module2', form: null, project: p })).toEqual([]);
+  // a bad name inside each new statement is found (review 08 final #1)
+  const bad: [string, string][] = [
+    ['Mid(zz, 1, 1) = "a"', 'Variable not defined: zz'],
+    ['Mid$(Label1.Text, 1) = "a"', 'A Label has no Text property. Did you mean Caption?'],
+    ['Mid(s, zz) = "a"', 'Variable not defined: zz'],
+    ['LSet zz = "a"', 'Variable not defined: zz'],
+    ['RSet Label1.Text = "a"', 'A Label has no Text property. Did you mean Caption?'],
+    ['RSet s = zz', 'Variable not defined: zz'],
+    ['Error zz', 'Variable not defined: zz'],
+    ['Debug.Print Tab(zz); "a"', 'Variable not defined: zz'],
+  ];
+  for (const [line, problem] of bad) expect(inForm1(sub(`    Dim s As String\n    ${line}`)), line).toEqual([problem]);
+  // without Option Explicit, a target of Input # / Mid / LSet creates the variable: no "not a control" report
+  expect(validateCode('Sub Main()\n    LSet q = "a"\n    q.x = 1\nEnd Sub', { moduleName: 'Module2', form: null, project: p })).toEqual([]);
 });
 
 test('a large valid program has no problems', () => {
@@ -187,7 +283,20 @@ End Sub
 
 Private Sub Timer1_Timer()
     Label1.Caption = Time
-End Sub`;
+End Sub
+
+Private Sub Form_KeyPress(KeyAscii As Integer)
+    If KeyAscii = 27 Then KeyAscii = 0
+End Sub
+
+Private Sub Text1_Click(Index As Integer)
+    Label1.Caption = Greet("x") & Greet("y", True) & Greet("z", , "!")
+    Label1.Tag = Choose(Index + 1, "a", "b", "c", "d") & UBound(Array(1, 2, 3, 4, 5))
+End Sub
+
+Private Function Greet(ByVal who As String, Optional ByVal loud As Boolean = False, Optional ByVal tail As String = ".") As String
+    Greet = IIf(loud, UCase(who), who) & tail
+End Function`;
   expect(inForm1(code)).toEqual([]);
 });
 
@@ -198,4 +307,59 @@ test('run-time objects: Controls, Forms, Screen.ActiveControl and Clipboard are 
     '    Debug.Print Me.Controls.Count, Forms.Count, Me.ActiveControl.Name, Screen.ActiveForm.Caption, Screen.ActiveControl.Name',
     '    Clipboard.SetText Clipboard.GetText & "x"',
   ].join('\n')))).toEqual([]);
+});
+
+test('event signatures: count and declared types must match what the event passes', () => {
+  expect(inForm1('Private Sub Form_KeyPress()\nEnd Sub')).toEqual(['Form_KeyPress needs (KeyAscii As Integer).']);
+  expect(inForm1('Private Sub Text1_Change()\nEnd Sub')).toEqual(['Text1_Change needs (Index As Integer).']);
+  expect(inForm1('Private Sub Command1_MouseDown(Button As Integer, Shift As Integer, X As Single)\nEnd Sub'))
+    .toEqual(['Command1_MouseDown needs (Button As Integer, Shift As Integer, X As Single, Y As Single).']);
+  expect(inForm1('Private Sub Form_QueryUnload(Cancel As Integer, UnloadMode As String)\nEnd Sub'))
+    .toEqual(['Form_QueryUnload needs (Cancel As Integer, UnloadMode As Integer).']);
+  // names may differ, undeclared types are not checked; without a project the rule still runs
+  expect(inForm1('Private Sub Form_KeyDown(k As Integer, s As Integer)\nEnd Sub\nPrivate Sub Form_Unload(Cancel)\nEnd Sub')).toEqual([]);
+  expect(validateCode('Private Sub Form_Load(x As Integer)\nEnd Sub', { moduleName: 'Form1', form: form() })).toEqual(['Form_Load needs ().']);
+});
+
+test('calls: procedures that exist nowhere and wrong argument counts', () => {
+  expect(inForm1(sub('    DoWork 1\n    Label1.Caption = Missing(2)'))).toEqual(['Sub or Function not defined: DoWork', 'Sub or Function not defined: Missing']);
+  expect(inForm1(sub('    Label1.Caption = Twice(1, 2)'))).toEqual(['Twice takes 1 argument, not 2.']);
+  const opt = 'Private Sub Show2(ByVal a As Long, Optional ByVal b As Long)\nEnd Sub\n';
+  expect(inForm1(opt + sub('    Show2 1\n    Show2 1, 2\n    Show2'))).toEqual(['Show2 takes 1 to 2 arguments, not 0.']);
+  expect(inForm1(sub('    Label1.Caption = Left("abc") & Mid("abc", 1, 2, 3) & Choose(1)')))
+    .toEqual(['Left takes 2 arguments, not 1.', 'Mid takes 2 to 3 arguments, not 4.', 'Choose takes at least 2 arguments, not 1.']);
+  // without a project the other modules' names are unknown: no report
+  const p = project();
+  expect(validateCode(sub('    DoWork 1'), { moduleName: 'Form1', form: p.forms[0] })).toEqual([]);
+});
+
+test('a procedure defined twice in the proposal', () => {
+  expect(validateCode('Sub Main()\nEnd Sub\nSub Helper()\nEnd Sub\nSub main()\nEnd Sub', { moduleName: 'Module2', form: null }))
+    .toEqual(['main is defined more than once; keep one.']);
+});
+
+test('the compile errors the run would raise at the call are found (review 08 final #4)', () => {
+  const p = project();
+  const mod = (code: string) => validateCode(code, { moduleName: 'Module2', form: null, project: p });
+  const inc = 'Private Sub Inc(n As Integer)\n    n = n + 1\nEnd Sub\n';
+  expect(mod(`${inc}Sub Main()\n    Dim total As Long\n    Inc total\nEnd Sub`))
+    .toEqual(["ByRef argument type mismatch: Inc's n is Integer, total is Long; pass (total) or declare total As Integer."]);
+  expect(mod('Private Sub IncL(n As Long)\nEnd Sub\nSub Main()\n    Dim total\n    IncL total\nEnd Sub')).toHaveLength(1);
+  // Module1's Twice is ByVal: fine; a call to the existing code's procedure is checked against its parameters
+  expect(mod('Sub Main()\n    Dim i As Integer\n    Debug.Print Twice(i)\nEnd Sub')).toEqual([]);
+  expect(mod('Private Sub Fill(a() As Long)\nEnd Sub\nSub Main()\n    Dim a(2) As Long\n    Fill (a)\nEnd Sub')[0]).toMatch(/^Type mismatch: array or user-defined type expected/);
+  expect(mod('Private Type P\n    X As Integer\nEnd Type\nSub Main()\n    Dim q As New P\nEnd Sub')).toEqual(['Invalid use of New keyword']);
+  expect(mod('Sub Main()\n    Dim d As Object\n    Set d = New Dictionary\nEnd Sub')[0]).toMatch(/^Not supported in VibeBasic: New Dictionary/);
+  expect(mod('Private Type P\n    X As Integer\nEnd Type\nSub Main()\n    Dim a As P, b As P\n    LSet a = b\nEnd Sub')).toEqual(['Not supported in VibeBasic: LSet of a user-defined type']);
+  // in a form, against the form's existing procedure; and a bare body is checked too
+  const p2 = project();
+  p2.forms[0].code += 'Private Sub Bump(n As Integer)\nEnd Sub\n';
+  const form1 = (code: string) => validateCode(code, { moduleName: 'Form1', form: p2.forms[0], project: p2 });
+  expect(form1(sub('    Bump mTotal'))).toEqual(["ByRef argument type mismatch: Bump's n is Integer, mTotal is Long; pass (mTotal) or declare mTotal As Integer."]);
+  expect(form1('Bump mTotal')).toHaveLength(1);
+  expect(form1('Bump (mTotal)')).toEqual([]);
+});
+
+test('vbUseDefault and the FirstWeekOfYear constants are known names (review 08 final #10)', () => {
+  expect(inForm1(sub('    Debug.Print FormatNumber(0.5, 2, vbUseDefault), DatePart("ww", Now, vbMonday, vbFirstFourDays)'))).toEqual([]);
 });

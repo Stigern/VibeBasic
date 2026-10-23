@@ -6,6 +6,7 @@ import type { BreakInfo, CodeLocation, Host, VBObject } from '../../src/lang/hos
 import type { VBRuntimeError } from '../../src/lang/errors';
 import { Nothing, type VBValue } from '../../src/lang/values';
 import { Program, type ProgramOptions } from '../../src/lang/interp/program';
+import { MemoryFs } from '../../src/lang/fileio/memoryFs';
 
 export class TestHost implements Host {
   /** Debug.Print lines, `[MsgBox] <prompt>` and `[Error <n> at <Module>:<line>] <text>`. */
@@ -25,6 +26,8 @@ export class TestHost implements Host {
   /** When set, answers every `onBreak` instead of `breakChoice` (e.g. to use the Immediate window first). */
   breakHook?: (info: BreakInfo) => Promise<string> | string;
   endCalls = 0;
+  /** The program's file system (Open, Kill, SaveSetting ...). */
+  fs = new MemoryFs();
   private breaksTaken = 0;
   private readonly breakWaiters = new Map<number, (info: BreakInfo) => void>();
   private pendingBreak?: (answer: 'continue' | 'end') => void;
@@ -91,6 +94,8 @@ export class TestHost implements Host {
   onEnd(): void {
     this.endCalls++;
   }
+
+  fileSystem(): MemoryFs { return this.fs; }
 
   /** Output lines, including an unfinished Debug.Print line. */
   lines(): string[] {

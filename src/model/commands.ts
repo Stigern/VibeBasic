@@ -2,8 +2,10 @@
 // only through these. Commands look up forms/controls by id every time they run, and capture what undo needs
 // (old values, array positions, deleted subtrees) at do-time, so they work as long as the stack is used in order.
 
+import { assetRefCount, controlAssetIds } from './assetRefs';
 import { CONTROL_TYPES } from './controls';
 import { setControlPos } from './geometry';
+import { ssTabCount } from './ssTab';
 import type { Asset, ControlDef, FormDef, ModuleDef, Project, PropValue } from './types';
 
 export interface Command { label: string; do(p: Project): void; undo(p: Project): void }
@@ -100,21 +102,56 @@ export function addControlsCmd(formId: string, defs: ControlDef[]): Command {
   };
 }
 
+/** Deletes controls and their descendants. As in VB6 the pictures only they used go with them (the assets nothing else names
+ *  are removed), and the TabIndex values of the remaining controls are renumbered without gaps. */
 export function deleteControlsCmd(formId: string, idList: string[]): Command {
   const ids = [...idList];
   let removed: { index: number; def: ControlDef }[] = [];
-  return {
-    label: ids.length === 1 ? 'Delete control' : `Delete ${ids.length} controls`,
+  let droppedAssets: [string, Asset][] = [];
+  const del: Command = {
+    label: '',
     do(p) {
       const f = formOf(p, formId);
       const all = withDescendants(f, ids);
       removed = [];
       f.controls.forEach((def, index) => { if (all.has(def.id)) removed.push({ index, def }); });
       f.controls = f.controls.filter(c => !all.has(c.id));
+      droppedAssets = [];
+      for (const a of new Set(removed.flatMap(r => controlAssetIds(r.def)))) {
+        if (a in p.assets && a !== p.iconAsset && assetRefCount(p, a) === 0) { droppedAssets.push([a, p.assets[a]]); delete p.assets[a]; }
+      }
+    },
+    undo(p) {
+      for (const [a, asset] of droppedAssets) p.assets[a] = asset;
+      const f = formOf(p, formId);
+      for (const r of removed) f.controls.splice(r.index, 0, r.def); // ascending index: each lands at its original slot
+    },
+  };
+  return compositeCmd(ids.length === 1 ? 'Delete control' : `Delete ${ids.length} controls`, [del, tabIndexCmd(formId)]);
+}
+
+/** Renumbers the TabIndex of the form's controls 0, 1, 2, ... in their current tab order, without gaps (VB6). With `place`, that
+ *  control is first moved to position `place.index` (clamped to the last one), and the others shift around it. */
+export function tabIndexCmd(formId: string, place?: { id: string; index: number }): Command {
+  let old: { id: string; value: PropValue }[] = [];
+  return {
+    label: 'Change TabIndex',
+    do(p) {
+      const f = formOf(p, formId);
+      const order = f.controls.filter(c => typeof c.props.TabIndex === 'number')
+        .map((c, i) => ({ c, i })).sort((a, b) => (a.c.props.TabIndex as number) - (b.c.props.TabIndex as number) || a.i - b.i).map(x => x.c);
+      if (place) {
+        const at = order.findIndex(c => c.id === place.id);
+        if (at < 0) throw new Error(`Control not found: ${place.id}`);
+        const [c] = order.splice(at, 1);
+        order.splice(Math.max(0, Math.min(place.index, order.length)), 0, c);
+      }
+      old = [];
+      order.forEach((c, i) => { if (c.props.TabIndex !== i) { old.push({ id: c.id, value: c.props.TabIndex }); c.props.TabIndex = i; } });
     },
     undo(p) {
       const f = formOf(p, formId);
-      for (const r of removed) f.controls.splice(r.index, 0, r.def); // ascending index: each lands at its original slot
+      for (const o of old) controlOf(f, o.id).props.TabIndex = o.value;
     },
   };
 }
@@ -190,30 +227,39 @@ export function reparentCmd(formId: string, items: { id: string; parentId: strin
 }
 
 /** Sets one property. A control type with linked properties (ControlTypeDef.onPropSet, e.g. SSTab Caption / Tab / TabCaption)
- *  updates them too; undo then restores all of its properties. */
+ *  updates them too; undo then restores all of its properties. When an SSTab loses tabs, the controls on the removed tabs move
+ *  to its last tab, so they stay reachable. */
 export function setPropertyCmd(formId: string, targetId: string | 'form', name: string, value: PropValue): Command {
   const newValue = clone(value);
   let had = false;
   let oldValue: PropValue = null;
   let snapshot: Record<string, PropValue> | null = null;
-  const target = (p: Project): { props: Record<string, PropValue>; hook?: (props: Record<string, PropValue>, name: string) => void } => {
+  let movedTabs: { id: string; tab: number | undefined }[] = [];
+  const target = (p: Project): { props: Record<string, PropValue>; hook?: (props: Record<string, PropValue>, name: string) => void; tabKids: ControlDef[] } => {
     const f = formOf(p, formId);
-    if (targetId === 'form') return { props: f.props };
+    if (targetId === 'form') return { props: f.props, tabKids: [] };
     const c = controlOf(f, targetId);
-    return { props: c.props, hook: CONTROL_TYPES[c.type]?.onPropSet };
+    return { props: c.props, hook: CONTROL_TYPES[c.type]?.onPropSet, tabKids: c.type === 'SSTab' ? f.controls.filter(k => k.parentId === c.id) : [] };
   };
   return {
     label: `Change ${name}`,
     do(p) {
-      const { props, hook } = target(p);
+      const { props, hook, tabKids } = target(p);
       had = name in props;
       oldValue = clone(props[name] ?? null);
       snapshot = hook ? structuredClone(props) : null;
       props[name] = clone(newValue);
       hook?.(props, name);
+      movedTabs = [];
+      const last = ssTabCount(props) - 1;
+      for (const k of tabKids) if ((k.tab ?? 0) > last) { movedTabs.push({ id: k.id, tab: k.tab }); k.tab = last; }
     },
     undo(p) {
       const { props } = target(p);
+      if (movedTabs.length) {
+        const f = formOf(p, formId);
+        for (const m of movedTabs) { const k = controlOf(f, m.id); if (m.tab === undefined) delete k.tab; else k.tab = m.tab; }
+      }
       if (snapshot) {
         for (const k of Object.keys(props)) delete props[k];
         Object.assign(props, structuredClone(snapshot));
@@ -320,6 +366,21 @@ export function renameCmd(formId: string, targetId: string | 'form', newName: st
   };
 }
 
+/** Renames a standard module (Properties window, (Name)). Like renameCmd it never touches code. */
+export function renameModuleCmd(moduleId: string, newName: string): Command {
+  let oldName = '';
+  const mod = (p: Project): ModuleDef => {
+    const m = p.modules.find(x => x.id === moduleId);
+    if (!m) throw new Error(`Module not found: ${moduleId}`);
+    return m;
+  };
+  return {
+    label: 'Rename',
+    do(p) { const m = mod(p); oldName = m.name; m.name = newName; },
+    undo(p) { mod(p).name = oldName; },
+  };
+}
+
 export function zOrderCmd(formId: string, idList: string[], where: 'front' | 'back'): Command {
   const ids = [...idList];
   let oldOrder: string[] = [];
@@ -371,22 +432,28 @@ export function compositeCmd(label: string, cmdList: Command[]): Command {
 // ---------------------------------------------------------------------------------------------------------------
 // Project items
 
-export function addFormCmd(form: FormDef): Command {
-  const pristine = structuredClone(form);
+/** Adds a form or module. Undo keeps the live object that it takes out (with the code typed into it since, which never goes
+ *  through the stack), and redo puts that same object back; only the first `do` uses the pristine copy. */
+function addItemCmd<T extends { id: string; name: string }>(item: T, list: (p: Project) => T[], set: (p: Project, items: T[]) => void): Command {
+  const pristine = structuredClone(item);
+  let removed: T | null = null;
   return {
     label: `Add ${pristine.name}`,
-    do(p) { p.forms.push(structuredClone(pristine)); },
-    undo(p) { p.forms = p.forms.filter(f => f.id !== pristine.id); },
+    do(p) { list(p).push(removed ?? structuredClone(pristine)); removed = null; },
+    undo(p) {
+      const items = list(p);
+      removed = items.find(x => x.id === pristine.id) ?? null;
+      set(p, items.filter(x => x.id !== pristine.id));
+    },
   };
 }
 
+export function addFormCmd(form: FormDef): Command {
+  return addItemCmd(form, p => p.forms, (p, v) => { p.forms = v; });
+}
+
 export function addModuleCmd(m: ModuleDef): Command {
-  const pristine = structuredClone(m);
-  return {
-    label: `Add ${pristine.name}`,
-    do(p) { p.modules.push(structuredClone(pristine)); },
-    undo(p) { p.modules = p.modules.filter(x => x.id !== pristine.id); },
-  };
+  return addItemCmd(m, p => p.modules, (p, v) => { p.modules = v; });
 }
 
 /** Removes a form or module by id. Removing the startup form requires `newStartupForm` (a form name); the command

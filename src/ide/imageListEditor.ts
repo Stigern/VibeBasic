@@ -14,10 +14,11 @@ import { messageBox98, showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
 import { bytesToBase64, mimeFromPath } from './propertyEditors';
 import './pickers.css';
+import { dataSourceEditor } from './dataSourceEditor';
 
 const NONE = '(None)';
 const IMAGE_REF_PROPS = new Set(['ImageList', 'Icons', 'SmallIcons']);
-const IMAGE_USERS = new Set<ControlType>(['Toolbar', 'TreeView', 'ListView', 'TabStrip']);
+const IMAGE_USERS = new Set<ControlType>(['Toolbar', 'TreeView', 'ListView', 'TabStrip', 'ImageCombo', 'CoolBar']);
 const VB_OK_EXCL = 48;
 
 export interface CustomEditorEnv {
@@ -39,6 +40,8 @@ export interface CustomEditor { focus: HTMLElement | null; open(): void; close()
 
 /** Fills `cell` with this property's own editor; null when the Properties window should use its standard one. */
 export function customPropEditor(env: CustomEditorEnv): CustomEditor | null {
+  const data = dataSourceEditor(env);
+  if (data) return data;
   if (env.type === 'ImageList' && env.def.name === 'ListImages') {
     const open = () => { void editListImages(env); };
     const btn = h('button', { type: 'button', class: 'pw98-btn pw98-wide', title: '(Custom)...' }, '(Custom)...');

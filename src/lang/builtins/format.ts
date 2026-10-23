@@ -1,4 +1,5 @@
-// Format(), FormatDateTime() and the locale-based date text used by CStr/Print.
+// Format(), FormatNumber(), FormatCurrency(), FormatPercent(), FormatDateTime() and the locale-based date text used by
+// CStr/Print.
 //
 // Numbers: named formats (General Number, Fixed, Standard, Percent, Currency,
 // Scientific, Yes/No, True/False, On/Off) and custom patterns with sections
@@ -8,7 +9,7 @@
 //
 // Dates: named formats follow the locale (Intl); custom patterns use
 // d dd ddd dddd ddddd m mm mmm mmmm yy yyyy h hh n nn s ss q w ww y ttttt
-// AM/PM am/pm A/P a/p. `m` right after `h` or right before `s` means minutes.
+// AM/PM am/pm A/P a/p AMPM (the locale's text). `m` right after `h` or right before `s` means minutes.
 
 import { VBRuntimeError } from '../errors';
 import { plain } from '../interp/operators';
@@ -150,6 +151,9 @@ export function localeDateParser(locale: string): DateTextParser {
   const timeOnly = new RegExp(`^${time.src}$`, 'i');
   const lower = (x: string) => clean(x).replace(/\s+/g, '').toLowerCase();
   const pmKeys = new Set(pm.map(lower));
+  const order = date.fields.filter(f => f === 'year' || f === 'month' || f === 'day').map(f => f[0]).join('');
+  const amKeys = new Set(am.map(lower));
+  const lenient = lenientDateParser(locale, order === 'dmy' || order === 'ymd' ? order : 'mdy', amKeys, pmKeys, lower);
   parser = (text: string) => {
     const s = clean(text).trim();
     const got: Partial<Record<DateField, string>> = {};
@@ -157,7 +161,7 @@ export function localeDateParser(locale: string): DateTextParser {
     if (m) [...date.fields, ...time.fields].forEach((f, i) => { got[f] = m![i + 1]; });
     else {
       m = timeOnly.exec(s);
-      if (!m) return undefined;
+      if (!m) return lenient(s);
       time.fields.forEach((f, i) => { got[f] = m![i + 1]; });
     }
     const num = (f: DateField, dflt: number) => (got[f] === undefined ? dflt : Number(got[f]));
@@ -168,10 +172,90 @@ export function localeDateParser(locale: string): DateTextParser {
       if (h < 1 || h > 12) return undefined;
       h = (h % 12) + (pmKeys.has(lower(got.dayPeriod)) ? 12 : 0);
     }
-    return validDate(y, num('month', 12), num('day', 30), h, num('minute', 0), num('second', 0));
+    // not a date in the locale's order (13/1/2003 in en-US): the other readings
+    return validDate(y, num('month', 12), num('day', 30), h, num('minute', 0), num('second', 0)) ?? lenient(s);
   };
   dateParsers.set(locale, parser);
   return parser;
+}
+
+/** The locale's AM or PM text (`AMPM` in a date format); AM / PM when the locale has none. */
+function dayPeriodText(pm: boolean, locale: string): string {
+  const parts = formatter(locale, { hour: 'numeric', hour12: true }).formatToParts(utcDate({ y: 2001, m: 1, d: 1, h: pm ? 13 : 1, n: 0, s: 0 }));
+  const text = parts.find(p => p.type === 'dayPeriod')?.value;
+  return text ? clean(text) : pm ? 'PM' : 'AM';
+}
+
+const EN_MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+const EN_DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+/**
+ * The other date texts VB6 reads (CDate, DateValue, IsDate): parts separated by `/`, `-`, `.`, `,` or spaces, a month
+ * name or abbreviation in any position (the locale's or English), a weekday name (ignored), a year first (`2003/1/5`),
+ * a month and day without a year (this year), numbers in the locale's order (`mdy`, `dmy`, `ymd`) and, when that is
+ * not a date, the other order (`13/1/2003` is the 13th of January). An optional time follows (`10:30 PM`).
+ */
+function lenientDateParser(
+  locale: string, order: 'mdy' | 'dmy' | 'ymd', amKeys: Set<string>, pmKeys: Set<string>, lower: (x: string) => string,
+): DateTextParser {
+  const strip = (x: string) => lower(x).replace(/\.$/, '');
+  const months = Array.from({ length: 12 }, (_, i) => [strip(monthName(i + 1, true, locale)), strip(monthName(i + 1, false, locale)), EN_MONTHS[i]]);
+  const days = new Set(Array.from({ length: 7 }, (_, i) => [strip(weekdayNameOf(i, true, locale)), strip(weekdayNameOf(i, false, locale)), EN_DAYS[i], EN_DAYS[i].slice(0, 3)]).flat());
+  const monthOf = (w: string): number | undefined => {
+    const x = strip(w);
+    if (x.length < 3) return undefined;
+    const i = months.findIndex(names => names.some(n => n === x || (n.startsWith(x) && x.length >= 3)));
+    return i < 0 ? undefined : i + 1;
+  };
+  const timeRe = /(?:^|\s+)(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?\s*([^\d\s:]+)?$/;
+  return text => {
+    let s = text;
+    let h = 0, n = 0, sec = 0;
+    const t = timeRe.exec(s);
+    if (t) {
+      h = +t[1]; n = +t[2]; sec = t[3] === undefined ? 0 : +t[3];
+      if (t[4] !== undefined) {
+        const p = lower(t[4]);
+        const pm = pmKeys.has(p);
+        if (!pm && !amKeys.has(p)) return undefined;
+        if (h < 1 || h > 12) return undefined;
+        h = (h % 12) + (pm ? 12 : 0);
+      }
+      s = s.slice(0, t.index);
+    }
+    const words = s.split(/[\s,./-]+/).filter(Boolean);
+    let month: number | undefined;
+    const nums: string[] = [];
+    for (const w of words) {
+      if (/^\d{1,4}$/.test(w)) { nums.push(w); continue; }
+      if (days.has(strip(w))) continue;
+      const m = monthOf(w);
+      if (m === undefined || month !== undefined) return undefined;
+      month = m;
+    }
+    const year = (x: string) => (x.length <= 2 ? pivotYear(+x) : +x);
+    const thisYear = new Date().getFullYear();
+    const isYear = (x: string) => x.length >= 3 || +x > 31;
+    if (month !== undefined) {
+      if (nums.length === 1) return isYear(nums[0]) ? validDate(year(nums[0]), month, 1, h, n, sec) : validDate(thisYear, month, +nums[0], h, n, sec);
+      if (nums.length !== 2) return undefined;
+      const [a, b] = nums;
+      return isYear(a) && !isYear(b) ? validDate(year(a), month, +b, h, n, sec) : validDate(year(b), month, +a, h, n, sec);
+    }
+    if (nums.length === 3) {
+      const [a, b, c] = nums;
+      if (a.length >= 3 || order === 'ymd') return validDate(year(a), +b, +c, h, n, sec);
+      const first = order === 'dmy' ? validDate(year(c), +b, +a, h, n, sec) : validDate(year(c), +a, +b, h, n, sec);
+      return first ?? (order === 'dmy' ? validDate(year(c), +a, +b, h, n, sec) : validDate(year(c), +b, +a, h, n, sec));
+    }
+    if (nums.length === 2) {
+      const [a, b] = nums;
+      if (isYear(b)) return validDate(year(b), +a, 1, h, n, sec);   // month and year
+      const md = order === 'dmy' ? validDate(thisYear, +b, +a, h, n, sec) : validDate(thisYear, +a, +b, h, n, sec);
+      return md ?? (order === 'dmy' ? validDate(thisYear, +a, +b, h, n, sec) : validDate(thisYear, +b, +a, h, n, sec));
+    }
+    return undefined;
+  };
 }
 
 type DateKind = 'general' | 'short date' | 'long date' | 'medium date' | 'short time' | 'long time' | 'medium time';
@@ -198,7 +282,7 @@ type DTok =
   | { t: 'lit'; s: string }
   | { t: 'd' | 'm' | 'y' | 'h' | 'n' | 's' | 'w'; n: number }
   | { t: 'q' }
-  | { t: 'ampm'; style: 'AM/PM' | 'am/pm' | 'A/P' | 'a/p' }
+  | { t: 'ampm'; style: 'AM/PM' | 'am/pm' | 'A/P' | 'a/p' | 'AMPM' }
   | { t: 'time5' };
 
 function dateTokens(fmt: string): DTok[] {
@@ -218,6 +302,10 @@ function dateTokens(fmt: string): DTok[] {
     } else if (c === '\\') {
       lit(fmt[i + 1] ?? '');
       i += 2;
+    } else if (rest.startsWith('ampm')) {
+      // the locale's AM/PM text, 12-hour clock
+      out.push({ t: 'ampm', style: 'AMPM' });
+      i += 4;
     } else if (rest.startsWith('am/pm')) {
       const text = fmt.slice(i, i + 5);
       out.push({ t: 'ampm', style: text === text.toLowerCase() ? 'am/pm' : 'AM/PM' });
@@ -278,7 +366,7 @@ function formatDate(v: VBValue, fmt: string, locale: string): string {
         break;
       case 'ampm': {
         const pm = p.h >= 12;
-        out += t.style === 'AM/PM' ? (pm ? 'PM' : 'AM') : t.style === 'am/pm' ? (pm ? 'pm' : 'am')
+        out += t.style === 'AMPM' ? dayPeriodText(pm, locale) : t.style === 'AM/PM' ? (pm ? 'PM' : 'AM') : t.style === 'am/pm' ? (pm ? 'pm' : 'am')
           : t.style === 'A/P' ? (pm ? 'P' : 'A') : (pm ? 'p' : 'a');
         break;
       }
@@ -480,17 +568,23 @@ function formatNumber(n: number, fmt: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Text formats (@ & < >)
+// Text formats (@ & < > !)
 // ---------------------------------------------------------------------------
 
+/**
+ * `@` (a character or a space) and `&` (a character or nothing) placeholders, filled from the right; with `!` from the
+ * left. Characters beyond the placeholders stay at the left (from the right: at the right). `<` / `>`: lower / upper case.
+ */
 function formatText(s: string, fmt: string): string {
   let upper = false;
   let lower = false;
+  let leftToRight = false;
   const slots: ('@' | '&' | string)[] = [];
   for (let i = 0; i < fmt.length; i++) {
     const c = fmt[i];
     if (c === '>') upper = true;
     else if (c === '<') lower = true;
+    else if (c === '!') leftToRight = true;
     else if (c === '@' || c === '&') slots.push(c);
     else if (c === '"') {
       const end = fmt.indexOf('"', i + 1);
@@ -500,16 +594,28 @@ function formatText(s: string, fmt: string): string {
     else slots.push(c);
   }
   if (upper) s = s.toUpperCase(); else if (lower) s = s.toLowerCase();
-  const nSlots = slots.filter(x => x === '@' || x === '&').length;
-  if (nSlots === 0) return s;
+  const isSlot = (x: string) => x === '@' || x === '&';
+  if (!slots.some(isSlot)) return s;
+  if (leftToRight) {
+    let rest = s;
+    let out = '';
+    const lastSlot = slots.length - 1 - [...slots].reverse().findIndex(isSlot);
+    slots.forEach((sl, i) => {
+      if (isSlot(sl)) {
+        if (rest) { out += rest[0]; rest = rest.slice(1); } else if (sl === '@') out += ' ';
+        if (i === lastSlot) { out += rest; rest = ''; }
+      } else out += sl;
+    });
+    return out;
+  }
   let rem = s;
   const out: string[] = [];
-  const firstSlot = slots.findIndex(x => x === '@' || x === '&');
+  const firstSlot = slots.findIndex(isSlot);
   for (let i = slots.length - 1; i >= 0; i--) {
     const sl = slots[i];
-    if (sl === '@' || sl === '&') {
+    if (isSlot(sl)) {
       if (rem) { out.push(rem[rem.length - 1]); rem = rem.slice(0, -1); } else if (sl === '@') out.push(' ');
-      if (i === firstSlot && rem) { out.push(rem.split('').reverse().join('')); rem = ''; }
+      if (i === firstSlot && rem) { out.push(rem); rem = ''; }   // the characters left over go in front, in order
     } else out.push(sl);
   }
   return out.reverse().join('');
@@ -566,8 +672,8 @@ export function formatValue(v: VBValue, fmt: string, locale: string): string {
   if (named) return named(v, locale);
   const bare = stripLiterals(fmt);
   const hasDigits = /[0#]/.test(bare);
-  if (!hasDigits && /[@&<>]/.test(bare)) return formatText(toStr(v), fmt);
-  if (!hasDigits && /[dmyhnsqw]|a\/p|am\/pm/i.test(bare)) return formatDate(v, fmt, locale);
+  if (!hasDigits && /[@&<>!]/.test(bare)) return formatText(toStr(v), fmt);
+  if (!hasDigits && /[dmyhnsqw]|a\/p|am\/pm|ampm/i.test(bare)) return formatDate(v, fmt, locale);
   const n = tryNumber(v);
   return n === undefined ? toStr(v) : formatNumber(n, fmt);
 }
@@ -577,6 +683,41 @@ def('Format', 1, 4, (a, ctx) => {
   if (v instanceof NullT) return Null;
   return a[1] === undefined ? toStr(v) : formatValue(v, toStr(a[1]), ctx.locale);
 });
+
+/** A Tristate argument (vbTrue -1, vbFalse 0, vbUseDefault -2 or omitted). */
+function tristate(v: VBValue | undefined, dflt: boolean): boolean {
+  if (v === undefined) return dflt;
+  const n = toNumber(v);
+  if (n === -2) return dflt;
+  return n !== 0;
+}
+
+/**
+ * FormatNumber / FormatCurrency / FormatPercent: `digits` decimals (default 2), a leading 0 before the point, negative
+ * numbers in parentheses or with a minus, thousands separators; `$` before (Currency) or `%` after (Percent, times 100).
+ */
+function formatFixed(a: VBValue[], kind: 'number' | 'currency' | 'percent'): string {
+  let n = toNumber(plain(a[0]));
+  if (kind === 'percent') n *= 100;
+  const d = a[1] === undefined ? -1 : toNumber(a[1]);
+  if (!Number.isInteger(d) || d < -1 || d > 99) throw new VBRuntimeError(5);
+  const digits = d === -1 ? 2 : d;
+  const lead = tristate(a[2], true);
+  const parens = tristate(a[3], kind === 'currency');
+  const group = tristate(a[4], true);
+  const frac = digits > 0 ? '.' + '0'.repeat(digits) : '';
+  const rounded = Number(formatNumber(Math.abs(n), '0' + frac));
+  const intPart = !lead && rounded < 1 && rounded > 0 ? (group ? '#,###' : '#') : group ? '#,##0' : '0';
+  let text = formatNumber(Math.abs(n), intPart + frac);
+  if (kind === 'currency') text = '$' + text;
+  if (kind === 'percent') text += '%';
+  if (n < 0 && /[1-9]/.test(text)) text = parens ? `(${text})` : '-' + text;
+  return text;
+}
+
+def('FormatNumber', 1, 5, a => formatFixed(a, 'number'));
+def('FormatCurrency', 1, 5, a => formatFixed(a, 'currency'));
+def('FormatPercent', 1, 5, a => formatFixed(a, 'percent'));
 
 def('FormatDateTime', 1, 2, (a, ctx) => {
   const kinds: DateKind[] = ['general', 'long date', 'short date', 'long time', 'short time'];

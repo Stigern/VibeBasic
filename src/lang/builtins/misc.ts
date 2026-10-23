@@ -25,6 +25,16 @@ def('DoEvents', 0, 0, async (_a, ctx) => {
   return 0;
 });
 
+def('Beep', 0, 0, (_a, ctx) => {
+  ctx.host.beep?.();
+  return Empty;
+});
+
+/** There is no process spawning in VibeBasic; error 5 with a clear text (the code check lists Shell as not supported). */
+def('Shell', 1, 2, () => {
+  throw new VBRuntimeError(5, 'Shell is not available in VibeBasic');
+});
+
 def('LoadPicture', 0, 2, (a, ctx) => (a[0] === undefined ? Nothing : ctx.host.loadPicture(toStr(a[0]))));
 
 // ---- colours ----

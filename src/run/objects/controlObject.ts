@@ -3,7 +3,7 @@
 
 import type { OutSlot, VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
-import { Empty, Nothing, Null, NullT, coerce, isObject, toBool, toStr, type VBDate, type VBRef, type VBValue } from '../../lang/values';
+import { Empty, Nothing, Null, NullT, coerce, isDate, isObject, toBool, toStr, type VBDate, type VBRef, type VBValue } from '../../lang/values';
 import { CONTROL_TYPES, getPropDef, type PropDef } from '../../model/controls';
 import { decodeRuns, encodeRuns, formatAt, formatRange, replaceRange, runsText, type RtfPatch, type Run } from '../../controls/richText';
 import type { DirListing, Volume } from '../../backend/backend';
@@ -32,6 +32,17 @@ import type { OpenedMedia } from '../mediaSource';
 import type { RichControl, RichHost } from './richControl';
 import { MciControl, MediaPlayerControl } from './mediaControls';
 import { AgentControl } from './agentControl';
+import { DataControl, type DataConsumer, type DataHost } from '../data/dataControl';
+import { RecordsetObject } from '../data/recordset';
+import type { DbSession } from '../data/dbSession';
+import { DataGridControl } from '../data/dataGrid';
+import { DataListControl } from '../data/dataList';
+import { MSCommControl, SysInfoControl } from './commControl';
+import { AnimationControl } from './animationControl';
+import { CoolBarControl, ImageComboControl } from './comboBands';
+import { CalendarControl } from './calendarControl';
+import type { CommSession } from '../comm';
+import type { SystemApi } from '../../backend/backend';
 
 export interface RunContext {
   resolveAsset(ref: PictureRef): string | null;
@@ -58,7 +69,26 @@ export interface RunContext {
   openMedia?(path: string, mime: string): Promise<OpenedMedia>;
   /** SetFocus: the control is the form's ActiveControl at once (the window confirms it later). */
   focused?(ctrl: ControlObject): void;
+  /** Data control, Adodc: the run's databases (made on first use). */
+  db?(): DbSession;
+  /** A database path of the program as a full path (relative to App.Path, like Open). */
+  resolveDbPath?(path: string): string;
+  /** Every control of the form (data binding). */
+  controls?(): ControlObject[];
+  msgBox?(prompt: string, buttons: number, title: string): Promise<number>;
+  /** MSComm: the run's serial ports (made on first use). Throws 8002 when there are none. */
+  comm?(): CommSession;
+  /** SysInfo: the system's state; null (or absent) when the host cannot tell. */
+  system?(): SystemApi | null;
+  /** Runs `fn` with the program's locale current (dates shown by data binding after an await). */
+  inProgramScope?<T>(fn: () => T): T;
 }
+
+/** The property a control shows a bound field in (DataSource / DataField). */
+const BOUND_PROP: Record<string, string> = { TextBox: 'Text', Label: 'Caption', CheckBox: 'Value', ComboBox: 'Text', ListBox: 'Text', DTPicker: 'Value', MaskedEdit: 'Text' };
+/** The properties that name a data control of the form (`Text1.DataSource`, `DataCombo1.RowSource`). */
+const DATA_REFS = new Set(['DataSource', 'RowSource']);
+const strProp = (v: PropValue | undefined): string => (typeof v === 'string' ? v : '');
 
 /** RichTextBox: the props that go to the window in order, as RtfOps (see send). */
 const RTF_OP_PROPS = new Set(['Text', 'Runs', 'SelStart', 'SelLength', 'SelBold', 'SelItalic', 'SelUnderline', 'SelColor', 'SelFontName', 'SelFontSize']);
@@ -109,7 +139,7 @@ function fromTextOrFail(mask: string, prompt: string, text: string): string {
 }
 const badIndex = (): VBRuntimeError => new VBRuntimeError(381, 'Invalid property array index');
 
-export class ControlObject implements VBObject {
+export class ControlObject implements VBObject, DataConsumer {
   readonly vbTypeName: string;
   readonly defaultMember?: string;
   readonly props: Record<string, PropValue> = {};
@@ -137,6 +167,10 @@ export class ControlObject implements VBObject {
   private rich: RichControl | null = null;
   /** MSChart: the data table (the window gets it as the prop `ChartLines`) and the Plot.Axis(id) titles. */
   private chart: ChartModel | null = null;
+  /** A bound control is being filled from its data control (no DataChanged). */
+  private filling = false;
+  /** ListBox / ComboBox ItemData: a Long per item (it moves with the item). */
+  private itemData: number[] = [];
 
   constructor(readonly def: ControlDef, private formKey: string, private queue: PatchQueue, private ctx: RunContext) {
     const td = CONTROL_TYPES[def.type];
@@ -167,6 +201,34 @@ export class ControlObject implements VBObject {
     if (def.type === 'MMControl') this.rich = new MciControl(this.richHost());
     else if (def.type === 'MediaPlayer') this.rich = new MediaPlayerControl(this.richHost());
     else if (def.type === 'Agent') this.rich = new AgentControl(this.richHost());
+    else if (def.type === 'Animation') this.rich = new AnimationControl(this.richHost());
+    else if (def.type === 'ImageCombo') this.rich = new ImageComboControl(this.richHost());
+    else if (def.type === 'CoolBar') this.rich = new CoolBarControl(this.richHost());
+    else if (def.type === 'Calendar') this.rich = new CalendarControl(this.richHost());
+    else if (def.type === 'MSComm') {
+      this.rich = new MSCommControl({
+        props: this.props, name: this.def.name,
+        raise: (event, args) => this.ctx.raise?.(this, event, args) ?? Promise.resolve(),
+        comm: () => {
+          const c = this.ctx.comm?.();
+          if (!c) throw new VBRuntimeError(8002, 'Invalid port number');
+          return c;
+        },
+      });
+    } else if (def.type === 'SysInfo') {
+      this.rich = new SysInfoControl({
+        props: this.props,
+        raise: (event, args) => this.ctx.raise?.(this, event, args) ?? Promise.resolve(),
+        system: () => this.ctx.system?.() ?? null,
+      });
+    } else if (def.type === 'Data' || def.type === 'Adodc') this.rich = new DataControl(this.dataHost(), def.type === 'Data' ? 'dao' : 'ado');
+    else if (def.type === 'DataGrid') {
+      const h = this.dataHost();
+      this.rich = new DataGridControl({ ...h, source: () => this.dataControlNamed(this.props.DataSource) });
+    } else if (def.type === 'DataList' || def.type === 'DataCombo') {
+      const h = this.dataHost();
+      this.rich = new DataListControl({ ...h, type: def.type, rowSource: () => this.dataControlNamed(this.props.RowSource) });
+    }
     if (def.type === 'MonthView') {   // the selection starts out as the Value
       const v = typeof this.props.Value === 'number' ? dayOf(this.props.Value) : dayOf(Number(CONTROL_TYPES.MonthView.props.find(p => p.name === 'Value')!.default));
       this.props.Value = v;
@@ -228,8 +290,96 @@ export class ControlObject implements VBObject {
         const o = this.ctx.openMedia;
         return o ? o(path, mime) : Promise.reject(new VBRuntimeError(53));
       },
+      controlByName: n => this.ctx.controlByName?.(n),
     };
   }
+
+  private dataHost(): DataHost {
+    return {
+      props: this.props, name: this.def.name,
+      raise: (event, args) => this.ctx.raise?.(this, event, args) ?? Promise.resolve(),
+      send: p => this.send(p),
+      db: () => {
+        const d = this.ctx.db?.();
+        if (!d) throw new VBRuntimeError(429, 'ActiveX component can\'t create object');
+        return d;
+      },
+      resolvePath: p => this.ctx.resolveDbPath?.(p) ?? p,
+      consumers: () => this.ctx.controls?.() ?? [],
+      msgBox: (p, b, t) => this.ctx.msgBox?.(p, b, t) ?? Promise.resolve(1),
+      inScope: fn => (this.ctx.inProgramScope ? this.ctx.inProgramScope(fn) : fn()),
+    };
+  }
+
+  // -- data binding -------------------------------------------------------------------------------------------------
+
+  /** A Data control / Adodc: its data side (recordset, binding); null for other controls. */
+  dataSource(): DataControl | null { return this.rich instanceof DataControl ? this.rich : null; }
+
+  /** The data control of the form a DataSource / RowSource names. */
+  private dataControlNamed(name: PropValue | undefined): DataControl | null {
+    const c = this.ctx.controlByName?.(strProp(name));
+    return c instanceof ControlObject ? c.dataSource() : null;
+  }
+
+  /** The property whose change marks a bound control's record changed (DataChanged). */
+  private dirtyProp(): string | null {
+    if (strProp(this.props.DataSource) === '') return null;
+    return this.def.type === 'ListBox' ? 'ListIndex' : BOUND_PROP[this.def.type] ?? null;
+  }
+
+  isBound(): boolean {
+    return (this.rich?.showBound !== undefined || BOUND_PROP[this.def.type] !== undefined)
+      && strProp(this.props.DataSource) !== '' && strProp(this.props.DataField) !== '';
+  }
+
+  /** The value to save in the bound field: the text, a CheckBox's True / False (Grayed: Null), a DTPicker's date or Null. */
+  boundValue(): VBValue {
+    if (this.rich?.boundValue) return this.rich.boundValue();
+    switch (this.def.type) {
+      case 'CheckBox': { const n = Number(this.props.Value); return n === 2 ? Null : n === 1; }
+      case 'DTPicker': return typeof this.props.Value === 'number' ? dateValue(this.props.Value) : Null;
+      case 'ListBox': case 'MaskedEdit': return this.read(this.propDef('Text')) as string;
+      default: return toStr(this.props[BOUND_PROP[this.def.type]] as string);
+    }
+  }
+
+  /** Shows a field's value (null: no current record); the Change / Click events follow as for code. DataChanged becomes False. */
+  showBound(v: VBValue | null): void {
+    const none = v === null || v instanceof NullT;
+    try {
+      this.filling = true;
+      if (this.rich?.showBound) this.rich.showBound(v);
+      else switch (this.def.type) {
+        case 'CheckBox': this.setMember('Value', [], none ? 0 : toBool(v) ? 1 : 0); break;
+        case 'DTPicker':
+          if (!none) void this.setMember('Value', [], v);
+          else if (this.props.CheckBox === true) void this.setMember('Value', [], Null);
+          break;
+        case 'ListBox': {
+          const t = none ? '' : toStr(v);
+          this.write(this.propDef('ListIndex'), this.list().findIndex(x => x === t));
+          break;
+        }
+        default: {
+          const prop = BOUND_PROP[this.def.type];
+          if (prop) void this.setMember(prop, [], none || (isObject(v) && !isDate(v)) ? '' : toStr(v));
+        }
+      }
+    } catch {
+      // a value the control cannot show (a MaskedEdit mask, a date out of range) is left out
+    } finally {
+      this.filling = false;
+      this.props.DataChanged = false;
+    }
+  }
+
+  dataNotify(src: DataControl, kind: 'reposition' | 'rows'): void { this.rich?.dataNotify?.(src, kind); }
+
+  /** Form_Load has finished: a Data control opens its recordset. */
+  formLoaded(): Promise<void> { return this.rich?.formLoaded?.() ?? Promise.resolve(); }
+  /** The form is about to unload: a Data control saves the bound controls' changes. */
+  beforeUnload(): Promise<void> { return this.rich?.formUnloading?.() ?? Promise.resolve(); }
 
   /** The form unloads or the program ends: sockets close, requests are aborted, media stops. */
   dispose(): void { this.ext?.dispose(); this.rich?.dispose(); }
@@ -545,6 +695,7 @@ export class ControlObject implements VBObject {
       case 'ButtonClick': return object('buttons');
       case 'DateClick': case 'DateDblClick': return args.map(a => dateValue(Number(a)));
       case 'SelChange': if (this.def.type === 'MonthView') return args.map(a => dateValue(Number(a))); break;
+      case 'Click': case 'DblClick': if ((this.def.type === 'DataList' || this.def.type === 'DataCombo') && !args.length) return [2]; break;   // dbcAreaList
     }
     return args;
   }
@@ -555,6 +706,7 @@ export class ControlObject implements VBObject {
   /** State reported by the window (user input). Updates the mirror without sending a patch back. */
   applyState(props: Record<string, PropValue>): void {
     const oldPath = this.props.Path;
+    const dirty = this.dirtyProp(), before = dirty ? this.props[dirty] : undefined;
     for (const [k, v] of Object.entries(props)) {
       if (k === 'SelectedNode' || k === 'SelectedIndex') this.selItem = this.collections.get(k === 'SelectedNode' ? 'nodes' : 'listitems')?.find(Number(v)) ?? null;
       else if (k === 'Toggled') {   // 'index|0 or 1': a node was expanded / collapsed by a click on the +/- box
@@ -568,6 +720,7 @@ export class ControlObject implements VBObject {
       this.props[getPropDef(this.def.type, k)?.name ?? k] = v;
     }
     if (isBrowserType(this.def.type) && 'Path' in props && this.props.Path !== oldPath) this.reload();   // a folder opened by a double click
+    if (dirty && dirty in props && this.props[dirty] !== before) this.props.DataChanged = true;   // the user edited a bound control
     this.ext?.applyState?.(props);
     this.rich?.applyState?.(props);
     if (this.def.type === 'RichTextBox') {   // the user typed, or moved the selection
@@ -619,8 +772,12 @@ export class ControlObject implements VBObject {
     if (this.def.type === 'SSTab') { const v = this.ssTabGet(pd, args); if (v !== undefined) return v; }
     if (pd.kind === 'list') return this.getListItem(args);
     if (pd.name === 'Selected') return this.selected(args);
+    if (pd.name === 'ItemData' && isListType(this.def.type)) return this.itemDataArr()[this.listArg(args)];
     if (args.length) throw new VBRuntimeError(450);
-    if (IMAGE_REFS.has(pd.name)) {   // the ImageList control itself (its name when the form cannot be asked)
+    if (pd.name === 'SelCount' && this.def.type === 'ListBox') {
+      return this.isMulti() ? this.selFlags().filter(Boolean).length : Number(this.props.ListIndex) >= 0 ? 1 : 0;
+    }
+    if (IMAGE_REFS.has(pd.name) || DATA_REFS.has(pd.name)) {   // the ImageList / data control itself (its name when the form cannot be asked)
       const name = String(this.props[pd.name] ?? '');
       return name === '' ? Nothing : (this.ctx.controlByName?.(name) as VBValue | undefined) ?? name;
     }
@@ -637,8 +794,16 @@ export class ControlObject implements VBObject {
     if (pd.runtime === 'ro' || name.toLowerCase() === 'name' || name.toLowerCase() === 'index') throw new VBRuntimeError(383);
     if (this.rich?.set) {
       if (args.length) throw new VBRuntimeError(450);
-      const r = this.rich.set(pd.name, this.plain(value));
+      // the object itself, not its default member: the ImageList a control names, the ComboItem SelectedItem becomes
+      const r = this.rich.set(pd.name, IMAGE_REFS.has(pd.name) || DATA_REFS.has(pd.name) || pd.name === 'SelectedItem' || pd.name === 'Recordset' ? value : this.plain(value));
       if (r !== false) return r === true ? undefined : r;
+    }
+    if (this.rich instanceof DataGridControl && pd.name === 'DataSource') {
+      // Set DataGrid1.DataSource = rs: a recordset made in code is shown as it is; anything else names a data control
+      if (args.length) throw new VBRuntimeError(450);
+      const free = value instanceof RecordsetObject && !(value.owner instanceof DataControl) ? value : null;
+      if (free) { this.props.DataSource = ''; this.rich.bindRecordset(free); return; }
+      this.rich.bindRecordset(null);
     }
     if (this.chart && this.chartSet(pd, args, value)) return;
     if (pd.name === 'SelectedItem') {
@@ -680,11 +845,22 @@ export class ControlObject implements VBObject {
       return;
     }
     if (pd.name === 'Selected') {
-      if (args.length !== 1) throw new VBRuntimeError(450);
-      const i = num(args[0]);
-      if (i < 0 || i >= this.list().length) throw badIndex();
-      if (toBool(this.plain(value))) this.write(this.propDef('ListIndex'), i);
+      const i = this.listArg(args), on = toBool(this.plain(value));
+      if (this.isMulti()) {   // MultiSelect: each item has its own flag; selecting one makes it the ListIndex (the focus) too
+        const flags = this.selFlags(), old = this.props.SelFlags;
+        flags[i] = on;
+        this.setSelFlags(flags);
+        if (on && this.props.ListIndex !== i) this.write(this.propDef('ListIndex'), i);
+        else if (this.props.SelFlags !== old) this.ctx.propChanged?.(this, 'SelFlags', old ?? '');
+        return;
+      }
+      if (on) this.write(this.propDef('ListIndex'), i);
       else if (this.props.ListIndex === i) this.write(this.propDef('ListIndex'), -1);
+      return;
+    }
+    if (pd.name === 'ItemData' && isListType(this.def.type)) {
+      const i = this.listArg(args);
+      this.itemDataArr()[i] = num(this.plain(value));
       return;
     }
     if (args.length) throw new VBRuntimeError(450);
@@ -798,11 +974,39 @@ export class ControlObject implements VBObject {
   }
 
   private selected(args: VBValue[]): VBValue {
+    const i = this.listArg(args);
+    return this.isMulti() ? this.selFlags()[i] : this.props.ListIndex === i;
+  }
+
+  /** The one item index argument of List(i), Selected(i), ItemData(i): 381 outside the list. */
+  private listArg(args: VBValue[]): number {
     if (args.length !== 1) throw new VBRuntimeError(450);
     const i = num(args[0]);
     if (i < 0 || i >= this.list().length) throw badIndex();
-    return this.props.ListIndex === i;
+    return i;
   }
+
+  /** A ListBox with MultiSelect: Selected(i) is a flag per item (SelFlags, '0' / '1' per item, also what the window shows). */
+  private isMulti(): boolean { return this.def.type === 'ListBox' && Number(this.props.MultiSelect) > 0; }
+  private selFlags(): boolean[] {
+    const f = typeof this.props.SelFlags === 'string' ? this.props.SelFlags : '';
+    return this.list().map((_, i) => f[i] === '1');
+  }
+  private setSelFlags(flags: boolean[], patch?: Record<string, PropValue>): void {
+    const v = flags.map(b => (b ? '1' : '0')).join('');
+    this.props.SelFlags = v;
+    if (patch) patch.SelFlags = v; else this.send({ SelFlags: v });
+  }
+  /** ItemData, as long as the list. */
+  private itemDataArr(): number[] {
+    const n = this.list().length, d = this.itemData;
+    while (d.length < n) d.push(0);
+    d.length = n;
+    return d;
+  }
+
+  /** Load List1(i): the new element gets the items' ItemData too (its List is copied with the properties). */
+  copyItemData(from: ControlObject): void { this.itemData = [...from.itemData]; }
 
   private getListItem(args: VBValue[]): VBValue {
     if (args.length !== 1) throw new VBRuntimeError(450);
@@ -833,6 +1037,12 @@ export class ControlObject implements VBObject {
     if (IMAGE_REFS.has(pd.name)) {
       if (value === Nothing || value === Empty) return '';
       if (value instanceof ControlObject && value.def.type === 'ImageList') return value.def.name;
+    }
+    if (DATA_REFS.has(pd.name)) {   // Set Text1.DataSource = Adodc1 (or its Recordset: the same)
+      if (value === Nothing || value === Empty) return '';
+      if (value instanceof ControlObject && value.dataSource()) return value.def.name;
+      if (value instanceof RecordsetObject && value.owner instanceof DataControl) return value.owner.name;
+      if (value instanceof RecordsetObject) throw new VBRuntimeError(13);   // only a DataGrid shows a recordset of its own
     }
     const v = this.plain(value);
     switch (pd.kind) {
@@ -865,8 +1075,17 @@ export class ControlObject implements VBObject {
       }
       case 'int': {
         const n = num(v);
+        if (this.def.type === 'TextBox' && (pd.name === 'SelStart' || pd.name === 'SelLength')) {   // 380 below 0; at most the text
+          if (n < 0) throw new VBRuntimeError(380);
+          const len = String(this.props.Text ?? '').length;
+          return pd.name === 'SelStart' ? Math.min(n, len) : Math.min(n, len - Math.min(Number(this.props.SelStart) || 0, len));
+        }
         if (pd.min !== undefined && n < pd.min) throw new VBRuntimeError(380);
         if (pd.max !== undefined && n > pd.max) throw new VBRuntimeError(380);
+        if (this.def.type === 'FlatScrollBar' && pd.name === 'Value') {   // the FlatScrollBar clamps a Value outside Min .. Max
+          const lo = Math.min(Number(this.props.Min), Number(this.props.Max)), hi = Math.max(Number(this.props.Min), Number(this.props.Max));
+          return Math.min(hi, Math.max(lo, n));
+        }
         if (pd.name === 'Value' && 'Min' in this.props && 'Max' in this.props
           && (n < Number(this.props.Min) || n > Number(this.props.Max))) throw new VBRuntimeError(380);
         if (pd.name === 'ListIndex' && (n < -1 || n > this.list().length - 1)) throw new VBRuntimeError(380);
@@ -886,7 +1105,7 @@ export class ControlObject implements VBObject {
     if (this.def.type === 'RichTextBox' && this.writeRich(pd, v, patch)) {
       // handled: the text with its formats is kept here, the window gets it as Runs
     } else if (name === 'SelText') {
-      const t = String(this.props.Text ?? ''), s = Number(this.props.SelStart), n = Number(this.props.SelLength);
+      const t = String(this.props.Text ?? ''), s = Math.min(Number(this.props.SelStart) || 0, t.length), n = Math.max(0, Number(this.props.SelLength) || 0);
       const ins = String(v);
       this.props.Text = t.slice(0, s) + ins + t.slice(s + n);
       this.props.SelStart = s + ins.length; this.props.SelLength = 0;
@@ -903,9 +1122,17 @@ export class ControlObject implements VBObject {
         if (name === 'Path') { Object.assign(patch, { List: [], ListIndex: -1 }); Object.assign(this.props, { List: [], ListIndex: -1 }); this.reload(); }
         else if (this.def.type === 'FileListBox' && (name === 'Pattern' || name === 'Hidden' || name === 'Normal' || name === 'Archive')) Object.assign(patch, this.listProps());
       }
+      if (this.def.type === 'TextBox' && (name === 'SelStart' || name === 'Text')) {
+        // VB6: a new SelStart is an insertion point; a new Text puts it at the start. The window gets both, so it selects
+        // without a SelStart / SelLength of its own (the user's selection reaches the mirror as state)
+        if (name === 'Text') this.props.SelStart = 0;
+        this.props.SelLength = 0;
+        Object.assign(patch, { SelStart: this.props.SelStart, SelLength: 0 });
+      } else if (this.def.type === 'TextBox' && name === 'SelLength') patch.SelStart = this.props.SelStart;
       if (name === 'ListIndex') {
         const i = v as number;
         if (this.def.type === 'ComboBox') { this.props.Text = i >= 0 ? this.list()[i] : ''; patch.Text = this.props.Text; }
+        if (this.isMulti() && i >= 0 && !this.selFlags()[i]) { const f = this.selFlags(); f[i] = true; this.setSelFlags(f, patch); }
       } else if (name === 'Text' && this.def.type === 'ComboBox') {
         const i = this.list().findIndex(s => s === v);
         this.props.ListIndex = i; patch.ListIndex = i;
@@ -915,7 +1142,22 @@ export class ControlObject implements VBObject {
     this.send(patch);
     if (this.grid && (name === 'Rows' || name === 'Cols' || name === 'FixedRows' || name === 'FixedCols')) this.gridResized();
     if (this.def.type === 'Timer' && (name === 'Enabled' || name === 'Interval')) this.ctx.timerChanged(this);
-    this.ctx.propChanged?.(this, name === 'SelText' ? 'Text' : name, old);
+    const changed = name === 'SelText' ? 'Text' : name;
+    if (!this.filling && changed === this.dirtyProp() && this.props[changed] !== old) this.props.DataChanged = true;
+    if (DATA_REFS.has(name) || (name === 'DataField' && v !== old)) this.rebind();
+    this.ctx.propChanged?.(this, changed, old);
+  }
+
+  /** DataSource / DataField set by code: show the field of the data control's current record. */
+  private rebind(): void {
+    const src = this.ctx.controlByName?.(strProp(this.props.DataSource));
+    const rs = src instanceof ControlObject ? src.dataSource()?.recordset() : null;
+    if (!rs) return;
+    if (this.rich?.dataNotify && src instanceof ControlObject) this.rich.dataNotify(src.dataSource()!, 'rows');
+    if (!this.isBound()) return;
+    let v: VBValue | null = null;
+    try { if (rs.hasCurrent || rs.mode === 2) v = rs.fieldValue(rs.fieldIndex(strProp(this.props.DataField))); } catch { v = null; }
+    this.showBound(v);
   }
 
   /** DTPicker / MonthView: a date property was set; Value, SelStart and SelEnd stay in step and inside MinDate .. MaxDate. */
@@ -993,7 +1235,8 @@ export class ControlObject implements VBObject {
   }
 
   private send(props: Record<string, PropValue>): void {
-    if (this.def.type === 'Timer' || this.def.type === 'CommonDialog' || this.def.type === 'Inet' || this.def.type === 'Winsock') return;   // no view
+    if (this.def.type === 'Timer' || this.def.type === 'CommonDialog' || this.def.type === 'Inet' || this.def.type === 'Winsock'
+      || this.def.type === 'MSComm' || this.def.type === 'SysInfo') return;   // no view
     if (this.def.type === 'RichTextBox') {
       // a RichTextBox applies each change at the selection as it is then (SelStart = 3: SelBold = True: SelStart = 9 must not merge
       // into one patch): the text and selection changes queue as an ordered list (RtfOps) that the window replays, so a loop that
@@ -1129,9 +1372,12 @@ export class ControlObject implements VBObject {
       at = num(this.plain(args[1]));
       if (at < 0 || at > list.length) throw new VBRuntimeError(5);
     }
+    const data = this.itemDataArr(), flags = this.selFlags();
     list.splice(at, 0, item);
+    data.splice(at, 0, 0);
     this.props.NewIndex = at;
     const patch: Record<string, PropValue> = { List: [...list] };
+    if (this.isMulti()) { flags.splice(at, 0, false); this.setSelFlags(flags, patch); }
     const li = this.props.ListIndex as number;
     if (li >= at) { this.props.ListIndex = li + 1; patch.ListIndex = li + 1; }
     this.send(patch);
@@ -1143,8 +1389,11 @@ export class ControlObject implements VBObject {
     const i = num(this.plain(args[0]));
     const list = this.list();
     if (i < 0 || i >= list.length) throw new VBRuntimeError(5);
+    const data = this.itemDataArr(), flags = this.selFlags();
     list.splice(i, 1);
+    data.splice(i, 1);
     const patch: Record<string, PropValue> = { List: [...list] };
+    if (this.isMulti()) { flags.splice(i, 1); this.setSelFlags(flags, patch); }
     const li = this.props.ListIndex as number;
     if (li === i) { this.props.ListIndex = -1; patch.ListIndex = -1; }
     else if (li > i) { this.props.ListIndex = li - 1; patch.ListIndex = li - 1; }
@@ -1156,7 +1405,9 @@ export class ControlObject implements VBObject {
     this.props.List = [];
     this.props.ListIndex = -1;
     this.props.NewIndex = -1;
+    this.itemData = [];
     const patch: Record<string, PropValue> = { List: [], ListIndex: -1 };
+    if (this.def.type === 'ListBox') { this.props.SelFlags = ''; patch.SelFlags = ''; }
     if (this.def.type === 'ComboBox') { this.props.Text = ''; patch.Text = ''; }
     this.send(patch);
     return Empty;

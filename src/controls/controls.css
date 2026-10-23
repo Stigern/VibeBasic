@@ -34,7 +34,7 @@
 .vb-Label .vb-text { display: block; white-space: pre; }
 .vb-Label.vb-wrap .vb-text { white-space: pre-wrap; overflow-wrap: break-word; }
 .vb-Label.vb-bordered { box-shadow: var(--w98-sunken); padding: 2px; }
-.vb-Label u, .vb-CheckBox u, .vb-OptionButton u, .vb-Frame u { border-bottom: 1px solid currentColor; }
+.vb-Label u, :is(.vb-CheckBox, .vb-SSCheck) u, :is(.vb-OptionButton, .vb-SSOption) u, .vb-Frame u, .vb-SSFrame u, .vb-SSPanel u, .vb-SSCommand u, .vb-SSRibbon u { border-bottom: 1px solid currentColor; }
 
 /* ---------- TextBox (and the input inside a ComboBox) ---------- */
 .vb-TextBox { background-color: #fff; }
@@ -55,21 +55,21 @@
 }
 .vb-box { position: relative; flex: none; width: 13px; height: 13px; background-color: #fff; box-shadow: var(--w98-sunken); }
 .vb-opt-text { margin-left: 4px; padding: 1px 2px; white-space: pre; }
-.vb-CheckBox input:checked + .vb-box::after, .vb-CheckBox input:indeterminate + .vb-box::after {
+:is(.vb-CheckBox, .vb-SSCheck) input:checked + .vb-box::after, :is(.vb-CheckBox, .vb-SSCheck) input:indeterminate + .vb-box::after {
   content: ""; position: absolute; left: 3px; top: 3px; width: 7px; height: 7px; background: url("data:image/svg+xml;charset=utf-8,%3Csvg width='7' height='7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M7 0H6v1H5v1H4v1H3v1H2V3H1V2H0v3h1v1h1v1h1V6h1V5h1V4h1V3h1V0z' fill='%23000'/%3E%3C/svg%3E");
 }
-.vb-CheckBox input:indeterminate + .vb-box {
+:is(.vb-CheckBox, .vb-SSCheck) input:indeterminate + .vb-box {
   background: repeating-conic-gradient(#fff 0% 25%, #c0c0c0 0% 50%) 0 0 / 2px 2px;
 }
-.vb-CheckBox input:indeterminate + .vb-box::after { background: url("data:image/svg+xml;charset=utf-8,%3Csvg width='7' height='7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M7 0H6v1H5v1H4v1H3v1H2V3H1V2H0v3h1v1h1v1h1V6h1V5h1V4h1V3h1V0z' fill='gray'/%3E%3C/svg%3E"); }
-.vb-CheckBox.vb-disabled .vb-box { background-color: #c0c0c0; }
-.vb-CheckBox.vb-disabled input:checked + .vb-box::after { background: url("data:image/svg+xml;charset=utf-8,%3Csvg width='7' height='7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M7 0H6v1H5v1H4v1H3v1H2V3H1V2H0v3h1v1h1v1h1V6h1V5h1V4h1V3h1V0z' fill='gray'/%3E%3C/svg%3E"); }
-.vb-OptionButton .vb-box { width: 12px; height: 12px; margin-top: 0; background: url("data:image/svg+xml;charset=utf-8,%3Csvg width='12' height='12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M8 0H4v1H2v1H1v2H0v4h1v2h1V8H1V4h1V2h2V1h4v1h2V1H8V0z' fill='gray'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M8 1H4v1H2v2H1v4h1v1h1V8H2V4h1V3h1V2h4v1h2V2H8V1z' fill='%23000'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M9 3h1v1H9V3zm1 5V4h1v4h-1zm-2 2V9h1V8h1v2H8zm-4 0v1h4v-1H4zm0 0V9H2v1h2z' fill='%23DFDFDF'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M11 2h-1v2h1v4h-1v2H8v1H4v-1H2v1h2v1h4v-1h2v-1h1V8h1V4h-1V2z' fill='%23fff'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M4 2h4v1h1v1h1v4H9v1H8v1H4V9H3V8H2V4h1V3h1V2z' fill='%23fff'/%3E%3C/svg%3E") no-repeat; box-shadow: none; }
-.vb-OptionButton input:checked + .vb-box::after {
+:is(.vb-CheckBox, .vb-SSCheck) input:indeterminate + .vb-box::after { background: url("data:image/svg+xml;charset=utf-8,%3Csvg width='7' height='7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M7 0H6v1H5v1H4v1H3v1H2V3H1V2H0v3h1v1h1v1h1V6h1V5h1V4h1V3h1V0z' fill='gray'/%3E%3C/svg%3E"); }
+:is(.vb-CheckBox, .vb-SSCheck).vb-disabled .vb-box { background-color: #c0c0c0; }
+:is(.vb-CheckBox, .vb-SSCheck).vb-disabled input:checked + .vb-box::after { background: url("data:image/svg+xml;charset=utf-8,%3Csvg width='7' height='7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M7 0H6v1H5v1H4v1H3v1H2V3H1V2H0v3h1v1h1v1h1V6h1V5h1V4h1V3h1V0z' fill='gray'/%3E%3C/svg%3E"); }
+:is(.vb-OptionButton, .vb-SSOption) .vb-box { width: 12px; height: 12px; margin-top: 0; background: url("data:image/svg+xml;charset=utf-8,%3Csvg width='12' height='12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M8 0H4v1H2v1H1v2H0v4h1v2h1V8H1V4h1V2h2V1h4v1h2V1H8V0z' fill='gray'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M8 1H4v1H2v2H1v4h1v1h1V8H2V4h1V3h1V2h4v1h2V2H8V1z' fill='%23000'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M9 3h1v1H9V3zm1 5V4h1v4h-1zm-2 2V9h1V8h1v2H8zm-4 0v1h4v-1H4zm0 0V9H2v1h2z' fill='%23DFDFDF'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M11 2h-1v2h1v4h-1v2H8v1H4v-1H2v1h2v1h4v-1h2v-1h1V8h1V4h-1V2z' fill='%23fff'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M4 2h4v1h1v1h1v4H9v1H8v1H4V9H3V8H2V4h1V3h1V2z' fill='%23fff'/%3E%3C/svg%3E") no-repeat; box-shadow: none; }
+:is(.vb-OptionButton, .vb-SSOption) input:checked + .vb-box::after {
   content: ""; position: absolute; left: 4px; top: 4px; width: 4px; height: 4px; background: url("data:image/svg+xml;charset=utf-8,%3Csvg width='4' height='4' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M3 0H1v1H0v2h1v1h2V3h1V1H3V0z' fill='%23000'/%3E%3C/svg%3E");
 }
-.vb-OptionButton.vb-disabled .vb-box { background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg width='12' height='12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M8 0H4v1H2v1H1v2H0v4h1v2h1V8H1V4h1V2h2V1h4v1h2V1H8V0z' fill='gray'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M8 1H4v1H2v2H1v4h1v1h1V8H2V4h1V3h1V2h4v1h2V2H8V1z' fill='%23000'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M9 3h1v1H9V3zm1 5V4h1v4h-1zm-2 2V9h1V8h1v2H8zm-4 0v1h4v-1H4zm0 0V9H2v1h2z' fill='%23DFDFDF'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M11 2h-1v2h1v4h-1v2H8v1H4v-1H2v1h2v1h4v-1h2v-1h1V8h1V4h-1V2z' fill='%23fff'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M4 2h4v1h1v1h1v4H9v1H8v1H4V9H3V8H2V4h1V3h1V2z' fill='silver'/%3E%3C/svg%3E"); }
-.vb-OptionButton.vb-disabled input:checked + .vb-box::after { background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg width='4' height='4' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M3 0H1v1H0v2h1v1h2V3h1V1H3V0z' fill='gray'/%3E%3C/svg%3E"); }
+:is(.vb-OptionButton, .vb-SSOption).vb-disabled .vb-box { background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg width='12' height='12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M8 0H4v1H2v1H1v2H0v4h1v2h1V8H1V4h1V2h2V1h4v1h2V1H8V0z' fill='gray'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M8 1H4v1H2v2H1v4h1v1h1V8H2V4h1V3h1V2h4v1h2V2H8V1z' fill='%23000'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M9 3h1v1H9V3zm1 5V4h1v4h-1zm-2 2V9h1V8h1v2H8zm-4 0v1h4v-1H4zm0 0V9H2v1h2z' fill='%23DFDFDF'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M11 2h-1v2h1v4h-1v2H8v1H4v-1H2v1h2v1h4v-1h2v-1h1V8h1V4h-1V2z' fill='%23fff'/%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M4 2h4v1h1v1h1v4H9v1H8v1H4V9H3V8H2V4h1V3h1V2z' fill='silver'/%3E%3C/svg%3E"); }
+:is(.vb-OptionButton, .vb-SSOption).vb-disabled input:checked + .vb-box::after { background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg width='4' height='4' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M3 0H1v1H0v2h1v1h2V3h1V1H3V0z' fill='gray'/%3E%3C/svg%3E"); }
 .vb-ctl input:focus ~ .vb-opt-text { outline: 1px dotted #000; outline-offset: 0; }
 .vb-right .vb-box { order: 2; margin-left: auto; margin-right: 2px; }
 .vb-right .vb-opt-text { order: 1; margin-left: 0; }
@@ -94,7 +94,7 @@
 .vb-listbox option:checked { background: #000080 linear-gradient(#000080, #000080); color: #fff; }
 
 /* ---------- ComboBox ---------- */
-.vb-ComboBox, .vb-DriveListBox { overflow: visible; }
+.vb-ComboBox, .vb-DriveListBox, .vb-ImageCombo { overflow: visible; }
 .vb-combo-field {
   position: absolute; left: 0; top: 0; right: 0; bottom: 0; display: flex; align-items: stretch; padding: 2px;
   background-color: #fff; box-shadow: var(--w98-sunken); box-sizing: border-box;
@@ -106,7 +106,7 @@
 }
 .vb-combo-btn:active { box-shadow: var(--w98-pressed); }
 .vb-glyph { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 4px solid #000; }
-.vb-ComboBox.vb-disabled .vb-glyph, .vb-DriveListBox.vb-disabled .vb-glyph { border-top-color: #808080; }
+.vb-ComboBox.vb-disabled .vb-glyph, .vb-DriveListBox.vb-disabled .vb-glyph, .vb-ImageCombo.vb-disabled .vb-glyph { border-top-color: #808080; }
 .vb-combo-list {
   position: absolute; left: 0; right: 0; top: 21px; z-index: 9999; box-sizing: border-box; display: none;
   max-height: 134px; overflow-x: hidden; overflow-y: auto; background-color: #fff; border: 1px solid #000;
@@ -377,6 +377,8 @@
 .vb-web-frame { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
 .vb-Inet, .vb-Winsock { background: #c0c0c0; box-shadow: var(--w98-raised); }
 .vb-Inet svg, .vb-Winsock svg { display: block; }
+.vb-MSComm, .vb-SysInfo { background: #c0c0c0; box-shadow: var(--w98-raised); }
+.vb-MSComm svg, .vb-SysInfo svg { display: block; }
 
 /* ---------- MSChart ---------- */
 .vb-MSChart { background: #fff; box-shadow: var(--w98-sunken); overflow: hidden; }
@@ -526,3 +528,95 @@
 .ag-balloon.below::after { top: auto; bottom: calc(100% - 1px); border-width: 0 4px 8px 0; border-top-color: transparent; border-bottom-color: #ffffe1; }
 .ag-balloon.think { border-style: dashed; border-radius: 14px; font-style: italic; }
 .ag-balloon.think::before, .ag-balloon.think::after { display: none; }
+
+/* Data control / ADO Data Control: |< < Caption > >| */
+.vb-data { display: flex; width: 100%; height: 100%; user-select: none; outline: none; box-sizing: border-box; }
+.vb-data-btn { flex: none; width: 15px; display: flex; align-items: center; justify-content: center; background: #c0c0c0; color: #000; box-shadow: var(--w98-raised); }
+.vb-run .vb-data-btn:active { box-shadow: var(--w98-sunken); }
+.vb-run .vb-data-btn:active svg { transform: translate(1px, 1px); }
+.vb-disabled .vb-data-btn { color: #808080; }
+.vb-data-caption { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; padding: 0 3px; overflow: hidden; white-space: nowrap; box-shadow: inset 1px 1px #808080, inset -1px -1px #fff; }
+
+/* DataGrid: headers, a record selector column, the current cell; cells are edited in place */
+.vb-DataGrid { background: #808080; }
+.vb-dg { position: absolute; left: 2px; top: 2px; right: 2px; bottom: 2px; overflow: auto; outline: none; box-sizing: border-box; background: #808080; }
+.dg-caption { background: #c0c0c0; text-align: center; padding: 1px 2px; box-shadow: inset -1px -1px #808080, inset 1px 1px #fff; }
+.dg-table { border-collapse: collapse; table-layout: fixed; background: #fff; }
+.dg-table th, .dg-table td { box-sizing: border-box; height: 16px; padding: 0 2px; overflow: hidden; white-space: pre; border: 1px solid #c0c0c0; font-weight: normal; }
+.dg-table th, .dg-table td.dg-sel { background: #c0c0c0; box-shadow: inset 1px 1px #fff, inset -1px -1px #808080; border-color: #808080; text-align: center; }
+.dg-table td.dg-sel { font-size: 9px; padding: 0; }
+.dg-table tr.picked td { background: #000080; color: #fff; }
+.dg-table td.dg-cell { outline: 1px dotted #000; outline-offset: -2px; }
+.vb-dg:focus .dg-table td.dg-cell { background: #000080; color: #fff; }
+.dg-editor { box-sizing: border-box; width: 100%; height: 100%; border: 0; padding: 0; margin: 0; font: inherit; outline: none; }
+
+/* ---------- Sheridan 3D controls (THREED32.OCX) ---------- */
+.ssp-outer, .ssp-inner, .ssp-flood-area, .ssp-text { position: absolute; box-sizing: border-box; pointer-events: none; }
+.ssp-outer { left: 0; top: 0; right: 0; bottom: 0; }
+.ssp-flood-area { overflow: hidden; }
+.ssp-flood { position: absolute; }
+.ssp-text { display: flex; overflow: hidden; }
+.ssp-caption { white-space: pre; }
+.vb-SSPanel.ssp-auto .ssp-text { position: relative; white-space: nowrap; }
+.vb-SSPanel.ssp-auto { display: inline-block; }
+.ss-round.vb-SSPanel .ssp-outer, .ss-round.vb-SSPanel .ssp-inner { border-radius: 2px; }
+.ss-outline { outline: 1px solid #000; outline-offset: -1px; }
+.vb-SSFrame.ssf-raised .vb-frame-box { border-color: #fff; box-shadow: 1px 1px 0 #808080, inset 1px 1px 0 #808080; }
+.vb-ctl.vb-ctl .vb-btn.ssc {
+  display: flex; align-items: center; justify-content: center; gap: 4px; position: relative; padding: 0 2px; border: 0; border-radius: 0;
+  box-shadow: var(--ssc-up, none); background-color: #c0c0c0;
+}
+.vb-ctl.vb-ctl.ss-round .vb-btn.ssc { border-radius: 3px; }
+.vb-ctl.vb-ctl .vb-btn.ssc:not(:disabled):active, .vb-ctl.vb-ctl .vb-btn.ssr.down { box-shadow: var(--ssc-dn, none); padding: 1px 0 0 1px; }
+.ssc-pic { flex: none; pointer-events: none; }
+.ssc-cap { position: relative; white-space: pre; }
+.ssc.ssc-fit .ssc-pic { position: absolute; left: 3px; top: 3px; width: calc(100% - 6px); height: calc(100% - 6px); }
+.vb-ctl.vb-ctl .vb-btn.ssr.down { background-image: repeating-conic-gradient(#c0c0c0 0% 25%, #dfdfdf 0% 50%); background-size: 2px 2px; }
+
+/* ---------- ImageCombo (MSCOMCTL.OCX) ---------- */
+.icb-pic { flex: none; display: flex; align-items: center; padding: 0 2px 0 1px; }
+.icb-img { flex: none; image-rendering: pixelated; vertical-align: middle; }
+.icb-row { display: flex; align-items: center; gap: 3px; min-height: 16px; }
+.icb-text { white-space: pre; }
+
+/* ---------- CoolBar (COMCT332.OCX) ---------- */
+.vb-CoolBar { background: #c0c0c0; }
+.vb-cbr { position: absolute; left: 0; top: 0; right: 0; bottom: 0; overflow: hidden; outline: none; }
+.cbr-row { position: absolute; left: 0; right: 0; }
+.cbr-row.cbr-borders { box-shadow: inset 0 1px #fff, inset 0 -1px #808080; }
+.cbr-band { position: absolute; top: 0; box-sizing: border-box; display: flex; align-items: center; gap: 3px; overflow: hidden; }
+.cbr-grip { flex: none; align-self: stretch; margin: 3px 0; background: linear-gradient(90deg, transparent 0 2px, #fff 2px 3px, #808080 3px 4px, transparent 4px 6px, #fff 6px 7px, #808080 7px 8px, transparent 8px); }
+.cbr-img { flex: none; image-rendering: pixelated; }
+.cbr-cap { flex: none; white-space: pre; }
+.cbr-body { position: absolute; top: 2px; bottom: 2px; }
+
+/* ---------- FlatScrollBar (MSCOMCT2.OCX) ---------- */
+.vb-FlatScrollBar .vb-sb { background: #c0c0c0; }
+.vb-FlatScrollBar.fsb-flat .vb-sb-btn, .vb-FlatScrollBar.fsb-flat .vb-sb-thumb { box-shadow: inset 0 0 0 1px #808080; background: #c0c0c0; }
+.vb-FlatScrollBar.fsb-flat .vb-sb-track { background: #c0c0c0; box-shadow: inset 0 0 0 1px #808080; }
+.vb-FlatScrollBar.fsb-track3d .vb-sb-btn, .vb-FlatScrollBar.fsb-track3d .vb-sb-thumb { box-shadow: inset 0 0 0 1px #808080; }
+.vb-FlatScrollBar.fsb-track3d .vb-sb-track { background: #c0c0c0; box-shadow: var(--w98-sunken); }
+.vb-FlatScrollBar.fsb-no-dec .vb-sb-btn.dec, .vb-FlatScrollBar.fsb-no-inc .vb-sb-btn.inc { opacity: .4; }
+
+/* ---------- Animation (MSCOMCT2.OCX) ---------- */
+.vb-Animation { overflow: hidden; }
+.vb-anim { position: absolute; left: 0; top: 0; right: 0; bottom: 0; overflow: hidden; outline: none; }
+.anim-stage { position: absolute; left: 0; top: 0; }
+.anim-stage.center { left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.anim-stage.anim-icon { left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.anim-stage .anim-pic { display: block; max-width: none; image-rendering: auto; }
+
+/* ---------- Calendar (MSCAL.OCX) ---------- */
+.vb-Calendar { overflow: hidden; }
+.vb-mscal { position: absolute; left: 0; top: 0; right: 0; bottom: 0; display: flex; flex-direction: column; outline: none; box-sizing: border-box; user-select: none; -webkit-user-select: none; cursor: default; }
+.mc-sel { flex: none; display: flex; justify-content: space-between; gap: 4px; padding: 2px; }
+.mc-sel select { font: inherit; min-width: 0; }
+.mc-title { flex: none; text-align: center; padding: 2px 0; }
+.mc-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(7, 1fr); }
+.mc-dow { text-align: center; padding: 2px 0; overflow: hidden; white-space: nowrap; }
+.mc-d { box-sizing: border-box; padding: 2px 3px; text-align: right; overflow: hidden; }
+.mc-d.out { color: #808080; }
+.mc-d.sel { background: #000080; color: #fff; }
+.mc-eff1 .mc-d { box-shadow: inset 1px 1px #fff, inset -1px -1px #808080; }
+.mc-eff2 .mc-d { box-shadow: inset 1px 1px #808080, inset -1px -1px #fff; }
+.vb-Calendar:focus-within .mc-d.sel { outline: 1px dotted #ff0; outline-offset: -2px; }

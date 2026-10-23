@@ -1,15 +1,15 @@
 // Conversion and type-check built-ins: Str Val CStr CInt CLng CDbl CSng CCur
-// CByte CBool CDate CVar, IsNumeric IsEmpty IsDate IsArray IsObject IsNull
-// TypeName VarType.
+// CByte CBool CDate CDec CVar CVErr, IsNumeric IsEmpty IsDate IsArray IsObject IsNull
+// IsMissing IsError TypeName VarType.
 
 import { VBRuntimeError } from '../errors';
 import { plain } from '../interp/operators';
 import { printNumber } from '../printFormat';
 import {
-  EmptyT, NothingT, NullT, VBArray, VBRecord, coerce, isDate, isObject, toNumber, toStr, vbTypeName,
+  EmptyT, Missing, NothingT, NullT, VBArray, VBErrorValue, VBRecord, coerce, isDate, isObject, toNumber, toStr, vbTypeName,
   type VBValue,
 } from '../values';
-import { def } from './util';
+import { def, intArg } from './util';
 
 // ---- Str / Val ----
 
@@ -51,29 +51,47 @@ conv('CBool', 'Boolean');
 conv('CDate', 'Date');
 conv('CStr', 'String');
 def('CVar', 1, 1, a => plain(a[0]));
+/** CDec: VibeBasic has no Decimal type; the value is a Double (TypeName reports Decimal for the call itself). */
+def('CDec', 1, 1, a => coerce(plain(a[0]), 'Double'));
+/** CVErr(n): a Variant of subtype Error. */
+def('CVErr', 1, 1, a => {
+  const n = intArg(a[0]);
+  if (n < 0 || n > 65535) throw new VBRuntimeError(5);
+  return new VBErrorValue(n);
+});
 
 // ---- type checks ----
 
-def('IsNull', 1, 1, a => plain(a[0]) instanceof NullT);
-def('IsEmpty', 1, 1, a => plain(a[0]) instanceof EmptyT);
-def('IsArray', 1, 1, a => a[0] instanceof VBArray);
-def('IsObject', 1, 1, a => a[0] instanceof NothingT || isObject(a[0]));
+const raw = { raw: true };
+def('IsNull', 1, 1, a => plain(a[0]) instanceof NullT, raw);
+def('IsEmpty', 1, 1, a => plain(a[0]) instanceof EmptyT, raw);
+def('IsArray', 1, 1, a => a[0] instanceof VBArray, raw);
+def('IsObject', 1, 1, a => a[0] instanceof NothingT || isObject(a[0]), raw);
+/** True for an Optional Variant parameter the caller left out (and that has no default). */
+def('IsMissing', 1, 1, a => a[0] === Missing, raw);
+def('IsError', 1, 1, a => a[0] instanceof VBErrorValue, raw);
 
 def('IsNumeric', 1, 1, a => {
   const v = plain(a[0]);
   if (typeof v === 'number' || typeof v === 'boolean' || v instanceof EmptyT) return true;
   if (typeof v !== 'string') return false;
   try { toNumber(v); return true; } catch { return false; }
-});
+}, raw);
 
 def('IsDate', 1, 1, a => {
   const v = plain(a[0]);
   if (isDate(v)) return true;
   if (typeof v !== 'string') return false;
   try { coerce(v, 'Date'); return true; } catch { return false; }
-});
+}, raw);
 
-def('TypeName', 1, 1, a => vbTypeName(a[0]));
+/** A number's type comes from the code when it is known there (`types`: a typed variable or expression), else from the value. */
+const known = (a: VBValue[], types: (string | undefined)[] | undefined): string | undefined =>
+  typeof a[0] === 'number' ? types?.[0] : undefined;
+
+def('TypeName', 1, 1, (a, _ctx, types) => known(a, types) ?? vbTypeName(a[0]), { raw: true, types: true });
+
+const VAR_TYPES: Record<string, number> = { Integer: 2, Long: 3, Single: 4, Double: 5, Currency: 6, Decimal: 14, Byte: 17 };
 
 /** VarType code (vbEmpty 0 ... vbArray 8192). Numbers without a declared type: Integer, Long or Double. */
 export function varType(v: VBValue): number {
@@ -95,7 +113,11 @@ export function varType(v: VBValue): number {
   }
   if (v instanceof VBRecord) return 36;
   if (isDate(v)) return 7;
+  if (v instanceof VBErrorValue) return 10;
   return 9;
 }
 
-def('VarType', 1, 1, a => varType(a[0]));
+def('VarType', 1, 1, (a, _ctx, types) => {
+  const t = known(a, types);
+  return t !== undefined ? VAR_TYPES[t] : varType(a[0]);
+}, { raw: true, types: true });
