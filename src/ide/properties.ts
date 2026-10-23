@@ -27,6 +27,7 @@ const INSTANCING_VALUES = [
   { value: 1, label: '1 - Private' }, { value: 2, label: '2 - PublicNotCreatable' },
   { value: 5, label: '5 - MultiUse' }, { value: 6, label: '6 - GlobalMultiUse' },
 ];
+const USER_SCALE = new Set(['ScaleLeft', 'ScaleTop', 'ScaleWidth', 'ScaleHeight']);
 const INDEX_DEF: PropDef = { name: 'Index', kind: 'int', default: null, designTime: true, runtime: 'rw', min: 0, max: 32767 };
 const DEFAULT_FONT: FontValue = { name: 'MS Sans Serif', size: 8, bold: false, italic: false, underline: false };
 
@@ -375,7 +376,8 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     // Rows: properties common to all selected types
     const defs = CONTROL_TYPES[first.type].props.filter(d => d.designTime && (first.id !== 'form' || formHasProp(form, d.name))).filter(d => ts.every(t => {
       const o = getPropDef(t.type, d.name);
-      return o && o.designTime && o.kind === d.kind && (d.kind !== 'enum' || JSON.stringify(o.enumValues) === JSON.stringify(d.enumValues));
+      return o && o.designTime && o.kind === d.kind && (d.kind !== 'enum' || JSON.stringify(o.enumValues) === JSON.stringify(d.enumValues))
+        && (!USER_SCALE.has(d.name) || t.props.ScaleMode === 0);   // ScaleLeft ... ScaleHeight only for the user scale (ScaleMode 0)
     }));
     const rows: PropDef[] = [...(multi ? [] : [NAME_DEF]), ...defs];
     if (!multi && first.id !== 'form') rows.push(INDEX_DEF);

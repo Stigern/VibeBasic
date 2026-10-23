@@ -67,7 +67,11 @@ export class DrawSurface {
   constructor(private o: SurfaceOwner) {
     this.images = imageSource(src => o.resolveAsset({ asset: src }));
     this.mirror = new GfxRenderer(this.images, textGlyphs);
-    if (this.mode() === 0) { const [w, h] = this.clientTwips(); this.sw = w; this.sh = h; }
+    if (this.mode() === 0) {   // the user scale: as stored at design time (a VB6 form's), else the client area in twips
+      const [w, h] = this.clientTwips(), n = (k: string): number => Number(this.p[k]) || 0;
+      this.ox = n('ScaleLeft'); this.oy = n('ScaleTop');
+      this.sw = n('ScaleWidth') || w; this.sh = n('ScaleHeight') || h;
+    }
     this.pictureChanged(false);
   }
 
@@ -101,6 +105,13 @@ export class DrawSurface {
     return [xTwips * ux + this.left(), yTwips * uy + this.top()];
   }
 
+  /** The scale is twips from the top left corner (ScaleMode 1): positions and sizes need no conversion. */
+  isTwips(): boolean { return this.mode() === 1; }
+
+  /** Lengths in twips in the current scale's units (signed: a user scale may run right to left or upwards); and back. */
+  lengths(w: number, h: number): [number, number] { const [ux, uy] = this.units(); return [w * ux, h * uy]; }
+  twipLengths(w: number, h: number): [number, number] { const [ux, uy] = this.units(); return [w / ux, h / uy]; }
+
   /** The reverse of `mouse`: a point in the current scale as twips from the client area's origin (PopupMenu X, Y). */
   twips(x: number, y: number): [number, number] {
     const [ux, uy] = this.units();
@@ -132,6 +143,7 @@ export class DrawSurface {
         if ((name === 'ScaleWidth' || name === 'ScaleHeight') && v === 0) throw new VBRuntimeError(380);
         this.toUser();
         if (name === 'ScaleLeft') this.ox = v; else if (name === 'ScaleTop') this.oy = v; else if (name === 'ScaleWidth') this.sw = v; else this.sh = v;
+        this.storeScale();
         return true;
       }
       case 'ScaleMode': {
@@ -150,6 +162,12 @@ export class DrawSurface {
     const [w, h] = this.clientTwips(), [ux, uy] = this.units();
     this.ox = 0; this.oy = 0; this.sw = w * ux; this.sh = h * uy;
     this.p.ScaleMode = 0;
+    this.storeScale();
+  }
+
+  /** The user scale in the props too (what a copy of the object starts from: Load of a control array element). */
+  private storeScale(): void {
+    Object.assign(this.p, { ScaleLeft: this.ox, ScaleTop: this.oy, ScaleWidth: this.sw, ScaleHeight: this.sh });
   }
 
   // -- methods ------------------------------------------------------------------------------------------------
@@ -357,6 +375,7 @@ export class DrawSurface {
         if (w === 0 || h === 0) throw new VBRuntimeError(5);
         this.ox = call.from.x; this.oy = call.from.y; this.sw = w; this.sh = h;
         this.p.ScaleMode = 0;
+        this.storeScale();
         return;
       }
     }

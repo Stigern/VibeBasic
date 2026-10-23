@@ -37,9 +37,23 @@ export function shortcutMatches(v: number, e: ShortcutKey): boolean {
   const key = parts[parts.length - 1];
   const ctrl = parts.includes('Ctrl'), shift = parts.includes('Shift'), alt = parts.includes('Alt');
   if (ctrl !== (e.ctrlKey || e.metaKey) || shift !== e.shiftKey || alt !== e.altKey) return false;
-  if (key.length === 1) return e.code ? e.code === `Key${key}` : e.key.toUpperCase() === key;
-  if (key === 'Ins') return e.key === 'Insert';
-  if (key === 'Del') return e.key === 'Delete';
-  if (key === 'Bksp') return e.key === 'Backspace';
-  return e.key === key;   // F1 .. F12
+  if (key.length === 1) {   // the letter the key types (Ctrl+Z on a German keyboard is the key QWERTY has Y on); else the key's place
+    const typed = e.key.length === 1 ? e.key.toUpperCase() : '';
+    return /^[A-Z]$/.test(typed) ? typed === key : e.code === `Key${key}`;
+  }
+  const special = ({ Ins: 'Insert', Del: 'Delete', Bksp: 'Backspace' } as Record<string, string>)[key] ?? key;   // F1 .. F12 as they are
+  return e.key === special || e.code === special;
 }
+
+/**
+ * The letter or digit of a key press for a menu's or caption's & (lower case; '' for none): the character the key types, so the
+ * keyboard layout counts. With Alt (Option on a Mac types another character: Option+Z is Ω) or a layout without Latin letters,
+ * the letter of the key's code.
+ */
+export function keyLetter(e: { key: string; code?: string; altKey: boolean }): string {
+  const typed = e.key.length === 1 ? e.key.toLowerCase() : '';
+  if (/^[a-z0-9]$/.test(typed) || (typed !== '' && !e.altKey)) return typed;
+  const c = /^Key([A-Z])$/.exec(e.code ?? '') ?? /^Digit(\d)$/.exec(e.code ?? '');
+  return c ? c[1].toLowerCase() : typed;
+}
+

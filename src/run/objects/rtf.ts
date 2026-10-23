@@ -54,20 +54,19 @@ export function toRtf(runs: Run[], paras: Paras, base: RtfFormat): string {
   };
   startPara();
   for (const r of runs) {
-    const pieces = r.text.split('\n');
-    pieces.forEach((piece, i) => {
-      if (i > 0) { body.push('\\par '); para++; startPara(); }
-      if (piece === '') return;
-      const f = r.fmt;
-      let ctl = '';
-      if (f.bold !== undefined) ctl += f.bold ? '\\b' : '\\b0';
-      if (f.italic !== undefined) ctl += f.italic ? '\\i' : '\\i0';
-      if (f.underline !== undefined) ctl += f.underline ? '\\ul' : '\\ulnone';
-      if (f.strike !== undefined) ctl += f.strike ? '\\strike' : '\\strike0';
-      if (f.color !== undefined) ctl += `\\cf${colorIndex(f.color)}`;
-      if (f.fontName !== undefined) ctl += `\\f${fontIndex(f.fontName)}`;
-      if (f.fontSize !== undefined) ctl += `\\fs${Math.round(f.fontSize * 2)}`;
-      body.push(ctl === '' ? escapeText(piece) : `{${ctl} ${escapeText(piece)}}`);
+    const f = r.fmt;
+    let ctl = '';
+    if (f.bold !== undefined) ctl += f.bold ? '\\b' : '\\b0';
+    if (f.italic !== undefined) ctl += f.italic ? '\\i' : '\\i0';
+    if (f.underline !== undefined) ctl += f.underline ? '\\ul' : '\\ulnone';
+    if (f.strike !== undefined) ctl += f.strike ? '\\strike' : '\\strike0';
+    if (f.color !== undefined) ctl += `\\cf${colorIndex(f.color)}`;
+    if (f.fontName !== undefined) ctl += `\\f${fontIndex(f.fontName)}`;
+    if (f.fontSize !== undefined) ctl += `\\fs${Math.round(f.fontSize * 2)}`;
+    r.text.split('\n').forEach((piece, i) => {
+      // the paragraph mark has the run's format too (a blank line keeps its size, the caret at a line start its font)
+      if (i > 0) { body.push(ctl === '' ? '\\par ' : `{${ctl}\\par }`); para++; startPara(); }
+      if (piece !== '') body.push(ctl === '' ? escapeText(piece) : `{${ctl} ${escapeText(piece)}}`);
     });
   }
   body.push('\\par');

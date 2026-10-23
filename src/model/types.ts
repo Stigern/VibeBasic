@@ -16,7 +16,7 @@ export type ControlType = 'Form' | 'CommandButton' | 'Label' | 'TextBox' | 'Chec
   | 'SSPanel' | 'SSCommand' | 'SSCheck' | 'SSOption' | 'SSFrame' | 'SSRibbon'
   | 'Animation' | 'ImageCombo' | 'CoolBar' | 'FlatScrollBar' | 'Calendar'
   | 'Menu';
-export interface FontValue { name: string; size: number; bold: boolean; italic: boolean; underline: boolean }
+export interface FontValue { name: string; size: number; bold: boolean; italic: boolean; underline: boolean; strikethrough?: boolean }
 export interface PictureRef { asset: string }                 // key in Project.assets
 export type PropValue = string | number | boolean | string[] | FontValue | PictureRef | null;
 /** Left/Top are relative to the parent, in twips. `tab`: the 0-based tab of an SSTab parent the control sits on (absent = 0;

@@ -6,6 +6,7 @@ import { VBRuntimeError } from '../../lang/errors';
 import type { Program } from '../../lang/interp/program';
 import { Empty, Nothing, VBArray, VBRef, coerce, toBool, type VBValue } from '../../lang/values';
 import { CONTROL_TYPES, getPropDef } from '../../model/controls';
+import { dockEdge, formClientTwips, stackDocks, type DockEdge, type Rect } from '../../model/geometry';
 import { formEvents, formHasProp, formObjectName, isMdiChild } from '../../model/mdi';
 import type { ControlDef, FormDef, PictureRef, PropValue } from '../../model/types';
 import type { FormHost, FormWindow } from '../formHost';
@@ -44,6 +45,8 @@ export interface FormSession {
   /** Runs `proc` of `moduleName` if it exists (then flushes and checks for the end of the program). */
   fire(moduleName: string, proc: string, args: VBRef[]): Promise<void>;
   syncTimer(form: FormInstance, timer: ControlObject): void;
+  /** The form is being loaded (a `New` instance is held by the session until it unloads). */
+  formLoading?(form: FormInstance): void;
   formUnloaded(form: FormInstance): void;
   /** The CSS cursor Screen.MousePointer puts over every form window ('' = none). */
   screenCursor(): string;
@@ -181,6 +184,18 @@ export class FormInstance implements VBObject {
       resized: c => { if (this.visible && this.st?.byId.get(c.def.id) === c) void this.fireControl(c, 'Resize', []).then(() => this.paint(c)); },
       repaint: c => this.paint(c, true).then(() => Empty),
       menuBar: () => this.showsMenuBar(),
+      container: c => {
+        const st = this.st;
+        if (!st) return null;
+        if (c.def.parentId === null) return st.form;
+        const p = st.byId.get(c.def.parentId);
+        return p?.def.type === 'PictureBox' ? p : null;
+      },
+      workArea: () => {
+        if (!this.isMdi || !this.st) return null;
+        const r = this.docks().rest;
+        return { w: r.width / 15, h: r.height / 15 };
+      },
     };
     // Load Name(i) / Unload Name(i). A control without a view (Winsock, Timer ...) starts from the design-time properties
     // of the lowest element; a visible one from its current properties, hidden (Visible = False) and last in the tab
@@ -221,7 +236,42 @@ export class FormInstance implements VBObject {
         arr.add(c);
       }
     }
-    return this.st = st;
+    this.st = st;
+    this.layoutDocks(false);
+    return st;
+  }
+
+  /** The docked controls (an aligned PictureBox, a Toolbar, StatusBar or CoolBar) as the window lays them out (render.ts dock): in
+   *  z-order each takes its edge of what the ones before it leave; `rest` is what is left (an MDI form's workspace). Twips. */
+  private docks(): { rects: Map<ControlObject, Rect>; edges: Map<ControlObject, DockEdge>; rest: Rect } {
+    const st = this.st!;
+    const client = formClientTwips(st.form.props, this.showsMenuBar());
+    const items: { key: ControlObject; edge: DockEdge; size: number }[] = [];
+    const edges = new Map<ControlObject, DockEdge>();
+    for (const c of st.byId.values()) {
+      const edge = dockEdge({ type: c.def.type, parentId: c.def.parentId, props: c.props });
+      if (!edge) continue;
+      edges.set(c, edge);
+      const across = edge === 'left' || edge === 'right';
+      items.push({ key: c, edge, size: c.props.Visible === false ? 0 : Number(across ? c.props.Width : c.props.Height) || 0 });
+    }
+    return { ...stackDocks(items, client.width, client.height), edges };
+  }
+
+  /** The docked controls get the place the window gives them (Left, Top and their length along the edge, VB6: Picture1.Width is the
+   *  form's ScaleWidth). With `raise`, a PictureBox whose size changed gets its Resize (and Paint) once the form is shown. */
+  private layoutDocks(raise: boolean): void {
+    const { rects, edges } = this.docks();
+    for (const [c, r] of rects) {
+      if (c.props.Visible === false) continue;   // a hidden one keeps its own size
+      const across = edges.get(c) === 'left' || edges.get(c) === 'right';
+      const before = [c.props.Width, c.props.Height];
+      c.props.Left = r.left; c.props.Top = r.top;
+      if (across) c.props.Height = r.height; else c.props.Width = r.width;
+      if (raise && c.def.type === 'PictureBox' && (c.props.Width !== before[0] || c.props.Height !== before[1]) && this.visible) {
+        void this.fireControl(c, 'Resize', []).then(() => this.paint(c));
+      }
+    }
   }
 
   /** A control (or control array) of this form by name; undefined for other names. */
@@ -258,6 +308,7 @@ export class FormInstance implements VBObject {
     if (this.isMdiChild && !parent) throw new VBRuntimeError(366);
     this.loaded = true;
     this.loadOrder = ++loadCounter;
+    this.s.formLoading?.(this);
     const st = this.state();
     st.form.props.Visible = false;
     for (const t of this.timers()) this.s.syncTimer(this, t);
@@ -456,6 +507,7 @@ export class FormInstance implements VBObject {
       case 'moved': st.form.applyState({ Left: m.left, Top: m.top }); break;
       case 'resized':
         st.form.applyState({ Width: m.width, Height: m.height });
+        this.layoutDocks(true);
         void this.fireForm('Resize', []).then(() => this.paint(st.form));
         break;
       case 'closeRequest': void this.unload(0); break;
@@ -583,9 +635,14 @@ export class FormInstance implements VBObject {
     const v = c.props[prop];
     const changed = v !== old;
     if (c.def.id === 'form') {
-      if ((prop === 'Width' || prop === 'Height') && changed && this.visible) void this.fireForm('Resize', []).then(() => this.paint(c));
+      if ((prop === 'Width' || prop === 'Height') && changed) {
+        this.layoutDocks(true);
+        if (this.visible) void this.fireForm('Resize', []).then(() => this.paint(c));
+      }
       return;
     }
+    if (changed && (prop === 'Align' || prop === 'Visible' || prop === 'Width' || prop === 'Height') && c.def.parentId === null
+      && (c.def.type === 'PictureBox' || c.def.type === 'Toolbar' || c.def.type === 'StatusBar' || c.def.type === 'CoolBar')) this.layoutDocks(true);
     let ev: string | null = null;
     switch (c.def.type) {
       case 'TextBox': case 'MaskedEdit': if (prop === 'Text' && changed) ev = 'Change'; break;
@@ -755,7 +812,7 @@ export class FormInstance implements VBObject {
       if (toBool(value)) void this.show(false); else this.hide();
       return;
     }
-    if (this.isMdi && l === 'activeform') throw new VBRuntimeError(383);
+    if (this.isMdi && (l === 'activeform' || l === 'scalewidth' || l === 'scaleheight')) throw new VBRuntimeError(383);   // the workspace's size
     if (!formHasProp(this.def, name) && getPropDef('Form', name)) throw new VBRuntimeError(438);
     st.form.setMember(name, args, value);
   }

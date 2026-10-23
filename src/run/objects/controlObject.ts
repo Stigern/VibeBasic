@@ -4,7 +4,7 @@
 import type { GraphicsCall, OutSlot, VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
 import { Empty, Nothing, Null, NullT, coerce, isDate, isObject, toBool, toStr, type VBDate, type VBRef, type VBValue } from '../../lang/values';
-import { CONTROL_TYPES, getPropDef, type PropDef } from '../../model/controls';
+import { CONTROL_TYPES, FONT_ALIASES, getPropDef, type PropDef } from '../../model/controls';
 import { adjustParas, decodeParas, decodeRuns, encodeParas, encodeRuns, formatAt, formatParas, formatRange, isDefaultPara, paraIndexAt, paraSpan, replaceRange, replaceRuns, runsBetween, runsText, trimParas, type ParaFmt, type Paras, type RtfFormat, type RtfPatch, type Run } from '../../controls/richText';
 import { fromRtf, toRtf, type RtfDoc } from './rtf';
 import { findText, lineFromChar, RTF_NO_HIGHLIGHT, spanText, upToText } from './richOps';
@@ -102,6 +102,11 @@ export interface RunContext {
   repaint?(ctrl: ControlObject): Promise<VBValue>;
   /** The form shows a menu bar (a visible top-level menu; not on an MDI child): it takes its height off the client area. */
   menuBar?(): boolean;
+  /** The Form or PictureBox whose scale a control's Left, Top, Width, Height (Line: X1 ... Y2) and mouse X, Y are in: its parent
+   *  PictureBox, or the form for a control on the form. Null (twips) inside any other container (a Frame has no ScaleMode). */
+  container?(ctrl: ControlObject): ControlObject | null;
+  /** An MDI form: its client area (px) is the workspace, what the docked controls leave of it. */
+  workArea?(): { w: number; h: number } | null;
 }
 
 /** Drawing methods that return a value (`x = Picture1.Point(1, 2)`). */
@@ -128,7 +133,20 @@ export type { HasPictureRef };
 const hasPictureRef = (v: unknown): v is HasPictureRef =>
   typeof v === 'object' && v !== null && 'pictureRef' in v;
 
-const FONT_PROPS: Record<string, keyof FontValue> = { name: 'name', size: 'size', bold: 'bold', italic: 'italic', underline: 'underline' };
+const FONT_PROPS: Record<string, keyof FontValue> = { name: 'name', size: 'size', bold: 'bold', italic: 'italic', underline: 'underline', strikethrough: 'strikethrough' };
+
+/** A Font part set by code (Font.Size = 12, FontBold = True): the new Font. 380 for a size VB6 refuses. */
+function withFontPart(f: FontValue, k: keyof FontValue, value: VBValue): FontValue {
+  const out = { ...f } as Record<string, string | number | boolean | undefined>;
+  if (k === 'size') {
+    const n = Number(coerce(value, 'Double'));
+    if (!(n > 0 && n <= 2160)) throw new VBRuntimeError(380);
+    out.size = n;
+  } else out[k] = k === 'name' ? toStr(value) : toBool(value);
+  return out as unknown as FontValue;
+}
+/** Left, Top, Width and Height (Line: X1, Y1, X2, Y2): a position ('x', 'y') or a length ('w', 'h') in the container's scale. */
+const GEOMETRY: Record<string, 'x' | 'y' | 'w' | 'h'> = { Left: 'x', Top: 'y', Width: 'w', Height: 'h', X1: 'x', X2: 'x', Y1: 'y', Y2: 'y' };
 
 export class FontObject implements VBObject {
   readonly vbTypeName = 'Font';
@@ -137,14 +155,12 @@ export class FontObject implements VBObject {
   getMember(name: string): VBValue {
     const k = FONT_PROPS[name.toLowerCase()];
     if (!k) throw new VBRuntimeError(438);
-    return this.get()[k];
+    return this.get()[k] ?? false;
   }
   setMember(name: string, _args: VBValue[], value: VBValue): void {
     const k = FONT_PROPS[name.toLowerCase()];
     if (!k) throw new VBRuntimeError(438);
-    const f = { ...this.get() } as Record<string, string | number | boolean>;
-    f[k] = k === 'name' ? toStr(value) : k === 'size' ? Number(coerce(value, 'Double')) : toBool(value);
-    this.set(f as unknown as FontValue);
+    this.set(withFontPart(this.get(), k, value));
   }
   callMethod(): VBValue { throw new VBRuntimeError(438); }
 }
@@ -207,7 +223,7 @@ export class ControlObject implements VBObject, DataConsumer {
     const td = CONTROL_TYPES[def.type];
     this.vbTypeName = def.type;
     this.defaultMember = td.defaultMember ?? undefined;
-    for (const pd of td.props) this.props[pd.name] = Array.isArray(pd.default) ? [...pd.default] : pd.default;
+    for (const pd of td.props) if (!this.fontPart(pd.name)) this.props[pd.name] = Array.isArray(pd.default) ? [...pd.default] : pd.default;
     for (const [k, v] of Object.entries(def.props)) {
       const pd = getPropDef(def.type, k);
       this.props[pd?.name ?? k] = Array.isArray(v) ? [...v] : v;
@@ -231,7 +247,12 @@ export class ControlObject implements VBObject, DataConsumer {
       this.gfx = new DrawSurface({
         props: p,
         clientPx: () => {
-          if ((def.type as string) === 'Form') { const m = formMetrics(p, this.ctx.menuBar?.() ?? false); return { w: m.clientWidth, h: m.clientHeight }; }
+          if ((def.type as string) === 'Form') {
+            const ws = this.ctx.workArea?.();
+            if (ws) return ws;
+            const m = formMetrics(p, this.ctx.menuBar?.() ?? false);
+            return { w: m.clientWidth, h: m.clientHeight };
+          }
           const b = Number(p.BorderStyle) === 1 ? 4 : 0;
           return { w: Math.max(0, twipsToPx(Number(p.Width) || 0) - b), h: Math.max(0, twipsToPx(Number(p.Height) || 0) - b) };
         },
@@ -308,6 +329,11 @@ export class ControlObject implements VBObject, DataConsumer {
       this.props.Col = Math.min(Number(this.props.Col), this.grid.cols - 1);
       this.syncGrid();
     }
+  }
+
+  /** FontName ... FontStrikethru of an object with a Font: the part of the Font it is (a CommonDialog's FontName is its own). */
+  private fontPart(name: string): keyof FontValue | undefined {
+    return getPropDef(this.def.type, 'Font')?.kind === 'font' ? FONT_ALIASES[name] : undefined;
   }
 
   // -- Winsock, Inet and WebBrowser --------------------------------------------------------------------------------
@@ -750,9 +776,37 @@ export class ControlObject implements VBObject, DataConsumer {
     return args;
   }
 
-  /** A point in twips from the control's origin in its own scale (the ScaleMode of a Form or PictureBox; twips for the others). */
+  /** A point in twips from the control's origin in its scale: a Form's or PictureBox's own ScaleMode; for another control the units of
+   *  its container's scale (VB6: a control's MouseDown X, Y are in the container's ScaleMode), from the control's origin. */
   scalePoint(x: number, y: number): [number, number] {
-    return this.gfx ? this.gfx.mouse(x, y) : [x, y];
+    if (this.gfx) return this.gfx.mouse(x, y);
+    const c = this.scaleOwner();
+    return c ? c.lengths(x, y) : [x, y];
+  }
+
+  /** The drawing surface whose scale this control's position and size are in; null for twips (see RunContext.container). */
+  private scaleOwner(): DrawSurface | null {
+    if (this.def.id === 'form') return null;
+    const s = this.ctx.container?.(this)?.gfx ?? null;
+    return s && !s.isTwips() ? s : null;
+  }
+
+  /** Left / Top / Width / Height (Line: X1 ... Y2) as the program reads it: twips in the container's scale. */
+  private toScale(name: string, twips: number): number {
+    const s = this.scaleOwner(), g = GEOMETRY[name];
+    if (!s) return twips;
+    if (g === 'x' || g === 'y') { const [x, y] = s.mouse(twips, twips); return g === 'x' ? x : y; }
+    const [w, h] = s.lengths(twips, twips);
+    return Math.abs(g === 'w' ? w : h);
+  }
+
+  /** The reverse of toScale: a value of the program in twips (whole twips, as the window places controls); null without a scale. */
+  private fromScale(name: string, v: number): number | null {
+    const s = this.scaleOwner(), g = GEOMETRY[name];
+    if (!s) return null;
+    if (g === 'x' || g === 'y') { const [x, y] = s.twips(v, v); return Math.round(g === 'x' ? x : y); }
+    const [w, h] = s.twipLengths(v, v);
+    return Math.round(Math.abs(g === 'w' ? w : h));
   }
 
   get name(): string { return this.def.name; }
@@ -863,7 +917,10 @@ export class ControlObject implements VBObject, DataConsumer {
       const name = String(this.props[pd.name] ?? '');
       return name === '' ? Nothing : (this.ctx.controlByName?.(name) as VBValue | undefined) ?? name;
     }
+    const fa = this.fontPart(pd.name);
+    if (fa) return (this.props.Font as FontValue)[fa] ?? false;
     const v = this.read(pd);
+    if (GEOMETRY[pd.name] && typeof v === 'number') return this.toScale(pd.name, v);
     if (pd.kind === 'font') return new FontObject(() => this.props.Font as FontValue, f => this.write(this.propDef('Font'), f));
     if (pd.kind === 'picture') return v ? new PictureObject(v as PictureRef) : Nothing;
     if (pd.kind === 'date') return typeof v === 'number' ? dateValue(v) : Null;
@@ -950,6 +1007,10 @@ export class ControlObject implements VBObject, DataConsumer {
     if (this.def.type === 'MaskedEdit' && pd.name === 'SelText' && String(this.props.Mask ?? '') !== '') { this.maskSelText(toStr(this.plain(value))); return; }
     if (this.def.type === 'RichTextBox' && (pd.name === 'TextRTF' || pd.name === 'SelRTF')) { this.setRtf(pd.name === 'SelRTF', toStr(this.plain(value))); return; }
     if (isDateType(this.def.type) && DATE_PARTS.has(pd.name)) { this.setDatePart(pd.name, num(this.plain(value))); return; }
+    const fa = this.fontPart(pd.name);
+    if (fa) { this.write(this.propDef('Font'), withFontPart(this.props.Font as FontValue, fa, this.plain(value))); return; }
+    const tw = GEOMETRY[pd.name] ? this.fromScale(pd.name, Number(coerce(this.plain(value), 'Double'))) : null;
+    if (tw !== null) { this.write(pd, this.convert(pd, tw)); return; }
     const v = this.convert(pd, value);
     if (this.ext?.set?.(pd.name, v)) return;
     this.write(pd, v);
@@ -1598,17 +1659,25 @@ export class ControlObject implements VBObject, DataConsumer {
 
   // -- methods ----------------------------------------------------------------------------------------------
 
+  /** Move Left, [Top], [Width], [Height]: in the container's scale (a form's in twips). A new size raises a PictureBox's Resize (and
+   *  Paint), and a form's Resize and Paint, as setting Width does. */
   private move(args: VBValue[]): VBValue {
     if (args.length < 1 || args.length > 4) throw new VBRuntimeError(450);
     const patch: Record<string, PropValue> = {};
-    const before = [this.props.Width, this.props.Height];
+    const before = [this.props.Width, this.props.Height] as const;
     ['Left', 'Top', 'Width', 'Height'].forEach((k, i) => {
       const a = args[i];
       if (a === undefined || a === Empty) return;
-      patch[k] = this.props[k] = num(this.plain(a));
+      const v = Number(coerce(this.plain(a), 'Double'));
+      patch[k] = this.props[k] = this.fromScale(k, v) ?? num(v);
     });
     this.send(patch);
-    if (this.def.type === 'PictureBox' && (this.props.Width !== before[0] || this.props.Height !== before[1])) this.ctx.resized?.(this);
+    const sized = this.props.Width !== before[0] || this.props.Height !== before[1];
+    if (sized && this.def.type === 'PictureBox') this.ctx.resized?.(this);
+    else if (sized && this.def.id === 'form') {
+      const [k, old] = this.props.Width !== before[0] ? ['Width', before[0]] : ['Height', before[1]];
+      this.ctx.propChanged?.(this, k, old);
+    }
     return Empty;
   }
 

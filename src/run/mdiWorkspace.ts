@@ -48,6 +48,8 @@ export interface MdiWorkspace {
   receive(m: ToWindow): boolean;
   /** The client area or the docked controls changed. */
   relayout(): void;
+  /** The root of the child window an element is in (its mount listens there, e.g. for files dragged from Finder); null outside them. */
+  childRoot(t: EventTarget | null): HTMLElement | null;
   dispose(): void;
 }
 
@@ -97,6 +99,8 @@ export function createMdiWorkspace(p: MdiParent): MdiWorkspace {
     return { width: twips(w.width + 2 * m.border), height: twips(w.height + 2 * m.border + m.titleHeight) };
   }
 
+  /** `report`: the session gets the new WindowState first, then the size (`resized`, also when only minimized or restored), so
+   *  Form_Resize runs once and sees the new WindowState (VB6). */
   function setState(c: Child, state: number, report: boolean): void {
     state = state === 1 || state === 2 ? state : 0;
     if (c.state === state) return;
@@ -104,16 +108,23 @@ export function createMdiWorkspace(p: MdiParent): MdiWorkspace {
     c.state = state;
     c.wrap.classList.toggle('vb-mdi-max', state === 2);
     c.wrap.classList.toggle('vb-mdi-min', state === 1);
-    if (was === 2 && c.normal) { c.mount.resize(c.normal.width, c.normal.height, report); c.props.Width = c.normal.width; c.props.Height = c.normal.height; c.normal = null; }
+    c.props.WindowState = state;
+    if (report) p.post(c.key, { t: 'state', id: 'form', props: { WindowState: state } });
+    let sized = false;
+    if (was === 2 && c.normal) {
+      c.mount.resize(c.normal.width, c.normal.height, report && state === 0);
+      c.props.Width = c.normal.width; c.props.Height = c.normal.height; c.normal = null;
+      sized = state === 0;
+    }
     if (state === 2) {
       c.normal = { width: num(c.props.Width), height: num(c.props.Height) };
       const s = maxSize(c);
       c.props.Width = s.width; c.props.Height = s.height;
       c.mount.resize(s.width, s.height, report);
+      sized = true;
     }
-    c.props.WindowState = state;
+    if (report && !sized) p.post(c.key, { t: 'resized', width: num(c.props.Width), height: num(c.props.Height) });
     for (const o of children.values()) if (o.state === 1 || o === c) place(o);
-    if (report) p.post(c.key, { t: 'state', id: 'form', props: { WindowState: state } });
     chrome();
   }
 
@@ -407,6 +418,11 @@ export function createMdiWorkspace(p: MdiParent): MdiWorkspace {
       }
     },
     relayout,
+    childRoot(t) {
+      if (!(t instanceof Node)) return null;
+      for (const c of children.values()) if (c.visible && c.wrap.contains(t)) return c.wrap;
+      return null;
+    },
     dispose() {
       if (disposed) return;
       for (const k of [...children.keys()]) close(k);

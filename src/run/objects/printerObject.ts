@@ -108,7 +108,7 @@ export class PrinterObject implements VBObject {
     const p = this.props;
     if (l in SURFACE_PROPS) return this.surface.get(SURFACE_PROPS[l])!;
     if (l === 'font') return new FontObject(() => p.Font as FontValue, f => { p.Font = f; });
-    if (l in FONT_PARTS) return (p.Font as FontValue)[FONT_PARTS[l]];
+    if (l in FONT_PARTS) return (p.Font as FontValue)[FONT_PARTS[l]] ?? false;
     if (l in PEN_PROPS) return p[PEN_PROPS[l]] as VBValue;
     if (l in STORED) return p[STORED[l]] as VBValue;
     switch (l) {

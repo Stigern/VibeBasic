@@ -21,11 +21,16 @@ export interface FileDialogRequest {
 
 /**
  * FileName after a multiple selection, as VB6 gives it: the folder, then the names, separated by Chr(0) with cdlOFNExplorer and by
- * a space without it. One file is just its path.
+ * a space without it. One file is just its path. Files from different folders (the Mac panel's Recents or a search): the folder
+ * they have in common, and each name relative to it ("Desktop/b.txt"), so `folder & "\" & name` still finds the file.
  */
 export function multiFileName(paths: string[], explorer: boolean): string {
   if (paths.length <= 1) return paths[0] ?? '';
-  return [dirName(paths[0]), ...paths.map(baseName)].join(explorer ? '\0' : ' ');
+  const parts = paths.map(p => p.split(/[\\/]/));
+  let n = parts[0].length - 1;   // the folders of the first path
+  for (const q of parts) { let i = 0; while (i < n && i < q.length - 1 && q[i] === parts[0][i]) i++; n = i; }
+  const dir = n === 0 ? '' : parts[0].slice(0, n).join('/') || '/';
+  return [dir, ...parts.map(q => q.slice(n).join('/'))].join(explorer ? '\0' : ' ');
 }
 
 /** The name with `.ext` added when its last part has no extension (a leading dot of `ext` is fine). */
