@@ -613,7 +613,7 @@ export function parseVbp(text: string): VbpInfo {
       case 'majorver': info.version.major = ver(v); break;
       case 'minorver': info.version.minor = ver(v); break;
       case 'revisionver': info.version.revision = ver(v); break;
-      case 'autoincrementver': info.version.autoIncrement = ver(v) !== 0; break;
+      case 'autoincrementver': if (ver(v) !== 0) info.version.autoIncrement = true; break;   // off is absent, as the Make tab stores it
       case 'command32': info.commandLine = unq(v); break;
       case 'condcomp': info.condComp = unq(v); break;
       case 'reference': {

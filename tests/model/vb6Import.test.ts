@@ -22,7 +22,7 @@ test('a .vbp with two forms, a module and a class', async () => {
   ]));
   expect(warnings.some(w => /OLE Automation/.test(w))).toBe(false);
   expect(warnings.some(w => /^Konto/.test(w))).toBe(false);   // class modules are supported: no code warnings
-  expect(p.versionInfo).toEqual({ major: 1, minor: 2, revision: 3, autoIncrement: false, companyName: 'Eksempel' });
+  expect(p.versionInfo).toEqual({ major: 1, minor: 2, revision: 3, companyName: 'Eksempel' });   // AutoIncrementVer=0 is absent
   expect(p.subMain).toBeUndefined();
   expect(p.commandLine).toBeUndefined();
 });

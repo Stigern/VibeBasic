@@ -4,7 +4,7 @@ import { assetUsedElsewhere } from '../model/assetRefs';
 import { addAssetCmd, compositeCmd, removeAssetCmd, setProjectFieldCmd, setProjectIconCmd, setProjectOptionsCmd, type Command, type ProjectOptions } from '../model/commands';
 import { availableComponents, componentDef, componentInUse, componentLocation, normalizeComponents, setComponentsCmd } from '../model/components';
 import { newId } from '../model/controls';
-import { DEFAULT_VERSION, type Asset, type Project, type VersionInfo } from '../model/types';
+import { DEFAULT_VERSION, sameVersion, type Asset, type Project, type VersionInfo } from '../model/types';
 import { parseCondConsts } from '../lang/condComp';
 import { bytesToBase64 } from './propertyEditors';
 import { validateName } from '../model/controls';
@@ -136,7 +136,7 @@ function makeTab(ide: IdeState, doc: Document = document): DialogTab {
       if (auto.input.checked) nv.autoIncrement = true;
       for (const [k] of VERSION_INFO) if (info[k] !== '') nv[k] = info[k];
       const opts: ProjectOptions = {};
-      if (JSON.stringify(nv) !== JSON.stringify(p.versionInfo ?? DEFAULT_VERSION)) opts.versionInfo = nv;
+      if (!sameVersion(nv, p.versionInfo)) opts.versionInfo = nv;
       const types = parseFileTypes(fileTypes.value) ?? [];
       if (types.join() !== (p.fileTypes ?? []).join()) opts.fileTypes = types.length ? types : undefined;
       if (cmdLine.value !== (p.commandLine ?? '')) opts.commandLine = cmdLine.value || undefined;

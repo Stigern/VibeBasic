@@ -47,6 +47,15 @@ export interface VersionInfo {
 }
 /** VB6's version of a new project: 1.0.0. */
 export const DEFAULT_VERSION: VersionInfo = { major: 1, minor: 0, revision: 0 };
+/** The same version information (absent fields as their defaults: autoIncrement off, texts ''), in any key order. */
+export function sameVersion(a: VersionInfo | undefined, b: VersionInfo | undefined): boolean {
+  const norm = (v: VersionInfo | undefined): string => {
+    const x = { ...DEFAULT_VERSION, ...v };
+    return JSON.stringify([x.major, x.minor, x.revision, !!x.autoIncrement, x.comments ?? '', x.companyName ?? '', x.fileDescription ?? '',
+      x.legalCopyright ?? '', x.legalTrademarks ?? '', x.productName ?? '']);
+  };
+  return norm(a) === norm(b);
+}
 /**
  * `components`: the OCX file names checked in Project > Components (see components.ts); their controls are in the Toolbox.
  * `condComp`: the conditional compilation arguments for `#If` (`DEBUG = 1 : BETA = 0`); older projects have none.

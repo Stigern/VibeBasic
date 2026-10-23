@@ -124,6 +124,15 @@ test('project properties: Startup Object Sub Main and the Make tab fields, one u
   expect(ide.project.subMain ?? ide.project.versionInfo ?? ide.project.commandLine ?? ide.project.fileTypes).toBeUndefined();
 });
 
+test('project properties: OK with nothing changed adds no undo step, whatever the key order of versionInfo', async () => {
+  ide.project.versionInfo = { companyName: 'Acme', revision: 3, minor: 2, major: 1, autoIncrement: false };
+  const p = showProjectProperties(ide);
+  press('OK');
+  await p;
+  expect(ide.stack.canUndo).toBe(false);
+  expect(ide.stack.isDirty).toBe(false);
+});
+
 test('options: OK updates ide.options, emits and saves; Cancel changes nothing', async () => {
   const be = new BrowserBackend();
   const onOpt = vi.fn();
