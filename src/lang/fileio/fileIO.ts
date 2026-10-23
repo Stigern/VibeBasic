@@ -12,7 +12,7 @@ import type { VBTypeName } from '../ast';
 import { VBRuntimeError } from '../errors';
 import { dateFrom, type VBDate, type VBRecord, type VBValue } from '../values';
 import { ByteReader, NeedMore, decodeRecord, encodeRecord, type TypeSource } from './binary';
-import { fsError, type FileAccess, type FileMode, type FileSystemApi } from './fsApi';
+import { fsError, type FileAccess, type FileMode, type FileStat, type FileSystemApi, type FsListing } from './fsApi';
 import { TextReader, decode1252, decodeText, encode1252, type InputField } from './textFormat';
 
 const MAX_FILE = 511;
@@ -157,6 +157,46 @@ export class FileIO {
 
   async open(path: string, mode: FileMode, access: FileAccess, num: number, recLen?: number): Promise<void> {
     if (!Number.isInteger(num) || num < 1 || num > MAX_FILE) throw new VBRuntimeError(52);
+    return this.openNum(path, mode, access, num, recLen);
+  }
+
+  /** A FileSystemObject TextStream: a text file under a number above 511 (Close, Close # and FreeFile do not see it). One
+   *  for reading is read whole and closed at once (a stream nobody closes holds nothing). */
+  async openStream(path: string, mode: 'input' | 'output' | 'append'): Promise<number> {
+    const num = MAX_FILE + ++this.streams;
+    await this.openNum(path, mode, '', num);
+    const f = this.files.get(num)!;
+    if (f.reader) { this.inputs.set(num, f.reader); await this.closeFile(f); }
+    return num;
+  }
+  private streams = 0;
+  private readonly inputs = new Map<number, TextReader>();
+
+  /** A TextStream's text and position (one for reading); 52 after Close. */
+  reader(num: number): TextReader {
+    const r = this.inputs.get(num);
+    if (!r) throw new VBRuntimeError(52);
+    return r;
+  }
+
+  /** A TextStream's Close. */
+  async closeStream(num: number): Promise<void> {
+    this.inputs.delete(num);
+    const f = this.files.get(num);
+    if (f) await this.closeFile(f);
+  }
+
+  /** FileSystemObject: what is at a path (null when nothing is), and a folder's contents. */
+  async statOf(path: string): Promise<FileStat | null> {
+    const p = this.resolve(path);
+    return this.call(a => a.fsStat(p));
+  }
+  async listing(path: string): Promise<FsListing> {
+    const p = this.resolve(path);
+    return this.call(a => a.listDir(p), 76);
+  }
+
+  private async openNum(path: string, mode: FileMode, access: FileAccess, num: number, recLen?: number): Promise<void> {
     if (this.files.has(num)) throw new VBRuntimeError(55);
     if (recLen !== undefined && (!Number.isInteger(recLen) || recLen < 1 || recLen > 32767)) throw new VBRuntimeError(5);
     const full = this.resolve(path);
@@ -222,7 +262,7 @@ export class FileIO {
 
   /** Close #1, #2 (an unopened number is ignored, as in VB6); `null` closes every file. */
   async close(nums: number[] | null): Promise<void> {
-    const list = nums === null ? [...this.files.values()] : nums.map(n => {
+    const list = nums === null ? [...this.files.values()].filter(f => f.num <= MAX_FILE) : nums.map(n => {
       if (!Number.isInteger(n) || n < 1 || n > MAX_FILE) throw new VBRuntimeError(52);
       return this.files.get(n);
     });

@@ -1,7 +1,7 @@
 // The language reference card in the code and form system prompts. Built once at module load from the language's own
 // tables (built-in functions and constants, the parser's type and unsupported-word tables), so a new built-in shows up
 // by itself. Everything is sorted: the card, and with it the system prompt, is byte-identical on every build (prefix caching).
-import { BUILTINS, CANONICAL_NAMES, CONSTANTS } from '../lang/builtins';
+import { BUILTINS, CANONICAL_NAMES, CONSTANTS, PROG_IDS } from '../lang/builtins';
 import { FINANCIAL } from '../lang/builtins/financial';
 import { TYPE_KEYWORDS, UNSUPPORTED_IDENTS, UNSUPPORTED_KEYWORDS } from '../lang/parseStatements';
 import { BUILTIN_OBJECTS } from './knownNames';
@@ -70,13 +70,16 @@ export function buildLanguageReference(): string {
     `Statements: ${STATEMENTS}`,
     `Types: ${types.join(', ')} (suffixes % & ! # $). Operators: + - * / \\ Mod ^ &, = <> < > <= >=, Like, Is, Not, And, Or, Xor, Eqv, Imp; rs!Name is rs("Name") (a Recordset field).`,
     `Objects: ${objects.join(', ')}.`,
+    `CreateObject(ProgID) or New: ${[...new Set([...PROG_IDS.values()].map(c => c.name))].sort(byName).join(', ')}. ADO on SQLite files:`
+      + ' cn.Open "Data Source=x.db", cn.Execute sql[, n], BeginTrans / CommitTrans / RollbackTrans; rs.Open sql, cn, adOpenStatic, adLockOptimistic;'
+      + ' rs.Filter = "A > 1 And B Like \'x*\'", rs.Sort = "B DESC". FSO: OpenTextFile / CreateTextFile -> ReadLine, WriteLine, AtEndOfStream, Close.',
     'Built-in functions by argument count (String functions also have a $ form, e.g. Left$):',
     ...functionLines(),
     `Financial: ${FINANCIAL.join(', ')} (VB6 argument order).`,
     'Constant groups (prefix, count, examples):',
     ...constantGroups(),
     `Not available: ${words.join(', ')}; ${drawing.join(' / ')} on forms;`
-      + ' CreateObject / GetObject (no COM automation); Shell (programs cannot be started).',
+      + ' GetObject, other ProgIDs (no COM automation); Shell (programs cannot be started).',
   ].join('\n');
 }
 

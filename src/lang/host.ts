@@ -79,4 +79,7 @@ export interface Host {
   onEnd(): void;
   /** File I/O and SaveSetting (Open, Kill, Dir ...). Absent: those statements raise error 68, Device unavailable. */
   fileSystem?(): FileSystemApi | undefined;
+  /** `New ADODB.Connection`, CreateObject("ADODB.Recordset"): the objects the run session makes (`progId` as registered);
+   *  undefined when it cannot (error 429). */
+  createObject?(progId: string): VBObject | undefined;
 }

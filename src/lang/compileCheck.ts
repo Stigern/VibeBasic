@@ -7,7 +7,7 @@
 // Every rule stays silent when it is not sure: a name it cannot resolve to a declared variable, a callee that may be
 // something else than a procedure, a type it does not know.
 import type { Expr, MissingArg, ModuleAst, Param, PrintItem, ProcDecl, Stmt, VarDecl, VBTypeName } from './ast';
-import { BUILTIN_CLASSES } from './builtins/collection';
+import { BUILTIN_CLASSES } from './builtins';
 
 export interface CheckModule { name: string; kind: 'form' | 'module' | 'class'; ast: ModuleAst }
 
@@ -52,7 +52,7 @@ export function newProblem(t: VBTypeName, classes: ReadonlySet<string>): { messa
   if (typeof t === 'string' || 'userType' in t) return { message: 'Invalid use of New keyword', hint: 'Invalid use of New keyword' };
   const n = lc(t.objectType);
   if (classes.has(n) || BUILTIN_CLASSES.has(n)) return null;
-  return { message: 'User-defined type not defined', hint: `User-defined type not defined: New ${t.objectType}. New makes an object of a class module of the project or a Collection.` };
+  return { message: 'User-defined type not defined', hint: `User-defined type not defined: New ${t.objectType}. New makes an object of a class module of the project or a built-in class (Collection, Dictionary, ADODB.Recordset ...).` };
 }
 
 export function compileProblems(modules: CheckModule[], opts: CompileCheckOptions = {}): CompileProblem[] {

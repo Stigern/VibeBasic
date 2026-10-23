@@ -175,6 +175,9 @@ export class TauriBackend implements Backend {
   dbExecute(id: number, sql: string, params: DbValue[]): Promise<DbExecResult> { return call('db_execute', { id, sql, params }); }
   async dbClose(id: number): Promise<void> { await call<void>('db_close', { id }); }
   async dbReset(): Promise<void> { await call<void>('db_reset', {}); }
+  dbBeginTrans(id: number): Promise<number> { return call('db_begin_trans', { id }); }
+  dbCommitTrans(id: number): Promise<number> { return call('db_commit_trans', { id }); }
+  dbRollbackTrans(id: number): Promise<number> { return call('db_rollback_trans', { id }); }
 
   // -- MSComm and SysInfo (comm.rs, sysinfo.rs) --
   commList(): Promise<string[]> { return call('comm_list', {}); }

@@ -25,6 +25,14 @@ export class DbConnection {
     this.session.check();
     try { return await this.api.dbExecute(this.id, sql, params); } catch (e) { throw dbError(e); }
   }
+
+  /** BeginTrans / CommitTrans / RollbackTrans: the transaction level after it (savepoints for nested levels). */
+  async transaction(op: 'begin' | 'commit' | 'rollback'): Promise<number> {
+    this.session.check();
+    try {
+      return await (op === 'begin' ? this.api.dbBeginTrans(this.id) : op === 'commit' ? this.api.dbCommitTrans(this.id) : this.api.dbRollbackTrans(this.id));
+    } catch (e) { throw dbError(e); }
+  }
 }
 
 export class DbSession {

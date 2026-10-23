@@ -100,6 +100,11 @@ export interface DatabaseApi {
   dbClose(id: number): Promise<void>;
   /** Closes every connection (the end of a run). */
   dbReset(): Promise<void>;
+  /** ADO BeginTrans (nested levels are savepoints): the new level. */
+  dbBeginTrans(id: number): Promise<number>;
+  /** CommitTrans / RollbackTrans of the innermost level: the level left. Rejects "-2147168242|No transaction is active." without one. */
+  dbCommitTrans(id: number): Promise<number>;
+  dbRollbackTrans(id: number): Promise<number>;
 }
 
 /** FileSystemApi: the files of a running program (Open, Kill, Dir ...) and SaveSetting, made by the main window. */

@@ -31,6 +31,8 @@ pub const MAX_BYTES: usize = 256 * 1024 * 1024;
 
 struct Db {
   conn: Mutex<Connection>,
+  /// ADO BeginTrans levels open on `conn` (nested ones are savepoints). Only used under the `conn` lock.
+  depth: Mutex<u32>,
   /// Stops the statement running on `conn` from any thread (db_close, db_reset).
   interrupt: rusqlite::InterruptHandle,
 }
@@ -61,6 +63,11 @@ pub struct ExecResult {
 }
 
 fn err(n: u32, msg: &str) -> String {
+  format!("{}|{}", n, msg)
+}
+
+/// An ADO error with a negative (HRESULT) number.
+fn err_neg(n: i64, msg: &str) -> String {
   format!("{}|{}", n, msg)
 }
 
@@ -144,15 +151,53 @@ impl Databases {
     let mut g = self.0.lock().unwrap();
     g.next += 1;
     let id = g.next;
-    g.conns.insert(id, Arc::new(Db { conn: Mutex::new(conn), interrupt }));
+    g.conns.insert(id, Arc::new(Db { conn: Mutex::new(conn), depth: Mutex::new(0), interrupt }));
     Ok(id)
   }
 
   /// Runs `f` on connection `id`; the map lock is held only for the lookup.
   fn with<T>(&self, id: u32, f: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
+    self.with_depth(id, |c, _| f(c))
+  }
+
+  fn with_depth<T>(&self, id: u32, f: impl FnOnce(&Connection, &mut u32) -> Result<T, String>) -> Result<T, String> {
     let db = self.0.lock().unwrap().conns.get(&id).cloned().ok_or_else(|| err(3420, "Object invalid or no longer set."))?;
     let c = db.conn.lock().unwrap_or_else(|p| p.into_inner());
-    f(&c)
+    let mut depth = db.depth.lock().unwrap_or_else(|p| p.into_inner());
+    // the program's own SQL may have ended the transaction (COMMIT / ROLLBACK)
+    if c.is_autocommit() {
+      *depth = 0;
+    }
+    f(&c, &mut depth)
+  }
+
+  /// ADO BeginTrans: BEGIN, or a savepoint inside a transaction. Returns the new level (1 for the outermost).
+  pub fn begin(&self, id: u32) -> Result<u32, String> {
+    self.with_depth(id, |c, depth| {
+      let sql = if *depth == 0 { "BEGIN".to_string() } else { format!("SAVEPOINT vb_trans{}", *depth) };
+      c.execute_batch(&sql).map_err(|e| sql_err(&e))?;
+      *depth += 1;
+      Ok(*depth)
+    })
+  }
+
+  /// ADO CommitTrans (`commit`) or RollbackTrans: ends the innermost level. Without a transaction: "No transaction is active."
+  pub fn end_trans(&self, id: u32, commit: bool) -> Result<u32, String> {
+    self.with_depth(id, |c, depth| {
+      if *depth == 0 {
+        return Err(err_neg(-2147168242, "No transaction is active."));
+      }
+      let level = *depth - 1;
+      let sql = match (level, commit) {
+        (0, true) => "COMMIT".to_string(),
+        (0, false) => "ROLLBACK".to_string(),
+        (n, true) => format!("RELEASE vb_trans{}", n),
+        (n, false) => format!("ROLLBACK TO vb_trans{n}; RELEASE vb_trans{n}"),
+      };
+      c.execute_batch(&sql).map_err(|e| sql_err(&e))?;
+      *depth = level;
+      Ok(level)
+    })
   }
 
   pub fn query(&self, id: u32, sql: &str, params: &[Value]) -> Result<QueryResult, String> {
@@ -246,6 +291,27 @@ pub async fn db_close(dbs: State<'_, Databases>, id: u32) -> Result<(), String> 
   Ok(())
 }
 
+/// Connection.BeginTrans: the new transaction level.
+#[tauri::command]
+pub async fn db_begin_trans(dbs: State<'_, Databases>, id: u32) -> Result<u32, String> {
+  let dbs = dbs.inner().clone();
+  off_main(move || dbs.begin(id)).await
+}
+
+/// Connection.CommitTrans: the level left.
+#[tauri::command]
+pub async fn db_commit_trans(dbs: State<'_, Databases>, id: u32) -> Result<u32, String> {
+  let dbs = dbs.inner().clone();
+  off_main(move || dbs.end_trans(id, true)).await
+}
+
+/// Connection.RollbackTrans: the level left.
+#[tauri::command]
+pub async fn db_rollback_trans(dbs: State<'_, Databases>, id: u32) -> Result<u32, String> {
+  let dbs = dbs.inner().clone();
+  off_main(move || dbs.end_trans(id, false)).await
+}
+
 /// The end of a run (and the start of the next): every connection closed, running queries interrupted.
 #[tauri::command]
 pub async fn db_reset(dbs: State<'_, Databases>) -> Result<(), String> {
@@ -298,6 +364,26 @@ mod tests {
     assert_eq!(dbs.query(id2, "SELECT count(*) FROM People", &[]).unwrap().rows, vec![vec![json!(1)]]);
     dbs.close(id2);
     assert!(dbs.open(&dir.path().join("no/such/x.db").to_string_lossy()).unwrap_err().starts_with("3044|"));
+  }
+
+  #[test]
+  fn transactions_nest_and_roll_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let dbs = Databases::default();
+    let id = dbs.open(&dir.path().join("t.db").to_string_lossy()).unwrap();
+    dbs.execute(id, "CREATE TABLE T (x INTEGER)", &[]).unwrap();
+    assert!(dbs.end_trans(id, true).unwrap_err().starts_with("-2147168242|"));
+    assert_eq!(dbs.begin(id).unwrap(), 1);
+    dbs.execute(id, "INSERT INTO T VALUES (1)", &[]).unwrap();
+    assert_eq!(dbs.begin(id).unwrap(), 2);
+    dbs.execute(id, "INSERT INTO T VALUES (2)", &[]).unwrap();
+    assert_eq!(dbs.end_trans(id, false).unwrap(), 1);
+    assert_eq!(dbs.end_trans(id, true).unwrap(), 0);
+    assert_eq!(dbs.query(id, "SELECT x FROM T", &[]).unwrap().rows, vec![vec![json!(1)]]);
+    dbs.begin(id).unwrap();
+    dbs.execute(id, "DELETE FROM T", &[]).unwrap();
+    assert_eq!(dbs.end_trans(id, false).unwrap(), 0);
+    assert_eq!(dbs.query(id, "SELECT count(*) FROM T", &[]).unwrap().rows, vec![vec![json!(1)]]);
   }
 
   const RUNAWAY: &str = "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n) SELECT x FROM n";

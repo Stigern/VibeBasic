@@ -57,9 +57,12 @@ const ERROR_TEXTS: Record<number, string> = {
   381: 'Invalid property array index',
   383: 'Property is read-only',
   424: 'Object required',
+  429: "ActiveX component can't create object",
   438: "Object doesn't support this property or method",
   448: 'Named argument not found',
   450: 'Wrong number of arguments or invalid property assignment',
+  457: 'This key is already associated with an element of this collection',
+  462: 'The remote server machine does not exist or is unavailable',
   // DAO / ADO (Data control, Adodc, Recordset)
   3001: 'Invalid argument.',
   3020: 'Update or CancelUpdate without AddNew or Edit.',
@@ -83,8 +86,10 @@ const ERROR_TEXTS: Record<number, string> = {
   3421: 'Data type conversion error.',
   3426: 'This action was cancelled by an associated object.',
   3704: 'Operation is not allowed when the object is closed.',
+  3705: 'Operation is not allowed when the object is open.',
   3709: 'The connection cannot be used to perform this operation. It is either closed or invalid in this context.',
   32755: 'Cancel was selected',
+  32811: 'Element not found',
   35600: 'Index out of bounds',
   35602: 'Key is not unique in collection',
 };

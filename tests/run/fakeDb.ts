@@ -70,4 +70,23 @@ export class FakeDb implements DatabaseApi {
 
   async dbClose(id: number): Promise<void> { this.conns.delete(id); }
   async dbReset(): Promise<void> { this.calls.push('reset'); this.conns.clear(); }
+
+  /** Transaction levels by connection (savepoints inside), as the Rust side keeps them. */
+  private depth = new Map<number, number>();
+  async dbBeginTrans(id: number): Promise<number> {
+    const n = this.depth.get(id) ?? 0;
+    this.conns.get(id)!.exec(n ? `SAVEPOINT vb_trans${n}` : 'BEGIN');
+    this.depth.set(id, n + 1);
+    return n + 1;
+  }
+  private endTrans(id: number, commit: boolean): number {
+    const n = this.depth.get(id) ?? 0;
+    if (!n) throw new Error('-2147168242|No transaction is active.');
+    const l = n - 1;
+    this.conns.get(id)!.exec(l ? (commit ? `RELEASE vb_trans${l}` : `ROLLBACK TO vb_trans${l}; RELEASE vb_trans${l}`) : commit ? 'COMMIT' : 'ROLLBACK');
+    this.depth.set(id, l);
+    return l;
+  }
+  async dbCommitTrans(id: number): Promise<number> { return this.endTrans(id, true); }
+  async dbRollbackTrans(id: number): Promise<number> { return this.endTrans(id, false); }
 }

@@ -2,7 +2,7 @@
 // The checks only report; none of them changes the code. A false report costs a slow extra model round, so every
 // rule stays silent when it is not sure (a name whose status is uncertain counts as known).
 import type { Expr, MissingArg, ModuleAst, Param, PrintItem, ProcDecl, Stmt, VBTypeName } from '../lang/ast';
-import { BUILTINS, CANONICAL_NAMES } from '../lang/builtins';
+import { BUILTINS, CANONICAL_NAMES, PROG_IDS } from '../lang/builtins';
 import { compileProblems, type CheckModule } from '../lang/compileCheck';
 import { parseModuleLenient } from '../lang/parser';
 import { TYPE_KEYWORDS } from '../lang/parseStatements';
@@ -93,7 +93,7 @@ const ALTERNATIVES: Record<string, string> = {
 };
 /** Functions that parse fine but do not exist in VibeBasic, with the name as written in VB6. */
 const UNSUPPORTED_CALLS: Record<string, string> = {
-  createobject: 'CreateObject', getobject: 'GetObject', shell: 'Shell',
+  getobject: 'GetObject', shell: 'Shell',
 };
 const unsupported = (name: string): string => {
   const alt = ALTERNATIVES[name.toLowerCase()];
@@ -287,6 +287,11 @@ function checkProc(c: Checker, p: ProcDecl): void {
   const callTarget = (name: string, args: (Expr | MissingArg)[], expression: boolean) => {
     callName(name);
     const k = lc(name);
+    // CreateObject("Excel.Application"): only the ProgIDs VibeBasic has (429 at run time)
+    const a0 = args[0];
+    if (k === 'createobject' && !shadowed(k) && a0?.kind === 'string' && !PROG_IDS.has(a0.value.trim().toLowerCase())) {
+      c.report(`CreateObject("${a0.value}") is not supported in VibeBasic (error 429). It has ${[...PROG_IDS.values()].map(x => x.name).filter((n, i, all) => all.indexOf(n) === i).join(', ')}.`);
+    }
     if (!c.namesKnown || UNSUPPORTED_CALLS[k]) return;
     if (!known(k) && !implicit.has(k)) {
       if (!reportedNames.has(k)) c.report(`Sub or Function not defined: ${name}`);

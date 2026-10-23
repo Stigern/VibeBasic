@@ -105,8 +105,10 @@ test('Option Explicit: undeclared variables', () => {
 test('unsupported functions and statements', () => {
   expect(inForm1(sub('    Shell "notepad.exe"'))).toEqual(['Shell is not supported in VibeBasic. Programs cannot be started.']);
   expect(inForm1(sub('    Label1.Caption = StrConv("a b", vbProperCase) & Environ("HOME")\n    Beep'))).toEqual([]);
-  expect(validateCode('Sub Main()\n    Dim o\n    Set o = CreateObject("Scripting.Dictionary")\nEnd Sub', { moduleName: 'Module2', form: null }))
-    .toEqual(['CreateObject is not supported in VibeBasic.']);
+  // 0.9: CreateObject makes the Scripting and ADODB objects; other ProgIDs are 429
+  expect(validateCode('Sub Main()\n    Dim o\n    Set o = CreateObject("Scripting.Dictionary")\nEnd Sub', { moduleName: 'Module2', form: null })).toEqual([]);
+  expect(validateCode('Sub Main()\n    Dim o\n    Set o = CreateObject("Excel.Application")\nEnd Sub', { moduleName: 'Module2', form: null })[0])
+    .toMatch(/^CreateObject\("Excel.Application"\) is not supported in VibeBasic \(error 429\)\. It has ADODB.Connection, /);
   // file I/O and the settings are supported
   expect(inForm1(sub('    SaveSetting "App", "S", "K", Text1(0).Text'))).toEqual([]);
   expect(validateCode('Sub Main()\n    Open "x" For Output As #1\n    Print #1, "x"\n    Close #1\nEnd Sub', { moduleName: 'Module2', form: null })).toEqual([]);
@@ -350,7 +352,8 @@ test('the compile errors the run would raise at the call are found (review 08 fi
   expect(mod('Sub Main()\n    Dim i As Integer\n    Debug.Print Twice(i)\nEnd Sub')).toEqual([]);
   expect(mod('Private Sub Fill(a() As Long)\nEnd Sub\nSub Main()\n    Dim a(2) As Long\n    Fill (a)\nEnd Sub')[0]).toMatch(/^Type mismatch: array or user-defined type expected/);
   expect(mod('Private Type P\n    X As Integer\nEnd Type\nSub Main()\n    Dim q As New P\nEnd Sub')).toEqual(['Invalid use of New keyword']);
-  expect(mod('Sub Main()\n    Dim d As Object\n    Set d = New Dictionary\nEnd Sub')[0]).toMatch(/^User-defined type not defined: New Dictionary/);
+  expect(mod('Sub Main()\n    Dim d As Object\n    Set d = New Gadget\nEnd Sub')[0]).toMatch(/^User-defined type not defined: New Gadget/);
+  expect(mod('Sub Main()\n    Dim d As Object, c As New ADODB.Connection\n    Set d = New Scripting.Dictionary\nEnd Sub')).toEqual([]);
   expect(mod('Private Type P\n    X As Integer\nEnd Type\nSub Main()\n    Dim a As P, b As P\n    LSet a = b\nEnd Sub')).toEqual(['Not supported in VibeBasic: LSet of a user-defined type']);
   // in a form, against the form's existing procedure; and a bare body is checked too
   const p2 = project();

@@ -215,7 +215,16 @@ group({
   adDoMoveFirst: 0, adStayBOF: 1, adDoMoveLast: 0, adStayEOF: 1, adDoAddNew: 2,
   adSmallInt: 2, adInteger: 3, adSingle: 4, adDouble: 5, adCurrency: 6, adDate: 7, adBoolean: 11, adVariant: 12, adTinyInt: 16,
   adBigInt: 20, adVarWChar: 202, adLongVarWChar: 203, adLongVarBinary: 205,
+  adEmpty: 0, adChar: 129, adWChar: 130, adNumeric: 131, adDBDate: 133, adDBTimeStamp: 135, adVarChar: 200, adLongVarChar: 201,
+  adFilterNone: 0, adFilterPendingRecords: 1, adFilterAffectedRecords: 2, adFilterFetchedRecords: 3, adFilterConflictingRecords: 5,
+  adExecuteNoRecords: 128, adOpenUnspecified: -1, adLockUnspecified: -1,
+  adParamInput: 1, adParamOutput: 2, adParamInputOutput: 3, adParamReturnValue: 4,
+  adAddNew: 0x1000400, adDelete: 0x1000800, adUpdate: 0x1008000, adBookmark: 0x2000, adMovePrevious: 0x200, adHoldRecords: 0x100,
+  adApproxPosition: 0x4000, adFind: 0x80000, adResync: 0x20000, adUpdateBatch: 0x10000, adIndex: 0x100000, adSeek: 0x400000, adNotify: 0x40000,
 });
+
+// Scripting runtime: OpenTextFile's IOMode
+group({ ForReading: 1, ForWriting: 2, ForAppending: 8 });
 
 // DataGrid (MSDATGRD.OCX), DataList / DataCombo (MSDATLST.OCX)
 group({

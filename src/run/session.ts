@@ -10,6 +10,7 @@ import { moduleKind, type PictureRef, type Project } from '../model/types';
 import type { FormHost } from './formHost';
 import { NetSession } from './net';
 import { DbSession } from './data/dbSession';
+import { createAdoObject } from './data/dbObjects';
 import { CommSession } from './comm';
 import type { SystemApi } from '../backend/backend';
 import { PatchQueue } from './patchQueue';
@@ -295,6 +296,11 @@ export class RunSession implements Host, FormSession {
 
   /** Open, Kill, Dir, SaveSetting ...: through the form host (the main window's backend). */
   fileSystem() { return this.formHost.fileSystem?.(); }
+
+  /** New ADODB.Connection / Recordset / Command: on the program's databases (a path relative to App.Path). */
+  createObject(progId: string): VBObject | undefined {
+    return createAdoObject(progId, { connect: path => this.db().connect(this.resolvePath(path)) });
+  }
 
   /**
    * DoEvents. Queued VB events are pumped by the driver on every await; the window (UI, timers, IPC) gets a real

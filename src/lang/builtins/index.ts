@@ -12,6 +12,7 @@ export { BUILTINS, CANONICAL_NAMES, CONSTANTS, def } from './util';
 export type { Builtin, BuiltinCtx } from './util';
 export { formatValue } from './format';
 export { ErrObject } from './err';
+export { BUILTIN_CLASSES, PROG_IDS } from './collection';
 
 function arrayBound(which: 0 | 1) {
   return (args: VBValue[]): VBValue => {
@@ -36,6 +37,7 @@ import './constants';
 import './err';
 import './financial';
 import './params';
+import './scripting';
 
 /**
  * Numeric built-ins get a Single argument as its exact value (Sqr(s), CDbl(s) as in VB6); the others (CStr, Left,

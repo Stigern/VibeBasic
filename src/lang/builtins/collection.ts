@@ -108,10 +108,26 @@ export interface BuiltinClass { name: string; create(ctx: BuiltinCtx): VBObject 
 /** Built-in classes by lower-case name; a library-qualified name (`vba.collection`) is a key of its own. */
 export const BUILTIN_CLASSES = new Map<string, BuiltinClass>();
 
-/** Registers a built-in class under each of `names` (the first is its display name). */
-export function defClass(names: string[], create: (ctx: BuiltinCtx) => VBObject): void {
+/** The classes CreateObject makes, by lower-case ProgID ("scripting.dictionary"). */
+export const PROG_IDS = new Map<string, BuiltinClass>();
+
+/** Registers a built-in class under each of `names` (the first is its display name); `progId`: its dotted names are ProgIDs too. */
+export function defClass(names: string[], create: (ctx: BuiltinCtx) => VBObject, progId = false): void {
   const c: BuiltinClass = { name: names[0], create };
-  for (const n of names) BUILTIN_CLASSES.set(n.toLowerCase(), c);
+  for (const n of names) {
+    BUILTIN_CLASSES.set(n.toLowerCase(), c);
+    if (progId && n.includes('.')) PROG_IDS.set(n.toLowerCase(), c);
+  }
 }
 
+/** A class the run session makes (ADO: it needs the program's databases); 429 without one. */
+export const hostClass = (progId: string) => (ctx: BuiltinCtx): VBObject => {
+  const o = ctx.host.createObject?.(progId);
+  if (!o) throw new VBRuntimeError(429);
+  return o;
+};
+
 defClass(['Collection', 'VBA.Collection'], () => new VBCollection());
+defClass(['ADODB.Connection', 'Connection'], hostClass('ADODB.Connection'), true);
+defClass(['ADODB.Recordset', 'Recordset'], hostClass('ADODB.Recordset'), true);
+defClass(['ADODB.Command', 'Command'], hostClass('ADODB.Command'), true);

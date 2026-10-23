@@ -159,6 +159,9 @@ export class BrowserBackend implements Backend {
   async dbExecute(): Promise<DbExecResult> { throw new Error('3420|Object invalid or no longer set.'); }
   async dbClose(): Promise<void> { /* nothing is open */ }
   async dbReset(): Promise<void> { /* nothing is open */ }
+  async dbBeginTrans(): Promise<number> { throw new Error('3420|Object invalid or no longer set.'); }
+  async dbCommitTrans(): Promise<number> { throw new Error('3420|Object invalid or no longer set.'); }
+  async dbRollbackTrans(): Promise<number> { throw new Error('3420|Object invalid or no longer set.'); }
 
   // MSComm: no serial ports in a browser (so every CommPort is 8002); SysInfo: the browser's screen, power unknown
   async commList(): Promise<string[]> { return []; }

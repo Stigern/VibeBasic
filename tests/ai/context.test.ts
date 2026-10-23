@@ -149,6 +149,9 @@ test('language reference: stable, within budget, in both system prompts', () => 
   for (const name of ['LenB', 'MidB', 'ChrB', 'Partition']) expect(LANGUAGE_REFERENCE).toMatch(new RegExp(`[:,] ${name}\\b`));
   expect(LANGUAGE_REFERENCE).not.toMatch(/Not available: .*(GoSub|Global|named arguments)/);
   expect(LANGUAGE_REFERENCE).not.toMatch(/\(3-5\): .*\bPmt\b/);
+  // 0.9 A3: CreateObject / New of the ADODB and Scripting classes
+  for (const text of ['Scripting.Dictionary', 'ADODB.Recordset', 'rs.Filter =', 'BeginTrans']) expect(LANGUAGE_REFERENCE).toContain(text);
+  expect(LANGUAGE_REFERENCE).not.toMatch(/Not available: .*CreateObject/);
   expect(LANGUAGE_REFERENCE.length / 3.5).toBeLessThanOrEqual(2000);
   const p = project();
   expect(buildCodeRequest(p, 'm1', 1, 'x')[0].content).toContain(LANGUAGE_REFERENCE);
