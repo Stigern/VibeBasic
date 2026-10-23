@@ -44,7 +44,7 @@ test('unknown prop, type, invalid value and missing control warn', () => {
 });
 test('taken name is renamed', () => {
   const { p } = setup();
-  const r = parseFormOps('{"ops":[{"op":"add","type":"Label","name":"cmdOK"},{"op":"add","type":"Label","name":"cmdOK"}]}', p.forms[0]) as any;
+  const r = parseFormOps('{"ops":[{"op":"add","type":"Label","name":"cmdOK"},{"op":"add","type":"Label","name":"cmdOK","props":{"Top":600}}]}', p.forms[0]) as any;
   expect(r.ops.map((o: any) => o.name)).toEqual(['cmdOK', 'cmdOK1']);
   expect(r.warnings).toContain('Renamed cmdOK to cmdOK1 because the name was taken.');
 });

@@ -44,12 +44,14 @@ fn cut_off() -> String {
 }
 
 /// Optional request fields the frontend may add: `response_format` (OpenAI structured output), `structured_outputs`
-/// (vLLM's own field; the frontend sends one or the other, never both) and `max_tokens`.
+/// (vLLM's own field; the frontend sends one or the other, never both), `max_tokens`, and `presence_penalty` (the retry after
+/// an answer that repeated itself).
 #[derive(Default, Clone)]
 pub struct ChatExtra {
   pub response_format: Option<Value>,
   pub structured_outputs: Option<Value>,
   pub max_tokens: Option<u64>,
+  pub presence_penalty: Option<f64>,
 }
 
 /// The chat/completions body. vLLM/Qwen servers honour chat_template_kwargs.reasoning_effort; other servers get nothing extra.
@@ -69,6 +71,9 @@ fn chat_body(model: &str, messages: &[ChatMessage], reasoning_effort: &Option<St
   }
   if let Some(f) = extra.structured_outputs.as_ref().filter(|f| !f.is_null()) {
     body["structured_outputs"] = f.clone();
+  }
+  if let Some(v) = extra.presence_penalty {
+    body["presence_penalty"] = json!(v);
   }
   body
 }
@@ -569,9 +574,10 @@ pub async fn ai_chat(
   response_format: Option<Value>,
   structured_outputs: Option<Value>,
   max_tokens: Option<u64>,
+  presence_penalty: Option<f64>,
   stream_id: Option<String>,
 ) -> Result<String, String> {
-  let extra = ChatExtra { response_format, structured_outputs, max_tokens };
+  let extra = ChatExtra { response_format, structured_outputs, max_tokens, presence_penalty };
   let Some(id) = stream_id else {
     return chat(&base_url, &api_key, &model, &messages, &reasoning_effort, &extra).await;
   };
@@ -609,7 +615,7 @@ mod tests {
   use super::*;
   use httpmock::prelude::*;
 
-  const NONE: ChatExtra = ChatExtra { response_format: None, structured_outputs: None, max_tokens: None };
+  const NONE: ChatExtra = ChatExtra { response_format: None, structured_outputs: None, max_tokens: None, presence_penalty: None };
 
   fn msgs() -> Vec<ChatMessage> {
     vec![ChatMessage { role: "user".into(), content: "hi".into() }]
@@ -707,6 +713,10 @@ mod tests {
     let body = chat_body("m", &msgs(), &None, &ChatExtra { structured_outputs: Some(so.clone()), ..Default::default() }, true);
     assert_eq!(body["structured_outputs"], so);
     assert!(body.get("response_format").is_none());
+    // the penalty only when given
+    assert!(body.get("presence_penalty").is_none());
+    let body = chat_body("m", &msgs(), &None, &ChatExtra { presence_penalty: Some(0.3), ..Default::default() }, true);
+    assert_eq!(body["presence_penalty"].as_f64(), Some(0.3));
     // a message with a picture keeps its parts array
     let parts = json!([{"type":"text","text":"hi"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]);
     let m: ChatMessage = serde_json::from_value(json!({"role":"user","content":parts.clone()})).unwrap();

@@ -356,6 +356,7 @@ export class BrowserBackend implements Backend {
       ...(effort ? { chat_template_kwargs: { reasoning_effort: effort } } : {}),
       ...(opts?.maxTokens ? { max_tokens: opts.maxTokens } : {}), ...(opts?.responseFormat !== undefined ? { response_format: opts.responseFormat } : {}),
       ...(opts?.structuredOutputs !== undefined ? { structured_outputs: opts.structuredOutputs } : {}),
+      ...(opts?.presencePenalty !== undefined ? { presence_penalty: opts.presencePenalty } : {}),
     });
     if (streaming) return aiStream(baseUrl, apiKey, body, opts!);
     const v = (await aiRequest(baseUrl, apiKey, 'chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, 600)) as

@@ -30,8 +30,8 @@ export class StreamLog {
   }
 
   /** A line between the first answer and the retry. */
-  separator(): void {
-    if (this.segs.length) this.segs.push({ kind: 'sep', text: `\n\n${FIX_SEPARATOR}\n\n` });
+  separator(line = FIX_SEPARATOR): void {
+    if (this.segs.length) this.segs.push({ kind: 'sep', text: `\n\n${line}\n\n` });
     this.schedule();
   }
 
