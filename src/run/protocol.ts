@@ -27,4 +27,5 @@ export type FromWindow =
   | { t: 'focused'; id: string }                                   // a control got the focus and has no GotFocus code (Me.ActiveControl)
   | { t: 'closeRequest' }
   | { t: 'activated' }                                             // the user brought the form to the front (focus from outside it)
-  | { t: 'resized'; width: number; height: number };               // twips
+  | { t: 'resized'; width: number; height: number }                // twips
+  | { t: 'moved'; left: number; top: number };                     // twips: the user moved the window

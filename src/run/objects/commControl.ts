@@ -153,6 +153,7 @@ export class MSCommControl implements RichControl {
     this.opening = true;
     try {
       await comm.ready;
+      await this.chain.catch(() => {});   // PortOpen = False just before: the device is free only once that close has finished
       let path = String(p.PortName ?? '').trim();
       if (path === '') {
         const ports = await comm.api.commList();
@@ -162,12 +163,13 @@ export class MSCommControl implements RichControl {
       if (gen !== this.gen) return;
       const id = comm.port(e => this.onEvent(id, e));
       this.id = id;
+      this.buf = EMPTY;   // bytes that arrive while the port opens are kept (OnComm follows once it is open)
       let lines;
       try {
         lines = await comm.api.commOpen(id, path, String(p.Settings ?? '9600,n,8,1'), Number(p.Handshaking) || 0, p.DTREnable === true, p.RTSEnable === true);
       } catch (e) {
         comm.release(id);
-        if (this.id === id) this.id = -1;
+        if (this.id === id) { this.id = -1; this.buf = EMPTY; p.InBufferCount = 0; }
         throw commError(e, 8002);
       }
       if (gen !== this.gen) {   // the form unloaded (or the program ended) while it opened
@@ -176,14 +178,14 @@ export class MSCommControl implements RichControl {
         return;
       }
       this.session = comm;
-      this.buf = EMPTY;
       this.pending = 0;
       this.ring = lines.ring;
-      Object.assign(p, { PortOpen: true, CommID: id, CommEvent: 0, InBufferCount: 0, OutBufferCount: 0,
+      Object.assign(p, { PortOpen: true, CommID: id, CommEvent: 0, InBufferCount: this.buf.length, OutBufferCount: 0,
         CTSHolding: lines.cts, DSRHolding: lines.dsr, CDHolding: lines.cd });
     } finally {
       this.opening = false;
     }
+    if (this.isOpen && this.buf.length) void this.received();
   }
 
   /** PortOpen = False (8012 when it is not open), or the form unloads (`explicit` false). Output handed over before is still sent. */
@@ -235,9 +237,11 @@ export class MSCommControl implements RichControl {
     this.chain = this.chain.then(() => comm.api.commWrite(id, bytes)).then(done, done);
   }
 
-  /** Input: InputLen bytes (0: all) from the receive buffer, as a String (comInputModeText) or a Byte array (comInputModeBinary). */
+  /** Input: InputLen bytes (0: all) from the receive buffer, as a String (comInputModeText) or a Byte array (comInputModeBinary).
+   *  Fewer than InputLen bytes there: "" and they stay (VB6). */
   private input(): VBValue {
     const len = Number(this.h.props.InputLen) || 0;
+    if (len > 0 && this.buf.length < len) return Number(this.h.props.InputMode) === 1 ? byteArray(EMPTY) : '';
     const n = len > 0 ? Math.min(len, this.buf.length) : this.buf.length;
     const out = this.buf.slice(0, n);
     this.buf = this.buf.slice(n);

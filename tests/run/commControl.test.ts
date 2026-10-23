@@ -129,3 +129,63 @@ Private Sub Form_Load()
 End Sub`, [['SysInfo', 'SysInfo1']]);
   expect(out).toEqual(['76 0 1 15120', '2 15.4 24E263 375 21600']);
 });
+
+test('MSComm: Input with InputLen above what has arrived gives "" and keeps the bytes (review 08 runtime 15)', async () => {
+  const { out, sys } = await run(`
+Private Sub Form_Load()
+  MSComm1.PortName = "/dev/cu.usbmodem1101"
+  MSComm1.PortOpen = True
+End Sub
+Private Sub Command1_Click()
+  MSComm1.InputLen = 10
+  Debug.Print "[" & MSComm1.Input & "] " & MSComm1.InBufferCount
+  MSComm1.InputLen = 3
+  Debug.Print "[" & MSComm1.Input & "] " & MSComm1.InBufferCount
+End Sub`, [['MSComm', 'MSComm1'], ['CommandButton', 'Command1']]);
+  sys.data('abcd');
+  await settle();
+  container.querySelector<HTMLElement>('[data-control-id] button')!.click();
+  await settle();
+  expect(out).toEqual(['[] 4', '[abc] 1']);
+});
+
+test('MSComm: bytes that arrive while the port opens are kept and raise OnComm (review 08 runtime, below the cut)', async () => {
+  class Early extends FakeSystem {
+    private h: ((e: CommEvent) => void) | null = null;
+    override async onCommEvent(h: (e: CommEvent) => void): Promise<() => void> { this.h = h; return super.onCommEvent(h); }
+    override async commOpen(id: number, path: string, settings: string): Promise<CommLines> {
+      const r = await super.commOpen(id, path, settings);
+      this.h?.({ kind: 'data', id, data: stringBytes('hi') });
+      return r;
+    }
+  }
+  const { out } = await run(`
+Private Sub Form_Load()
+  MSComm1.PortName = "/dev/cu.usbmodem1101"
+  MSComm1.RThreshold = 1
+  MSComm1.PortOpen = True
+End Sub
+Private Sub MSComm1_OnComm()
+  If MSComm1.CommEvent = comEvReceive Then Debug.Print "got " & MSComm1.Input
+End Sub`, [['MSComm', 'MSComm1']], new Early());
+  expect(out).toEqual(['got hi']);
+});
+
+test('MSComm: PortOpen = False then True opens once the close has finished (review 08 runtime 14)', async () => {
+  class SlowClose extends FakeSystem {
+    override async commClose(id: number): Promise<void> { await new Promise(r => setTimeout(r, 20)); this.calls.push(`close ${id}`); }
+  }
+  const sys = new SlowClose();
+  const { out } = await run(`
+Private Sub Form_Load()
+  MSComm1.PortName = "/dev/cu.usbmodem1101"
+  MSComm1.PortOpen = True
+  MSComm1.PortOpen = False
+  MSComm1.PortOpen = True
+  Debug.Print MSComm1.PortOpen
+End Sub`, [['MSComm', 'MSComm1']], sys);
+  expect(out).toEqual(['True']);
+  const seq = sys.calls.filter(c => /^(open|close)/.test(c)).map(c => c.split(' ').slice(0, 2));
+  expect(seq.map(c => c[0])).toEqual(['open', 'close', 'open']);
+  expect(seq[1][1]).toBe(seq[0][1]);
+});

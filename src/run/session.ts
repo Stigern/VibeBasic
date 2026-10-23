@@ -112,6 +112,22 @@ export class RunSession implements Host, FormSession {
   }
 
   end(): void { this.program.end(); }
+
+  /** Resolves when the files left open at the end are written and closed. */
+  get filesClosed(): Promise<void> { return this.program.filesClosed; }
+
+  /**
+   * The app is asked to quit (Cmd+Q): as when Windows closes a VB6 app, every loaded form gets QueryUnload with UnloadMode
+   * vbAppWindows (2), newest first, then each one unloads, and the program ends. False when a form cancelled (the app stays).
+   */
+  async quit(): Promise<boolean> {
+    if (this.ended) return true;
+    const loaded = () => [...this.forms.values()].filter(f => f.loaded).sort((a, b) => b.loadOrder - a.loadOrder);
+    for (const f of loaded()) if (!(await f.queryUnload(2))) return this.ended;
+    for (const f of loaded()) if (!(await f.unload(2, true))) return this.ended;
+    this.end();
+    return true;
+  }
   pause(): void { this.program.requestPause(); }
 
   // Debugging (IDE only: a made app never breaks on a breakpoint or a step)
@@ -280,8 +296,9 @@ export class RunSession implements Host, FormSession {
     this.lastYield = performance.now();
   }
 
-  /** A file of the program (relative paths are from App.Path; VB code builds Windows paths: App.Path & "\pic.bmp"). 53 when it
-   *  cannot be read, 7 when it is too big (the rejection's `vbNumber`). */
+  /** A file of the program, found as Open finds it (relative paths are from CurDir, which starts as App.Path; `\` separators and
+   *  a drive letter are fine: App.Path & "\pic.bmp", "C:\pics\a.bmp"). 53 when it cannot be read, 7 when it is too big (the
+   *  rejection's `vbNumber`). */
   async readFile(path: string): Promise<Uint8Array> {
     const full = this.resolvePath(path);
     try {
@@ -292,11 +309,8 @@ export class RunSession implements Host, FormSession {
     }
   }
 
-  /** The full path of a file of the program (relative paths are from App.Path). */
-  resolvePath(path: string): string {
-    const p = path.replace(/\\/g, '/');
-    return p.startsWith('/') || /^[A-Za-z]:\//.test(p) ? p : `${this.cb.appPath.replace(/\\/g, '/').replace(/\/+$/, '')}/${p}`;
-  }
+  /** The full path of a file of the program, as Open resolves it (CurDir; the drive letter dropped). */
+  resolvePath(path: string): string { return this.program.resolvePath(path); }
 
   async loadPicture(path: string): Promise<VBValue> {
     if (path === '') return new PictureObject(null);

@@ -209,24 +209,39 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
         && (Number(state.get(d.id)!.GroupNumber) || 0) === group && state.get(d.id)!.Value === true).map(d => d.id) : [];
       const r = ribbonClick({ value: me.Value === true, group, allowAllUp: me.GroupAllowAllUp !== false }, down);
       for (const id of r.release) { apply(id, { Value: false }); send({ t: 'state', id, props: { Value: false } }); }
+      if (r.value === (me.Value === true)) return;   // a ribbon that stays down (GroupAllowAllUp = False): nothing changed, no Click
       emit(tg.id, 'Click', [r.value ? -1 : 0], { Value: r.value });
     }
   });
   on<MouseEvent>('dblclick', e => { const tg = clickTarget(e); if (!blocked && tg && usable(tg.id)) emit(tg.id, 'DblClick'); });
 
   // --- mouse ---
-  function mouse(event: string) {
-    return (e: MouseEvent) => {
-      const tg = targetOf(e.target);
-      if (blocked || !tg || !usable(tg.id)) return;   // a disabled control gets no mouse events
-      const box = (tg.id === 'form' ? surface.clientEl : viewOf(tg.id)!.el).getBoundingClientRect();
-      const button = event === 'MouseMove' ? e.buttons & 7 : e.button === 0 ? 1 : e.button === 2 ? 2 : e.button === 1 ? 4 : 0;
-      emit(tg.id, event, [button, shiftBits(e), Math.round((e.clientX - box.left) * 15), Math.round((e.clientY - box.top) * 15)]);
-    };
+  // VB6 mouse capture: the control that got MouseDown gets MouseMove and MouseUp until the button is released, also outside its
+  // area (X / Y relative to it, maybe negative). The document's listeners see the pointer anywhere while a button is down.
+  let captured: string | null = null;
+  function mouseTo(id: string, event: string, e: MouseEvent): void {
+    const v = id === 'form' ? surface.clientEl : viewOf(id)?.el;
+    if (!v) return;
+    const box = v.getBoundingClientRect();
+    const button = event === 'MouseMove' ? e.buttons & 7 : e.button === 0 ? 1 : e.button === 2 ? 2 : e.button === 1 ? 4 : 0;
+    emit(id, event, [button, shiftBits(e), Math.round((e.clientX - box.left) * 15), Math.round((e.clientY - box.top) * 15)]);
   }
-  on('mousedown', mouse('MouseDown'));
-  on('mouseup', mouse('MouseUp'));
-  on('mousemove', mouse('MouseMove'));
+  on<MouseEvent>('mousedown', e => {
+    const tg = targetOf(e.target);
+    if (blocked || !tg || !usable(tg.id)) return;   // a disabled control gets no mouse events
+    captured = tg.id;
+    mouseTo(tg.id, 'MouseDown', e);
+  });
+  for (const [type, event] of [['mousemove', 'MouseMove'], ['mouseup', 'MouseUp']] as const) {
+    root.ownerDocument.addEventListener(type, (e: MouseEvent) => {
+      const id = captured;
+      if (type === 'mouseup') captured = null;
+      if (blocked) { captured = null; return; }
+      if (id !== null) { if (usable(id) && (id === 'form' || defs.has(id))) mouseTo(id, event, e); return; }
+      const tg = targetOf(e.target);
+      if (tg && usable(tg.id)) mouseTo(tg.id, event, e);
+    }, { signal: ac.signal });
+  }
 
   // --- focus ---
   // the focus came from outside the form (another form, or the window became the key window): the form is the active one

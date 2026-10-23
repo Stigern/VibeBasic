@@ -106,6 +106,8 @@ export class Runtime {
   readonly builtinCtx: BuiltinCtx;
   /** Open, Close, Print # ... and CurDir. */
   readonly files: FileIO;
+  /** Resolves once the files open at the end are written and closed (a made app quits only then). */
+  filesClosed: Promise<void> = Promise.resolve();
   /** Makes this program's locale (date text and parsing) current while its code runs; pass to `runGenerator`. */
   readonly scope: ExecScope;
   private readonly dateText: DateTextFormatter;
@@ -299,7 +301,7 @@ export class Runtime {
     this.abortListeners.clear();
     for (const cancel of cancels) cancel(new EndSignal());
     this.drainEvents(); // each queued runEvent sees 'ended' and resolves
-    void this.files.closeAll(); // buffered Print # text is written, every file closed
+    this.filesClosed = this.files.closeAll().catch(() => {}); // buffered Print # text is written, every file closed
     try {
       this.host.onEnd();
     } catch (e) {
@@ -543,6 +545,9 @@ export class Program {
 
   /** A path of the program as a full Mac path, like Open resolves it (relative to CurDir, which starts as App.Path). */
   resolvePath(path: string): string { return this.rt.files.resolve(path); }
+
+  /** Resolves when the files the program left open at End are written and closed. */
+  get filesClosed(): Promise<void> { return this.rt.filesClosed; }
 
   /** Runs `fn` with the program's locale current (date text and parsing), for work outside its code: data binding after an await. */
   inScope<T>(fn: () => T): T {

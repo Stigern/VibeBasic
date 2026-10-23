@@ -264,14 +264,21 @@ export class FormInstance implements VBObject {
     this.s.formLeft(this, true);
   }
 
-  /** QueryUnload(Cancel, UnloadMode) then Unload(Cancel); false when cancelled. */
-  async unload(mode: 0 | 1): Promise<boolean> {
+  /** QueryUnload(Cancel, UnloadMode); false when cancelled (or the program ended meanwhile). */
+  async queryUnload(mode: number): Promise<boolean> {
+    if (!this.loaded) return true;
+    const cancel = new VBRef(0);
+    await this.s.fire(this.name, 'Form_QueryUnload', [cancel, new VBRef(mode)]);
+    return !this.s.ended && !toBool(cancel.value);
+  }
+
+  /** QueryUnload(Cancel, UnloadMode) (unless `queried`: the app is quitting and asked every form first) then Unload(Cancel);
+   *  false when cancelled. UnloadMode: vbFormControlMenu 0, vbFormCode 1, vbAppWindows 2. */
+  async unload(mode: number, queried = false): Promise<boolean> {
     if (!this.loaded || this.unloading) return true;
     this.unloading = true;
     try {
-      const cancel = new VBRef(0);
-      await this.s.fire(this.name, 'Form_QueryUnload', [cancel, new VBRef(mode)]);
-      if (this.s.ended || toBool(cancel.value)) return false;
+      if (!queried && !(await this.queryUnload(mode))) return false;
       const cancel2 = new VBRef(0);
       await this.s.fire(this.name, 'Form_Unload', [cancel2]);
       if (this.s.ended || toBool(cancel2.value)) return false;
@@ -347,6 +354,7 @@ export class FormInstance implements VBObject {
       case 'focused': this.setActive(m.id); break;
       case 'activated': if (this.visible && !this.blocked) void this.s.formActivated(this); break;
       case 'state': st.byId.get(m.id)?.applyState(m.props); break;
+      case 'moved': st.form.applyState({ Left: m.left, Top: m.top }); break;
       case 'resized':
         st.form.applyState({ Width: m.width, Height: m.height });
         void this.s.fire(this.name, 'Form_Resize', []);

@@ -145,6 +145,20 @@ struct Port {
   /// Writes, line changes and settings go through this handle; the reader thread has its own clone.
   port: Mutex<Box<dyn SerialPort>>,
   stop: Arc<AtomicBool>,
+  /// The reader thread: close waits for it, because its clone shares the port's exclusive lock (an open of the same device
+  /// right after a close would fail with 8005 until the clone is gone).
+  reader: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl Port {
+  /// Stops the reader thread and waits for it (at most one read timeout).
+  fn stop_and_join(&self) {
+    self.stop.store(true, Ordering::Relaxed);
+    let h = self.reader.lock().unwrap().take();
+    if let Some(h) = h.filter(|h| h.thread().id() != std::thread::current().id()) {
+      let _ = h.join();
+    }
+  }
 }
 
 /// Every open port of the app (one running program at a time).
@@ -179,10 +193,10 @@ impl Ports {
     let lines = read_lines(port.as_mut());
     let mut reader = port.try_clone().map_err(port_err)?;
     let stop = Arc::new(AtomicBool::new(false));
-    let entry = Arc::new(Port { port: Mutex::new(port), stop: stop.clone() });
-    self.0.lock().unwrap().insert(id, entry);
+    let entry = Arc::new(Port { port: Mutex::new(port), stop: stop.clone(), reader: Mutex::new(None) });
+    self.0.lock().unwrap().insert(id, entry.clone());
     let me = self.clone();
-    std::thread::spawn(move || {
+    let reader_thread = std::thread::spawn(move || {
       let mut buf = vec![0u8; 4096];
       let mut last = lines;
       let mut checked = Instant::now();
@@ -209,6 +223,7 @@ impl Ports {
         }
       }
     });
+    *entry.reader.lock().unwrap() = Some(reader_thread);
     Ok(lines)
   }
 
@@ -262,17 +277,19 @@ impl Ports {
     Ok(())
   }
 
-  /// PortOpen = False: the reader thread stops (within one read timeout) and the port closes.
+  /// PortOpen = False: the reader thread stops (within one read timeout) and the port closes; it can be opened again at once.
   pub fn close(&self, id: u32) {
-    if let Some(p) = self.0.lock().unwrap().remove(&id) {
-      p.stop.store(true, Ordering::Relaxed);
+    let p = self.0.lock().unwrap().remove(&id);   // not locked while waiting: the reader takes the lock when the device fails
+    if let Some(p) = p {
+      p.stop_and_join();
     }
   }
 
   /// The end of the program: every port closed.
   pub fn close_all(&self) {
-    for (_, p) in self.0.lock().unwrap().drain() {
-      p.stop.store(true, Ordering::Relaxed);
+    let all: Vec<Arc<Port>> = self.0.lock().unwrap().drain().map(|(_, p)| p).collect();
+    for p in all {
+      p.stop_and_join();
     }
   }
 }
@@ -320,15 +337,26 @@ pub async fn comm_set_lines(ports: State<'_, Ports>, id: u32, dtr: Option<bool>,
   blocking(move || ports.set_lines(id, dtr, rts, brk)).await
 }
 
+/// Waits (off the async runtime's threads) until the port is closed.
 #[tauri::command]
-pub fn comm_close(ports: State<'_, Ports>, id: u32) {
-  ports.close(id);
+pub async fn comm_close(ports: State<'_, Ports>, id: u32) -> Result<(), String> {
+  let ports = ports.inner().clone();
+  blocking(move || {
+    ports.close(id);
+    Ok(())
+  })
+  .await
 }
 
 /// End of the program (or a new run): closes every port.
 #[tauri::command]
-pub fn comm_reset(ports: State<'_, Ports>) {
-  ports.close_all();
+pub async fn comm_reset(ports: State<'_, Ports>) -> Result<(), String> {
+  let ports = ports.inner().clone();
+  blocking(move || {
+    ports.close_all();
+    Ok(())
+  })
+  .await
 }
 
 #[cfg(test)]
@@ -372,5 +400,29 @@ mod tests {
     assert!(p.set_lines(1, Some(true), None, None).unwrap_err().starts_with("8018|"));
     p.close(1);
     p.close_all();
+  }
+
+  /// MSComm1.PortOpen = False: MSComm1.PortOpen = True at once (reconnect code): the reader thread's clone of the port holds
+  /// the exclusive lock until it has stopped, so close (and close_all) return only once the thread has ended.
+  #[test]
+  fn close_waits_for_the_reader_thread() {
+    for all in [false, true] {
+      let (master, _slave) = serialport::TTYPort::pair().expect("pty");
+      let stop = Arc::new(AtomicBool::new(false));
+      let done = Arc::new(AtomicBool::new(false));
+      let (s2, d2) = (stop.clone(), done.clone());
+      let reader = std::thread::spawn(move || {
+        while !s2.load(Ordering::Relaxed) {
+          std::thread::sleep(READ_TIMEOUT);
+        }
+        std::thread::sleep(Duration::from_millis(10));   // the clone is dropped as the thread ends
+        d2.store(true, Ordering::Relaxed);
+      });
+      let p = Ports::default();
+      p.0.lock().unwrap().insert(1, Arc::new(Port { port: Mutex::new(Box::new(master)), stop, reader: Mutex::new(Some(reader)) }));
+      if all { p.close_all() } else { p.close(1) }
+      assert!(done.load(Ordering::Relaxed), "close_all {all}");
+      assert!(p.get(1).is_err());
+    }
   }
 }
