@@ -105,7 +105,7 @@ function applyFont(el: HTMLElement, f: FontValue): void {
   el.style.fontSize = `${Math.round(f.size * 96 / 72)}px`;
   el.style.fontWeight = f.bold ? '700' : '400';
   el.style.fontStyle = f.italic ? 'italic' : 'normal';
-  el.style.textDecoration = f.underline ? 'underline' : 'none';
+  el.style.textDecoration = [f.underline ? 'underline' : '', f.strikethrough ? 'line-through' : ''].filter(Boolean).join(' ') || 'none';
 }
 
 const cssUrl = (u: string): string => `url(${JSON.stringify(u)})`;

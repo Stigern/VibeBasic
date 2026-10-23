@@ -94,7 +94,8 @@ const listMethods = (): MethodDef[] => [
 const DRAW_MODES = ['Blackness', 'Not Merge Pen', 'Mask Not Pen', 'Not Copy Pen', 'Mask Pen Not', 'Invert', 'Xor Pen', 'Not Mask Pen',
   'Mask Pen', 'Not Xor Pen', 'Nop', 'Merge Not Pen', 'Copy Pen', 'Merge Pen Not', 'Merge Pen', 'Whiteness'];
 const FILL_STYLES = ['Solid', 'Transparent', 'Horizontal Line', 'Vertical Line', 'Upward Diagonal', 'Downward Diagonal', 'Cross', 'Diagonal Cross'];
-/** AutoRedraw ... ScaleMode, and the run-time CurrentX/Y, Scale*, hDC and Image. ScaleLeft/Top/Width/Height are Single. */
+/** AutoRedraw ... ScaleMode, ScaleLeft/Top/Width/Height (Single; stored for ScaleMode 0, the user scale, which a VB6 form can have at
+ *  design time; the Properties window shows them then), and the run-time CurrentX/Y, hDC and Image. */
 const drawProps = (): PropDef[] => [
   bool('AutoRedraw', false), bool('ClipControls', true),
   p('DrawMode', 'enum', 13, { enumValues: DRAW_MODES.map((l, i) => ({ value: i + 1, label: `${i + 1} - ${l}` })) }),
@@ -102,7 +103,7 @@ const drawProps = (): PropDef[] => [
   int('DrawWidth', 1, { min: 1, max: 32767 }), color('FillColor', 0), en('FillStyle', 1, FILL_STYLES),
   bool('FontTransparent', true), bool('HasDC', true, { runtime: 'ro' }),
   en('ScaleMode', 1, ['User', 'Twip', 'Point', 'Pixel', 'Character', 'Inch', 'Millimeter', 'Centimeter']),
-  rt('ScaleLeft', 'int', 0), rt('ScaleTop', 'int', 0), rt('ScaleWidth', 'int', 0), rt('ScaleHeight', 'int', 0),
+  int('ScaleLeft', 0), int('ScaleTop', 0), int('ScaleWidth', 0), int('ScaleHeight', 0),
   rt('CurrentX', 'int', 0), rt('CurrentY', 'int', 0), rt('hDC', 'int', 0, 'ro'), rt('Image', 'picture', null, 'ro'),
 ];
 const drawMethods = (): MethodDef[] => [
@@ -163,6 +164,14 @@ const dragEvents = (): EventDef[] => [
 const OLE_DROP_MODES = (): PropDef => en('OLEDropMode', 0, ['None', 'Manual', 'Automatic']);
 const dragProps = (): PropDef[] => [en('DragMode', 0, ['Manual', 'Automatic']), picture('DragIcon'), en('OLEDragMode', 0, ['Manual', 'Automatic']), OLE_DROP_MODES()];
 
+/** The Font as separate run-time properties, as VB6 has them on every object with a Font (FontName ... FontStrikethru are Font.Name
+ *  ... Font.Strikethrough; see run/objects/controlObject.ts). Not in the props of a control; the AI's control list says so once. */
+export const FONT_ALIASES: Readonly<Record<string, keyof FontValue>> = {
+  FontName: 'name', FontSize: 'size', FontBold: 'bold', FontItalic: 'italic', FontUnderline: 'underline', FontStrikethru: 'strikethrough',
+};
+const fontAliases = (): PropDef[] => [rt('FontName', 'string', DEFAULT_FONT.name), rt('FontSize', 'int', DEFAULT_FONT.size),
+  ...['FontBold', 'FontItalic', 'FontUnderline', 'FontStrikethru'].map(n => rt(n, 'bool', false))];
+
 const def = (d: Omit<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'> &
   Partial<Pick<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'>>): ControlTypeDef => {
   const t: ControlTypeDef = { methods: baseMethods(), isContainer: false, invisibleAtRuntime: false, ...d };
@@ -175,6 +184,7 @@ const def = (d: Omit<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRun
     t.events = [...t.events, ...dropEvents(), ...dragEvents()];
     t.methods = [...t.methods, { name: 'Drag', params: '[Action]' }, { name: 'OLEDrag', params: '' }];
   }
+  if (t.props.some(pd => pd.kind === 'font')) t.props = [...t.props, ...fontAliases()];
   if (t.type !== 'Form' && t.events.some(e => e.name === 'GotFocus')) {
     t.props = [...t.props, bool('CausesValidation', true)];
     t.events = [...t.events, ev('Validate', 'Cancel As Boolean')];

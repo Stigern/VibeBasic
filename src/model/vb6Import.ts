@@ -272,7 +272,7 @@ function applyProp(ctx: FormContext, owner: string, type: ControlType, props: Re
     }
     switch (pd.kind) {
       case 'int': case 'enum': case 'color': case 'date':
-        if (v.kind === 'num') props[pd.name] = pd.kind === 'int' ? Math.round(v.n) : v.n;
+        if (v.kind === 'num') props[pd.name] = pd.kind === 'int' && !/^Scale(Left|Top|Width|Height)$/.test(pd.name) ? Math.round(v.n) : v.n;   // a user scale is Single
         else if (pd.name === 'Shortcut' && v.kind === 'raw') props[pd.name] = frmShortcut(v.s);
         return;
       case 'bool':

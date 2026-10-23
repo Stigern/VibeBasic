@@ -13,9 +13,12 @@ export const APP_WORKSPACE = 0x8000000c | 0;
 
 /** The properties only an MDI form has. */
 const MDI_ONLY = new Set(['autoshowchildren', 'scrollbars']);
-/** The Form properties an MDI form has (VB6's MDIForm: no BorderStyle, ControlBox, Min/MaxButton, KeyPreview, Font, ForeColor). */
+/** What an MDI form has only at run time (read-only): the size of its workspace. */
+const MDI_RUNTIME = new Set(['scalewidth', 'scaleheight']);
+/** The Form properties an MDI form has (VB6's MDIForm: no BorderStyle, ControlBox, Min/MaxButton, KeyPreview, Font, ForeColor, no
+ *  ScaleMode or drawing). */
 const MDI_PROPS = new Set(['left', 'top', 'width', 'height', 'visible', 'enabled', 'tag', 'caption', 'backcolor', 'startupposition',
-  'windowstate', 'picture', 'icon', ...MDI_ONLY]);
+  'windowstate', 'picture', 'icon', 'mousepointer', 'mouseicon', 'oledropmode', ...MDI_RUNTIME, ...MDI_ONLY]);
 /** The Form events an MDI form does not have (MDIForm_Load ... has no focus or key events). */
 const NOT_MDI_EVENTS = new Set(['gotfocus', 'lostfocus', 'keypress', 'keydown', 'keyup', 'paint']);
 
@@ -45,7 +48,7 @@ export function mdiAllows(type: ControlType): boolean {
 /** A new MDI form: its properties at their defaults, the AppWorkspace grey, Caption = name. */
 export function newMdiForm(name: string, code = ''): FormDef {
   const f = newForm(name, code);
-  const props = Object.fromEntries(CONTROL_TYPES.Form.props.filter(p => p.designTime && MDI_PROPS.has(lc(p.name)))
+  const props = Object.fromEntries(CONTROL_TYPES.Form.props.filter(p => p.designTime && MDI_PROPS.has(lc(p.name)) && !MDI_RUNTIME.has(lc(p.name)))
     .map(p => [p.name, Array.isArray(p.default) ? [...p.default] : p.default]));
   return { ...f, mdi: true, props: { ...props, Caption: name, BackColor: APP_WORKSPACE, Width: 7200, Height: 5400 } };
 }

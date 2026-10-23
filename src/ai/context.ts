@@ -1,7 +1,7 @@
 // Builds the text the AI sees: control type reference, form descriptions and chat messages.
 import type { Expr, ModuleAst, Param, ProcDecl, VarDecl, VBTypeName } from '../lang/ast';
 import { parseModuleLenient } from '../lang/parser';
-import { CONTROL_TYPES, type PropDef } from '../model/controls';
+import { CONTROL_TYPES, FONT_ALIASES, type PropDef } from '../model/controls';
 import { absoluteRect, shownInDesign } from '../ide/designerLogic';
 import { formClientTwips, isLine } from '../model/geometry';
 import { hasMenuBar, isMenu, shortcutText } from '../model/menus';
@@ -60,7 +60,7 @@ function eventText(names: string[]): string[] {
 export function describeControlTypes(): string {
   const lines: string[] = [];
   for (const td of Object.values(CONTROL_TYPES)) {
-    const props = td.props.filter(p => !COMMON.has(p.name.toLowerCase()) && (p.designTime || p.runtime !== 'none')).map(propText);
+    const props = td.props.filter(p => !COMMON.has(p.name.toLowerCase()) && (p.designTime || p.runtime !== 'none') && !(p.name in FONT_ALIASES && !p.designTime)).map(propText);
     const methods = td.methods.filter(m => !BASE_METHODS.has(m.name.toLowerCase())).map(m => m.name);
     let line = `${td.type}: ${props.join(', ')}`;
     if (td.events.length) line += ` | events: ${eventText(td.events.map(e => e.name).filter(n => !DRAG_EVENTS.has(n))).join(', ')}`;
@@ -68,7 +68,8 @@ export function describeControlTypes(): string {
     lines.push(line);
   }
   lines.push('All controls also have: Left, Top, Width, Height, Visible, Enabled, TabIndex, Tag and the methods Move, SetFocus, Refresh, ZOrder.'
-    + ' Visible controls and the Form have MousePointer (and MouseIcon), Screen.MousePointer too.'
+    + ' Visible controls and the Form have MousePointer (and MouseIcon), Screen.MousePointer too. Those with Font also have FontName, FontSize, FontBold, FontItalic, FontUnderline, FontStrikethru.'
+    + ' In code, a control\'s Left, Top, Width, Height and its mouse X, Y are in the ScaleMode of its Form or PictureBox.'
     + ' +focus controls have CausesValidation and Validate(Cancel As Boolean). A & in a Caption: Alt+letter.'
     + ' Drag: DragMode (vbAutomatic, or Ctl.Drag), DragDrop(Source As Control, X, Y), DragOver(Source, X, Y, State); OLEDropMode 1: OLEDragDrop(Data As DataObject, Effect, Button, Shift, X, Y), also Finder files (Data.Files(1)).'
     + ' In the events, +focus is GotFocus and LostFocus, +keys KeyPress, KeyDown and KeyUp, +mouse MouseDown, MouseMove and MouseUp (VB6 parameters).'
