@@ -281,3 +281,15 @@ test('Line: drawn from end to end, end point handles move X1/Y1 or X2/Y2, no res
   expect(form().controls[0].props).toMatchObject({ X1: 120, X2: 1320 });
   expect(Number(form().controls[0].props.Y1)).toBeGreaterThan(120);
 });
+
+test('Toolbox double-click: a control larger than the form shrinks to fit and never starts off the form', async () => {
+  const { placeControlCentered } = await import('../../src/ide/designer');
+  ide.setActiveView({ kind: 'designer', formId: form().id });
+  placeControlCentered(ide, 'WebBrowser');   // 4815 x 3615 by default; the default form's client area is smaller
+  const c = form().controls.find(x => x.type === 'WebBrowser')!;
+  expect(c.props.Left as number).toBeGreaterThanOrEqual(0);
+  expect(c.props.Top as number).toBeGreaterThanOrEqual(0);
+  expect(c.props.Width as number).toBeLessThan(4815);
+  placeControlCentered(ide, 'CommandButton');   // small controls keep their default size
+  expect(form().controls.find(x => x.type === 'CommandButton')!.props.Width).toBe(1215);
+});

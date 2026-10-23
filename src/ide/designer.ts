@@ -485,9 +485,13 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     const area = parent ? sizeOf(parent) : { width: pxToTwips(m.clientWidth), height: pxToTwips(m.clientHeight) };
     const snapv = (v: number, g: number) => (so.snap ? Math.round(v / g) * g : v);
     const bodyTop = parent?.type === 'SSTab' ? ssTabLayout(parent.props).bodyTop : 0;
-    const left = snapv((area.width - td.defaultWidth) / 2, so.grid);
-    const top = snapv(bodyTop + (area.height - bodyTop - td.defaultHeight) / 2, so.gridY ?? so.grid);
-    const def = newControl(form, tool, { left, top }, parent?.id ?? null);
+    // a control larger than the form (WebBrowser, MediaPlayer on a small form) shrinks to fit instead of starting off-form
+    const fits = tool !== 'Line' && td.defaultWidth > 0;
+    const width = fits ? Math.min(td.defaultWidth, Math.max(so.grid, area.width)) : td.defaultWidth;
+    const height = fits ? Math.min(td.defaultHeight, Math.max(so.gridY ?? so.grid, area.height - bodyTop)) : td.defaultHeight;
+    const left = Math.max(0, snapv((area.width - width) / 2, so.grid));
+    const top = Math.max(bodyTop, snapv(bodyTop + (area.height - bodyTop - height) / 2, so.gridY ?? so.grid));
+    const def = newControl(form, tool, fits ? { left, top, width, height } : { left, top }, parent?.id ?? null);
     const tab = tabFor(form, parent?.id ?? null);
     if (tab !== undefined) def.tab = tab;
     ide.stack.execute(addControlsCmd(formId, [def]));
