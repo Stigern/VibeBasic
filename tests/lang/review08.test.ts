@@ -2,6 +2,7 @@
 // program, with VB6's output.
 
 import { Program } from '../../src/lang/interp/program';
+import { VBSyntaxError } from '../../src/lang/errors';
 import { TestHost } from './testHost';
 import { FakeObject } from './fakeObject';
 import { prettifyLine } from '../../src/lang/prettify';
@@ -11,7 +12,14 @@ async function run(src: string, setup?: (h: TestHost) => void): Promise<string[]
   const host = new TestHost();
   host.fs.mkdirs('/app');
   setup?.(host);
-  const prog = new Program([{ name: 'Module1', kind: 'module', source: src }], host, { locale: 'en-US', appPath: '/app' });
+  let prog: Program;
+  try {
+    prog = new Program([{ name: 'Module1', kind: 'module', source: src }], host, { locale: 'en-US', appPath: '/app' });
+  } catch (e) {
+    // a compile error found before the program starts (review 08 final #4)
+    if (e instanceof VBSyntaxError) return [`[Before run at ${e.moduleName}:${e.line}] Compile error: ${e.message}`];
+    throw e;
+  }
   await prog.runEvent('Module1', 'Main');
   await new Promise(r => setTimeout(r, 0));
   return host.lines();
@@ -376,4 +384,32 @@ End Sub`;
   expect((await run(src('Fill (arr)')))[0]).toMatch(/Compile error: Type mismatch: array or user-defined type expected/);
   expect((await run(src('Show (r)')))[0]).toMatch(/Compile error: Type mismatch: array or user-defined type expected/);
   expect(await run(src('Fill arr: Call Fill(arr): Show r: Debug.Print arr(0)'))).toEqual([' 1 ']);
+});
+
+test('final #5 an item of an array a Variant holds is a Variant: no false Overflow, whatever ran first', async () => {
+  expect(await run(main('Dim a(1) As Integer, v\n  a(0) = 300: v = a\n  Debug.Print v(0) * 300'))).toEqual([' 90000 ']);
+  expect(await run(main('Dim v\n  v = Nums()\n  Debug.Print v(0) * 1000',
+    'Function Nums() As Integer()\n  Dim r(1) As Integer\n  r(0) = 100: Nums = r\nEnd Function'))).toEqual([' 100000 ']);
+  const f = 'Sub F(v)\n  Debug.Print v(0) * 1000\nEnd Sub';
+  const arrays = 'Dim d(0) As Double, i(0) As Integer\n  d(0) = 100: i(0) = 100\n  ';
+  expect(await run(main(`${arrays}F d: F i`, f))).toEqual([' 100000 ', ' 100000 ']);
+  expect(await run(main(`${arrays}F i: F d`, f))).toEqual([' 100000 ', ' 100000 ']);
+  // a declared Integer array still overflows, as in VB6
+  expect((await run(main('Dim a(0) As Integer\n  a(0) = 300\n  Debug.Print a(0) * 300')))[0]).toMatch(/Overflow/);
+});
+
+test('final #9 ParamArray items and As Variant parameters keep the number subtype', async () => {
+  const show = 'Sub Show(ParamArray a())\n  Dim i As Integer, x\n  For i = 0 To UBound(a): Debug.Print TypeName(a(i)); VarType(a(i)): Next\n  For Each x In a: Debug.Print TypeName(x);: Next\n  Debug.Print\nEnd Sub';
+  expect(await run(main('Show 5&, 1.5!, CCur(2)', show)))
+    .toEqual(['Long 3 ', 'Single 4 ', 'Currency 6 ', 'LongSingleCurrency']);
+  const f = 'Sub F(ByVal v As Variant)\n  Debug.Print TypeName(v);" ";\nEnd Sub\nSub G(ByVal v)\n  Debug.Print TypeName(v);" ";\nEnd Sub';
+  expect(await run(main('F 5&: F CCur(1): F 1.5!: Debug.Print\n  G 5&: G CCur(1): G 1.5!', f)))
+    .toEqual(['Long Currency Single ', 'Long Currency Single ']);
+  // an element assigned again later reports its new value's type
+  expect(await run(main('Show2 5&', 'Sub Show2(ParamArray a())\n  a(0) = 2.5\n  Debug.Print TypeName(a(0))\nEnd Sub'))).toEqual(['Double']);
+});
+
+test('final #10 vbUseDefault and the FirstWeekOfYear constants', async () => {
+  expect(await run(`Option Explicit\nSub Main()\n  Debug.Print FormatNumber(0.5, 2, vbUseDefault); " "; FormatNumber(0.5, 2, -2)\n  Debug.Print vbUseSystem; vbFirstJan1; vbFirstFourDays; vbFirstFullWeek\nEnd Sub`))
+    .toEqual(['0.50 0.50', ' 0  1  2  3 ']);
 });

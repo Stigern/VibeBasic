@@ -69,6 +69,11 @@ export class VBArray {
   private data: VBValue[] = [];
   /** `Dim a(3) As String * 5`: every element is padded or cut to this length (set with `fixedString`). */
   fixedLength?: number;
+  /**
+   * The number subtype of Variant elements whose value came from typed code (a ParamArray item `5&` is a Long for
+   * TypeName), by storage offset, valid while the element still holds `of` (like `Variable.sub`).
+   */
+  private subs?: Map<number, { t: string; of: VBValue }>;
 
   constructor(
     public elemType: VBTypeName,
@@ -108,6 +113,19 @@ export class VBArray {
   values(): VBValue[] { return this.data.slice(); }
 
   get(idx: number[]): VBValue { return this.data[this.offset(idx)]; }
+
+  /** The subtype noted for the element at `idx` with `noteSub`, while it still holds that value. */
+  subAt(idx: number[]): string | undefined {
+    if (!this.subs) return undefined;
+    const o = this.offset(idx);
+    const s = this.subs.get(o);
+    return s && s.of === this.data[o] ? s.t : undefined;
+  }
+
+  noteSub(idx: number[], t: string): void {
+    const o = this.offset(idx);
+    (this.subs ??= new Map()).set(o, { t, of: this.data[o] });
+  }
 
   /** Stores `v` after coercing it to the element type. */
   set(idx: number[], v: VBValue): void {
@@ -154,6 +172,7 @@ export class VBArray {
       : new VBArray(this.elemType, this.bounds.map(b => [b[0], b[1]] as [number, number]), this.fixed, this.init);
     c.data = this.data.map(cloneValue);
     c.fixedLength = this.fixedLength;
+    if (this.subs) c.subs = new Map(this.subs);
     return c;
   }
 

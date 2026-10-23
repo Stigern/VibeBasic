@@ -13,7 +13,7 @@
 // The type of an operator node depends only on the code, so it is computed once and kept on the node (`st`, and the
 // check its results need, `chk`: see eval.ts `binaryResult`).
 
-import type { BinaryExpr, BinaryOp, Expr, MissingArg, UnaryExpr, VBTypeName } from '../ast';
+import type { BinaryExpr, BinaryOp, CallOrIndex, Expr, MissingArg, UnaryExpr, VBTypeName } from '../ast';
 import { VBArray, maybeSingle, single7, type VBValue } from '../values';
 import { lookup } from './eval';
 import { BuiltinRef, Frame, ProcRef, ValueRef, Variable, lc } from './scope';
@@ -83,7 +83,8 @@ export function staticType(f: Frame, e: Expr | MissingArg): StaticType {
       const key = lc(t.name);
       if (f.returnVar && key === lc(f.proc!.name)) return procType(f, f.module.procs.get(key)!);   // a recursive call
       const b = lookup(f, key, t.name, true);
-      if (b instanceof Variable) return b.value instanceof VBArray ? b.value.elemType : V;
+      // an element of a declared array; an array a Variant holds has Variant items (VB6), so the type never depends on the value
+      if (b instanceof Variable) return b.opts.isArray && !b.opts.variantAlias && b.value instanceof VBArray ? b.value.elemType : V;
       if (b instanceof ProcRef) return procType(f, b);
       if (b instanceof BuiltinRef) return builtinType(f, b.name, e.args);
       return V;
@@ -165,6 +166,7 @@ export function operatorType(f: Frame, e: BinaryExpr | UnaryExpr): StaticType {
  * value.
  */
 export function reportedType(f: Frame, e: Expr | MissingArg): string | undefined {
+  if (e.kind === 'call') { const s = elementSub(f, e); if (s !== undefined) return s; }
   let t: StaticType | undefined;
   const b = e.kind === 'name' ? lookup(f, lc(e.name), e.name) : undefined;
   if (b instanceof Variable) {
@@ -174,11 +176,38 @@ export function reportedType(f: Frame, e: Expr | MissingArg): string | undefined
   return t !== undefined && REPORTED.has(t) ? (t as string) : undefined;
 }
 
+/**
+ * `a(i)` of an array with noted subtypes (a ParamArray): the subtype of that element. Only for indexes that can be read
+ * without running code (numbers, variables, constants, + and -); undefined otherwise.
+ */
+function elementSub(f: Frame, e: CallOrIndex): string | undefined {
+  if (e.target.kind !== 'name') return undefined;
+  const b = lookup(f, lc(e.target.name), e.target.name, true);
+  if (!(b instanceof Variable) || !(b.value instanceof VBArray)) return undefined;
+  const pure = (x: Expr | MissingArg): number | undefined => {
+    if (x.kind === 'number') return x.value;
+    if (x.kind === 'name') {
+      const v = lookup(f, lc(x.name), x.name);
+      const n = v instanceof Variable || v instanceof ValueRef ? v.value : undefined;
+      return typeof n === 'number' ? n : undefined;
+    }
+    if (x.kind === 'unary' && x.op === 'neg') { const n = pure(x.operand); return n === undefined ? undefined : -n; }
+    if (x.kind === 'binary' && (x.op === '+' || x.op === '-')) {
+      const l = pure(x.left), r = pure(x.right);
+      return l === undefined || r === undefined ? undefined : x.op === '+' ? l + r : l - r;
+    }
+    return undefined;
+  };
+  const idx = e.args.map(pure);
+  if (idx.some(n => n === undefined || !Number.isInteger(n))) return undefined;
+  try { return b.value.subAt(idx as number[]); } catch { return undefined; }
+}
+
 /** Records on a Variant variable the type of the typed number just assigned to it (see `Variable.sub`). */
 export function noteSubtype(f: Frame, v: Variable, src: Expr): void {
   const value = v.value;
   if (typeof value !== 'number') { v.sub = undefined; return; }
-  const t = src.kind === 'name' ? reportedType(f, src) : staticType(f, src);
+  const t = src.kind === 'name' || src.kind === 'call' ? reportedType(f, src) : staticType(f, src);
   v.sub = t !== undefined && REPORTED.has(t as StaticType) ? (t as StaticType) : undefined;
   v.subOf = value;
 }

@@ -1,7 +1,8 @@
 // Public API of the interpreter (Program) and its shared state (Runtime).
 
 import type { ProcDecl, TypeDecl, VBTypeName } from '../ast';
-import { VBRuntimeError, internalError } from '../errors';
+import { VBRuntimeError, VBSyntaxError, internalError } from '../errors';
+import { compileProblems } from '../compileCheck';
 import { ErrObject, type BuiltinCtx } from '../builtins';
 import type { CodeLocation, Host } from '../host';
 import { generalDateText, localeDateParser } from '../builtins/format';
@@ -150,6 +151,13 @@ export class Runtime {
       this.modules.set(m.key, m);
       this.moduleList.push(m);
       if (m.kind === 'module') this.globals.addModule(m);
+    }
+    // the compile errors VB6 finds before the program starts (a ByRef type mismatch, New of a record ...)
+    const problem = compileProblems(this.moduleList.map(m => ({ name: m.name, kind: m.kind, ast: m.ast })))[0];
+    if (problem) {
+      const e = new VBSyntaxError(problem.message, problem.line, 1);
+      e.moduleName = problem.module;
+      throw e;
     }
   }
 

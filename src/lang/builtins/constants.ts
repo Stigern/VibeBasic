@@ -53,7 +53,10 @@ group({
 });
 
 // Misc
-group({ vbTrue: -1, vbFalse: 0, vbObjectError: -2147221504 });
+group({ vbTrue: -1, vbFalse: 0, vbUseDefault: -2, vbObjectError: -2147221504 });   // vbTrue/vbFalse/vbUseDefault: Tristate
+
+// FirstWeekOfYear (DatePart, DateDiff, Format)
+group({ vbUseSystem: 0, vbFirstJan1: 1, vbFirstFourDays: 2, vbFirstFullWeek: 3 });
 
 // Weekdays (Weekday, WeekdayName, DateDiff)
 group({

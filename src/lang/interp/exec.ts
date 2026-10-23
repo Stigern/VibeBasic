@@ -438,7 +438,7 @@ function bindParams(f: Frame, args: BoundArg[]): void {
         v = new Variable(p.name, type, a.slot);
       } else if (sameType(a.type, type) || type === 'Variant') {
         // shared: assignments convert to the caller's declared type (an array stays an array, a String * n keeps n)
-        v = new Variable(p.name, a.type, a.slot, { isArray: a.isArray, fixedLength: a.fixedLength });
+        v = new Variable(p.name, a.type, a.slot, { isArray: a.isArray, fixedLength: a.fixedLength, variantAlias: !sameType(a.type, type) });
       } else if (isObjectType(a.type) && isObjectType(type)) {
         v = new Variable(p.name, type, new VBRef(storeValue(a.slot.value, type)));
       } else {
@@ -931,12 +931,15 @@ function* execForEach(f: Frame, s: ForEachStmt): Gen<Completion> {
   let coll = plainCollection(source);
   // the elements of a Single array in a Variant: their 7 shown digits (see staticTypes.ts `shown`)
   if (source instanceof VBArray && source.elemType === 'Single' && v.type !== 'Single') coll = coll.map(x => (maybeSingle(x) ? single7(x) : x));
-  for (const item of coll) {
+  // a ParamArray's items keep the number subtype the caller's code gave them (VBArray.noteSub)
+  const subs = source instanceof VBArray && source.bounds.length === 1 && v.type === 'Variant' && !v.opts.isArray ? source : null;
+  for (const [k, item] of coll.entries()) {
     // the element assignment belongs to the For Each statement; a failure is retried on its own
     for (;;) {
       f.line = s.line;
       try {
         v.set(item);
+        if (subs) { v.sub = subs.subAt([subs.bounds[0][0] + k]) as StaticType | undefined; v.subOf = v.value; }
         break;
       } catch (e) {
         const r = yield* handleError(f, e);

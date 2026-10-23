@@ -160,3 +160,9 @@ test('pretty listing capitalises keywords and types on leaving a line', () => {
   cw.gotoLine(2);
   expect(cw.getSource()).toBe('Dim x As Integer\n');
 });
+
+test('LSet and RSet are coloured as keywords; a variable named LSet is not (review 08 final #11)', () => {
+  const cls = (line: string) => vbSpans(line).map(s => `${line.slice(s.from, s.to)}:${s.cls.slice(6)}`);
+  expect(cls('LSet a = "x"')).toEqual(['LSet:kw', '"x":str']);
+  expect(cls('If b Then rset t = s')).toEqual(['If:kw', 'Then:kw', 'rset:kw']);
+});

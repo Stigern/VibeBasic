@@ -169,6 +169,17 @@ test('project symbols: Public items of the other modules and forms, after the fo
   expect(describeProjectSymbols(p, p.forms[0].id, true, 60).split('\n').pop()).toMatch(/more not shown/);
 });
 
+test('project symbols: typed array returns, fixed-length strings and As New are written as declared (review 08 final #7)', () => {
+  const p = project();
+  p.modules[0].code = 'Public Name As String * 20\nPublic Items As New Collection\nPublic Codes() As Long\nPublic Function Nums() As Integer()\nEnd Function\nPublic Function Any_()\nEnd Function';
+  const s = describeProjectSymbols(p, p.forms[0].id);
+  expect(s).toContain('Module1: Public Name As String * 20');
+  expect(s).toContain('Module1: Public Items As New Collection');
+  expect(s).toContain('Module1: Public Codes() As Long');
+  expect(s).toContain('Module1: Public Function Nums() As Integer()');
+  expect(s).toMatch(/^Module1: Public Function Any_\(\)$/m);
+});
+
 test('a known context size raises the trim threshold', () => {
   const code = bigModule();
   expect(codeForPrompt(code, { procName: 'Proc3', mention: '' })).not.toBe(code);

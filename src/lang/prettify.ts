@@ -41,7 +41,7 @@ const KEYWORD_SPELLING: Record<string, string> = {
 };
 
 /** Names that are neither keywords nor registered built-ins but have a fixed VB6 spelling. */
-const EXTRA_NAMES = ['Debug', 'Print', 'Tab', 'Spc', 'LSet', 'RSet'];
+const EXTRA_NAMES = ['Debug', 'Print', 'Tab', 'Spc', 'LSet', 'RSet', 'Collection'];
 
 /** Identifiers that are keywords inside a file statement (VB6 colours them): the statement word, and Open's clauses. */
 const FILE_STATEMENT_WORDS = new Set(['print', 'write', 'input', 'get', 'put', 'seek']);
@@ -49,7 +49,8 @@ const OPEN_WORDS = new Set(['input', 'output', 'append', 'binary', 'random', 'ac
 
 /**
  * Indexes of the identifier tokens that act as keywords in a file statement: `Print #`, `Line Input #`, `Get #`, ...,
- * `Name ... As`, and in `Open ... For Input Access Read Lock Write As #1 Len = 8` the mode and clause words.
+ * `Name ... As`, and in `Open ... For Input Access Read Lock Write As #1 Len = 8` the mode and clause words; also the
+ * `LSet` / `RSet` of `LSet s = value` (identifiers to the lexer too).
  */
 export function fileStatementWords(tokens: Token[]): Set<number> {
   const out = new Set<number>();
@@ -65,6 +66,7 @@ export function fileStatementWords(tokens: Token[]): Set<number> {
       if (FILE_STATEMENT_WORDS.has(l) && hash(next)) out.add(i);
       else if (l === 'line' && next?.kind === 'ident' && next.text.toLowerCase() === 'input' && hash(tokens[i + 2])) { out.add(i); out.add(i + 1); }
       else if (l === 'name' && tokens.slice(i + 1).some(x => x.kind === 'keyword' && x.text.toLowerCase() === 'as')) out.add(i);
+      else if ((l === 'lset' || l === 'rset') && next?.kind === 'ident') out.add(i);
     }
     if (t.kind === 'keyword' && l === 'open' && start) open = 'path';
     else if (open && t.kind === 'keyword' && (l === 'for' || l === 'as')) open = l === 'for' ? 'for' : 'as';
@@ -172,7 +174,7 @@ function prettifyPhysicalLine(line: string, known: Map<string, string>): string 
     if (t.kind === 'keyword') {
       text = KEYWORD_CASE.get(lower) ?? t.text;
     } else if (fileWords.has(i)) {
-      text = t.text[0].toUpperCase() + lower.slice(1);   // Print #, Line Input #, Output, Access, Read, Len ...
+      text = KEYWORD_CASE.get(lower) ?? t.text[0].toUpperCase() + lower.slice(1);   // Print #, Line Input #, Output, LSet ...
     } else if (t.kind === 'ident') {
       const afterMember = prev && (isOp(prev, '.') || isOp(prev, '!'));
       if (afterMember) {

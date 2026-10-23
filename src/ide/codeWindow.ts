@@ -25,6 +25,7 @@ import { bpEffect, bpField, bpLines, toggleBreakpointAt } from './breakpoints';
 import { SpanCache, editorLook, refreshHighlight, vbHighlight, vbTheme } from './vbLanguage';
 import { collapseToDefinitions, indentGuides, outlining, procedureSeparator, revealEffects, toggleAllOutlining, toggleOutliningExpansion } from './vbOutlining';
 import { editingHelpers, vbEnter, vbTab } from './vbEditing';
+import { lineChanges } from './lineDiff';
 import './codeWindow.css';
 
 export interface CodeWindow {
@@ -513,7 +514,8 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     markErrorLines(lines) {
       view.dispatch({ effects: errEffect.of({ replace: lines.filter(n => n >= 1 && n <= view.state.doc.lines).map(lineStart) }), annotations: INTERNAL.of(true) });
     },
-    applyChange(from, to, text) { view.dispatch({ changes: { from, to, insert: text } }); },
+    // only the lines that differ change: breakpoints, folds and the cursor on untouched lines stay (review 08 final #2)
+    applyChange(from, to, text) { view.dispatch({ changes: lineChanges(src(), from, to, norm(text)) }); },
     getCursorLine: () => view.state.doc.lineAt(view.state.selection.main.head).number,
     getSelection: () => { const r = view.state.selection.main; return r.empty ? null : { from: r.from, to: r.to, text: view.state.sliceDoc(r.from, r.to) }; },
     getSource: () => src(),

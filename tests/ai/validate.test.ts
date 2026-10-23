@@ -136,6 +136,24 @@ test('file I/O and the settings functions are fine under Option Explicit (0.8 fi
     '    DeleteSetting "App", "S"',
   ].join('\n');
   expect(inForm1(sub(body))).toEqual([]);
+  // a bad name inside each file statement is found (review 08 final #1)
+  const bad: [string, string][] = [
+    ['Print #1, zz', 'Variable not defined: zz'],
+    ['Print #1, Label1.Text', 'A Label has no Text property. Did you mean Caption?'],
+    ['Print #1, Spc(zz); "a"', 'Variable not defined: zz'],
+    ['Write #zz, 1', 'Variable not defined: zz'],
+    ['Input #1, zz', 'Variable not defined: zz'],
+    ['Line Input #1, Label1.Text', 'A Label has no Text property. Did you mean Caption?'],
+    ['Open zz For Output As #1', 'Variable not defined: zz'],
+    ['Open "a" For Random As #1 Len = zz', 'Variable not defined: zz'],
+    ['Get #1, , zz', 'Variable not defined: zz'],
+    ['Put #1, zz, 1', 'Variable not defined: zz'],
+    ['Seek #1, zz', 'Variable not defined: zz'],
+    ['Close #zz', 'Variable not defined: zz'],
+    ['Name zz As "b"', 'Variable not defined: zz'],
+    ['Name "a" As Twice(1, 2)', 'Twice takes 1 argument, not 2.'],
+  ];
+  for (const [line, problem] of bad) expect(inForm1(sub(`    ${line}`)), line).toEqual([problem]);
 });
 
 test('the review 08 language additions are known names under Option Explicit', () => {
@@ -169,6 +187,22 @@ test('the review 08 language additions are known names under Option Explicit', (
     'End Sub',
   ].join('\n');
   expect(validateCode(code, { moduleName: 'Module1', form: null })).toEqual([]);
+  const p = project();
+  expect(validateCode(code, { moduleName: 'Module2', form: null, project: p })).toEqual([]);
+  // a bad name inside each new statement is found (review 08 final #1)
+  const bad: [string, string][] = [
+    ['Mid(zz, 1, 1) = "a"', 'Variable not defined: zz'],
+    ['Mid$(Label1.Text, 1) = "a"', 'A Label has no Text property. Did you mean Caption?'],
+    ['Mid(s, zz) = "a"', 'Variable not defined: zz'],
+    ['LSet zz = "a"', 'Variable not defined: zz'],
+    ['RSet Label1.Text = "a"', 'A Label has no Text property. Did you mean Caption?'],
+    ['RSet s = zz', 'Variable not defined: zz'],
+    ['Error zz', 'Variable not defined: zz'],
+    ['Debug.Print Tab(zz); "a"', 'Variable not defined: zz'],
+  ];
+  for (const [line, problem] of bad) expect(inForm1(sub(`    Dim s As String\n    ${line}`)), line).toEqual([problem]);
+  // without Option Explicit, a target of Input # / Mid / LSet creates the variable: no "not a control" report
+  expect(validateCode('Sub Main()\n    LSet q = "a"\n    q.x = 1\nEnd Sub', { moduleName: 'Module2', form: null, project: p })).toEqual([]);
 });
 
 test('a large valid program has no problems', () => {
@@ -302,4 +336,30 @@ test('calls: procedures that exist nowhere and wrong argument counts', () => {
 test('a procedure defined twice in the proposal', () => {
   expect(validateCode('Sub Main()\nEnd Sub\nSub Helper()\nEnd Sub\nSub main()\nEnd Sub', { moduleName: 'Module2', form: null }))
     .toEqual(['main is defined more than once; keep one.']);
+});
+
+test('the compile errors the run would raise at the call are found (review 08 final #4)', () => {
+  const p = project();
+  const mod = (code: string) => validateCode(code, { moduleName: 'Module2', form: null, project: p });
+  const inc = 'Private Sub Inc(n As Integer)\n    n = n + 1\nEnd Sub\n';
+  expect(mod(`${inc}Sub Main()\n    Dim total As Long\n    Inc total\nEnd Sub`))
+    .toEqual(["ByRef argument type mismatch: Inc's n is Integer, total is Long; pass (total) or declare total As Integer."]);
+  expect(mod('Private Sub IncL(n As Long)\nEnd Sub\nSub Main()\n    Dim total\n    IncL total\nEnd Sub')).toHaveLength(1);
+  // Module1's Twice is ByVal: fine; a call to the existing code's procedure is checked against its parameters
+  expect(mod('Sub Main()\n    Dim i As Integer\n    Debug.Print Twice(i)\nEnd Sub')).toEqual([]);
+  expect(mod('Private Sub Fill(a() As Long)\nEnd Sub\nSub Main()\n    Dim a(2) As Long\n    Fill (a)\nEnd Sub')[0]).toMatch(/^Type mismatch: array or user-defined type expected/);
+  expect(mod('Private Type P\n    X As Integer\nEnd Type\nSub Main()\n    Dim q As New P\nEnd Sub')).toEqual(['Invalid use of New keyword']);
+  expect(mod('Sub Main()\n    Dim d As Object\n    Set d = New Dictionary\nEnd Sub')[0]).toMatch(/^Not supported in VibeBasic: New Dictionary/);
+  expect(mod('Private Type P\n    X As Integer\nEnd Type\nSub Main()\n    Dim a As P, b As P\n    LSet a = b\nEnd Sub')).toEqual(['Not supported in VibeBasic: LSet of a user-defined type']);
+  // in a form, against the form's existing procedure; and a bare body is checked too
+  const p2 = project();
+  p2.forms[0].code += 'Private Sub Bump(n As Integer)\nEnd Sub\n';
+  const form1 = (code: string) => validateCode(code, { moduleName: 'Form1', form: p2.forms[0], project: p2 });
+  expect(form1(sub('    Bump mTotal'))).toEqual(["ByRef argument type mismatch: Bump's n is Integer, mTotal is Long; pass (mTotal) or declare mTotal As Integer."]);
+  expect(form1('Bump mTotal')).toHaveLength(1);
+  expect(form1('Bump (mTotal)')).toEqual([]);
+});
+
+test('vbUseDefault and the FirstWeekOfYear constants are known names (review 08 final #10)', () => {
+  expect(inForm1(sub('    Debug.Print FormatNumber(0.5, 2, vbUseDefault), DatePart("ww", Now, vbMonday, vbFirstFourDays)'))).toEqual([]);
 });

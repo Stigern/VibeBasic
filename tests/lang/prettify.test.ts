@@ -355,3 +355,10 @@ test('file statements: VB6 casing, and their words count as keywords for colouri
   expect(kw('Open output For Binary Access Read As #1 Len = 4')).toEqual(['Binary', 'Access', 'Read', 'Len']);
   expect(kw('Line Input #1, s: Get #1, , x: Name a As b: Print = 1')).toEqual(['Line', 'Input', 'Get', 'Name']);
 });
+
+test('LSet / RSet and Collection get the VB6 spelling (review 08 final #11)', () => {
+  expect(prettifyLine('dim c as new collection', known)).toBe('Dim c As New Collection');
+  expect(prettifyLine('set c = new collection', known)).toBe('Set c = New Collection');
+  expect(prettifyLine('lset t = "a": rset t = "b"', known)).toBe('LSet t = "a": RSet t = "b"');
+  expect(prettifyLine('print #1, x: line input #1, s', known)).toBe('Print #1, x: Line Input #1, s');
+});

@@ -654,6 +654,9 @@ function* bindArgs(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[]): Gen<Bou
         if (e.kind === 'missing') { arr.set([k], Empty); continue; }
         const v = yield* evalExpr(f, e);
         arr.set([k], isSingleFrac(v) ? shown(f, e, v) : v);   // a Variant item: a Single keeps its 7 digits
+        // and a number keeps the type the code gives it, as in a Variant variable (TypeName(a(0)) of `5&` is Long)
+        const t = typeof v === 'number' ? reportedType(f, e) : undefined;
+        if (t !== undefined) arr.noteSub([k], t);
       }
       out.push({ value: arr });
       break;
@@ -680,7 +683,8 @@ const isRecordType = (t: VBTypeName): boolean => typeof t === 'object' && 'userT
 
 /** A value argument; a number for a Variant parameter keeps the type the code gives it (TypeName), a Single its 7 digits. */
 function valueArg(f: Frame, p: Param, a: Expr, value: VBValue): BoundArg {
-  const sub = typeof value === 'number' && p.type === undefined && !p.isArray ? reportedType(f, a) : undefined;
+  // `ByVal v` and `ByVal v As Variant` are the same Variant parameter
+  const sub = typeof value === 'number' && (p.type === undefined || p.type === 'Variant') && !p.isArray ? reportedType(f, a) : undefined;
   if (sub === undefined) return { value };
   return { value: sub === 'Single' ? shown(f, a, value) : value, sub: sub as StaticType };
 }

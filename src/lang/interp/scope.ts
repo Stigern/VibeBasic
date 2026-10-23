@@ -69,6 +69,11 @@ export interface VarOptions {
   fixedLength?: number;
   /** A `Const`. */
   isConst?: boolean;
+  /**
+   * A Variant parameter sharing a typed variable of the caller (ByRef, `Sub F(v)` called with an Integer array): its
+   * elements are Variants to the static types (staticTypes.ts), whatever the array holds.
+   */
+  variantAlias?: boolean;
 }
 
 /** A named variable. `ref` may be shared with a caller (ByRef parameters). */

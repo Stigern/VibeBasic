@@ -1,8 +1,9 @@
 // Checks the code the AI proposed: cheap automatic fixes plus a list of problems that is fed back to the model once.
 // The checks only report; none of them changes the code. A false report costs a slow extra model round, so every
 // rule stays silent when it is not sure (a name whose status is uncertain counts as known).
-import type { Expr, MissingArg, ModuleAst, Param, ProcDecl, Stmt, VBTypeName } from '../lang/ast';
+import type { Expr, MissingArg, ModuleAst, Param, PrintItem, ProcDecl, Stmt, VBTypeName } from '../lang/ast';
 import { BUILTINS, CANONICAL_NAMES } from '../lang/builtins';
+import { compileProblems, type CheckModule } from '../lang/compileCheck';
 import { parseModuleLenient } from '../lang/parser';
 import { TYPE_KEYWORDS } from '../lang/parseStatements';
 import { CONTROL_TYPES } from '../model/controls';
@@ -184,6 +185,9 @@ function procNames(p: ProcDecl): { declared: Set<string>; implicit: Set<string> 
     else if (e.kind === 'unary') expr(e.operand);
     else if (e.kind === 'binary') { expr(e.left); expr(e.right); }
   };
+  /** A variable the statement writes (Input #, Get #, Mid, LSet...): a bare name may be created implicitly. */
+  const target = (t: Expr) => { if (t.kind === 'name') implicit.add(lc(t.name)); expr(t); };
+  const items = (list: PrintItem[]) => { for (const it of list) { if (it.expr) expr(it.expr); if (it.fn?.arg) expr(it.fn.arg); } };
   const stmts = (body: Stmt[]): void => {
     for (const s of body) {
       switch (s.kind) {
@@ -191,15 +195,30 @@ function procNames(p: ProcDecl): { declared: Set<string>; implicit: Set<string> 
         case 'const': for (const d of s.decls) declared.add(lc(d.name)); break;
         case 'redim': for (const d of s.decls) declared.add(lc(d.name)); break;
         case 'erase': for (const t of s.targets) implicit.add(lc(t.name)); break;
-        case 'assign': if (s.target.kind === 'name') implicit.add(lc(s.target.name)); expr(s.target); expr(s.value); break;
+        case 'assign': target(s.target); expr(s.value); break;
         case 'call': argNames(s.args); s.args.forEach(expr); break;
-        case 'for': implicit.add(lc(s.variable.name)); expr(s.from); expr(s.to); stmts(s.body); break;
+        case 'for': implicit.add(lc(s.variable.name)); expr(s.from); expr(s.to); if (s.step) expr(s.step); stmts(s.body); break;
         case 'forEach': implicit.add(lc(s.variable.name)); expr(s.collection); stmts(s.body); break;
         case 'if': for (const b of s.branches) { expr(b.cond); stmts(b.body); } if (s.elseBody) stmts(s.elseBody); break;
         case 'select': expr(s.subject); for (const c of s.cases) stmts(c.body); if (s.elseBody) stmts(s.elseBody); break;
         case 'do': if (s.test) expr(s.test.expr); stmts(s.body); break;
         case 'while': expr(s.cond); stmts(s.body); break;
         case 'with': expr(s.object); stmts(s.body); break;
+        case 'unload': case 'load': expr(s.target); break;
+        case 'debugPrint': items(s.items); break;
+        case 'error': expr(s.number); break;
+        case 'mid': target(s.target); expr(s.start); if (s.length) expr(s.length); expr(s.value); break;
+        case 'lset': case 'rset': target(s.target); expr(s.value); break;
+        case 'open': expr(s.path); expr(s.file); if (s.recLen) expr(s.recLen); break;
+        case 'close': s.files.forEach(expr); break;
+        case 'printFile': case 'writeFile': expr(s.file); items(s.items); break;
+        case 'inputFile': case 'lineInput': expr(s.file); s.targets.forEach(target); break;
+        case 'getFile': expr(s.file); if (s.rec) expr(s.rec); target(s.target); break;
+        case 'putFile': expr(s.file); if (s.rec) expr(s.rec); expr(s.target); break;
+        case 'seekFile': expr(s.file); expr(s.pos); break;
+        case 'name': expr(s.from); expr(s.to); break;
+        case 'exit': case 'onError': case 'resume': case 'goto': case 'label': case 'end': case 'stop': break;
+        default: { const never: never = s; void never; }
       }
     }
   };
@@ -326,21 +345,24 @@ function checkProc(c: Checker, p: ProcDecl): void {
     }
   }
 
+  /** A variable or property a statement writes (`x = `, `Input #1, x`, `Mid(x, 1) = `, `LSet x = `). */
+  const target = (t: Expr) => {
+    if (t.kind === 'name') undefinedName(t.name);
+    else if (t.kind === 'call') {
+      if (t.target.kind === 'member') member(t.target.object, t.target.name, false);
+      else if (t.target.kind !== 'name') expr(t.target);
+      t.args.forEach(expr);
+    } else expr(t);
+  };
+  const items = (list: PrintItem[]) => { for (const it of list) { if (it.expr) expr(it.expr); if (it.fn?.arg) expr(it.fn.arg); } };
   const stmts = (body: Stmt[]): void => {
     for (const s of body) {
       switch (s.kind) {
         case 'dim': for (const d of s.decls) for (const b of d.bounds ?? []) { if (b.lower) expr(b.lower); expr(b.upper); } break;
         case 'const': for (const d of s.decls) expr(d.value); break;
         case 'redim': for (const d of s.decls) for (const b of d.bounds) { if (b.lower) expr(b.lower); expr(b.upper); } break;
-        case 'assign':
-          if (s.target.kind === 'name') undefinedName(s.target.name);
-          else if (s.target.kind === 'call') {
-            if (s.target.target.kind === 'member') member(s.target.target.object, s.target.target.name, false);
-            else if (s.target.target.kind !== 'name') expr(s.target.target);
-            s.target.args.forEach(expr);
-          } else expr(s.target);
-          expr(s.value);
-          break;
+        case 'erase': break;
+        case 'assign': target(s.target); expr(s.value); break;
         case 'call':
           if (s.target.kind === 'name') callTarget(s.target.name, s.args, false);
           else if (s.target.kind === 'member') member(s.target.object, s.target.name, true);
@@ -361,7 +383,20 @@ function checkProc(c: Checker, p: ProcDecl): void {
         case 'while': expr(s.cond); stmts(s.body); break;
         case 'with': expr(s.object); stmts(s.body); break;
         case 'unload': case 'load': expr(s.target); break;
-        case 'debugPrint': for (const it of s.items) if (it.expr) expr(it.expr); break;
+        case 'debugPrint': items(s.items); break;
+        case 'error': expr(s.number); break;
+        case 'mid': target(s.target); expr(s.start); if (s.length) expr(s.length); expr(s.value); break;
+        case 'lset': case 'rset': target(s.target); expr(s.value); break;
+        case 'open': expr(s.path); expr(s.file); if (s.recLen) expr(s.recLen); break;
+        case 'close': s.files.forEach(expr); break;
+        case 'printFile': case 'writeFile': expr(s.file); items(s.items); break;
+        case 'inputFile': case 'lineInput': expr(s.file); s.targets.forEach(target); break;
+        case 'getFile': expr(s.file); if (s.rec) expr(s.rec); target(s.target); break;
+        case 'putFile': expr(s.file); if (s.rec) expr(s.rec); expr(s.target); break;
+        case 'seekFile': expr(s.file); expr(s.pos); break;
+        case 'name': expr(s.from); expr(s.to); break;
+        case 'exit': case 'onError': case 'resume': case 'goto': case 'label': case 'end': case 'stop': break;
+        default: { const never: never = s; void never; }
       }
     }
   };
@@ -400,6 +435,38 @@ function checkNames(ast: ModuleAst, syntaxOk: boolean, ctx: ValidateContext, rep
     module, globals: proj?.globals ?? new Set(), me, controls, forms, bareExtra, procs, globalProcs: proj?.procs ?? new Map(),
   };
   for (const p of ast.procedures) checkProc(c, p);
+  if (c.namesKnown && ctx.project) compileRules(ast, existing.ast, form !== null, { ...ctx, project: ctx.project }, c.bareExtra, report);
+}
+
+/**
+ * The compile errors VibeBasic raises when the statement runs (a ByRef type mismatch, an array in parentheses, New of a
+ * record, LSet of a record), found in the proposal's procedures with the whole project around them (src/lang/compileCheck.ts).
+ */
+function compileRules(ast: ModuleAst, existing: ModuleAst | null, isForm: boolean, ctx: ValidateContext & { project: Project },
+  bareExtra: Set<string>, report: (m: string) => void): void {
+  const name = lc(ctx.moduleName);
+  const replaced = new Set(ast.procedures.map(p => lc(p.name)));
+  const merged: ModuleAst = {
+    ...ast,
+    variables: [...existing?.variables ?? [], ...ast.variables], consts: [...existing?.consts ?? [], ...ast.consts],
+    types: [...existing?.types ?? [], ...ast.types], enums: [...existing?.enums ?? [], ...ast.enums],
+    procedures: [...(existing?.procedures ?? []).filter(p => !replaced.has(lc(p.name))), ...ast.procedures],
+  };
+  const modules: CheckModule[] = [{ name: ctx.moduleName, kind: isForm ? 'form' : 'module', ast: merged }];
+  const others = [...ctx.project.forms.map(f => ({ name: f.name, kind: 'form' as const, code: f.code })),
+    ...ctx.project.modules.map(m => ({ name: m.name, kind: 'module' as const, code: m.code }))];
+  for (const o of others) {
+    if (lc(o.name) === name) continue;
+    const r = parseModuleLenient(o.code, o.name);
+    if (!r.ast || r.errors.length) return;
+    modules.push({ name: o.name, kind: o.kind, ast: r.ast });
+  }
+  const none = new Set<string>();
+  for (const p of compileProblems(modules, {
+    only: (m, proc) => m.ast === merged && ast.procedures.includes(proc),
+    onlyDecls: (m, d) => m.ast === merged && ast.variables.includes(d),
+    unknownLocals: (_m, proc) => (proc.name === BARE_PROC ? bareExtra : none),
+  })) report(p.hint);
 }
 
 /**

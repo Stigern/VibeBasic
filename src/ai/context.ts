@@ -1,5 +1,5 @@
 // Builds the text the AI sees: control type reference, form descriptions and chat messages.
-import type { Expr, ModuleAst, Param, ProcDecl, VBTypeName } from '../lang/ast';
+import type { Expr, ModuleAst, Param, ProcDecl, VarDecl, VBTypeName } from '../lang/ast';
 import { parseModuleLenient } from '../lang/parser';
 import { CONTROL_TYPES, type PropDef } from '../model/controls';
 import { absoluteRect, shownInDesign } from '../ide/designerLogic';
@@ -224,7 +224,10 @@ const literal = (e: Expr): string | null =>
 const asType = (t: VBTypeName | undefined): string => t === undefined ? '' : ` As ${typeof t === 'string' ? t : 'userType' in t ? t.userType : t.objectType}`;
 const param = (p: Param): string => `${p.paramArray ? 'ParamArray ' : p.optional ? 'Optional ' : ''}${p.byRef || p.paramArray ? '' : 'ByVal '}${p.name}${p.isArray ? '()' : ''}${asType(p.type)}`;
 const signature = (p: ProcDecl): string =>
-  `Public ${p.kind === 'sub' ? 'Sub' : 'Function'} ${p.name}(${p.params.map(param).join(', ')})${p.kind === 'function' ? asType(p.returnType) : ''}`;
+  `Public ${p.kind === 'sub' ? 'Sub' : 'Function'} ${p.name}(${p.params.map(param).join(', ')})${p.kind !== 'function' ? '' : p.returnsArray ? `${asType(p.returnType ?? 'Variant')}()` : asType(p.returnType)}`;
+/** "Name As String * 20", "Items As New Collection", "a() As Long". */
+const variable = (v: VarDecl): string =>
+  `${v.name}${v.isArray ? '()' : ''}${v.isNew && v.type !== undefined ? asType(v.type).replace(' As ', ' As New ') : asType(v.type)}${v.fixedLength !== undefined ? ` * ${v.fixedLength}` : ''}`;
 
 /** The Public items of a module or form, in source order: "Public Function Add(a As Integer) As Integer", "Public Enum Colors (Red, Green)". */
 function publicItems(ast: ModuleAst): string[] {
@@ -237,7 +240,7 @@ function publicItems(ast: ModuleAst): string[] {
     const v = literal(c.value);
     items.push({ line: c.line, text: `Public Const ${c.name}${asType(c.type)}${v === null ? '' : ` = ${v}`}` });
   }
-  for (const v of ast.variables) if (v.scope === 'public') items.push({ line: v.line, text: `Public ${v.name}${v.isArray ? '()' : ''}${asType(v.type)}` });
+  for (const v of ast.variables) if (v.scope === 'public') items.push({ line: v.line, text: `Public ${variable(v)}` });
   for (const p of ast.procedures) if (p.visibility === 'public') items.push({ line: p.line, text: signature(p) });
   return items.sort((a, b) => a.line - b.line).map(i => i.text);
 }
