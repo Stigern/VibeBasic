@@ -60,8 +60,22 @@ def('QBColor', 1, 1, a => {
 
 // ---- environment ----
 
-def('Environ', 1, 1, () => '');
-def('Command', 0, 0, () => '');
+/** Environ(name): the value ('' when not set; the name exact, else without regard to case, as on Windows). Environ(n): the n-th
+ *  "NAME=value" entry ('' after the last; 5 for n < 1). */
+def('Environ', 1, 1, async (a, ctx) => {
+  const env = (await ctx.host.environment?.()) ?? [];
+  if (typeof a[0] === 'string') {
+    const name = a[0];
+    if (name === '') throw new VBRuntimeError(5);
+    const l = name.toLowerCase();
+    return (env.find(([k]) => k === name) ?? env.find(([k]) => k.toLowerCase() === l))?.[1] ?? '';
+  }
+  const n = intArg(a[0]);
+  if (n < 1) throw new VBRuntimeError(5);
+  const e = env[n - 1];
+  return e ? `${e[0]}=${e[1]}` : '';
+});
+def('Command', 0, 0, (_a, ctx) => ctx.host.commandLine?.() ?? '');
 
 // ---- Variant helpers (arguments are evaluated eagerly, as for any function) ----
 

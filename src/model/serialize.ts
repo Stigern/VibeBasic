@@ -50,7 +50,18 @@ function isProjectShape(o: Record<string, unknown>): boolean {
     && Array.isArray(o.modules) && o.modules.every(isModule)
     && isObject(o.assets) && Object.values(o.assets).every(isAsset)
     && (o.iconAsset === null || typeof o.iconAsset === 'string')
-    && (o.condComp === undefined || typeof o.condComp === 'string');
+    && (o.condComp === undefined || typeof o.condComp === 'string')
+    && (o.subMain === undefined || typeof o.subMain === 'boolean')
+    && (o.commandLine === undefined || typeof o.commandLine === 'string')
+    && (o.versionInfo === undefined || isVersion(o.versionInfo))
+    && (o.fileTypes === undefined || (Array.isArray(o.fileTypes) && o.fileTypes.every(e => typeof e === 'string')));
+}
+
+function isVersion(v: unknown): boolean {
+  return isObject(v) && ['major', 'minor', 'revision'].every(k => typeof v[k] === 'number')
+    && (v.autoIncrement === undefined || typeof v.autoIncrement === 'boolean')
+    && ['comments', 'companyName', 'fileDescription', 'legalCopyright', 'legalTrademarks', 'productName']
+      .every(k => v[k] === undefined || typeof v[k] === 'string');
 }
 
 export function parseProject(text: string): Project {

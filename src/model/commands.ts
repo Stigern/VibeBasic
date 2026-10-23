@@ -514,6 +514,23 @@ export function setProjectFieldCmd(field: 'name' | 'title' | 'startupForm', valu
   };
 }
 
+/** The optional Project Properties fields (Startup Object Sub Main, Make tab). `undefined` in `patch` removes a field. */
+export type ProjectOptions = Pick<Project, 'subMain' | 'commandLine' | 'condComp' | 'versionInfo' | 'fileTypes'>;
+export function setProjectOptionsCmd(patch: ProjectOptions, label = 'Change project properties'): Command {
+  let old: ProjectOptions = {};
+  const keys = Object.keys(patch) as (keyof ProjectOptions)[];
+  const put = (p: Project, from: ProjectOptions) => {
+    for (const k of keys) {
+      if (from[k] === undefined) delete p[k]; else (p as unknown as Record<string, unknown>)[k] = from[k];
+    }
+  };
+  return {
+    label,
+    do(p) { old = Object.fromEntries(keys.map(k => [k, p[k]])); put(p, patch); },
+    undo(p) { put(p, old); },
+  };
+}
+
 /** Project icon (Make tab): `iconAsset` is an asset id or null. */
 export function setProjectIconCmd(id: string | null): Command {
   let old: string | null = null;

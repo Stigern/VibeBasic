@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import type { Backend, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DbValue, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
+import type { Backend, MakeAppOptions, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DbValue, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import { dialogFilters } from './dialogFilters';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
@@ -75,10 +75,10 @@ export class TauriBackend implements Backend {
     return (await save({ defaultPath: defaultName, filters: [{ name: 'Application', extensions: ['app'] }] })) ?? null;
   }
 
-  async makeApp(o: { targetPath: string; appName: string; projectJson: string; iconPngBase64: string | null; overwrite: boolean }): Promise<void> {
+  async makeApp(o: MakeAppOptions): Promise<void> {
     await call<void>('make_app', {
       targetPath: o.targetPath, appName: o.appName, projectJson: o.projectJson,
-      iconPngBase64: o.iconPngBase64, overwrite: o.overwrite,
+      iconPngBase64: o.iconPngBase64, overwrite: o.overwrite, version: o.version ?? null, fileTypes: o.fileTypes ?? null,
     });
   }
 
@@ -196,6 +196,10 @@ export class TauriBackend implements Backend {
     });
   }
   sysInfo(): Promise<SysInfoData> { return call('sys_info', {}); }
+  environment(): Promise<[string, string][]> { return call('get_environment', {}); }
+  commandLine(): Promise<string> { return call('get_command_line', {}); }
+  prevInstance(): Promise<boolean> { return call('app_prev_instance', {}); }
+  logEvent(line: string): Promise<void> { return call('app_log_event', { line }); }
 
   mediaOpen(path: string): Promise<string> { return call<string>('media_open', { path }); }
   async mediaRead(token: string): Promise<Uint8Array> {

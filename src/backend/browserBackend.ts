@@ -1,4 +1,4 @@
-import type { Backend, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
+import type { Backend, MakeAppOptions, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import { AI_CUT_OFF, readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
 import { MemoryFs } from '../lang/fileio/memoryFs';
@@ -205,7 +205,7 @@ export class BrowserBackend implements Backend {
     return null;
   }
 
-  async makeApp(_o: { targetPath: string; appName: string; projectJson: string; iconPngBase64: string | null; overwrite: boolean }): Promise<void> {
+  async makeApp(_o: MakeAppOptions): Promise<void> {
     throw new Error('Make requires the desktop version of VibeBasic.');
   }
 

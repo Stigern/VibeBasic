@@ -2,7 +2,7 @@
 // the patch queue and the modal stack, and talks to the windows through a FormHost.
 
 import type { BreakInfo, CodeLocation, Host, VBObject } from '../lang/host';
-import { VBRuntimeError } from '../lang/errors';
+import { VBRuntimeError, VBSyntaxError } from '../lang/errors';
 import { macrotask } from '../lang/interp/driver';
 import { Program, type SourceModule } from '../lang/interp/program';
 import { Nothing, type VBRef, type VBValue } from '../lang/values';
@@ -42,6 +42,9 @@ class TimedPatchQueue extends PatchQueue {
     this.timer = null;
   }
 }
+
+/** VB6's message when the Startup Object is Sub Main and no standard module has one. */
+export const NO_STARTUP = 'Must have startup form or Sub Main()';
 
 /** Minimum time between two DoEvents calls that really give the event loop a turn. */
 const DOEVENTS_MS = 8;
@@ -93,7 +96,9 @@ export class RunSession implements Host, FormSession {
     this.queue = new TimedPatchQueue((key, m) => this.forms.get(key.toLowerCase())?.deliver(m));
     for (const f of project.forms) this.forms.set(f.name.toLowerCase(), new FormInstance(f, this));
     this.title = project.title || project.name;
-    this.app = new AppObject(this.title, cb.appPath, cb.appName || project.name);
+    // App.LogEvent writes only in a made app; VB6 does not log in the IDE
+    const log = mode === 'app' ? (line: string) => this.system()?.logEvent?.(line) ?? Promise.resolve() : undefined;
+    this.app = new AppObject({ title: this.title, path: cb.appPath, exeName: cb.appName || project.name, version: project.versionInfo, log });
     const modules: SourceModule[] = [
       ...project.forms.map(f => ({ name: f.name, kind: 'form' as const, source: f.code })),
       ...project.modules.map(m => ({ name: m.name, kind: moduleKind(m), source: m.code })),
@@ -101,14 +106,26 @@ export class RunSession implements Host, FormSession {
     this.program = new Program(modules, this, {
       appTitle: this.title, appPath: cb.appPath, condComp: project.condComp, ignoreAsserts: mode !== 'ide',
     });
+    if (project.subMain && !this.mainModule()) throw new VBSyntaxError(NO_STARTUP, 0, 0);
+  }
+
+  /** The standard module with Sub Main (the Startup Object Sub Main). */
+  private mainModule(): string | undefined {
+    return this.project.modules.find(m => moduleKind(m) === 'module' && this.program.hasProcedure(m.name, 'Main'))?.name;
   }
 
   get appPath(): string { return this.cb.appPath; }
   get state(): 'running' | 'break' | 'ended' { return this._state; }
   get ended(): boolean { return this._state === 'ended'; }
 
-  /** Loads and shows the startup form. */
+  /** Runs Sub Main, or loads and shows the startup form. In a made app App.PrevInstance is known first. */
   async start(): Promise<void> {
+    if (this.mode === 'app') this.app.prevInstance = await this.system()?.prevInstance?.().catch(() => false) ?? false;
+    const main = this.project.subMain ? this.mainModule() : undefined;
+    if (main) {
+      await this.fire(main, 'Main', []);   // the program ends when Main returns and no form is loaded
+      return;
+    }
     const f = this.forms.get(this.project.startupForm.toLowerCase()) ?? [...this.forms.values()][0];
     if (!f) { this.end(); return; }
     await f.show(false);
@@ -301,6 +318,18 @@ export class RunSession implements Host, FormSession {
   createObject(progId: string): VBObject | undefined {
     return createAdoObject(progId, { connect: path => this.db().connect(this.resolvePath(path)) });
   }
+
+  /** Command$: in the IDE the project's Command Line Arguments; in a made app its arguments or the file opened with it. */
+  commandLine(): string | Promise<string> {
+    if (this.mode === 'ide') return this.project.commandLine ?? '';
+    return this.system()?.commandLine?.().catch(() => '') ?? '';
+  }
+
+  /** Environ: the real process environment (read once; empty when there is none, as in a browser). */
+  environment(): Promise<readonly (readonly [string, string])[]> {
+    return this.env ??= this.system()?.environment?.().catch(() => []) ?? Promise.resolve([]);
+  }
+  private env: Promise<readonly (readonly [string, string])[]> | undefined;
 
   /**
    * DoEvents. Queued VB events are pumped by the driver on every await; the window (UI, timers, IPC) gets a real

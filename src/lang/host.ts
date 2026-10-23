@@ -82,4 +82,8 @@ export interface Host {
   /** `New ADODB.Connection`, CreateObject("ADODB.Recordset"): the objects the run session makes (`progId` as registered);
    *  undefined when it cannot (error 429). */
   createObject?(progId: string): VBObject | undefined;
+  /** Command$: the program's command line ('' when absent). */
+  commandLine?(): string | Promise<string>;
+  /** Environ: the process environment as NAME / value pairs in its order (absent: Environ gives ""). */
+  environment?(): readonly (readonly [string, string])[] | Promise<readonly (readonly [string, string])[]>;
 }

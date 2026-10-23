@@ -1,10 +1,11 @@
 // Project Properties and Project > Components dialogs, and the shared tabbed-dialog runner (also used by Options).
 import { getBackend } from '../backend/backend';
 import { assetUsedElsewhere } from '../model/assetRefs';
-import { addAssetCmd, compositeCmd, removeAssetCmd, setProjectFieldCmd, setProjectIconCmd, type Command } from '../model/commands';
+import { addAssetCmd, compositeCmd, removeAssetCmd, setProjectFieldCmd, setProjectIconCmd, setProjectOptionsCmd, type Command, type ProjectOptions } from '../model/commands';
 import { availableComponents, componentDef, componentInUse, componentLocation, normalizeComponents, setComponentsCmd } from '../model/components';
 import { newId } from '../model/controls';
-import type { Asset, Project } from '../model/types';
+import { DEFAULT_VERSION, type Asset, type Project, type VersionInfo } from '../model/types';
+import { parseCondConsts } from '../lang/condComp';
 import { bytesToBase64 } from './propertyEditors';
 import { validateName } from '../model/controls';
 import { createCombo } from '../ui98/combo';
@@ -45,6 +46,15 @@ export async function runTabbedDialog(doc: Document, title: string, tabs: Dialog
 
 export const field = (label: string, control: HTMLElement): HTMLElement => h('label', { class: 'dlgform98-row' }, h('span', {}, label), control);
 
+// 98.css hides the native box and draws it with `input + label[for]::before`, so the label must follow the input
+// as a sibling (as in the font dialog's .pw98-fontchk); a box wrapped inside its label is invisible.
+let checkIds = 0;
+export const check = (label: string, on: boolean): { el: HTMLElement; input: HTMLInputElement } => {
+  const id = `opt98-check-${++checkIds}`;
+  const input = h('input', { type: 'checkbox', checked: on, id });
+  return { input, el: h('div', { class: 'dlgform98-check' }, input, h('label', { for: id }, label)) };
+};
+
 /** Extra tabs for Project Properties. Plan 04 pushes a builder for the "Make" tab here. */
 export const projectPropertiesTabs: DialogTabBuilder[] = [];
 
@@ -80,24 +90,90 @@ function makeTab(ide: IdeState, doc: Document = document): DialogTab {
   });
   clear.addEventListener('click', () => { pending = null; refresh(); });
   refresh();
+
+  const v = p.versionInfo ?? DEFAULT_VERSION;
+  const num = (n: number) => h('input', { type: 'text', value: String(n), class: 'dlgform98-num' });
+  const major = num(v.major), minor = num(v.minor), revision = num(v.revision);
+  const auto = check('Auto Increment', v.autoIncrement === true);
+  // Version Information: VB6's Type list and Value box
+  const info: Record<InfoKey, string> = Object.fromEntries(VERSION_INFO.map(([k]) => [k, v[k] ?? ''])) as Record<InfoKey, string>;
+  const value = h('input', { type: 'text', value: info.comments });
+  let shown: InfoKey = 'comments';
+  const type = createCombo({ items: VERSION_INFO.map(([, l]) => l), value: VERSION_INFO[0][1], onChange: l => {
+    shown = VERSION_INFO.find(([, x]) => x === l)?.[0] ?? 'comments';
+    value.value = info[shown];
+  } });
+  value.addEventListener('input', () => { info[shown] = value.value; });
+  const fileTypes = h('input', { type: 'text', value: (p.fileTypes ?? []).join(', '), placeholder: 'kalk, txt' });
+  const cmdLine = h('input', { type: 'text', value: p.commandLine ?? '' });
+  const condComp = h('input', { type: 'text', value: p.condComp ?? '', placeholder: 'DEBUG = 1 : BETA = 0' });
+  const versionNumbers = [major, minor, revision];
   return {
     label: 'Make',
-    content: h('div', { class: 'dlgform98' }, field('Icon:', h('span', {}, preview, browse, clear))),
+    content: h('div', { class: 'dlgform98' },
+      field('Version Number:', h('div', { class: 'dlgform98-nums' }, 'Major', major, 'Minor', minor, 'Revision', revision)),
+      auto.el,
+      field('Version Information:', type.el), field('Value:', value),
+      field('Icon:', h('span', {}, preview, browse, clear)),
+      field('File Types:', fileTypes),
+      field('Command Line Arguments:', cmdLine),
+      field('Conditional Compilation Arguments:', condComp)),
+    validate: () => {
+      if (!versionNumbers.every(i => /^\d{1,4}$/.test(i.value.trim()))) return 'Invalid property value';
+      if (parseFileTypes(fileTypes.value) === null) return 'Invalid file type: use extensions such as kalk, txt';
+      try { parseCondConsts(condComp.value); } catch (e) { return `Conditional Compilation Arguments: ${e instanceof Error ? e.message : String(e)}`; }
+      return null;
+    },
     commands: () => {
-      if (pending === undefined) return [];
-      const old = p.iconAsset;
-      const drop = old !== null && old in p.assets && !assetUsedElsewhere(p, old) ? [removeAssetCmd(old)] : [];
-      if (pending === null) return old === null ? [] : [setProjectIconCmd(null), ...drop];
-      return [addAssetCmd(pending.id, pending.asset), setProjectIconCmd(pending.id), ...drop];
+      const cmds: Command[] = [];
+      if (pending !== undefined) {
+        const old = p.iconAsset;
+        const drop = old !== null && old in p.assets && !assetUsedElsewhere(p, old) ? [removeAssetCmd(old)] : [];
+        if (pending === null) { if (old !== null) cmds.push(setProjectIconCmd(null), ...drop); }
+        else cmds.push(addAssetCmd(pending.id, pending.asset), setProjectIconCmd(pending.id), ...drop);
+      }
+      const nv: VersionInfo = { major: Number(major.value), minor: Number(minor.value), revision: Number(revision.value) };
+      if (auto.input.checked) nv.autoIncrement = true;
+      for (const [k] of VERSION_INFO) if (info[k] !== '') nv[k] = info[k];
+      const opts: ProjectOptions = {};
+      if (JSON.stringify(nv) !== JSON.stringify(p.versionInfo ?? DEFAULT_VERSION)) opts.versionInfo = nv;
+      const types = parseFileTypes(fileTypes.value) ?? [];
+      if (types.join() !== (p.fileTypes ?? []).join()) opts.fileTypes = types.length ? types : undefined;
+      if (cmdLine.value !== (p.commandLine ?? '')) opts.commandLine = cmdLine.value || undefined;
+      if (condComp.value !== (p.condComp ?? '')) opts.condComp = condComp.value || undefined;
+      if (Object.keys(opts).length) cmds.push(setProjectOptionsCmd(opts));
+      return cmds;
     },
   };
 }
+
+type InfoKey = 'comments' | 'companyName' | 'fileDescription' | 'legalCopyright' | 'legalTrademarks' | 'productName';
+/** The Version Information types, as VB6's Make tab lists them. */
+const VERSION_INFO: [InfoKey, string][] = [
+  ['comments', 'Comments'], ['companyName', 'Company Name'], ['fileDescription', 'File Description'],
+  ['legalCopyright', 'Legal Copyright'], ['legalTrademarks', 'Legal Trademarks'], ['productName', 'Product Name'],
+];
+
+/** "kalk, *.TXT .md" -> ['kalk', 'txt', 'md']; null when one is not an extension (letters, digits, - and _). */
+export function parseFileTypes(text: string): string[] | null {
+  const out: string[] = [];
+  for (const raw of text.split(/[\s,;]+/)) {
+    const e = raw.replace(/^\*?\./, '').toLowerCase();
+    if (!e) continue;
+    if (!/^[a-z0-9_-]+$/.test(e)) return null;
+    if (!out.includes(e)) out.push(e);
+  }
+  return out;
+}
 projectPropertiesTabs.push(makeTab);
+
+/** The Startup Object that runs Sub Main of a standard module. */
+export const SUB_MAIN = 'Sub Main';
 
 function generalTab(ide: IdeState): DialogTab {
   const p = ide.project;
   const name = h('input', { type: 'text', value: p.name, 'data-autofocus': '' });
-  const startup = createCombo({ items: p.forms.map(f => f.name), value: p.startupForm });
+  const startup = createCombo({ items: [SUB_MAIN, ...p.forms.map(f => f.name)], value: p.subMain ? SUB_MAIN : p.startupForm });
   const title = h('input', { type: 'text', value: p.title });
   return {
     label: 'General',
@@ -106,7 +182,9 @@ function generalTab(ide: IdeState): DialogTab {
     commands: () => {
       const cmds: Command[] = [];
       if (name.value !== p.name) cmds.push(setProjectFieldCmd('name', name.value));
-      if (startup.getValue() !== p.startupForm && p.forms.some(f => f.name === startup.getValue())) cmds.push(setProjectFieldCmd('startupForm', startup.getValue()));
+      const subMain = startup.getValue() === SUB_MAIN;
+      if (subMain !== (p.subMain === true)) cmds.push(setProjectOptionsCmd({ subMain: subMain || undefined }));
+      if (!subMain && startup.getValue() !== p.startupForm && p.forms.some(f => f.name === startup.getValue())) cmds.push(setProjectFieldCmd('startupForm', startup.getValue()));
       if (title.value !== p.title) cmds.push(setProjectFieldCmd('title', title.value));
       return cmds;
     },

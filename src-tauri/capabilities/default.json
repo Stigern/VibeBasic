@@ -78,6 +78,10 @@
     "allow-get-embedded-project",
     "allow-quit-app",
     "allow-get-app-dir",
-    "allow-get-app-name"
+    "allow-get-app-name",
+    "allow-get-command-line",
+    "allow-get-environment",
+    "allow-app-prev-instance",
+    "allow-app-log-event"
   ]
 }

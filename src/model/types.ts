@@ -33,9 +33,23 @@ export interface ModuleDef { id: string; name: string; code: string; kind?: 'cla
 /** What a module is to the interpreter. */
 export const moduleKind = (m: ModuleDef): 'module' | 'class' => (m.kind === 'class' ? 'class' : 'module');
 export interface Asset { mime: string; dataBase64: string }
+/** Project Properties > Make: VB6's version number (0-9999 each) and version information (App.Major ..., the made app's Info.plist). */
+export interface VersionInfo {
+  major: number; minor: number; revision: number;
+  /** Make adds 1 to the revision each time. */
+  autoIncrement?: boolean;
+  comments?: string; companyName?: string; fileDescription?: string; legalCopyright?: string; legalTrademarks?: string; productName?: string;
+}
+/** VB6's version of a new project: 1.0.0. */
+export const DEFAULT_VERSION: VersionInfo = { major: 1, minor: 0, revision: 0 };
 /**
  * `components`: the OCX file names checked in Project > Components (see components.ts); their controls are in the Toolbox.
  * `condComp`: the conditional compilation arguments for `#If` (`DEBUG = 1 : BETA = 0`); older projects have none.
+ * `subMain`: the Startup Object is Sub Main (in a standard module); `startupForm` stays a form name (shown when this is unset).
+ * `commandLine`: Command$ when the program runs in the IDE (Make tab, Command Line Arguments).
+ * `versionInfo`: absent is DEFAULT_VERSION (not `version`: the file format number). `fileTypes`: extensions a made app opens from Finder (`kalk`, `txt`).
+ * The fields after `components` are optional: older projects have none.
  */
 export interface Project { name: string; title: string; startupForm: string; forms: FormDef[]; modules: ModuleDef[];
-  assets: Record<string, Asset>; iconAsset: string | null; components: string[]; condComp?: string }
+  assets: Record<string, Asset>; iconAsset: string | null; components: string[]; condComp?: string;
+  subMain?: boolean; commandLine?: string; versionInfo?: VersionInfo; fileTypes?: string[] }

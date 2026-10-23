@@ -1,19 +1,12 @@
 // Tools > Options: Editor, Editor Format and General tabs. Plan 05 pushes a builder for the "AI" tab onto `optionsTabs`.
 import { getBackend, type Backend } from '../backend/backend';
 import { h } from '../ui98/dom';
-import { field, runTabbedDialog, type DialogTab, type DialogTabBuilder } from './projectDialogs';
+import { check, field, runTabbedDialog, type DialogTab, type DialogTabBuilder } from './projectDialogs';
 import type { IdeState } from './ideState';
 
 export const optionsTabs: DialogTabBuilder[] = [];
 
-// 98.css hides the native box and draws it with `input + label[for]::before`, so the label must follow the input
-// as a sibling (as in the font dialog's .pw98-fontchk); a box wrapped inside its label is invisible.
-let checkIds = 0;
-export const check = (label: string, on: boolean): { el: HTMLElement; input: HTMLInputElement } => {
-  const id = `opt98-check-${++checkIds}`;
-  const input = h('input', { type: 'checkbox', checked: on, id });
-  return { input, el: h('div', { class: 'dlgform98-check' }, input, h('label', { for: id }, label)) };
-};
+export { check };
 /** Code window font sizes (px). */
 export const FONT_SIZES = [9, 10, 11, 12, 13, 14, 15, 16];
 const positiveInt = (s: string): boolean => /^\d+$/.test(s.trim()) && Number(s) > 0;

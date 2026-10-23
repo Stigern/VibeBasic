@@ -493,7 +493,7 @@ test('RGB / QBColor', () => {
   expect(() => call('QBColor', 16)).toThrow(err(5));
 });
 
-test('IIf / Choose / Switch / Array / Environ / Command', () => {
+test('IIf / Choose / Switch / Array / Environ / Command', async () => {
   expect(call('IIf', true, 'a', 'b')).toBe('a');
   expect(call('IIf', 0, 'a', 'b')).toBe('b');
   expect(call('Choose', 2, 'a', 'b', 'c')).toBe('b');
@@ -505,11 +505,11 @@ test('IIf / Choose / Switch / Array / Environ / Command', () => {
   expect(a.bounds).toEqual([[0, 2]]);
   expect(arr(a)).toEqual([1, 'x', 3]);
   expect((call('Array') as VBArray).bounds).toEqual([[0, -1]]);
-  expect(call('Environ', 'PATH')).toBe('');
+  await expect(call('Environ', 'PATH')).resolves.toBe('');   // the test host has no environment
   expect(call('Command')).toBe('');
 });
 
-test('StrConv, Beep, Shell', () => {
+test('StrConv, Beep, Shell', async () => {
   expect(call('StrConv', 'hello wORLD o\'neil', 3)).toBe("Hello World O'neil");
   expect(call('StrConv', 'abc', 1)).toBe('ABC');
   expect(call('StrConv', 'ABC', 2)).toBe('abc');
@@ -517,7 +517,7 @@ test('StrConv, Beep, Shell', () => {
   expect(call('StrConv', 'abc', 128)).toBe('abc');
   expect(() => call('Beep')).not.toThrow();   // the test host has no sound
   expect(() => call('Shell', 'notepad.exe')).toThrow(expect.objectContaining({ number: 5, description: 'Shell is not available in VibeBasic' }));
-  expect(call('Environ', 'HOME')).toBe('');
+  await expect(call('Environ', 'HOME')).resolves.toBe('');
 });
 
 test('dialogs go to the host', async () => {

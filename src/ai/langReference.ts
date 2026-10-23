@@ -57,7 +57,7 @@ const STATEMENTS = 'Option Explicit; Dim / Private / Public / Static x As Type, 
   + ' Property Get/Let/Set, Exit Property, Me; Event E(a) + RaiseEvent E(a) -> Private WithEvents x As Class1, Sub x_E(a); Implements IFoo, Sub IFoo_M().'
   + ' If TypeOf x Is TextBox (or Form, a class, Collection); named arguments MsgBox Prompt:="x", Title:="t" (skip Optionals);'
   + ' Option Base 1, Option Compare Text; Global = Public; GoSub label ... Return; On n GoTo|GoSub a, b; Debug.Assert cond;'
-  + ' #Const X = 1, #If X Then ... #ElseIf ... #Else ... #End If.';
+  + ' #Const X = 1, #If X Then ... #ElseIf ... #Else ... #End If. App.Major, Minor, Revision, PrevInstance, LogEvent s.';
 
 /** Builds the card from the language's tables (exported for the stability test). */
 export function buildLanguageReference(): string {

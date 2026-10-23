@@ -2,8 +2,9 @@
 
 import type { VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
-import { Nothing, toStr, type VBValue } from '../../lang/values';
-import type { PictureRef } from '../../model/types';
+import { optInt } from '../../lang/builtins/util';
+import { Empty, Nothing, toStr, type VBValue } from '../../lang/values';
+import { DEFAULT_VERSION, type PictureRef, type VersionInfo } from '../../model/types';
 
 /** Any picture value carries its asset reference; `null` is an empty picture (`LoadPicture("")`). */
 export interface HasPictureRef { pictureRef: PictureRef | null }
@@ -43,17 +44,51 @@ abstract class PropObject implements VBObject {
     if (!s) throw new VBRuntimeError(383);
     s(value);
   }
-  callMethod(): VBValue { throw new VBRuntimeError(438); }
+  callMethod(_name: string, _args: VBValue[]): VBValue | Promise<VBValue> { throw new VBRuntimeError(438); }
+}
+
+/** App.LogEvent's event types (vbLogEventTypeError 1, Warning 2, Information 4) as the log file names them. */
+const LOG_TYPES: Record<number, string> = { 1: 'Error', 2: 'Warning', 4: 'Information' };
+
+/** A log line: local time, the event type and the text (line ends in it become spaces). */
+export function logLine(text: string, type: number, now = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  const t = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} ${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`;
+  return `${t}\t${LOG_TYPES[type] ?? 'Information'}\t${text.replace(/\r\n|[\r\n]/g, ' ')}`;
+}
+
+export interface AppInfo {
+  title: string; path: string; exeName: string;
+  version?: VersionInfo;
+  /** App.LogEvent: writes one line to the log (absent: LogEvent does nothing, as in VB6's IDE). */
+  log?: (line: string) => Promise<void>;
 }
 
 export class AppObject extends PropObject {
   readonly vbTypeName = 'App';
-  constructor(public title: string, private path: string, private exeName: string) {
+  title: string;
+  /** App.PrevInstance; the session sets it before the program starts. */
+  prevInstance = false;
+  constructor(private info: AppInfo) {
     super();
+    this.title = info.title;
     this.setters = { title: v => { this.title = toStr(v); } };
   }
   protected props(): Record<string, () => VBValue> {
-    return { title: () => this.title, path: () => this.path, exename: () => this.exeName, previnstance: () => false };
+    const v = this.info.version ?? DEFAULT_VERSION;
+    return {
+      title: () => this.title, path: () => this.info.path, exename: () => this.info.exeName, previnstance: () => this.prevInstance,
+      major: () => v.major, minor: () => v.minor, revision: () => v.revision,
+      comments: () => v.comments ?? '', companyname: () => v.companyName ?? '', filedescription: () => v.fileDescription ?? '',
+      legalcopyright: () => v.legalCopyright ?? '', legaltrademarks: () => v.legalTrademarks ?? '', productname: () => v.productName ?? '',
+    };
+  }
+  override hasMember(name: string): boolean { return name.toLowerCase() === 'logevent' || super.hasMember(name); }
+  override callMethod(name: string, args: VBValue[]): VBValue | Promise<VBValue> {
+    if (name.toLowerCase() !== 'logevent') throw new VBRuntimeError(438);
+    if (args.length < 1 || args.length > 2 || args[0] === undefined) throw new VBRuntimeError(450);
+    const line = logLine(toStr(args[0]), optInt(args[1], 4));
+    return this.info.log ? this.info.log(line).then(() => Empty, () => { throw new VBRuntimeError(75); }) : Empty;
   }
 }
 

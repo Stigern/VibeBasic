@@ -24,7 +24,8 @@ const membersOf = (type: ControlType): string[] =>
 
 /** The members of the run session's global objects (src/run/objects/appObjects.ts, globalObjects.ts). */
 const GLOBAL_OBJECTS: Record<string, string[]> = {
-  app: ['EXEName', 'Path', 'PrevInstance', 'Title'],
+  app: ['Comments', 'CompanyName', 'EXEName', 'FileDescription', 'LegalCopyright', 'LegalTrademarks', 'LogEvent', 'Major', 'Minor',
+    'Path', 'PrevInstance', 'ProductName', 'Revision', 'Title'],
   screen: ['ActiveControl', 'ActiveForm', 'Height', 'MousePointer', 'Width'],
   clipboard: ['Clear', 'GetFormat', 'GetText', 'SetText'],
   forms: ['Count', 'Item'],

@@ -67,6 +67,10 @@ pub const APP_COMMANDS: &[&str] = &[
   "quit_app",
   "get_app_dir",
   "get_app_name",
+  "get_command_line",
+  "get_environment",
+  "app_prev_instance",
+  "app_log_event",
 ];
 
 /// The app commands the form and dialog windows of a running program may call (capabilities/run-windows.json): reading a media

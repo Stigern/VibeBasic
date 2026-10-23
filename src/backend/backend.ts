@@ -79,7 +79,17 @@ export interface SysInfoData {
   workLeft: number; workTop: number; workWidth: number; workHeight: number;
   acStatus: number; batteryLifePercent: number; batteryLifeTime: number; batteryFullTime: number; batteryStatus: number;
 }
-export interface SystemApi { sysInfo(): Promise<SysInfoData> }
+export interface SystemApi {
+  sysInfo(): Promise<SysInfoData>;
+  /** Environ: the process environment as NAME / value pairs, in the process's order. */
+  environment?(): Promise<[string, string][]>;
+  /** A made app's Command$: the files opened with it (Finder), else its arguments after the executable, joined with spaces. */
+  commandLine?(): Promise<string>;
+  /** App.PrevInstance: another instance of this made app (the same bundle id) runs. */
+  prevInstance?(): Promise<boolean>;
+  /** App.LogEvent: appends one line to the made app's log file (in its data folder). */
+  logEvent?(line: string): Promise<void>;
+}
 
 /** A database value as the Rust side sends it: SQLite NULL, a number, a string, or the bytes of a BLOB. */
 export type DbValue = null | number | string | { blob: string };
@@ -107,6 +117,13 @@ export interface DatabaseApi {
   dbRollbackTrans(id: number): Promise<number>;
 }
 
+/** Make: the project, the icon, the version for Info.plist (Major.Minor.Revision, Legal Copyright) and the file extensions it opens. */
+export interface MakeAppOptions {
+  targetPath: string; appName: string; projectJson: string; iconPngBase64: string | null; overwrite: boolean;
+  version?: { major: number; minor: number; revision: number; copyright: string };
+  fileTypes?: string[];
+}
+
 /** FileSystemApi: the files of a running program (Open, Kill, Dir ...) and SaveSetting, made by the main window. */
 export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, SystemApi {
   readonly kind: 'tauri' | 'browser';
@@ -117,7 +134,7 @@ export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, 
   /** Save dialog for a made app (filter .app). Null when cancelled. */
   saveAppDialog(defaultName: string): Promise<string | null>;
   /** Builds a standalone .app from the project (desktop only). Rejects with the error text. */
-  makeApp(o: { targetPath: string; appName: string; projectJson: string; iconPngBase64: string | null; overwrite: boolean }): Promise<void>;
+  makeApp(o: MakeAppOptions): Promise<void>;
   openFileDialog(filters: FileFilter[]): Promise<string | null>;
   /** Generic open dialog (CommonDialog.ShowOpen): `filters` in the order shown (the first is selected), `initDir` '' for the default folder. Null when cancelled. An extension `*` means every file. */
   showOpenDialog(filters: FileFilter[], title: string, initDir: string): Promise<string | null>;

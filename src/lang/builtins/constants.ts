@@ -24,6 +24,9 @@ group({
 // File attributes (Dir, GetAttr, SetAttr)
 group({ vbNormal: 0, vbReadOnly: 1, vbHidden: 2, vbSystem: 4, vbVolume: 8, vbDirectory: 16, vbArchive: 32, vbAlias: 64 });
 
+// App.LogEvent
+group({ vbLogEventTypeError: 1, vbLogEventTypeWarning: 2, vbLogEventTypeInformation: 4 });
+
 // Colours (VB6 Long: &H00BBGGRR)
 group({
   vbBlack: 0, vbRed: 0xff, vbGreen: 0xff00, vbYellow: 0xffff,
