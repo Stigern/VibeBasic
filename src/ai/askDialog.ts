@@ -8,7 +8,7 @@ import { listProcedures } from '../model/procedures';
 import { messageBox98, showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
 import { createAiAnimation } from './aiAnimation';
-import { applyCodeProposal, extractCode, skippedProblem } from './codeMode';
+import { type CodeSelection, applyCodeProposal, extractCode, skippedProblem } from './codeMode';
 import { buildCodeRequest, buildFixRequest, buildFormRequest, type FixError } from './context';
 import { NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
 import { type PreviewResult, showCodePreview, showFormPreview } from './previewDialogs';
@@ -123,10 +123,14 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   const prompt = await promptDialog(doc, `Ask AI - ${item.name} (${codeMode ? 'Code' : 'Form'})`);
   if (prompt === null) return;
 
-  const first = (() => { try { return codeMode ? buildCodeRequest(project, itemId, codeWin!.getCursorLine(), prompt) : buildFormRequest(project, itemId, prompt); } catch { return null; } })();
+  // Code mode with a selection: the request is about it, and a bare-body answer replaces exactly it.
+  const sel = codeMode ? codeWin!.getSelection?.() ?? null : null;
+  const selection = sel && sel.text.trim() ? sel : null;
+  const opts = { contextTokens: settings.contextTokens, selection: selection?.text };
+  const first = (() => { try { return codeMode ? buildCodeRequest(project, itemId, codeWin!.getCursorLine(), prompt, opts) : buildFormRequest(project, itemId, prompt, opts); } catch { return null; } })();
   if (!first) { await warn(doc, 'Could not build the request.'); return; }
   const session: AiSession = { ide, backend, settings, doc };
-  if (codeMode) await runCodeConversation(session, { first, itemId, codeWin: codeWin! });
+  if (codeMode) await runCodeConversation(session, { first, itemId, codeWin: codeWin!, selection });
   else await runFormConversation(session, { first, itemId });
 }
 
@@ -154,7 +158,7 @@ export async function askAiAboutError(ide: IdeState, backend: Backend, fix: Erro
   if (!settings) return;
   const win = ui.openCode(fix.itemId);
   win.gotoLine(fix.error.line);   // the cursor marks the failing procedure for the merge
-  const first = (() => { try { return buildFixRequest(ide.project, fix.itemId, fix.error, fix.error.compile ? [] : fix.vars); } catch { return null; } })();
+  const first = (() => { try { return buildFixRequest(ide.project, fix.itemId, fix.error, fix.error.compile ? [] : fix.vars, { contextTokens: settings.contextTokens }); } catch { return null; } })();
   if (!first) { await warn(doc, 'Could not build the request.'); return; }
   const applied = await runCodeConversation({ ide, backend, settings, doc }, { first, itemId: fix.itemId, codeWin: win, beforeApply: ui.end });
   if (applied) ui.openCode(fix.itemId).gotoLine(fix.error.line);
@@ -246,9 +250,10 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
 
 /**
  * Code mode: `first` is the finished request; the proposal is checked against `codeWin` and applied there on OK
- * (after `beforeApply`, which Ask AI on an error uses to end the program). True when a proposal was applied.
+ * (after `beforeApply`, which Ask AI on an error uses to end the program). With `selection` (the code window's selection
+ * when the request was made), an answer without a procedure heading replaces exactly that. True when a proposal was applied.
  */
-export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[]; itemId: string; codeWin: CodeWindow; beforeApply?: () => Promise<void> }): Promise<boolean> {
+export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[]; itemId: string; codeWin: CodeWindow; beforeApply?: () => Promise<void>; selection?: CodeSelection | null }): Promise<boolean> {
   const { ide, doc } = s;
   const project = ide.project;
   const win = o.codeWin;
@@ -265,7 +270,7 @@ export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[
     const code = fixEventNames(form, raw, notes);
     const before = win.getSource();
     const proc = listProcedures(before).find(p => win.getCursorLine() >= p.line && win.getCursorLine() <= p.endLine)?.name ?? null;
-    const applied = applyCodeProposal(before, code, proc);
+    const applied = applyCodeProposal(before, code, proc, o.selection);
     if (!applied) return none;
     const problems = validateCode(code, { moduleName, form, project });
     if (applied.skipped) problems.push(skippedProblem(applied.skipped));   // the retry asks for the changed procedures only

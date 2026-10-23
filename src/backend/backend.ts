@@ -1,6 +1,6 @@
 import { BrowserBackend } from './browserBackend';
 import { TauriBackend } from './tauriBackend';
-import type { ChatMessage } from '../ai/types';
+import type { AiModel, ChatMessage } from '../ai/types';
 import type { AiChatOptions } from '../ai/sse';
 
 export interface FileFilter { name: string; extensions: string[] }
@@ -93,8 +93,8 @@ export interface Backend extends NetApi {
   getAppName(): Promise<string>;
   /** Rejects with the reason text when Make can't work here (browser, or desktop not run as a built .app). */
   canMakeApp(): Promise<void>;
-  /** Model ids from `GET {baseUrl}/models`. Rejects with a readable error text. */
-  aiListModels(baseUrl: string, apiKey: string): Promise<string[]>;
+  /** Models from `GET {baseUrl}/models` (id, and the context size when the server reports one). Rejects with a readable error text. */
+  aiListModels(baseUrl: string, apiKey: string): Promise<AiModel[]>;
   /** `POST {baseUrl}/chat/completions`; resolves to choices[0].message.content. With `opts.onDelta` the reply streams (thinking, then answer); `opts.signal` aborts it (rejects with "cancelled"). Rejects with a readable error text. */
   aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string, opts?: AiChatOptions): Promise<string>;
   /** Made apps: the runtime menu's Quit (Cmd+Q) was chosen. */

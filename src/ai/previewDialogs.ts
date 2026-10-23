@@ -5,7 +5,7 @@ import { diffLines } from './diff';
 import { formMetrics, renderFormSurface } from '../controls/render';
 import type { Asset, FormDef } from '../model/types';
 
-const KIND_LABEL = { replaced: 'Replace', added: 'Add', body: 'Replace body of', declarations: 'Add declarations' } as const;
+const KIND_LABEL = { replaced: 'Replace', added: 'Add', body: 'Replace body of', selection: 'Replace selection in', declarations: 'Add declarations' } as const;
 const metricsLine = (metrics?: string): HTMLElement[] => metrics ? [h('div', { class: 'ai-metrics', style: 'color:#808080;margin-bottom:4px' }, metrics)] : [];
 const CELL = 'margin:0;padding:0 3px;white-space:pre;font:13px "Courier New",monospace;min-height:15px;';
 
@@ -36,7 +36,7 @@ async function previewLoop(doc: Document, show: () => Promise<string>): Promise<
 
 /** Before/After view of a code change. `canChange` false hides Change... (informational views). */
 export async function showCodePreview(doc: Document, before: string, after: string,
-  changes: { name: string; kind: 'replaced' | 'added' | 'body' | 'declarations' }[], warnings: string[] = [], metrics?: string, canChange = true): Promise<PreviewResult> {
+  changes: { name: string; kind: keyof typeof KIND_LABEL }[], warnings: string[] = [], metrics?: string, canChange = true): Promise<PreviewResult> {
   const left = h('div', { class: 'ai-before', style: 'min-width:0' });
   const right = h('div', { class: 'ai-after', style: 'min-width:0' });
   const cell = (text: string, bg: string, cls = '') => h('div', { class: cls, style: `${CELL}background:${bg}` }, text);

@@ -1,5 +1,5 @@
 import type { Backend, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
-import type { ChatMessage } from '../ai/types';
+import type { AiModel, ChatMessage } from '../ai/types';
 import { readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
 
 const AI_CONNECT_ERROR = (baseUrl: string) =>
@@ -289,10 +289,16 @@ export class BrowserBackend implements Backend {
     throw new Error('Make requires the desktop version of VibeBasic.');
   }
 
-  async aiListModels(baseUrl: string, apiKey: string): Promise<string[]> {
+  async aiListModels(baseUrl: string, apiKey: string): Promise<AiModel[]> {
     const v = (await aiRequest(baseUrl, apiKey, 'models', { method: 'GET' }, 15)) as { data?: unknown } | null;
     if (!v || !Array.isArray(v.data)) throw new Error(AI_UNREADABLE);
-    return v.data.map((m) => (m as { id?: unknown })?.id).filter((id): id is string => typeof id === 'string');
+    const out: AiModel[] = [];
+    for (const m of v.data as Record<string, unknown>[]) {
+      if (typeof m?.id !== 'string') continue;
+      const n = [m.max_model_len, m.context_length].find((x): x is number => typeof x === 'number' && x > 0);
+      out.push(n === undefined ? { id: m.id } : { id: m.id, contextTokens: n });
+    }
+    return out;
   }
 
   async aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string, opts?: AiChatOptions): Promise<string> {

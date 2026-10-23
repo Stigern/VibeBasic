@@ -2,9 +2,10 @@
 import { afterEach, expect, test, vi } from 'vitest';
 import { buildAiTab } from '../../src/ai/optionsTab';
 import { loadAiSettings, saveAiSettings } from '../../src/ai/settings';
+import type { AiModel } from '../../src/ai/types';
 
 afterEach(() => { document.body.innerHTML = ''; });
-const fakeBackend = (listModels: (b: string, k: string) => Promise<string[]> = async () => []) => {
+const fakeBackend = (listModels: (b: string, k: string) => Promise<AiModel[]> = async () => []) => {
   const store = new Map<string, unknown>();
   return {
     store,
@@ -44,7 +45,7 @@ test('tab loads saved values; key is a password field; apply saves', async () =>
   expect((tab.controls.thinking.el.querySelector('input') as HTMLInputElement).readOnly).toBe(true);
 });
 test('test connection fills models and reports', async () => {
-  const b = fakeBackend(async () => ['qwen2.5-coder:14b']);
+  const b = fakeBackend(async () => [{ id: 'qwen2.5-coder:14b' }]);
   const tab = buildAiTab(b, document);
   document.body.append(tab.content);
   await flush();
@@ -59,7 +60,7 @@ test('test connection fills models and reports', async () => {
   expect(document.querySelector('.popup98-layer .cb98-item')!.textContent).toBe('qwen2.5-coder:14b');
 });
 test('test connection selects first model when Model is empty, keeps a chosen one', async () => {
-  const b = fakeBackend(async () => ['a', 'b']);
+  const b = fakeBackend(async () => [{ id: 'a' }, { id: 'b' }]);
   const tab = buildAiTab(b, document);
   await flush();
   const p = tab.controls.testConnection();
@@ -71,7 +72,7 @@ test('test connection selects first model when Model is empty, keeps a chosen on
   expect(tab.controls.model.getValue()).toBe('b');
 });
 test('test connection fixes the case of a typed model name', async () => {
-  const b = fakeBackend(async () => ['qwen38-27b']);
+  const b = fakeBackend(async () => [{ id: 'qwen38-27b' }]);
   const tab = buildAiTab(b, document);
   await flush();
   tab.controls.model.setValue('Qwen38-27b');
@@ -118,4 +119,16 @@ test('old settings without thinking load as server default', async () => {
   expect((await loadAiSettings(b)).thinking).toBe('server');
   b.store.set('ai', { baseUrl: 'http://x/v1', model: 'm', apiKey: '', thinking: 'bogus' });
   expect((await loadAiSettings(b)).thinking).toBe('server');
+});
+test('test connection stores the context size; old settings without it load as undefined', async () => {
+  const b = fakeBackend(async () => [{ id: 'q', contextTokens: 262144 }, { id: 'r' }]);
+  b.store.set('ai', { baseUrl: 'http://x/v1', model: 'q', apiKey: '', thinking: 'server' });
+  expect((await loadAiSettings(b)).contextTokens).toBeUndefined();
+  const tab = buildAiTab(b, document);
+  await flush();
+  const p = tab.controls.testConnection();
+  await flush(); okButton().click(); await p;
+  tab.apply();
+  await flush();
+  expect((await loadAiSettings(b)).contextTokens).toBe(262144);
 });

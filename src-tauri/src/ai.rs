@@ -115,12 +115,26 @@ fn client(timeout_secs: u64) -> Result<reqwest::Client, String> {
     .map_err(|e| format!("Could not start the AI request: {e}"))
 }
 
-pub async fn list_models(base_url: &str, api_key: &Option<String>) -> Result<Vec<String>, String> {
+/// A model from `GET /models`: its id and, when the server reports it, its context size in tokens
+/// (vLLM `max_model_len`, some other servers `context_length`).
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInfo {
+  pub id: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub context_tokens: Option<u64>,
+}
+
+pub async fn list_models(base_url: &str, api_key: &Option<String>) -> Result<Vec<ModelInfo>, String> {
   let url = endpoint(base_url, "models");
   let c = client(LIST_TIMEOUT_SECS)?;
   let v = send_json(c.get(&url), base_url, &url, api_key, LIST_TIMEOUT_SECS).await?;
   let data = v.get("data").and_then(Value::as_array).ok_or_else(unreadable)?;
-  Ok(data.iter().filter_map(|m| m.get("id").and_then(Value::as_str).map(str::to_string)).collect())
+  Ok(data.iter().filter_map(|m| {
+    let id = m.get("id").and_then(Value::as_str)?.to_string();
+    let context_tokens = ["max_model_len", "context_length"].iter().find_map(|k| m.get(*k).and_then(Value::as_u64)).filter(|n| *n > 0);
+    Some(ModelInfo { id, context_tokens })
+  }).collect())
 }
 
 pub async fn chat(
@@ -365,7 +379,7 @@ fn reply_text(v: &Value) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn ai_list_models(base_url: String, api_key: Option<String>) -> Result<Vec<String>, String> {
+pub async fn ai_list_models(base_url: String, api_key: Option<String>) -> Result<Vec<ModelInfo>, String> {
   list_models(&base_url, &api_key).await
 }
 
@@ -517,9 +531,10 @@ mod tests {
     let server = MockServer::start();
     server.mock(|when, then| {
       when.method(GET).path("/v1/models");
-      then.status(200).json_body(json!({"data":[{"id":"a"},{"id":"b"}]}));
+      then.status(200).json_body(json!({"data":[{"id":"a","max_model_len":262144},{"id":"b","context_length":8192},{"id":"c"}]}));
     });
-    assert_eq!(list_models(&server.url("/v1/"), &None).await.unwrap(), vec!["a", "b"]);
+    let info = |id: &str, n: Option<u64>| ModelInfo { id: id.to_string(), context_tokens: n };
+    assert_eq!(list_models(&server.url("/v1/"), &None).await.unwrap(), vec![info("a", Some(262144)), info("b", Some(8192)), info("c", None)]);
   }
 
   #[tokio::test]
