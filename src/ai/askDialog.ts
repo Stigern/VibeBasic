@@ -10,10 +10,12 @@ import { h } from '../ui98/dom';
 import { createAiAnimation } from './aiAnimation';
 import { type CodeSelection, applyCodeProposal, extractCode, skippedProblem } from './codeMode';
 import { buildCodeRequest, buildFixRequest, buildFormRequest, type FixError } from './context';
-import { FORM_RESPONSE_FORMAT, NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
+import { addAiLogEntry, describeRequest, finishAiLogEntry, type AiLogEntry, type AiLogMode } from './aiLog';
+import { isProse, isQuestion, showAnswer } from './answerDialog';
+import { FORM_RESPONSE_FORMAT, FORM_STRUCTURED_OUTPUTS, NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
 import { type PreviewResult, showCodePreview, showFormPreview } from './previewDialogs';
 import { type AiSettings, type Thinking, loadAiSettings } from './settings';
-import type { AiChatOptions, AiUsage } from './sse';
+import { AI_CUT_OFF, type AiChatOptions, type AiUsage } from './sse';
 import { StreamLog } from './streamLog';
 import type { ChatMessage } from './types';
 import { autoFixEventNames, validateCode } from './validate';
@@ -71,7 +73,8 @@ type Waited = { kind: 'reply'; text: string; metrics: string } | { kind: 'error'
  * Cancel closes it and aborts the request (`signal`); a reply arriving afterwards is discarded.
  * A reply carries the measurement line (token counts from the server, and the time taken).
  */
-async function waitForReply(doc: Document, model: string, start: (o: AiChatOptions) => Promise<string>, log: StreamLog, label = `Waiting for ${model}...`): Promise<Waited> {
+type Start = (o: AiChatOptions, ui: { setLabel(text: string): void }) => Promise<string>;
+async function waitForReply(doc: Document, model: string, start: Start, log: StreamLog, label = `Waiting for ${model}...`): Promise<Waited> {
   const block = h('div', { style: 'position:absolute;top:1px;bottom:1px;left:0;width:40px;background:#000080' });
   const bar = h('div', { class: 'ai-progress', style: 'position:relative;height:16px;margin-top:8px;overflow:hidden;box-shadow:inset -1px -1px #fff,inset 1px 1px #808080' }, block);
   const box = h('div', {
@@ -81,7 +84,8 @@ async function waitForReply(doc: Document, model: string, start: (o: AiChatOptio
       + 'box-shadow:inset -1px -1px #fff,inset 1px 1px #808080,inset -2px -2px #dfdfdf,inset 2px 2px #000',
   });
   const anim = createAiAnimation(doc);
-  const content = h('div', { style: 'min-width:420px' }, anim.el, h('div', {}, label), bar, box);
+  const labelEl = h('div', { class: 'ai-wait-label' }, label);
+  const content = h('div', { style: 'min-width:420px' }, anim.el, labelEl, bar, box);
   log.attach(box);
   let pos = 0, dir = 1;
   const timer = setInterval(() => {
@@ -94,7 +98,10 @@ async function waitForReply(doc: Document, model: string, start: (o: AiChatOptio
   const t0 = Date.now();
   let usage: AiUsage | undefined;
   let request: Promise<string>;
-  try { request = start({ signal: ctrl.signal, onDelta: (kind, text) => { anim.setPhase(kind === 'content' ? 'writing' : 'thinking'); log.add(kind, text); }, onUsage: u => { usage = u; } }); }
+  try {
+    request = start({ signal: ctrl.signal, onDelta: (kind, text) => { anim.setPhase(kind === 'content' ? 'writing' : 'thinking'); log.add(kind, text); }, onUsage: u => { usage = u; } },
+      { setLabel: t => { labelEl.textContent = t; } });
+  }
   catch (e) { request = Promise.reject(e); }
   const answered = request.then<Waited, Waited>(text => ({ kind: 'reply', text, metrics: formatMetrics(usage, Date.now() - t0) }), e => ({ kind: 'error', message: e instanceof Error ? e.message : String(e) }));
   const cancelled = showDialog98(doc, { title: TITLE, content, buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }] })
@@ -130,7 +137,7 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   const first = (() => { try { return codeMode ? buildCodeRequest(project, itemId, codeWin!.getCursorLine(), prompt, opts) : buildFormRequest(project, itemId, prompt, opts); } catch { return null; } })();
   if (!first) { await warn(doc, 'Could not build the request.'); return; }
   const session: AiSession = { ide, backend, settings, doc };
-  if (codeMode) await runCodeConversation(session, { first, itemId, codeWin: codeWin!, selection });
+  if (codeMode) await runCodeConversation(session, { first, itemId, codeWin: codeWin!, selection, question: isQuestion(prompt) });
   else await runFormConversation(session, { first, itemId });
 }
 
@@ -160,7 +167,7 @@ export async function askAiAboutError(ide: IdeState, backend: Backend, fix: Erro
   win.gotoLine(fix.error.line);   // the cursor marks the failing procedure for the merge
   const first = (() => { try { return buildFixRequest(ide.project, fix.itemId, fix.error, fix.error.compile ? [] : fix.vars, { contextTokens: settings.contextTokens }); } catch { return null; } })();
   if (!first) { await warn(doc, 'Could not build the request.'); return; }
-  const applied = await runCodeConversation({ ide, backend, settings, doc }, { first, itemId: fix.itemId, codeWin: win, beforeApply: ui.end });
+  const applied = await runCodeConversation({ ide, backend, settings, doc }, { first, itemId: fix.itemId, codeWin: win, beforeApply: ui.end, mode: 'fix' });
   if (applied) ui.openCode(fix.itemId).gotoLine(fix.error.line);
 }
 
@@ -195,53 +202,133 @@ export function maxTokensFor(thinking: Thinking, contextTokens: number | undefin
   return room < 1024 ? undefined : Math.min(cap, room);
 }
 
-/** "baseUrl|model" of servers that rejected `response_format` in this session: their later requests go without it. */
+/** "baseUrl|model" of servers whose structured output failed in this session: their later requests go without it. */
 const noStructuredOutput = new Set<string>();
-/** An HTTP 400/422 about response_format / json_schema (the server does not support structured output). */
-const rejectsResponseFormat = (message: string): boolean => /\b(400|422)\b/.test(message) && /response_format|json_schema/i.test(message);
+/** An HTTP 400/422 about the structured output field (the server does not support it, or not this schema). */
+const rejectsStructuredOutput = (message: string): boolean =>
+  /\b(400|422)\b/.test(message) && /response_format|json_schema|structured_output|guided|grammar/i.test(message);
+/**
+ * A structured answer cut off at max_tokens with only whitespace after its opening `{...` (the xgrammar whitespace runaway:
+ * `{"ops"` and then blanks until the limit). Treated like a server without structured output.
+ */
+export const isWhitespaceRunaway = (content: string): boolean => {
+  if (!content.trimStart().startsWith('{')) return false;
+  const tail = content.length - content.trimEnd().length;
+  return tail >= 64 && tail >= content.length / 2;
+};
+/** A dropped connection, a timeout or a 5xx: worth one more try. */
+export const isTransientError = (message: string): boolean =>
+  /^Could not connect to|did not answer within|did not finish within|stopped sending for|^The AI server answered 5\d\d\b/.test(message);
+/** The pause before the automatic retry of a transient error (tests shorten it). */
+export const aiRetry = { delayMs: 2000 };
+const pause = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+  if (signal?.aborted) { reject(new Error('cancelled')); return; }
+  const t = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, ms);
+  const onAbort = () => { clearTimeout(t); reject(new Error('cancelled')); };
+  signal?.addEventListener('abort', onAbort, { once: true });
+});
+
+/** A structured output schema, sent as `structured_outputs` to vLLM and as `response_format` to other (and unknown) servers. */
+export interface StructuredOutput { responseFormat: unknown; structuredOutputs: unknown }
 
 const changeRequest = (wish: string): ChatMessage => ({ role: 'user', content: `Change your last answer: ${wish}\nAnswer with the complete result again, in exactly the same format.` });
 
-/** One answer, understood (or `result` null), the conversation up to and including it, and the measurement line. */
-type Round<A> = { kind: 'done'; result: A | null; reply: string; metrics: string; messages: ChatMessage[] } | { kind: 'error'; message: string } | { kind: 'cancel' };
+/** One answer, understood (or `result` null), the conversation up to and including it, and the measurement line. `answer`: show it as text. */
+type Done<A> = { kind: 'done'; result: A | null; reply: string; metrics: string; messages: ChatMessage[]; answer: boolean };
+type Round<A> = Done<A> | { kind: 'error'; message: string } | { kind: 'cancel' };
 type Understood<A> = { result: A | null; jsonReason: string | null };
+
+/** How a conversation runs: its log mode, its structured output (form mode), whether answers in prose are shown (code mode). */
+interface ConverseOptions { mode: AiLogMode; structured?: StructuredOutput; answers?: boolean; question?: boolean }
 
 /**
  * The shared flow: send `first`, check the answer (one retry at most), show the preview, and on Change... send the conversation
  * so far plus the wish. The conversation only grows at the end, so the server's prefix cache keeps working.
+ * With `answers`, a question or a reply in prose is shown in the AI Answer dialog; its Ask more... continues the conversation.
+ * Every request goes into the AI log. A transient error (no connection, timeout, 5xx) is tried once more after a pause.
  */
 async function converse<A extends { notes: string[]; problems: string[] }>(
   s: AiSession, first: ChatMessage[], analyse: (text: string) => Understood<A>,
   preview: (a: A, reply: string, metrics: string) => Promise<PreviewResult>, apply: (a: A) => void | Promise<void>,
-  responseFormat?: unknown,
+  co: ConverseOptions,
 ): Promise<boolean> {
   const { ide, backend, settings, doc } = s;
   const project = ide.project;
   const effort = settings.thinking === 'server' ? undefined : settings.thinking;
   const log = new StreamLog();
   const server = `${settings.baseUrl.trim()}|${settings.model.trim()}`;
-  /** Follow-up rounds (the check-and-fix retry, Change...) think 'low' with "Fast follow-up rounds"; Server default stays unsent. */
-  const send = (messages: ChatMessage[], followUp: boolean) => async (o: AiChatOptions): Promise<string> => {
-    const level = effort && followUp && settings.fastFollowUp !== false ? 'low' : effort;
-    const opts: AiChatOptions = { ...o, maxTokens: maxTokensFor(level ?? 'server', settings.contextTokens, messages.reduce((n, m) => n + m.content.length, 0)) };
-    const chat = (x: AiChatOptions) => backend.aiChat(settings.baseUrl, settings.apiKey, settings.model, messages, level, x);
-    if (responseFormat === undefined || noStructuredOutput.has(server)) return chat(opts);
-    try { return await chat({ ...opts, responseFormat }); }
-    catch (e) {
-      // A server without structured output: once more at once without it, and never again for this server and model.
-      if (o.signal?.aborted || !rejectsResponseFormat(e instanceof Error ? e.message : String(e))) throw e;
-      noStructuredOutput.add(server);
-      return chat(opts);
+  const secret = settings.apiKey;
+  /** The log entry of the request that gave the latest reply (marked "not understood" when it was). */
+  let lastEntry: AiLogEntry | null = null;
+
+  /** One request to the server, logged. `partial` gets the answer text that streamed in, also when the request fails. */
+  const attempt = async (messages: ChatMessage[], level: string | undefined, x: AiChatOptions, mode: AiLogMode, partial: { content: string }): Promise<string> => {
+    const entry = addAiLogEntry({
+      mode, model: settings.model, seconds: 0, status: 'ok', reply: '', reasoning: '',
+      sent: describeRequest(settings.baseUrl, settings.model, messages, {
+        reasoning_effort: level, max_tokens: x.maxTokens,
+        ...(x.structuredOutputs !== undefined ? { structured_outputs: 'json schema' } : {}), ...(x.responseFormat !== undefined ? { response_format: 'json_schema' } : {}),
+      }),
+    }, secret);
+    lastEntry = entry;
+    const t0 = Date.now();
+    let reasoning = '', usage: AiUsage | undefined;
+    partial.content = '';
+    try {
+      const text = await backend.aiChat(settings.baseUrl, settings.apiKey, settings.model, messages, level, {
+        ...x,
+        onDelta: (k, t) => { if (k === 'content') partial.content += t; else reasoning += t; x.onDelta?.(k, t); },
+        onUsage: u => { usage = u; x.onUsage?.(u); },
+      });
+      finishAiLogEntry(entry, { status: 'ok', reply: text, reasoning, usage, ms: Date.now() - t0 }, secret);
+      return text;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      const cancelled = x.signal?.aborted || message === 'cancelled';
+      finishAiLogEntry(entry, { status: cancelled ? 'cancelled' : 'error', reply: partial.content, reasoning, usage, error: cancelled ? undefined : message, ms: Date.now() - t0 }, secret);
+      throw e;
     }
   };
 
-  const round = async (messages: ChatMessage[], later: boolean): Promise<Round<A>> => {
-    const res = await waitForReply(doc, settings.model, send(messages, later), log);
+  /** Follow-up rounds (the check-and-fix retry, Change...) think 'low' with "Fast follow-up rounds"; Server default stays unsent. */
+  const send = (messages: ChatMessage[], followUp: boolean, mode: AiLogMode): Start => async (o, ui) => {
+    const level = effort && followUp && settings.fastFollowUp !== false ? 'low' : effort;
+    const opts: AiChatOptions = { ...o, maxTokens: maxTokensFor(level ?? 'server', settings.contextTokens, messages.reduce((n, m) => n + m.content.length, 0)) };
+    const partial = { content: '' };
+    const once = async (m: AiLogMode): Promise<string> => {
+      const so = co.structured;
+      if (so === undefined || noStructuredOutput.has(server)) return attempt(messages, level, opts, m, partial);
+      const field = settings.serverKind === 'vllm' ? { structuredOutputs: so.structuredOutputs } : { responseFormat: so.responseFormat };
+      try { return await attempt(messages, level, { ...opts, ...field }, m, partial); }
+      catch (e) {
+        // Structured output failed (rejected, or the whitespace runaway): once more at once without it, and never again for this server and model.
+        const message = e instanceof Error ? e.message : String(e);
+        if (o.signal?.aborted || !(rejectsStructuredOutput(message) || (message === AI_CUT_OFF && isWhitespaceRunaway(partial.content)))) throw e;
+        noStructuredOutput.add(server);
+        return attempt(messages, level, opts, 'retry', partial);
+      }
+    };
+    try { return await once(mode); }
+    catch (e) {
+      if (o.signal?.aborted || !isTransientError(e instanceof Error ? e.message : String(e))) throw e;
+      ui.setLabel('Retrying...');
+      await pause(aiRetry.delayMs, o.signal);
+      return once('retry');
+    }
+  };
+
+  const round = async (messages: ChatMessage[], later: boolean, mode: AiLogMode, question = false): Promise<Round<A>> => {
+    const res = await waitForReply(doc, settings.model, send(messages, later, mode), log);
     if (res.kind !== 'reply') return res;
     if (ide.project !== project) return { kind: 'cancel' };   // a different project was opened meanwhile
     let reply = res.text, metrics = res.metrics;
     let convo: ChatMessage[] = [...messages, { role: 'assistant', content: reply }];
+    // A question is answered in words: no checks, no retry.
+    if (co.answers && question) return { kind: 'done', result: null, reply, metrics, messages: convo, answer: true };
+    const firstEntry = lastEntry;
     let got = analyse(reply);
+    const garbled = (u: Understood<A>, text: string) => !u.result && !(co.answers && isProse(text));
+    if (garbled(got, reply) && firstEntry) firstEntry.status = 'not understood';
     // One retry at most: for the problems the checks found, or (form mode) for an answer that was not usable JSON.
     const complaint = got.result?.problems.length
       ? `Your answer has these problems:\n${got.result.problems.map(p => `- ${p}`).join('\n')}\nFix them and answer again in exactly the same format.`
@@ -250,33 +337,40 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
       // Keep the first answer if the second is no better understood.
       const followUp: ChatMessage[] = [...convo, { role: 'user', content: complaint }];
       log.separator();
-      const again = await waitForReply(doc, settings.model, send(followUp, true), log, 'Checking and fixing...');
+      const again = await waitForReply(doc, settings.model, send(followUp, true, 'retry'), log, 'Checking and fixing...');
       if (again.kind === 'cancel' || ide.project !== project) return { kind: 'cancel' };
       if (again.kind === 'reply') {
         const second = analyse(again.text);
+        if (garbled(second, again.text) && lastEntry) lastEntry.status = 'not understood';
         if (second.result) { got = second; reply = again.text; metrics = again.metrics; convo = [...followUp, { role: 'assistant', content: again.text }]; }
         else if (!got.result) reply = again.text;   // neither was understood: Details shows the latest
       }
     }
-    return { kind: 'done', result: got.result, reply, metrics, messages: convo };
+    return { kind: 'done', result: got.result, reply, metrics, messages: convo, answer: !got.result && !!co.answers && isProse(reply) };
   };
 
-  let cur = await round(first, false);
-  if (cur.kind === 'cancel') return false;
-  if (cur.kind === 'error') { await warn(doc, cur.message); return false; }
-  if (!cur.result) { await showNotUnderstood(doc, cur.reply); return false; }
+  const copy = (text: string) => backend.clipboardSetText(text);
+  /** The proposal on screen in the preview (null until there is one). */
+  let shown: Done<A> | null = null;
+  let next: Round<A> = await round(first, false, co.mode, co.question);
   for (;;) {
-    let out: PreviewResult;
-    try { out = await preview(cur.result!, cur.reply, cur.metrics); }
-    catch (e) { await showNotUnderstood(doc, `${cur.reply}\n\nError: ${e instanceof Error ? e.message : String(e)}`); return false; }
-    if (out === 'cancel') return false;
-    if (out === 'ok') { await apply(cur.result!); return true; }
-    // Change...: a new answer to the whole conversation. If it is not understood, the last proposal stays.
-    const next = await round(trimConversation([...cur.messages, changeRequest(out.change)]), true);
     if (ide.project !== project) return false;
     if (next.kind === 'error') await warn(doc, next.message);
+    else if (next.kind === 'done' && next.answer) {
+      const a = await showAnswer(doc, next.reply, next.metrics, copy);
+      if (a !== 'ok') { next = await round(trimConversation([...next.messages, { role: 'user', content: a.more }]), true, 'change', isQuestion(a.more)); continue; }
+    }
     else if (next.kind === 'done' && !next.result) await showNotUnderstood(doc, next.reply);
-    else if (next.kind === 'done') cur = next;
+    else if (next.kind === 'done') shown = next;
+    // Without a proposal the conversation ends; otherwise (a failed Change... too) the last proposal stays.
+    if (!shown) return false;
+    let out: PreviewResult;
+    try { out = await preview(shown.result!, shown.reply, shown.metrics); }
+    catch (e) { await showNotUnderstood(doc, `${shown.reply}\n\nError: ${e instanceof Error ? e.message : String(e)}`); return false; }
+    if (out === 'cancel') return false;
+    if (out === 'ok') { await apply(shown.result!); return true; }
+    // Change...: a new answer to the whole conversation.
+    next = await round(trimConversation([...shown.messages, changeRequest(out.change)]), true, 'change');
   }
 }
 
@@ -285,7 +379,8 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
  * (after `beforeApply`, which Ask AI on an error uses to end the program). With `selection` (the code window's selection
  * when the request was made), an answer without a procedure heading replaces exactly that. True when a proposal was applied.
  */
-export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[]; itemId: string; codeWin: CodeWindow; beforeApply?: () => Promise<void>; selection?: CodeSelection | null }): Promise<boolean> {
+export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[]; itemId: string; codeWin: CodeWindow; beforeApply?: () => Promise<void>; selection?: CodeSelection | null;
+  /** The request asks about the code (the answer is shown as text). */ question?: boolean; mode?: AiLogMode }): Promise<boolean> {
   const { ide, doc } = s;
   const project = ide.project;
   const win = o.codeWin;
@@ -310,7 +405,8 @@ export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[
   };
   return converse<A>(s, o.first, analyse,
     (a, _reply, metrics) => showCodePreview(doc, win.getSource().replace(/\r\n?/g, '\n'), a.applied.source, a.applied.changes, [...a.notes, ...a.problems], metrics),
-    async a => { await o.beforeApply?.(); win.applyChange(0, win.getSource().length, a.applied.source); });
+    async a => { await o.beforeApply?.(); win.applyChange(0, win.getSource().length, a.applied.source); },
+    { mode: o.mode ?? 'code', answers: true, question: o.question });
 }
 
 /** Form mode: `first` is the finished request; the proposal is applied to the form as one undo step on OK. */
@@ -339,7 +435,7 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
     async a => {
       try { ide.stack.execute(formOpsToCommand(ide.project, o.itemId, a.parsed, 'AI changes')); }
       catch (e) { await warn(doc, e instanceof Error ? e.message : String(e)); }
-    }, FORM_RESPONSE_FORMAT);
+    }, { mode: 'form', structured: { responseFormat: FORM_RESPONSE_FORMAT, structuredOutputs: FORM_STRUCTURED_OUTPUTS } });
 }
 
 /** Fixes wrong event-procedure names in AI code (Form1_Load etc.) and records what it did in `notes`. */

@@ -52,8 +52,13 @@ export const FORM_OPS_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-/** `response_format` for a form-mode request. */
+/** `response_format` for a form-mode request (OpenAI-style servers). */
 export const FORM_RESPONSE_FORMAT = { type: 'json_schema', json_schema: { name: 'form_ops', schema: FORM_OPS_SCHEMA } } as const;
+/**
+ * vLLM's `structured_outputs` for a form-mode request. With `response_format` json_schema, vLLM (xgrammar) emits `{"ops"` and then
+ * whitespace until max_tokens on this anyOf schema; `disable_any_whitespace` avoids that (measured on vLLM 0.28).
+ */
+export const FORM_STRUCTURED_OUTPUTS = { json: FORM_OPS_SCHEMA, disable_any_whitespace: true } as const;
 
 export const NOT_UNDERSTOOD = 'The AI answer could not be understood. Try again or rephrase.';
 

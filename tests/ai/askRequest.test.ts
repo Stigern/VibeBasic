@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-// Request options: structured output in form mode (with its fallback), fast follow-up rounds, max_tokens.
+// Request options: structured output in form mode (response_format, or structured_outputs on vLLM, with the fallbacks),
+// fast follow-up rounds, max_tokens.
 import { afterEach, expect, test, vi } from 'vitest';
 import { askAi, formatMetrics, maxTokensFor } from '../../src/ai/askDialog';
-import { FORM_RESPONSE_FORMAT } from '../../src/ai/formMode';
+import { FORM_RESPONSE_FORMAT, FORM_STRUCTURED_OUTPUTS } from '../../src/ai/formMode';
+import { AI_CUT_OFF } from '../../src/ai/sse';
 import type { Backend } from '../../src/backend/backend';
 import { IdeState } from '../../src/ide/ideState';
 import { newControl, newProject } from '../../src/model/controls';
@@ -55,12 +57,57 @@ async function askForm(b: Backend) {
   await p;
 }
 
-test('form request includes response_format (json_schema form_ops) and max_tokens', async () => {
-  const b = fakeBackend({ model: 'schema-ok' }, async () => OPS);
+test('form request includes response_format (json_schema form_ops) and max_tokens on an unknown or openai server', async () => {
+  for (const serverKind of [undefined, 'openai']) {
+    const b = fakeBackend({ model: `schema-ok-${serverKind}`, serverKind }, async () => OPS);
+    await askForm(b);
+    expect(opts(b, 0).responseFormat).toEqual(FORM_RESPONSE_FORMAT);
+    expect(opts(b, 0).responseFormat.json_schema.name).toBe('form_ops');
+    expect(opts(b, 0).structuredOutputs).toBeUndefined();
+    expect(opts(b, 0).maxTokens).toBe(8192 + 16384);
+  }
+});
+
+test('on vLLM the form request sends structured_outputs (no whitespace) instead of response_format', async () => {
+  const b = fakeBackend({ model: 'vllm-ok', serverKind: 'vllm' }, async () => OPS);
   await askForm(b);
-  expect(opts(b, 0).responseFormat).toEqual(FORM_RESPONSE_FORMAT);
-  expect(opts(b, 0).responseFormat.json_schema.name).toBe('form_ops');
-  expect(opts(b, 0).maxTokens).toBe(8192 + 16384);
+  expect(opts(b, 0).structuredOutputs).toEqual(FORM_STRUCTURED_OUTPUTS);
+  expect(opts(b, 0).structuredOutputs.disable_any_whitespace).toBe(true);
+  expect(opts(b, 0).responseFormat).toBeUndefined();
+});
+
+test('a 400 about structured_outputs on vLLM falls back the same way', async () => {
+  const b = fakeBackend({ model: 'vllm-400', serverKind: 'vllm' }, async (...a: any[]) => {
+    if (a[5]?.structuredOutputs) throw new Error('The AI server answered 400 Bad Request: Grammar error: Invalid type');
+    return OPS;
+  });
+  await askForm(b);
+  expect(b.aiChat).toHaveBeenCalledTimes(2);
+  expect(opts(b, 1).structuredOutputs).toBeUndefined();
+  await askForm(b);
+  expect(opts(b, 2).structuredOutputs).toBeUndefined();
+});
+
+test('a structured reply cut off with only whitespace after { is retried without structured output, for the session', async () => {
+  const b = fakeBackend({ model: 'runaway', serverKind: 'vllm' }, async (...a: any[]) => {
+    if (!a[5]?.structuredOutputs) return OPS;
+    a[5].onDelta('content', `{"ops"${' '.repeat(500)}`);
+    throw new Error(AI_CUT_OFF);
+  });
+  await askForm(b);
+  expect(b.aiChat).toHaveBeenCalledTimes(2);
+  expect(opts(b, 1).structuredOutputs).toBeUndefined();
+  await askForm(b);
+  expect(b.aiChat).toHaveBeenCalledTimes(3);
+  expect(opts(b, 2).structuredOutputs).toBeUndefined();
+  // a real cut-off (text, not whitespace) is not retried
+  const c = fakeBackend({ model: 'cut', serverKind: 'vllm' }, async (...a: any[]) => { a[5].onDelta('content', '{"ops":[{"op":"set","name":"Command1"'); throw new Error(AI_CUT_OFF); });
+  const p = askAi(ide('designer'), c, { codeWindowFor: () => null });
+  await enterPrompt('x');
+  await vi.waitFor(() => expect(text()).toContain('cut off'));
+  click('OK');
+  await p;
+  expect(c.aiChat).toHaveBeenCalledTimes(1);
 });
 
 test('a 400 about response_format is retried at once without it, and later requests skip it', async () => {
@@ -76,7 +123,7 @@ test('a 400 about response_format is retried at once without it, and later reque
   expect(b.aiChat).toHaveBeenCalledTimes(3);
   expect(opts(b, 2).responseFormat).toBeUndefined();
   // other errors are not retried
-  const c = fakeBackend({ model: 'other-error' }, async () => { throw new Error('The AI server answered 500 Internal Server Error: boom'); });
+  const c = fakeBackend({ model: 'other-error' }, async () => { throw new Error('The AI server answered 400 Bad Request: boom'); });
   const p = askAi(ide('designer'), c, { codeWindowFor: () => null });
   await enterPrompt('x');
   await vi.waitFor(() => expect(text()).toContain('boom'));

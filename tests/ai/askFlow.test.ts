@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, expect, test, vi } from 'vitest';
-import { askAi, trimConversation } from '../../src/ai/askDialog';
+import { askAi, trimConversation, aiRetry } from '../../src/ai/askDialog';
+aiRetry.delayMs = 1;   // the automatic retry of a transient error
 import { registerAiOptionsTab } from '../../src/ai/optionsTab';
 import type { Backend } from '../../src/backend/backend';
 import { IdeState } from '../../src/ide/ideState';

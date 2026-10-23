@@ -147,3 +147,18 @@ test('Fast follow-up rounds: on for old settings, saved only when turned off', a
   await flush();
   expect((await loadAiSettings(b)).fastFollowUp).toBe(false);
 });
+
+test('test connection records the server kind: owned_by "vllm" is vllm, anything else openai; old settings have none', async () => {
+  for (const [ownedBy, kind] of [['vllm', 'vllm'], ['ollama', 'openai'], [undefined, 'openai']] as const) {
+    const b = fakeBackend(async () => [{ id: 'q', ...(ownedBy ? { ownedBy } : {}) }]);
+    b.store.set('ai', { baseUrl: 'http://x/v1', model: 'q', apiKey: '', thinking: 'server' });
+    expect((await loadAiSettings(b)).serverKind).toBeUndefined();
+    const tab = buildAiTab(b, document);
+    await flush();
+    const p = tab.controls.testConnection();
+    await flush(); okButton().click(); await p;
+    tab.apply();
+    await flush();
+    expect((await loadAiSettings(b)).serverKind).toBe(kind);
+  }
+});

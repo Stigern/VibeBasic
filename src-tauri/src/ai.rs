@@ -38,10 +38,12 @@ fn cut_off() -> String {
   "The AI answer was cut off before it was finished (finish_reason = length). Choose a lower Thinking level in Tools > Options > AI, or ask for less at a time.".to_string()
 }
 
-/// Optional request fields the frontend may add: `response_format` (structured output) and `max_tokens`.
+/// Optional request fields the frontend may add: `response_format` (OpenAI structured output), `structured_outputs`
+/// (vLLM's own field; the frontend sends one or the other, never both) and `max_tokens`.
 #[derive(Default, Clone)]
 pub struct ChatExtra {
   pub response_format: Option<Value>,
+  pub structured_outputs: Option<Value>,
   pub max_tokens: Option<u64>,
 }
 
@@ -59,6 +61,9 @@ fn chat_body(model: &str, messages: &[ChatMessage], reasoning_effort: &Option<St
   }
   if let Some(f) = extra.response_format.as_ref().filter(|f| !f.is_null()) {
     body["response_format"] = f.clone();
+  }
+  if let Some(f) = extra.structured_outputs.as_ref().filter(|f| !f.is_null()) {
+    body["structured_outputs"] = f.clone();
   }
   body
 }
@@ -146,13 +151,15 @@ fn client(timeout_secs: u64) -> Result<reqwest::Client, String> {
 }
 
 /// A model from `GET /models`: its id and, when the server reports it, its context size in tokens
-/// (vLLM `max_model_len`, some other servers `context_length`).
+/// (vLLM `max_model_len`, some other servers `context_length`), and `owned_by` ("vllm" on vLLM).
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
   pub id: String,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub context_tokens: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub owned_by: Option<String>,
 }
 
 pub async fn list_models(base_url: &str, api_key: &Option<String>) -> Result<Vec<ModelInfo>, String> {
@@ -163,7 +170,8 @@ pub async fn list_models(base_url: &str, api_key: &Option<String>) -> Result<Vec
   Ok(data.iter().filter_map(|m| {
     let id = m.get("id").and_then(Value::as_str)?.to_string();
     let context_tokens = ["max_model_len", "context_length"].iter().find_map(|k| m.get(*k).and_then(Value::as_u64)).filter(|n| *n > 0);
-    Some(ModelInfo { id, context_tokens })
+    let owned_by = m.get("owned_by").and_then(Value::as_str).map(str::to_string);
+    Some(ModelInfo { id, context_tokens, owned_by })
   }).collect())
 }
 
@@ -427,10 +435,11 @@ pub async fn ai_chat(
   messages: Vec<ChatMessage>,
   reasoning_effort: Option<String>,
   response_format: Option<Value>,
+  structured_outputs: Option<Value>,
   max_tokens: Option<u64>,
   stream_id: Option<String>,
 ) -> Result<String, String> {
-  let extra = ChatExtra { response_format, max_tokens };
+  let extra = ChatExtra { response_format, structured_outputs, max_tokens };
   let Some(id) = stream_id else {
     return chat(&base_url, &api_key, &model, &messages, &reasoning_effort, &extra).await;
   };
@@ -470,7 +479,7 @@ mod tests {
   use super::*;
   use httpmock::prelude::*;
 
-  const NONE: ChatExtra = ChatExtra { response_format: None, max_tokens: None };
+  const NONE: ChatExtra = ChatExtra { response_format: None, structured_outputs: None, max_tokens: None };
 
   fn msgs() -> Vec<ChatMessage> {
     vec![ChatMessage { role: "user".into(), content: "hi".into() }]
@@ -544,7 +553,7 @@ mod tests {
   #[tokio::test]
   async fn response_format_and_max_tokens_passed_through() {
     let rf = json!({"type":"json_schema","json_schema":{"name":"form_ops","schema":{"type":"object"}}});
-    let extra = ChatExtra { response_format: Some(rf.clone()), max_tokens: Some(8192) };
+    let extra = ChatExtra { response_format: Some(rf.clone()), max_tokens: Some(8192), ..Default::default() };
     let want = json!({"response_format": rf, "max_tokens": 8192}).to_string();
     let server = MockServer::start();
     let plain = server.mock(|when, then| {
@@ -562,7 +571,12 @@ mod tests {
     streamed.assert();
     // without them the body has neither field
     let body = chat_body("m", &msgs(), &None, &NONE, false);
-    assert!(body.get("response_format").is_none() && body.get("max_tokens").is_none());
+    assert!(body.get("response_format").is_none() && body.get("max_tokens").is_none() && body.get("structured_outputs").is_none());
+    // vLLM's structured_outputs goes in as given
+    let so = json!({"json":{"type":"object"},"disable_any_whitespace":true});
+    let body = chat_body("m", &msgs(), &None, &ChatExtra { structured_outputs: Some(so.clone()), ..Default::default() }, true);
+    assert_eq!(body["structured_outputs"], so);
+    assert!(body.get("response_format").is_none());
   }
 
   #[tokio::test]
@@ -594,10 +608,10 @@ mod tests {
     let server = MockServer::start();
     server.mock(|when, then| {
       when.method(GET).path("/v1/models");
-      then.status(200).json_body(json!({"data":[{"id":"a","max_model_len":262144},{"id":"b","context_length":8192},{"id":"c"}]}));
+      then.status(200).json_body(json!({"data":[{"id":"a","max_model_len":262144,"owned_by":"vllm"},{"id":"b","context_length":8192},{"id":"c"}]}));
     });
-    let info = |id: &str, n: Option<u64>| ModelInfo { id: id.to_string(), context_tokens: n };
-    assert_eq!(list_models(&server.url("/v1/"), &None).await.unwrap(), vec![info("a", Some(262144)), info("b", Some(8192)), info("c", None)]);
+    let info = |id: &str, n: Option<u64>, o: Option<&str>| ModelInfo { id: id.to_string(), context_tokens: n, owned_by: o.map(str::to_string) };
+    assert_eq!(list_models(&server.url("/v1/"), &None).await.unwrap(), vec![info("a", Some(262144), Some("vllm")), info("b", Some(8192), None), info("c", None, None)]);
   }
 
   #[tokio::test]

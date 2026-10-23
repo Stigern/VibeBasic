@@ -14,6 +14,8 @@ export interface AiChatOptions {
   onUsage?: (u: AiUsage) => void;
   /** Sent as `response_format` (structured output, e.g. a json_schema). */
   responseFormat?: unknown;
+  /** Sent as `structured_outputs` (vLLM's own structured output field; never together with responseFormat). */
+  structuredOutputs?: unknown;
   /** Sent as `max_tokens` (on vLLM the thinking counts too). */
   maxTokens?: number;
 }

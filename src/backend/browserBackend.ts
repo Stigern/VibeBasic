@@ -297,7 +297,7 @@ export class BrowserBackend implements Backend {
     for (const m of v.data as Record<string, unknown>[]) {
       if (typeof m?.id !== 'string') continue;
       const n = [m.max_model_len, m.context_length].find((x): x is number => typeof x === 'number' && x > 0);
-      out.push(n === undefined ? { id: m.id } : { id: m.id, contextTokens: n });
+      out.push({ id: m.id, ...(n === undefined ? {} : { contextTokens: n }), ...(typeof m.owned_by === 'string' ? { ownedBy: m.owned_by } : {}) });
     }
     return out;
   }
@@ -309,6 +309,7 @@ export class BrowserBackend implements Backend {
       model, messages, temperature: 0.2, stream: streaming, ...(streaming ? { stream_options: { include_usage: true } } : {}),
       ...(effort ? { chat_template_kwargs: { reasoning_effort: effort } } : {}),
       ...(opts?.maxTokens ? { max_tokens: opts.maxTokens } : {}), ...(opts?.responseFormat !== undefined ? { response_format: opts.responseFormat } : {}),
+      ...(opts?.structuredOutputs !== undefined ? { structured_outputs: opts.structuredOutputs } : {}),
     });
     if (streaming) return aiStream(baseUrl, apiKey, body, opts!);
     const v = (await aiRequest(baseUrl, apiKey, 'chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, 600)) as

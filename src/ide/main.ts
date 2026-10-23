@@ -9,6 +9,7 @@ import { IdeState, OPTION_EXPLICIT, type IdeOptions } from './ideState';
 import { buildLayout, type IdeLayout } from './layout';
 import { buildMenus, type IdeActions } from './menus';
 import { askAi, askAiAboutError } from '../ai/askDialog';
+import { showAiLog } from '../ai/aiLog';
 import { getCodeWindow, openCodeWindow, registerCodeActions } from './codeWindow';
 import { openDesigner, registerDesignerActions } from './designer';
 import { createPropertiesWindow, type PropertiesWindow } from './properties';
@@ -55,6 +56,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   actions.components = () => { if (state.mode === 'design') void showComponents(state, doc); };
   actions.options = () => { void showOptions(state, backend, doc); };
   actions.askAi = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc); };
+  actions.aiLog = () => { void showAiLog(doc, text => backend.clipboardSetText(text)); };
   const fc = new FileController(state, backend, doc);
   fc.onProjectReplaced = () => {
     const id = state.project.forms.find(f => f.name === state.project.startupForm)?.id ?? state.project.forms[0]?.id;

@@ -5,8 +5,9 @@ import { field } from '../ide/projectDialogs';
 import { createCombo } from '../ui98/combo';
 import { messageBox98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
+import { addAiLogEntry } from './aiLog';
 import { THINKING_LEVELS, defaultAiSettings, loadAiSettings, saveAiSettings } from './settings';
-import type { Thinking } from './types';
+import type { AiModel, ServerKind, Thinking } from './types';
 
 const THINKING_LABELS: Record<Thinking, string> = { server: 'Server default', low: 'Low (fast)', medium: 'Medium', high: 'High (thorough)' };
 const thinkingOf = (label: string): Thinking => THINKING_LEVELS.find(t => THINKING_LABELS[t] === label) ?? 'server';
@@ -25,8 +26,8 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
   baseUrl.addEventListener('input', () => { dirty.baseUrl = true; });
   fast.input.addEventListener('change', () => { dirty.fast = true; });
   apiKey.addEventListener('input', () => { dirty.apiKey = true; });
-  // Context sizes by lower-case model id from the last Test Connection, and the stored settings (to keep their contextTokens).
-  let tested: Map<string, number | undefined> | null = null;
+  // The models by lower-case id from the last Test Connection, and the stored settings (to keep their contextTokens and serverKind).
+  let tested: Map<string, AiModel> | null = null;
   let saved = d;
   const loading = loadAiSettings(backend).then(s => {
     saved = s;
@@ -39,10 +40,11 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
 
   const testConnection = async (): Promise<void> => {
     test.disabled = true;
+    const t0 = Date.now();
     try {
       const list = await backend.aiListModels(baseUrl.value.trim(), apiKey.value);
       const models = list.map(m => m.id);
-      tested = new Map(list.map(m => [m.id.toLowerCase(), m.contextTokens]));
+      tested = new Map(list.map(m => [m.id.toLowerCase(), m]));
       model.setItems(models);
       const typed = model.getValue().trim();
       const match = models.find(m => m.toLowerCase() === typed.toLowerCase());
@@ -50,14 +52,23 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
       else if (!typed && models.length > 0) model.setValue(models[0]);
       await messageBox98(doc, { prompt: `Connected. ${models.length} models found.`, title: 'VibeBasic', buttons: 64 });
     } catch (e) {
-      await messageBox98(doc, { prompt: e instanceof Error ? e.message : String(e), title: 'VibeBasic', buttons: 48 });
+      const message = e instanceof Error ? e.message : String(e);
+      addAiLogEntry({ mode: 'test', model: model.getValue().trim(), seconds: Math.round((Date.now() - t0) / 100) / 10, status: 'error',
+        sent: `GET ${baseUrl.value.trim().replace(/\/+$/, '')}/models`, reply: '', reasoning: '', error: message }, apiKey.value);
+      await messageBox98(doc, { prompt: message, title: 'VibeBasic', buttons: 48 });
     } finally { test.disabled = false; }
   };
   test.addEventListener('click', () => { void testConnection(); });
 
-  /** The context size to store for `m` at `url`: what the last Test Connection reported, else the stored one if nothing changed. */
-  const contextFor = (url: string, m: string): number | undefined =>
-    tested ? tested.get(m.toLowerCase()) : url === saved.baseUrl && m === saved.model ? saved.contextTokens : undefined;
+  /** The context size and server kind to store for `m` at `url`: what the last Test Connection reported (owned_by "vllm" is vLLM,
+   *  any other model a server found is "openai"), else the stored ones if nothing changed. */
+  const testedFor = (url: string, m: string): { contextTokens?: number; serverKind?: ServerKind } => {
+    if (tested) {
+      const t = tested.get(m.toLowerCase());
+      return t ? { contextTokens: t.contextTokens, serverKind: t.ownedBy === 'vllm' ? 'vllm' : 'openai' } : {};
+    }
+    return url === saved.baseUrl && m === saved.model ? { contextTokens: saved.contextTokens, serverKind: saved.serverKind } : {};
+  };
 
   return {
     label: 'AI',
@@ -70,7 +81,7 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
       void loading
         .then(() => {
           const url = baseUrl.value.trim(), m = model.getValue().trim();
-          return saveAiSettings(backend, { baseUrl: url, model: m, apiKey: apiKey.value, thinking: thinkingOf(thinking.getValue()), contextTokens: contextFor(url, m), fastFollowUp: fast.input.checked });
+          return saveAiSettings(backend, { baseUrl: url, model: m, apiKey: apiKey.value, thinking: thinkingOf(thinking.getValue()), ...testedFor(url, m), fastFollowUp: fast.input.checked });
         })
         .catch(e => messageBox98(doc, { prompt: `Could not save the AI settings: ${e instanceof Error ? e.message : String(e)}`, title: 'VibeBasic', buttons: 48 }));
     },
