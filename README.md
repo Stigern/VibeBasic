@@ -1,3 +1,5 @@
+<img src="docs/images/icon.png" width="128" align="right" alt="VibeBasic icon">
+
 # VibeBasic
 
 A Visual Basic 6 clone for macOS, with the authentic Windows 98 look and a built-in AI assistant that runs on your own local model.
