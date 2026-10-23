@@ -23,7 +23,11 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
   const dirty = { baseUrl: false, apiKey: false, model: false, thinking: false };
   baseUrl.addEventListener('input', () => { dirty.baseUrl = true; });
   apiKey.addEventListener('input', () => { dirty.apiKey = true; });
+  // Context sizes by lower-case model id from the last Test Connection, and the stored settings (to keep their contextTokens).
+  let tested: Map<string, number | undefined> | null = null;
+  let saved = d;
   const loading = loadAiSettings(backend).then(s => {
+    saved = s;
     if (!dirty.baseUrl) baseUrl.value = s.baseUrl;
     if (!dirty.apiKey) apiKey.value = s.apiKey;
     if (!dirty.thinking) thinking.setValue(THINKING_LABELS[s.thinking]);
@@ -33,7 +37,9 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
   const testConnection = async (): Promise<void> => {
     test.disabled = true;
     try {
-      const models = await backend.aiListModels(baseUrl.value.trim(), apiKey.value);
+      const list = await backend.aiListModels(baseUrl.value.trim(), apiKey.value);
+      const models = list.map(m => m.id);
+      tested = new Map(list.map(m => [m.id.toLowerCase(), m.contextTokens]));
       model.setItems(models);
       const typed = model.getValue().trim();
       const match = models.find(m => m.toLowerCase() === typed.toLowerCase());
@@ -46,6 +52,10 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
   };
   test.addEventListener('click', () => { void testConnection(); });
 
+  /** The context size to store for `m` at `url`: what the last Test Connection reported, else the stored one if nothing changed. */
+  const contextFor = (url: string, m: string): number | undefined =>
+    tested ? tested.get(m.toLowerCase()) : url === saved.baseUrl && m === saved.model ? saved.contextTokens : undefined;
+
   return {
     label: 'AI',
     content: h('div', { class: 'dlgform98' },
@@ -54,7 +64,10 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
       h('div', {}, 'Thinking level is sent to vLLM/Qwen servers. Use Server default for other servers.')),
     apply() {
       void loading
-        .then(() => saveAiSettings(backend, { baseUrl: baseUrl.value.trim(), model: model.getValue().trim(), apiKey: apiKey.value, thinking: thinkingOf(thinking.getValue()) }))
+        .then(() => {
+          const url = baseUrl.value.trim(), m = model.getValue().trim();
+          return saveAiSettings(backend, { baseUrl: url, model: m, apiKey: apiKey.value, thinking: thinkingOf(thinking.getValue()), contextTokens: contextFor(url, m) });
+        })
         .catch(e => messageBox98(doc, { prompt: `Could not save the AI settings: ${e instanceof Error ? e.message : String(e)}`, title: 'VibeBasic', buttons: 48 }));
     },
     // exposed for tests

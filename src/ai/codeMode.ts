@@ -29,7 +29,7 @@ export function extractCode(reply: string): string | null {
 
 /** `skipped`: procedures of the reply that were left out because they are stubs without a body (the `(body omitted)` lines the model
  *  was shown, echoed back); the module keeps its own procedure. */
-export interface CodeApplyResult { source: string; changes: { name: string; kind: 'replaced' | 'added' | 'body' | 'declarations' }[]; skipped?: string[] }
+export interface CodeApplyResult { source: string; changes: { name: string; kind: 'replaced' | 'added' | 'body' | 'selection' | 'declarations' }[]; skipped?: string[] }
 
 const DECL = /^\s*(Option\s|Dim\s|Const\s|Public\s|Private\s|Global\s|Static\s|Type\s|Enum\s)/i;
 const DECL_ONLY = /^\s*(Dim|Const|Public|Private|Global|Static)\s/i;
@@ -71,11 +71,32 @@ function splitHeader(header: string[]): { decls: string[]; procComments: string[
 }
 const DECLS = '(Declarations)';
 
-export function applyCodeProposal(source: string, code: string, currentProc: string | null): CodeApplyResult | null {
+/** A selection in the code window: offsets into the (LF-only) source. */
+export interface CodeSelection { from: number; to: number }
+
+/** Puts `codeLines` in place of exactly the selected text. A selection that starts after a line's indentation keeps it,
+ *  and one that ends with a line break keeps the break. */
+function replaceSelection(src: string, codeLines: string[], sel: CodeSelection): CodeApplyResult {
+  const before = src.slice(0, sel.from);
+  const lineStart = before.lastIndexOf('\n') + 1;
+  let text = codeLines.join('\n');
+  if (sel.from > lineStart && /^[ \t]*$/.test(before.slice(lineStart))) text = text.replace(/^[ \t]+/, '');
+  if (src.slice(sel.from, sel.to).endsWith('\n')) text += '\n';
+  const line = before.split('\n').length;
+  const proc = listProcedures(src).find(p => line >= p.line && line <= p.endLine);
+  return { source: before + text + src.slice(sel.to), changes: [{ name: proc?.name ?? DECLS, kind: 'selection' }] };
+}
+
+/**
+ * Merges the reply's code into `source`. With a `selection` (a non-empty range of `source`), an answer without a
+ * procedure heading (a bare body) replaces exactly the selection; without one it replaces the body of `currentProc`.
+ */
+export function applyCodeProposal(source: string, code: string, currentProc: string | null, selection?: CodeSelection | null): CodeApplyResult | null {
   const src = source.replace(/\r\n?/g, '\n');
   const codeLines = trimBlankEdges(code.replace(/\r\n?/g, '\n')).split('\n');
   if (codeLines.length === 1 && codeLines[0].trim() === '') return null;
   const procs = listProcedures(codeLines.join('\n'));
+  if (!procs.length && selection && selection.to > selection.from && selection.to <= src.length) return replaceSelection(src, codeLines, selection);
   const changes: CodeApplyResult['changes'] = [];
   let lines = src.split('\n');
 

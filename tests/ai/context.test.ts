@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest';
 import { stripThinking } from '../../src/ai/clean';
-import { buildCodeRequest, buildFormRequest, codeForPrompt, describeControlTypes, describeForm, describeProjectForms } from '../../src/ai/context';
+import { buildCodeRequest, buildFormRequest, codeBudget, codeForPrompt, describeControlTypes, describeForm, describeProjectForms, describeProjectSymbols } from '../../src/ai/context';
+import { LANGUAGE_REFERENCE, buildLanguageReference } from '../../src/ai/langReference';
 import { CODE_SYSTEM_PROMPT, FORM_SYSTEM_PROMPT } from '../../src/ai/prompts';
 import { newForm, newProject } from '../../src/model/controls';
 import type { ControlDef, FormDef } from '../../src/model/types';
@@ -108,4 +109,50 @@ test('codeForPrompt: 500 lines keep the current procedure, the one it calls and 
   expect(out).not.toContain('    total = total + 206');            // Proc20 body omitted
   expect(out).toContain("Private Sub Proc20(x As Integer)\n' ... (body omitted)");
   expect(out.split('\n').length).toBeLessThan(code.split('\n').length / 2);
+});
+
+test('language reference: stable, within budget, in both system prompts', () => {
+  expect(buildLanguageReference()).toBe(LANGUAGE_REFERENCE);
+  for (const name of ['Len', 'Mid', 'MsgBox']) expect(LANGUAGE_REFERENCE).toMatch(new RegExp(`\\b${name}\\b`));
+  expect(LANGUAGE_REFERENCE).toContain('vb* (');
+  expect(LANGUAGE_REFERENCE.length / 3.5).toBeLessThanOrEqual(1500);
+  const p = project();
+  expect(buildCodeRequest(p, 'm1', 1, 'x')[0].content).toContain(LANGUAGE_REFERENCE);
+  expect(buildFormRequest(p, p.forms[0].id, 'x')[0].content).toContain(LANGUAGE_REFERENCE);
+});
+
+test('project symbols: Public items of the other modules and forms, after the form description', () => {
+  const p = project();
+  p.modules[0].code = 'Public Total As Long\nPublic Const MAX_ITEMS = 10\nPublic Function Add(a As Integer, ByVal b As Integer) As Integer\nEnd Function\nPrivate Sub Hidden()\nEnd Sub';
+  const f2 = newForm('Form2', 'Public Sub ShowFor(n As String)\nEnd Sub');
+  p.forms.push(f2);
+  const s = describeProjectSymbols(p, p.forms[0].id);
+  expect(s).toContain('Module1: Public Function Add(a As Integer, ByVal b As Integer) As Integer');
+  expect(s).toContain('Module1: Public Const MAX_ITEMS = 10');
+  expect(s).toContain('Form2: (no controls)');
+  expect(s).toContain('Form2: Public Sub ShowFor(n As String)');
+  expect(s).not.toContain('Hidden');
+  expect(s.indexOf('Module1:')).toBeLessThan(s.indexOf('Form2:'));
+  const u = buildCodeRequest(p, p.forms[0].id, 1, 'x')[1].content;
+  expect(u.indexOf('Form description')).toBeLessThan(u.indexOf('Project symbols'));
+  expect(u.indexOf('Project symbols')).toBeLessThan(u.indexOf('Code of form'));
+  expect(buildFormRequest(p, p.forms[0].id, 'x')[1].content).toContain('Module1: Public Function Add(');
+  expect(describeProjectSymbols(p, p.forms[0].id, true, 60).split('\n').pop()).toMatch(/more not shown/);
+});
+
+test('a known context size raises the trim threshold', () => {
+  const code = bigModule();
+  expect(codeForPrompt(code, { procName: 'Proc3', mention: '' })).not.toBe(code);
+  expect(codeBudget(undefined)).toBeUndefined();
+  expect(codeBudget(262144)).toBe(120000);
+  expect(codeForPrompt(code, { procName: 'Proc3', mention: '' }, codeBudget(262144))).toBe(code);
+  expect(codeForPrompt(code, { procName: 'Proc3', mention: '' }, codeBudget(2048))).not.toBe(code);
+});
+
+test('the selection goes into the code request', () => {
+  const p = project();
+  const u = buildCodeRequest(p, 'm1', 1, 'REQ', { selection: '    x = 1' })[1].content;
+  expect(u).toContain('Selected code (the request is about this):\n    x = 1');
+  expect(u.indexOf('Selected code')).toBeLessThan(u.indexOf('Request: REQ'));
+  expect(buildCodeRequest(p, 'm1', 1, 'REQ')[1].content).not.toContain('Selected code');
 });

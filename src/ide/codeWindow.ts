@@ -34,6 +34,8 @@ export interface CodeWindow {
   /** One undo step (plan 05). */
   applyChange(from: number, to: number, text: string): void;
   getCursorLine(): number;
+  /** The main selection (offsets into getSource()), or null when nothing is selected. Optional for test doubles. */
+  getSelection?(): { from: number; to: number; text: string } | null;
   getSource(): string;
   /** F9: toggles the breakpoint on `line` (default: the cursor line); false when the line cannot have one. */
   toggleBreakpoint(line?: number): boolean;
@@ -496,6 +498,7 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     },
     applyChange(from, to, text) { view.dispatch({ changes: { from, to, insert: text } }); },
     getCursorLine: () => view.state.doc.lineAt(view.state.selection.main.head).number,
+    getSelection: () => { const r = view.state.selection.main; return r.empty ? null : { from: r.from, to: r.to, text: view.state.sliceDoc(r.from, r.to) }; },
     getSource: () => src(),
     toggleBreakpoint: line => toggleBreakpointAt(view, line ?? api.getCursorLine()),
     breakpointLines: () => bpLines(view.state),

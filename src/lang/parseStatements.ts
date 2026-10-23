@@ -28,22 +28,22 @@ type Closer =
   | 'end if' | 'end select' | 'end with' | 'end sub' | 'end function' | 'end type' | 'end enum'
   | 'next' | 'loop' | 'wend' | 'else' | 'elseif' | 'case';
 
-const TYPE_KEYWORDS: Record<string, VBTypeName> = {
+export const TYPE_KEYWORDS: Record<string, VBTypeName> = {
   integer: 'Integer', long: 'Long', single: 'Single', double: 'Double', currency: 'Currency',
   string: 'String', boolean: 'Boolean', variant: 'Variant', date: 'Date', byte: 'Byte', object: 'Object',
 };
 const SUFFIX_TYPES: Record<TypeSuffix, VBTypeName> = { '%': 'Integer', '&': 'Long', '!': 'Single', '#': 'Double', '$': 'String' };
 
 /** Unsupported VB6 keywords (see KEYWORDS in tokens.ts), with the name shown in the error. */
-const UNSUPPORTED_KEYWORDS: Record<string, string> = {
+export const UNSUPPORTED_KEYWORDS: Record<string, string> = {
   declare: 'Declare', open: 'Open', close: 'Close', property: 'Property', implements: 'Implements',
   event: 'Event', raiseevent: 'RaiseEvent', withevents: 'WithEvents', friend: 'Friend', global: 'Global',
   lib: 'Lib', alias: 'Alias', paramarray: 'ParamArray', gosub: 'GoSub', return: 'Return',
 };
 /** Unsupported statements that are plain identifiers; only unsupported when they start a statement and are not assigned to / member-accessed. */
-const UNSUPPORTED_IDENTS: Record<string, string> = { print: 'Print', line: 'Line', circle: 'Circle', pset: 'PSet' };
+export const UNSUPPORTED_IDENTS: Record<string, string> = { print: 'Print', line: 'Line', circle: 'Circle', pset: 'PSet' };
 /** File I/O statements: an identifier followed by `#`. */
-const HASH_STATEMENTS: Record<string, string> = { print: 'Print', write: 'Write', input: 'Input', get: 'Get', put: 'Put', seek: 'Seek' };
+export const HASH_STATEMENTS: Record<string, string> = { print: 'Print', write: 'Write', input: 'Input', get: 'Get', put: 'Put', seek: 'Seek' };
 
 const STRAY_MESSAGES: Record<Closer, string> = {
   'end if': 'End If without block If',

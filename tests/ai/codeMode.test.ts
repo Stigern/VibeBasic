@@ -107,3 +107,13 @@ test('header before the first procedure: declarations and attached comments only
     'End Sub',
   ].join('\n'));
 });
+
+test('with a selection, a bare-body answer replaces exactly the selection', () => {
+  const src = 'Private Sub A()\n    x = 1\n    y = 2\n    z = 3\nEnd Sub';
+  const from = src.indexOf('    y'), to = src.indexOf('    z');   // the whole line "    y = 2\n"
+  const r = applyCodeProposal(src, '    y = 20\n    w = 4', 'A', { from, to })!;
+  expect(r.source).toBe('Private Sub A()\n    x = 1\n    y = 20\n    w = 4\n    z = 3\nEnd Sub');
+  expect(r.changes).toEqual([{ name: 'A', kind: 'selection' }]);
+  // a whole procedure still replaces the procedure
+  expect(applyCodeProposal(src, 'Private Sub A()\nEnd Sub', 'A', { from, to })!.source).toBe('Private Sub A()\nEnd Sub');
+});

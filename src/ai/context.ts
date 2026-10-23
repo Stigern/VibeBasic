@@ -1,8 +1,11 @@
 // Builds the text the AI sees: control type reference, form descriptions and chat messages.
+import type { Expr, ModuleAst, Param, ProcDecl, VBTypeName } from '../lang/ast';
+import { parseModuleLenient } from '../lang/parser';
 import { CONTROL_TYPES, type PropDef } from '../model/controls';
 import { listProcedures } from '../model/procedures';
 import type { ControlDef, ControlType, FormDef, FontValue, ModuleDef, Project, PropValue } from '../model/types';
 import type { ChatMessage } from './types';
+import { LANGUAGE_REFERENCE } from './langReference';
 import { BODY_OMITTED } from './omitted';
 import { CODE_SYSTEM_PROMPT, FORM_SYSTEM_PROMPT } from './prompts';
 
@@ -99,19 +102,74 @@ export function describeForm(form: FormDef): string {
   return lines.join('\n');
 }
 
+/** "Form1: Command1 (CommandButton), Text1 (TextBox)"; control arrays are listed once. */
+function describeFormControls(f: FormDef): string {
+  const seen = new Set<string>();
+  const items: string[] = [];
+  for (const c of f.controls) {
+    const k = c.name.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    items.push(`${c.name} (${c.type})`);
+  }
+  return `${f.name}: ${items.length ? items.join(', ') : '(no controls)'}`;
+}
+
 /** "Form1: Command1 (CommandButton), Text1 (TextBox)" per form; control arrays are listed once. */
 export function describeProjectForms(p: Project): string {
-  return p.forms.map(f => {
-    const seen = new Set<string>();
-    const items: string[] = [];
-    for (const c of f.controls) {
-      const k = c.name.toLowerCase();
-      if (seen.has(k)) continue;
-      seen.add(k);
-      items.push(`${c.name} (${c.type})`);
-    }
-    return `${f.name}: ${items.length ? items.join(', ') : '(no controls)'}`;
-  }).join('\n');
+  return p.forms.map(describeFormControls).join('\n');
+}
+
+const literal = (e: Expr): string | null =>
+  e.kind === 'number' ? String(e.value) : e.kind === 'string' ? quote(e.value) : e.kind === 'bool' ? (e.value ? 'True' : 'False')
+    : e.kind === 'unary' && e.op === 'neg' && e.operand.kind === 'number' ? `-${e.operand.value}` : null;
+const asType = (t: VBTypeName | undefined): string => t === undefined ? '' : ` As ${typeof t === 'string' ? t : 'userType' in t ? t.userType : t.objectType}`;
+const param = (p: Param): string => `${p.optional ? 'Optional ' : ''}${p.byRef ? '' : 'ByVal '}${p.name}${p.isArray ? '()' : ''}${asType(p.type)}`;
+const signature = (p: ProcDecl): string =>
+  `Public ${p.kind === 'sub' ? 'Sub' : 'Function'} ${p.name}(${p.params.map(param).join(', ')})${p.kind === 'function' ? asType(p.returnType) : ''}`;
+
+/** The Public items of a module or form, in source order: "Public Function Add(a As Integer) As Integer", "Public Enum Colors (Red, Green)". */
+function publicItems(ast: ModuleAst): string[] {
+  const items: { line: number; text: string }[] = [];
+  const list = (names: string[]) => ` (${names.slice(0, 10).join(', ')}${names.length > 10 ? ', ...' : ''})`;
+  for (const t of ast.types) if (t.visibility === 'public') items.push({ line: t.line, text: `Public Type ${t.name}${list(t.fields.map(f => f.name))}` });
+  for (const e of ast.enums) if (e.visibility === 'public') items.push({ line: e.line, text: `Public Enum ${e.name}${list(e.members.map(m => m.name))}` });
+  for (const c of ast.consts) {
+    if (c.scope !== 'public') continue;
+    const v = literal(c.value);
+    items.push({ line: c.line, text: `Public Const ${c.name}${asType(c.type)}${v === null ? '' : ` = ${v}`}` });
+  }
+  for (const v of ast.variables) if (v.scope === 'public') items.push({ line: v.line, text: `Public ${v.name}${v.isArray ? '()' : ''}${asType(v.type)}` });
+  for (const p of ast.procedures) if (p.visibility === 'public') items.push({ line: p.line, text: signature(p) });
+  return items.sort((a, b) => a.line - b.line).map(i => i.text);
+}
+
+/** About how long the project symbols section may get. */
+export const SYMBOLS_MAX_CHARS = 3000;
+
+/**
+ * One line per public item of the project's other modules and forms ("Module1: Public Function Add(a As Integer) As Integer"),
+ * nearest first: the standard modules (their Public names are visible everywhere), then the other forms, each led by its
+ * controls ("Form2: Text1 (TextBox), cmdOK (CommandButton)") unless `formControls` is false. `currentId` (its code is in the
+ * message) is skipped. Capped at about `max` characters; the rest is counted in a last line.
+ */
+export function describeProjectSymbols(p: Project, currentId: string, formControls = true, max = SYMBOLS_MAX_CHARS): string {
+  const lines: string[] = [];
+  const itemsOf = (code: string, name: string) => { const ast = parseModuleLenient(code, name).ast; return ast ? publicItems(ast) : []; };
+  for (const m of p.modules) if (m.id !== currentId) lines.push(...itemsOf(m.code, m.name).map(t => `${m.name}: ${t}`));
+  for (const f of p.forms) {
+    if (f.id === currentId) continue;
+    if (formControls) lines.push(describeFormControls(f));
+    lines.push(...itemsOf(f.code, f.name).map(t => `${f.name}: ${t}`));
+  }
+  const out: string[] = [];
+  let size = 0;
+  for (const l of lines) {
+    if (size + l.length + 1 > max) { out.push(`(${lines.length - out.length} more not shown)`); break; }
+    out.push(l);
+    size += l.length + 1;
+  }
+  return out.join('\n');
 }
 
 function findItem(p: Project, id: string): { form?: FormDef; module?: ModuleDef } {
@@ -123,14 +181,24 @@ function findItem(p: Project, id: string): { form?: FormDef; module?: ModuleDef 
 const LINE_BREAK = /\r\n|\n|\r/;
 const mentions = (text: string, name: string): boolean => new RegExp(`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`, 'i').test(text);
 
+/** Without a known context size, code up to this many lines goes to the model unchanged. */
+export const DEFAULT_MAX_LINES = 400;
+/** The most code characters sent unchanged, whatever the context size. */
+export const MAX_CODE_CHARS = 120000;
+
+/** The code budget in characters for a context of `contextTokens` (half of it, at about 3.5 characters per token); undefined when unknown. */
+export function codeBudget(contextTokens: number | undefined): number | undefined {
+  return contextTokens && contextTokens > 0 ? Math.min(Math.floor(contextTokens * 3.5 * 0.5), MAX_CODE_CHARS) : undefined;
+}
+
 /**
- * The code as the model should see it. Up to `maxLines` lines it is unchanged. Above that: everything outside
- * procedures (declarations), the whole current procedure, the whole procedures it calls or the request names
- * (case-insensitive), and only the heading line plus `' ... (body omitted)` for the rest.
+ * The code as the model should see it. Up to `budgetChars` characters (unknown budget: up to 400 lines) it is unchanged.
+ * Above that: everything outside procedures (declarations), the whole current procedure, the whole procedures it calls
+ * or the request names (case-insensitive), and only the heading line plus `' ... (body omitted)` for the rest.
  */
-export function codeForPrompt(code: string, focus: { procName: string | null; mention: string }, maxLines = 400): string {
+export function codeForPrompt(code: string, focus: { procName: string | null; mention: string }, budgetChars?: number): string {
   const lines = code.split(LINE_BREAK);
-  if (lines.length <= maxLines) return code;
+  if (budgetChars === undefined ? lines.length <= DEFAULT_MAX_LINES : code.length <= budgetChars) return code;
   const procs = listProcedures(code);
   const current = focus.procName ? procs.find(p => p.name.toLowerCase() === focus.procName!.toLowerCase()) : undefined;
   const body = current ? lines.slice(current.line - 1, current.endLine).join('\n') : '';
@@ -149,13 +217,35 @@ export function codeForPrompt(code: string, focus: { procName: string | null; me
   return out.join('\n');
 }
 
-export function buildCodeRequest(p: Project, itemId: string, cursorLine: number, userPrompt: string): ChatMessage[] {
+/** What a request may know besides the project: the server's context size and (code mode) the selected text. */
+export interface RequestOptions { contextTokens?: number; selection?: string | null }
+
+let codeSystem: string | undefined, formSystem: string | undefined;
+/** The system prompts, built once: byte-identical for every request (the server's prefix cache). */
+const codeSystemPrompt = (): string => codeSystem ??= `${CODE_SYSTEM_PROMPT}${describeControlTypes()}\n${LANGUAGE_REFERENCE}`;
+const formSystemPrompt = (): string => formSystem ??= `${FORM_SYSTEM_PROMPT}${describeControlTypes()}\n${LANGUAGE_REFERENCE}`;
+
+/** The form description (or, for a module, the project's forms) followed by the project symbols, when there are any. */
+function projectContext(p: Project, itemId: string, form: FormDef | undefined): string {
+  const head = form ? `Form description:\n${describeForm(form)}` : `Forms in the project:\n${describeProjectForms(p)}`;
+  const symbols = describeProjectSymbols(p, itemId, !!form);
+  return symbols ? `${head}\n\nProject symbols (other modules and forms):\n${symbols}` : head;
+}
+
+export function buildCodeRequest(p: Project, itemId: string, cursorLine: number, userPrompt: string, opts: RequestOptions = {}): ChatMessage[] {
   const { form, module } = findItem(p, itemId);
   const code = (form ?? module)?.code ?? '';
   const proc = listProcedures(code).find(pr => cursorLine >= pr.line && cursorLine <= pr.endLine);
-  const context = form ? `Form description:\n${describeForm(form)}` : `Forms in the project:\n${describeProjectForms(p)}`;
-  const user = `${context}\n\nCode of ${form ? `form ${form.name}` : `module ${module?.name ?? ''}`}:\n${codeForPrompt(code, { procName: proc?.name ?? null, mention: userPrompt })}\n\nCurrent procedure: ${proc?.name ?? '(none)'}\n\nRequest: ${userPrompt}`;
-  return [{ role: 'system', content: `${CODE_SYSTEM_PROMPT}${describeControlTypes()}` }, { role: 'user', content: user }];
+  const parts = [
+    projectContext(p, itemId, form),
+    `Code of ${form ? `form ${form.name}` : `module ${module?.name ?? ''}`}:\n${codeForPrompt(code, { procName: proc?.name ?? null, mention: userPrompt }, codeBudget(opts.contextTokens))}`,
+  ];
+  if (opts.selection?.trim()) {
+    parts.push(`Selected code (the request is about this):\n${opts.selection}\n`
+      + 'Answer with the whole procedure, or with only the new code for the selected lines (no Sub line).');
+  }
+  parts.push(`Current procedure: ${proc?.name ?? '(none)'}`, `Request: ${userPrompt}`);
+  return [{ role: 'system', content: codeSystemPrompt() }, { role: 'user', content: parts.join('\n\n') }];
 }
 
 export interface FixError { number: number; description: string; compile: boolean; line: number; procName: string | null }
@@ -164,7 +254,7 @@ export interface FixError { number: number; description: string; compile: boolea
  * Debugging with AI: the code-mode system prompt; in the user message the form description, the code (the procedure
  * with the error and its callers in full), the error, the line and the variable values, then `Fix the error.`
  */
-export function buildFixRequest(p: Project, itemId: string, err: FixError, vars: { name: string; value: string }[]): ChatMessage[] {
+export function buildFixRequest(p: Project, itemId: string, err: FixError, vars: { name: string; value: string }[], opts: RequestOptions = {}): ChatMessage[] {
   const { form, module } = findItem(p, itemId);
   const code = (form ?? module)?.code ?? '';
   const lines = code.split(LINE_BREAK);
@@ -172,25 +262,24 @@ export function buildFixRequest(p: Project, itemId: string, err: FixError, vars:
   const proc = err.procName ? procs.find(pr => pr.name.toLowerCase() === err.procName!.toLowerCase()) : undefined;
   // the callers of the failing procedure: named in `mention`, so codeForPrompt keeps them whole
   const callers = proc ? procs.filter(pr => pr !== proc && mentions(lines.slice(pr.line, pr.endLine).join('\n'), proc.name)).map(pr => pr.name) : [];
-  const context = form ? `Form description:\n${describeForm(form)}` : `Forms in the project:\n${describeProjectForms(p)}`;
   const what = err.compile ? `Compile error: ${err.description}` : `Run-time error ${err.number}: ${err.description}`;
   const lineText = (lines[err.line - 1] ?? '').trim();
   const parts = [
-    context,
-    `Code of ${form ? `form ${form.name}` : `module ${module?.name ?? ''}`}:\n${codeForPrompt(code, { procName: proc?.name ?? null, mention: callers.join(' ') })}`,
+    projectContext(p, itemId, form),
+    `Code of ${form ? `form ${form.name}` : `module ${module?.name ?? ''}`}:\n${codeForPrompt(code, { procName: proc?.name ?? null, mention: callers.join(' ') }, codeBudget(opts.contextTokens))}`,
     `Error: ${what}`,
     `Line ${err.line} in ${proc?.name ?? '(declarations)'}: ${lineText}`,
   ];
   if (!err.compile) parts.push(`Variable values:\n${vars.length ? vars.map(v => `${v.name} = ${v.value}`).join('\n') : '(none)'}`);
   parts.push('Fix the error.');
-  return [{ role: 'system', content: `${CODE_SYSTEM_PROMPT}${describeControlTypes()}` }, { role: 'user', content: parts.join('\n\n') }];
+  return [{ role: 'system', content: codeSystemPrompt() }, { role: 'user', content: parts.join('\n\n') }];
 }
 
-export function buildFormRequest(p: Project, formId: string, userPrompt: string): ChatMessage[] {
+export function buildFormRequest(p: Project, formId: string, userPrompt: string, opts: RequestOptions = {}): ChatMessage[] {
   const form = p.forms.find(f => f.id === formId);
   if (!form) throw new Error(`Unknown form ${formId}`);
-  const user = `Form description:\n${describeForm(form)}\n\nForm code:\n${codeForPrompt(form.code, { procName: null, mention: userPrompt })}\n\nRequest: ${userPrompt}`;
-  return [{ role: 'system', content: `${FORM_SYSTEM_PROMPT}${describeControlTypes()}` }, { role: 'user', content: user }];
+  const user = `${projectContext(p, formId, form)}\n\nForm code:\n${codeForPrompt(form.code, { procName: null, mention: userPrompt }, codeBudget(opts.contextTokens))}\n\nRequest: ${userPrompt}`;
+  return [{ role: 'system', content: formSystemPrompt() }, { role: 'user', content: user }];
 }
 
 export { stripThinking } from './clean';

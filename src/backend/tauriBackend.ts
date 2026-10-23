@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import type { Backend, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
-import type { ChatMessage } from '../ai/types';
+import type { AiModel, ChatMessage } from '../ai/types';
 import { dialogFilters } from './dialogFilters';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
 
@@ -173,8 +173,8 @@ export class TauriBackend implements Backend {
     return call<void>('can_make_app', {});
   }
 
-  aiListModels(baseUrl: string, apiKey: string): Promise<string[]> {
-    return call<string[]>('ai_list_models', { baseUrl, apiKey });
+  aiListModels(baseUrl: string, apiKey: string): Promise<AiModel[]> {
+    return call<AiModel[]>('ai_list_models', { baseUrl, apiKey });
   }
 
   async aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string, opts?: AiChatOptions): Promise<string> {
