@@ -3,7 +3,7 @@
 // marks it red and shows the compile error box. Edits write form.code / module.code and mark the project dirty.
 import { Annotation, Compartment, EditorState, StateEffect, StateField, type Extension, type Transaction } from '@codemirror/state';
 import { Decoration, EditorView, GutterMarker, gutter, keymap, type DecorationSet } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap, insertNewlineKeepIndent, insertTab, indentLess, undo, redo, deleteCharForward } from '@codemirror/commands';
+import { defaultKeymap, history, historyKeymap, indentLess, undo, redo, deleteCharForward } from '@codemirror/commands';
 import { acceptCompletion, autocompletion } from '@codemirror/autocomplete';
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search';
 import { tokenize } from '../lang/lexer';
@@ -22,7 +22,9 @@ import type { IdeState } from './ideState';
 import type { IdeActions } from './menus';
 import { memberCompletion } from './completions';
 import { bpEffect, bpField, bpLines, toggleBreakpointAt } from './breakpoints';
-import { vbHighlight, vbTheme } from './vbLanguage';
+import { SpanCache, editorLook, refreshHighlight, vbHighlight, vbTheme } from './vbLanguage';
+import { collapseToDefinitions, indentGuides, outlining, procedureSeparator, revealEffects, toggleAllOutlining, toggleOutliningExpansion } from './vbOutlining';
+import { editingHelpers, vbEnter, vbTab } from './vbEditing';
 import './codeWindow.css';
 
 export interface CodeWindow {
@@ -110,11 +112,12 @@ const breakExt: Extension = [
   }),
 ];
 
-// thin grey rule under every End Sub / End Function
-const procEndExt = EditorView.decorations.compute(['doc'], s => {
-  const ends = listProcedures(s.doc.toString()).filter(p => p.endLine < s.doc.lines);
-  return Decoration.set(ends.map(p => Decoration.line({ class: 'cm-vb-procend' }).range(s.doc.line(p.endLine).from)));
-});
+/** Edit > Outlining and its Ctrl+M chords (Visual Studio). On a Mac these are the Control key: Cmd+M minimizes. */
+const outliningKeys = [
+  { key: 'Ctrl-m Ctrl-m', run: toggleOutliningExpansion },
+  { key: 'Ctrl-m Ctrl-l', run: toggleAllOutlining },
+  { key: 'Ctrl-m Ctrl-o', run: collapseToDefinitions },
+];
 
 const envs = new WeakMap<IdeState, CodeEnv>();
 const windows = new WeakMap<IdeState, Map<string, CodeWindow>>();
@@ -299,23 +302,23 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     } else api.gotoProcedure(curObj, p);
   } });
   const src = () => view.state.doc.toString();
-  const generalProcs = () => listProcedures(src()).filter(p => !resolveProc(p.name)).map(p => p.name);
-  function fillProcs(): void {
-    if (curObj === GENERAL) procCombo.setItems([DECLS, ...generalProcs()], () => false);
+  function fillProcs(procs = listProcedures(src())): void {
+    if (curObj === GENERAL) procCombo.setItems([DECLS, ...procs.filter(p => !resolveProc(p.name)).map(p => p.name)], () => false);
     else {
       const t = typeOf(curObj);
-      const s = src();
-      procCombo.setItems((t ? CONTROL_TYPES[t.type].events : []).map(e => e.name), e => !!findProcedureRange(s, `${curObj}_${e}`));
+      const have = new Set(procs.map(p => p.name.toLowerCase()));
+      procCombo.setItems((t ? CONTROL_TYPES[t.type].events : []).map(e => e.name), e => have.has(`${curObj}_${e}`.toLowerCase()));
     }
   }
   function syncCombos(): void {
     objCombo.setItems(objectNames());
     const line = view.state.doc.lineAt(view.state.selection.main.head).number;
-    const p = listProcedures(src()).find(x => line >= x.line && line <= x.endLine);
+    const procs = listProcedures(src());
+    const p = procs.find(x => line >= x.line && line <= x.endLine);
     const r = p ? resolveProc(p.name) : null;
     curObj = r ? r.obj : GENERAL;
     objCombo.setValue(curObj);
-    fillProcs();
+    fillProcs(procs);
     procCombo.setValue(r ? r.ev : p ? p.name : DECLS);
   }
 
@@ -385,18 +388,26 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   // Read-only in run and break mode (edit-and-continue comes in phase 6)
   const lockExt = (): Extension => [EditorState.readOnly.of(ide.mode !== 'design'), EditorView.editable.of(ide.mode === 'design')];
   const lock = new Compartment();
+  // Tools > Options: palette, font size, procedure separator
+  const look = new Compartment(), separator = new Compartment();
+  const lookExt = (): Extension => editorLook(ide.options.codePalette === 'vb6' ? 'vb6' : 'vs', Math.min(16, Math.max(9, Math.round(ide.options.codeFontSize) || 13)));
+  const sepExt = (): Extension => (ide.options.procedureSeparator ? procedureSeparator : []);
+  // control and form names (coloured like VS user types)
+  const spans = new SpanCache(() => new Set([...controls().map(c => c.name.toLowerCase()), ...ide.project.forms.map(f => f.name.toLowerCase())]));
   const state = EditorState.create({
     doc: norm(item0.code),
     extensions: [
       lock.of(lockExt()),
       history(), search({ top: true }),
       autocompletion({ override: [memberCompletion(() => form() ?? null)], icons: false }),
-      vbHighlight, vbTheme, errField, breakExt, procEndExt,
+      vbHighlight(spans), vbTheme, look.of(lookExt()), errField, breakExt, outlining, separator.of(sepExt()), indentGuides, editingHelpers(spans),
       keymap.of([
-        { key: 'Enter', run: insertNewlineKeepIndent }, { key: 'Tab', run: c => acceptCompletion(c) || insertTab(c) }, { key: 'Shift-Tab', run: indentLess },
+        { key: 'Enter', run: vbEnter }, { key: 'Tab', run: c => acceptCompletion(c) || vbTab(c) }, { key: 'Shift-Tab', run: indentLess },
+        ...outliningKeys,
         // before defaultKeymap: its Mod-i (selectParentSyntax) would swallow Cmd+I (Tools > Ask AI...)
         { key: 'Mod-i', run: () => { envs.get(ide)?.actions?.askAi?.(); return true; } },
-        ...searchKeymap, ...historyKeymap, ...defaultKeymap,
+        // Ctrl-m (tab focus mode) would clash with the Ctrl+M outlining chords
+        ...searchKeymap, ...historyKeymap, ...defaultKeymap.filter(b => b.key !== 'Ctrl-m'),
       ]),
     ],
   });
@@ -445,11 +456,15 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
         selection: { anchor: clamp(sel.anchor), head: clamp(sel.head) }, annotations: EXTERNAL.of(true),
       });
     } else syncCombos();
+    view.dispatch({ effects: refreshHighlight.of(null) });   // a renamed control / form changes the colours
   };
   const unsubProject = ide.on('project', onProject);
   const unsubClose = ide.on('closeWindows', () => win.close());
   const unsubMode = ide.on('mode', () => { if (!closed) view.dispatch({ effects: lock.reconfigure(lockExt()) }); });
-  const unsub = () => { unsubProject(); unsubClose(); unsubMode(); };
+  const unsubOptions = ide.on('options', () => {
+    if (!closed) view.dispatch({ effects: [look.reconfigure(lookExt()), separator.reconfigure(sepExt())] });
+  });
+  const unsub = () => { unsubProject(); unsubClose(); unsubMode(); unsubOptions(); };
   let closed = false;
   win.onClose = () => {
     closed = true; unsub(); reg!.delete(itemId);
@@ -464,7 +479,8 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   const api: CodeWindow = {
     win,
     gotoLine(n) {
-      view.dispatch({ selection: { anchor: lineStart(n) }, scrollIntoView: true });
+      // a line inside a folded block is shown first (break mode, errors, the procedure dropdown)
+      view.dispatch({ effects: revealEffects(view.state, lineStart(n)), selection: { anchor: lineStart(n) }, scrollIntoView: true });
       view.focus();
     },
     gotoProcedure(objectName, eventName) {
@@ -491,7 +507,7 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
       if (r) api.gotoLine(Math.min(r.line + 1, r.endLine));
     },
     setBreakLine(n) {
-      view.dispatch({ effects: breakEffect.of(n === null ? null : lineStart(n)), scrollIntoView: false });
+      view.dispatch({ effects: [breakEffect.of(n === null ? null : lineStart(n)), ...(n === null ? [] : revealEffects(view.state, lineStart(n)))], scrollIntoView: false });
       if (n !== null) view.dispatch({ effects: EditorView.scrollIntoView(lineStart(n), { y: 'center' }) });
     },
     markErrorLines(lines) {
@@ -558,6 +574,11 @@ export function registerCodeActions(ide: IdeState, actions: IdeActions, env: Cod
     if (v.kind === 'code') windows.get(ide)?.get(v.itemId)?.toggleBreakpoint();
   };
   actions.clearAllBreakpoints = () => clearAllBreakpoints(ide);
+  // Edit > Outlining
+  for (const [name, cmd] of [['toggleOutlining', toggleOutliningExpansion], ['toggleAllOutlining', toggleAllOutlining],
+    ['collapseToDefinitions', collapseToDefinitions]] as const) {
+    actions[name] = () => { const v = viewOf(); if (v) { cmd(v); v.focus(); } };
+  }
   // a new project has no breakpoints
   ide.on('project', () => { if (ide.hasBreakpoints && breakpointsOf(ide).size === 0) ide.breakpointsChanged(false); });
 }

@@ -11,6 +11,7 @@ export interface IdeActions { [name: string]: IdeAction }
 export const ACTION_NAMES = [
   'newProject', 'openProject', 'saveProject', 'saveProjectAs', 'makeApp', 'exit',
   'undo', 'redo', 'cut', 'copy', 'paste', 'delete', 'selectAll', 'find',
+  'toggleOutlining', 'toggleAllOutlining', 'collapseToDefinitions',
   'viewCode', 'viewObject', 'viewImmediate', 'viewProjectExplorer', 'viewProperties', 'viewToolbox',
   'addForm', 'addModule', 'removeItem', 'components', 'projectProperties',
   'alignLefts', 'alignCenters', 'alignRights', 'alignTops', 'alignMiddles', 'alignBottoms',
@@ -106,6 +107,13 @@ export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?
       mk('Select All', 'selectAll', 'Ctrl+A', () => editEnabled(state, 'selectAll')),
       sep(),
       mk('Find...', 'find', 'Ctrl+F', inCode),
+      sep(),
+      // two-key chords (Visual Studio): the code editor's keymap handles them, bindShortcuts skips them
+      sub('Outlining', [
+        mk('Toggle Outlining Expansion', 'toggleOutlining', 'Ctrl+M, Ctrl+M', inCode),
+        mk('Toggle All Outlining', 'toggleAllOutlining', 'Ctrl+M, Ctrl+L', inCode),
+        mk('Collapse to Definitions', 'collapseToDefinitions', 'Ctrl+M, Ctrl+O', inCode),
+      ]),
     ] },
     { label: 'View', items: [
       mk('Code', 'viewCode', 'F7'),

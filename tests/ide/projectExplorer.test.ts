@@ -114,7 +114,7 @@ test('options: OK updates ide.options, emits and saves; Cancel changes nothing',
   // 98.css draws a check box only as `input + label[for=id]` (a box inside its label is invisible)
   for (const cb of cbs) expect(cb.nextElementSibling?.matches(`label[for="${cb.id}"]`), cb.id).toBe(true);
   cbs[1].checked = true;                       // Require Variable Declaration
-  document.querySelectorAll<HTMLElement>('.tabs98-tab')[1].click();   // General tab
+  [...document.querySelectorAll<HTMLElement>('.tabs98-tab')].find(t => t.textContent === 'General')!.click();
   const nums = inputs().filter(i => i.type === 'text');
   nums[0].value = '0';                         // invalid grid width
   press('OK');
