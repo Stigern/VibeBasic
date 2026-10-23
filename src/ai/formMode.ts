@@ -1,12 +1,15 @@
-// Form mode: the model answers with JSON ops (add / set / delete / form) and optional event code.
+// Form mode: the model answers with JSON ops (add / set / delete / form, and the placement ops arrange / autosize) and optional event code.
 // parseFormOps is tolerant (fences, thinking, trailing commas, comments, type aliases); nothing is applied on failure.
+// Relative placement ("place" on add and set, "arrange", "autosize") is resolved to absolute Left/Top/Width/Height while parsing, in op order.
 import { setCodeCmd, addControlsCmd, compositeCmd, deleteControlsCmd, setPropertyCmd, type Command } from '../model/commands';
 import { addComponentsCmd } from '../model/components';
 import { CONTROL_TYPES, getPropDef, newControl, nextDefaultName, validateName } from '../model/controls';
 import type { ControlDef, ControlType, FormDef, Project, PropValue } from '../model/types';
+import { absoluteRect, sizeOf } from '../ide/designerLogic';
 import { parsePropertyInput } from '../ide/propertyEditors';
 import { applyCodeProposal, extractCode, type CodeApplyResult } from './codeMode';
 import { stripThinking } from './clean';
+import { CAPTION_PAD, captionText, textWidthPx } from './layoutCheck';
 
 export { setCodeCmd };
 
@@ -26,7 +29,13 @@ const PROP_VALUE = { anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'bo
 const PROPS = { type: 'object', additionalProperties: PROP_VALUE };
 const opSchema = (op: string, properties: Record<string, unknown>, required: string[]) =>
   ({ type: 'object', properties: { op: { type: 'string', enum: [op] }, ...properties }, required: ['op', ...required], additionalProperties: false });
-const NAME = { type: 'string' }, INDEX = { type: 'integer', minimum: 0 };
+const NAME = { type: 'string' }, INDEX = { type: 'integer', minimum: 0 }, INT = { type: 'integer' }, NAMES = { type: 'array', items: NAME };
+/** "place": next to another control, `gap` twips away (default 120). */
+const PLACE = {
+  type: 'object',
+  properties: { below: NAME, above: NAME, rightOf: NAME, leftOf: NAME, gap: INT, align: { type: 'string', enum: ['left', 'top', 'center'] } },
+  additionalProperties: false,
+};
 
 /**
  * The JSON schema of a form-mode answer, `{ops:[...], code?}`, sent as `response_format` (json_schema "form_ops").
@@ -39,10 +48,12 @@ export const FORM_OPS_SCHEMA = {
       type: 'array',
       items: {
         anyOf: [
-          opSchema('add', { type: { type: 'string' }, name: NAME, index: INDEX, container: { anyOf: [{ type: 'string' }, { type: 'null' }] }, tab: INDEX, props: PROPS }, ['type', 'name']),
-          opSchema('set', { name: NAME, index: INDEX, props: PROPS }, ['name', 'props']),
+          opSchema('add', { type: { type: 'string' }, name: NAME, index: INDEX, container: { anyOf: [{ type: 'string' }, { type: 'null' }] }, tab: INDEX, props: PROPS, place: PLACE }, ['type', 'name']),
+          opSchema('set', { name: NAME, index: INDEX, props: PROPS, place: PLACE }, ['name']),
           opSchema('delete', { name: NAME, index: INDEX }, ['name']),
           opSchema('form', { props: PROPS }, ['props']),
+          opSchema('arrange', { names: NAMES, as: { type: 'string', enum: ['row', 'column', 'grid'] }, columns: { type: 'integer', minimum: 1 }, gap: INT, left: INT, top: INT }, ['names', 'as']),
+          opSchema('autosize', { names: NAMES }, ['names']),
         ],
       },
     },
@@ -115,7 +126,7 @@ function parseJsonLoose(reply: string): { value: unknown } | { reason: string } 
 const OP_ALIASES: Record<string, string> = {
   remove: 'delete', update: 'set', modify: 'set', change: 'set', move: 'set', edit: 'set', create: 'add', insert: 'add',
 };
-const OP_KEYS = new Set(['op', 'type', 'name', 'container', 'index', 'props', 'tab']);
+const OP_KEYS = new Set(['op', 'type', 'name', 'container', 'index', 'props', 'tab', 'place']);
 /** The op's props; without a `props` object, loose top-level keys (e.g. {"op":"set","name":"X","Caption":"y"}) count. */
 function propsOf(raw: Record<string, unknown>): Record<string, unknown> {
   if (isObj(raw.props)) return raw.props;
@@ -172,7 +183,21 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
   const warnings: string[] = [];
   const ops: FormOp[] = [];
   // Working picture of the form's controls while the ops are read (names, types, containers).
-  const work: FormDef = { ...form, controls: form.controls.map(c => ({ ...c, props: {} })) };
+  const work: FormDef = { ...form, controls: form.controls.map(c => ({ ...c, props: { ...c.props } })) };
+  /** The props of the add op of a control added in this reply (by working id): later placement goes into them. */
+  const addedProps = new Map<string, Record<string, PropValue>>();
+  /** New geometry for `c`: into its add op when it was added in this reply, else a further set op. */
+  const setGeometry = (c: ControlDef, geo: Record<string, number>) => {
+    Object.assign(c.props, geo);
+    const own = addedProps.get(c.id);
+    if (own) Object.assign(own, geo);
+    else ops.push({ op: 'set', name: c.name, index: c.index, props: { ...geo } });
+  };
+  const byName = (raw: unknown): ControlDef | undefined => {
+    if (typeof raw !== 'string') return undefined;
+    const s = splitName(raw);
+    return find(s.name, s.index)[0];
+  };
   const taken = (n: string, i: number | null): boolean => work.controls.some(c => c.name.toLowerCase() === n.toLowerCase() && (i === null || c.index === i));
   /** A new control may only join an existing name as a further member of a control array of the same type. */
   const clashes = (n: string, i: number | null, type: ControlType): boolean => {
@@ -221,8 +246,12 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
         else warnings.push(`Ignored unknown container ${raw.container} for ${name}.`);
       }
       const parent = container ? find(splitName(container).name, splitName(container).index)[0] : undefined;
-      work.controls.push({ id: `w${work.controls.length}`, type, name, index, parentId: parent?.id ?? null, props: {} });
       const tab = parent?.type === 'SSTab' && typeof raw.tab === 'number' && raw.tab >= 0 ? Math.floor(raw.tab) : undefined;
+      const added: ControlDef = { id: `w${work.controls.length}`, type, name, index, parentId: parent?.id ?? null, props: { ...props }, ...(tab !== undefined ? { tab } : {}) };
+      work.controls.push(added);
+      addedProps.set(added.id, props);
+      if (raw.place !== undefined) Object.assign(props, resolvePlace(work, added, raw.place, byName, warnings, props));
+      Object.assign(added.props, props);
       ops.push({ op: 'add', type, name, index, container, props, ...(tab !== undefined ? { tab } : {}) });
     } else if (kind === 'set' || kind === 'delete') {
       const s = splitName(typeof raw.name === 'string' ? raw.name : '');
@@ -239,8 +268,24 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
         ops.push({ op: 'delete', name: targets[0].name, index: s.index });
       } else {
         const props = parseProps(targets[0].type, propsOf(raw), label(targets[0].name, s.index), warnings);
+        for (const t of targets) Object.assign(t.props, props);
+        if (raw.place !== undefined) {
+          const geo = resolvePlace(work, targets[0], raw.place, byName, warnings, props);
+          Object.assign(props, geo);
+          for (const t of targets) Object.assign(t.props, geo);
+        }
         if (Object.keys(props).length) ops.push({ op: 'set', name: targets[0].name, index: s.index, props });
       }
+    } else if (kind === 'arrange' || kind === 'autosize') {
+      const names = Array.isArray(raw.names) ? raw.names : [];
+      const ctrls: ControlDef[] = [];
+      for (const n of names) {
+        const c = byName(n);
+        if (c && !ctrls.includes(c)) ctrls.push(c);
+        else if (!c) warnings.push(`Ignored ${kind} of missing control ${String(n)}.`);
+      }
+      if (kind === 'autosize') for (const c of ctrls) { const geo = autosize(c, warnings); if (geo) setGeometry(c, geo); }
+      else for (const [c, geo] of arrange(ctrls, raw, warnings)) setGeometry(c, geo);
     } else warnings.push(`Ignored unknown operation ${raw.op}.`);
   }
 
@@ -257,6 +302,90 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
   }
   if (!ops.length && code === null) return warnings.length ? { ...fail, raw: `${reply}\n\nIgnored:\n${warnings.join('\n')}` } : fail;
   return { ok: true, ops, code, warnings, ...(codeChanges ? { codeChanges } : {}), ...(code !== null && text !== undefined ? { codeText: text } : {}), ...(codeSkipped ? { codeSkipped } : {}) };
+}
+
+const DEFAULT_GAP = 120;
+const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : undefined);
+const rectOf = (c: ControlDef) => ({ left: Number(c.props.Left) || 0, top: Number(c.props.Top) || 0, ...sizeOf(c) });
+const PLACE_KEYS: Record<string, 'below' | 'above' | 'rightOf' | 'leftOf'> = { below: 'below', under: 'below', above: 'above', rightof: 'rightOf', right: 'rightOf', leftof: 'leftOf', left: 'leftOf' };
+
+/**
+ * Left and Top for `place` ({"below"|"above"|"rightOf"|"leftOf": name, gap?, align?}): next to the named control, `gap` twips away
+ * (default 120). Below/above line up the left edges (align "center": the centres); rightOf/leftOf line up the tops (align "center":
+ * the middles). A Left (below/above) or Top (rightOf/leftOf) given in the same op's `given` props is kept unless "align" is set.
+ * Works across containers (the position is converted to the target's container).
+ */
+function resolvePlace(work: FormDef, target: ControlDef, place: unknown, byName: (n: unknown) => ControlDef | undefined, warnings: string[],
+  given: Record<string, PropValue>): Record<string, number> {
+  if (!isObj(place)) return {};
+  const entry = Object.entries(place).find(([k]) => PLACE_KEYS[k.toLowerCase()]);
+  if (!entry) { warnings.push(`Ignored "place" of ${target.name} without below, above, rightOf or leftOf.`); return {}; }
+  const ref = byName(entry[1]);
+  if (!ref || ref === target) { warnings.push(`Ignored "place" of ${target.name}: no control ${String(entry[1])}.`); return {}; }
+  const dir = PLACE_KEYS[entry[0].toLowerCase()];
+  const gap = Math.max(0, num(place.gap) ?? DEFAULT_GAP);
+  const align = typeof place.align === 'string' ? place.align.toLowerCase() : '';
+  const r = absoluteRect(work, ref.id);
+  const { width: w, height: h } = sizeOf(target);
+  const origin = target.parentId ? absoluteRect(work, target.parentId) : { left: 0, top: 0 };
+  let left: number, top: number;
+  if (dir === 'below' || dir === 'above') {
+    top = dir === 'below' ? r.top + r.height + gap : r.top - gap - h;
+    left = align === 'center' ? r.left + (r.width - w) / 2 : align === 'right' ? r.left + r.width - w : r.left;
+  } else {
+    left = dir === 'rightOf' ? r.left + r.width + gap : r.left - gap - w;
+    top = align === 'center' || align === 'middle' ? r.top + (r.height - h) / 2 : align === 'bottom' ? r.top + r.height - h : r.top;
+  }
+  const out = { Left: Math.round(left - origin.left), Top: Math.round(top - origin.top) };
+  const cross = dir === 'below' || dir === 'above' ? 'Left' : 'Top';
+  if (!align && typeof given[cross] === 'number') out[cross] = given[cross] as number;
+  return out;
+}
+
+/**
+ * "arrange": the controls in a row, a column or a grid (`columns`, default about square), `gap` twips apart (default 120), starting at
+ * `left`/`top` (default: where the first one is). A grid's columns are as wide as their widest control; in a row or a grid each control
+ * is centred vertically in its row, so a Label next to a TextBox lines up with its text.
+ */
+function arrange(ctrls: ControlDef[], raw: Record<string, unknown>, warnings: string[]): [ControlDef, Record<string, number>][] {
+  if (!ctrls.length) return [];
+  const same = ctrls.filter(c => c.parentId === ctrls[0].parentId);
+  if (same.length < ctrls.length) warnings.push(`Ignored arrange of ${ctrls.filter(c => !same.includes(c)).map(c => c.name).join(', ')}: in another container than ${ctrls[0].name}.`);
+  const as = String(raw.as ?? 'row').toLowerCase();
+  const gap = Math.max(0, num(raw.gap) ?? DEFAULT_GAP);
+  const first = rectOf(same[0]);
+  const left = num(raw.left) ?? first.left, top = num(raw.top) ?? first.top;
+  const cols = as === 'column' || as === 'vertical' ? 1 : as === 'grid' ? Math.max(1, num(raw.columns) ?? Math.ceil(Math.sqrt(same.length))) : same.length;
+  const sizes = same.map(sizeOf);
+  const colW: number[] = [], rowH: number[] = [];
+  sizes.forEach((s, i) => {
+    const c = i % cols, r = Math.floor(i / cols);
+    colW[c] = Math.max(colW[c] ?? 0, s.width); rowH[r] = Math.max(rowH[r] ?? 0, s.height);
+  });
+  const x0 = (c: number) => left + colW.slice(0, c).reduce((a, b) => a + b, 0) + c * gap;
+  const y0 = (r: number) => top + rowH.slice(0, r).reduce((a, b) => a + b, 0) + r * gap;
+  return same.map((c, i) => {
+    const col = i % cols, row = Math.floor(i / cols);
+    const dy = cols === 1 ? 0 : Math.round((rowH[row] - sizes[i].height) / 2);
+    return [c, { Left: x0(col), Top: y0(row) + dy }];
+  });
+}
+
+const roundUp = (twips: number) => Math.ceil(twips / 15) * 15;
+/** "autosize": Width (and a Label's Height) that fit the caption; a CommandButton gets some room around it and at least 375 height. */
+function autosize(c: ControlDef, warnings: string[]): Record<string, number> | null {
+  const pad = CAPTION_PAD[c.type];
+  if (pad === undefined || c.type === 'Frame') { warnings.push(`Ignored autosize of ${c.name}: only Labels, CommandButtons, CheckBoxes and OptionButtons are sized to their caption.`); return null; }
+  const caption = typeof c.props.Caption === 'string' ? c.props.Caption : c.name;
+  const textW = textWidthPx(captionText(caption), c.props.Font);
+  const lines = Math.max(1, caption.split(/\r?\n/).length);
+  const size = typeof c.props.Font === 'object' && c.props.Font && 'size' in c.props.Font ? c.props.Font.size : 8;
+  if (c.type === 'Label') return { Width: roundUp((textW + 4) * 15), Height: roundUp(lines * Math.round(13 * size / 8) * 15) };
+  if (c.type === 'CommandButton') {
+    const h = sizeOf(c).height;
+    return { Width: Math.max(735, roundUp((textW + 24) * 15)), ...(h < 375 ? { Height: 375 } : {}) };
+  }
+  return { Width: roundUp((textW + pad + 4) * 15), Height: Math.max(255, roundUp(Math.round(13 * size / 8) * 15)) };
 }
 
 const quote = (s: string) => `"${s.replace(/"/g, '""')}"`;

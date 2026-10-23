@@ -4,7 +4,7 @@ import { showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
 import type { AiUsage } from './sse';
 import { THINKING_COLOR } from './streamLog';
-import type { ChatMessage } from './types';
+import { type ChatMessage, contentText } from './types';
 
 export type AiLogMode = 'code' | 'form' | 'fix' | 'change' | 'retry' | 'test';
 export type AiLogStatus = 'ok' | 'cancelled' | 'error' | 'not understood';
@@ -36,7 +36,7 @@ const scrub = (text: string, secret: string): string => {
 export function describeRequest(baseUrl: string, model: string, messages: ChatMessage[], options: Record<string, unknown>): string {
   const opts = Object.entries(options).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}: ${typeof v === 'string' || typeof v === 'number' ? v : JSON.stringify(v)}`);
   return [`POST ${baseUrl.trim().replace(/\/+$/, '')}/chat/completions`, `model: ${model}`, ...opts, '',
-    ...messages.map(m => `--- ${m.role} ---\n${m.content}`)].join('\n');
+    ...messages.map(m => `--- ${m.role} ---\n${contentText(m.content)}`)].join('\n');
 }
 
 /** Adds an entry (scrubbed of `secret`) and returns it, so the caller can finish or mark it later. */

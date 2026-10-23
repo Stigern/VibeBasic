@@ -2,9 +2,11 @@
 import type { Expr, ModuleAst, Param, ProcDecl, VBTypeName } from '../lang/ast';
 import { parseModuleLenient } from '../lang/parser';
 import { CONTROL_TYPES, type PropDef } from '../model/controls';
+import { absoluteRect, shownInDesign } from '../ide/designerLogic';
+import { formClientTwips, isLine } from '../model/geometry';
 import { listProcedures } from '../model/procedures';
 import type { ControlDef, ControlType, FormDef, FontValue, ModuleDef, Project, PropValue } from '../model/types';
-import type { ChatMessage } from './types';
+import type { TextMessage } from './types';
 import { LANGUAGE_REFERENCE } from './langReference';
 import { BODY_OMITTED } from './omitted';
 import { CODE_SYSTEM_PROMPT, FORM_SYSTEM_PROMPT } from './prompts';
@@ -84,8 +86,45 @@ function propParts(type: ControlType, props: Record<string, PropValue>, skip: Se
   return out;
 }
 
-/** One line for the form, one per control in z-order. Only geometry and non-default properties are listed. */
-export function describeForm(form: FormDef): string {
+/** The size of the ASCII layout map in characters. */
+export const MAP_COLS = 48, MAP_ROWS = 16;
+
+/**
+ * A coarse ASCII picture of the form's client area (for servers without vision): each control shown in the designer is a box
+ * labelled with its name ("+Frame1---+" with "|" sides, or "[Text1--]" when it is one row high); "." is empty form.
+ * Containers are drawn before their children, siblings in z-order. Controls invisible at run time and Lines are left out.
+ */
+export function layoutMap(form: FormDef, cols = MAP_COLS, rows = MAP_ROWS): string {
+  const cl = formClientTwips(form.props);
+  const cw = Math.max(1, cl.width) / cols, ch = Math.max(1, cl.height) / rows;
+  const grid = Array.from({ length: rows }, () => Array<string>(cols).fill('.'));
+  const put = (y: number, x: number, ch_: string) => { if (y >= 0 && y < rows && x >= 0 && x < cols) grid[y][x] = ch_; };
+  const order: ControlDef[] = [];
+  const visit = (parentId: string | null) => { for (const c of form.controls) if (c.parentId === parentId) { order.push(c); visit(c.id); } };
+  visit(null);
+  for (const c of order) {
+    if (CONTROL_TYPES[c.type].invisibleAtRuntime || isLine(c) || !shownInDesign(form, c.id)) continue;
+    const r = absoluteRect(form, c.id);
+    const clamp = (v: number, n: number) => Math.min(n - 1, Math.max(0, v));
+    const x1 = clamp(Math.floor(r.left / cw), cols), y1 = clamp(Math.floor(r.top / ch), rows);
+    const x2 = Math.max(x1, clamp(Math.ceil((r.left + r.width) / cw) - 1, cols)), y2 = Math.max(y1, clamp(Math.ceil((r.top + r.height) / ch) - 1, rows));
+    for (let y = y1; y <= y2; y++) for (let x = x1; x <= x2; x++) {
+      const edgeY = y === y1 || y === y2, edgeX = x === x1 || x === x2;
+      put(y, x, y1 === y2 ? (x === x1 ? '[' : x === x2 ? ']' : '-') : edgeX && edgeY ? '+' : edgeY ? '-' : edgeX ? '|' : ' ');
+    }
+    const name = nameOf(c);
+    const room = x2 - x1 - 1;
+    const text = room >= 1 ? name.slice(0, room) : name.slice(0, x2 - x1 + 1);
+    for (let i = 0; i < text.length; i++) put(y1, (room >= 1 ? x1 + 1 : x1) + i, text[i]);
+  }
+  return grid.map(r => r.join('')).join('\n');
+}
+
+/**
+ * One line for the form, one per control in z-order. Only geometry and non-default properties are listed.
+ * With `map`, the ASCII layout map (layoutMap) follows.
+ */
+export function describeForm(form: FormDef, opts: { map?: boolean } = {}): string {
   const lines: string[] = [];
   const formParts = propParts('Form', form.props, new Set(['left', 'top', 'width', 'height', 'tabindex']));
   for (const k of ['Width', 'Height']) if (k in form.props) formParts.push(`${k}=${fmtValue(form.props[k])}`);
@@ -98,6 +137,10 @@ export function describeForm(form: FormDef): string {
     if (parent) head.push('in', nameOf(parent));
     if (parent?.type === 'SSTab') head.push('tab', String(c.tab ?? 0));
     lines.push([...head, ...geo, ...propParts(c.type, c.props, new Set(['left', 'top', 'width', 'height', 'x1', 'y1', 'x2', 'y2', 'tabindex']))].join(' '));
+  }
+  if (opts.map) {
+    const cl = formClientTwips(form.props);
+    lines.push(`Layout map of the client area (${cl.width} x ${cl.height} twips; one character is about ${Math.round(cl.width / MAP_COLS)} x ${Math.round(cl.height / MAP_ROWS)} twips):`, layoutMap(form));
   }
   return lines.join('\n');
 }
@@ -226,13 +269,13 @@ const codeSystemPrompt = (): string => codeSystem ??= `${CODE_SYSTEM_PROMPT}${de
 const formSystemPrompt = (): string => formSystem ??= `${FORM_SYSTEM_PROMPT}${describeControlTypes()}\n${LANGUAGE_REFERENCE}`;
 
 /** The form description (or, for a module, the project's forms) followed by the project symbols, when there are any. */
-function projectContext(p: Project, itemId: string, form: FormDef | undefined): string {
-  const head = form ? `Form description:\n${describeForm(form)}` : `Forms in the project:\n${describeProjectForms(p)}`;
+function projectContext(p: Project, itemId: string, form: FormDef | undefined, map = false): string {
+  const head = form ? `Form description:\n${describeForm(form, { map })}` : `Forms in the project:\n${describeProjectForms(p)}`;
   const symbols = describeProjectSymbols(p, itemId, !!form);
   return symbols ? `${head}\n\nProject symbols (other modules and forms):\n${symbols}` : head;
 }
 
-export function buildCodeRequest(p: Project, itemId: string, cursorLine: number, userPrompt: string, opts: RequestOptions = {}): ChatMessage[] {
+export function buildCodeRequest(p: Project, itemId: string, cursorLine: number, userPrompt: string, opts: RequestOptions = {}): TextMessage[] {
   const { form, module } = findItem(p, itemId);
   const code = (form ?? module)?.code ?? '';
   const proc = listProcedures(code).find(pr => cursorLine >= pr.line && cursorLine <= pr.endLine);
@@ -254,7 +297,7 @@ export interface FixError { number: number; description: string; compile: boolea
  * Debugging with AI: the code-mode system prompt; in the user message the form description, the code (the procedure
  * with the error and its callers in full), the error, the line and the variable values, then `Fix the error.`
  */
-export function buildFixRequest(p: Project, itemId: string, err: FixError, vars: { name: string; value: string }[], opts: RequestOptions = {}): ChatMessage[] {
+export function buildFixRequest(p: Project, itemId: string, err: FixError, vars: { name: string; value: string }[], opts: RequestOptions = {}): TextMessage[] {
   const { form, module } = findItem(p, itemId);
   const code = (form ?? module)?.code ?? '';
   const lines = code.split(LINE_BREAK);
@@ -275,10 +318,10 @@ export function buildFixRequest(p: Project, itemId: string, err: FixError, vars:
   return [{ role: 'system', content: codeSystemPrompt() }, { role: 'user', content: parts.join('\n\n') }];
 }
 
-export function buildFormRequest(p: Project, formId: string, userPrompt: string, opts: RequestOptions = {}): ChatMessage[] {
+export function buildFormRequest(p: Project, formId: string, userPrompt: string, opts: RequestOptions = {}): TextMessage[] {
   const form = p.forms.find(f => f.id === formId);
   if (!form) throw new Error(`Unknown form ${formId}`);
-  const user = `${projectContext(p, formId, form)}\n\nForm code:\n${codeForPrompt(form.code, { procName: null, mention: userPrompt }, codeBudget(opts.contextTokens))}\n\nRequest: ${userPrompt}`;
+  const user = `${projectContext(p, formId, form, true)}\n\nForm code:\n${codeForPrompt(form.code, { procName: null, mention: userPrompt }, codeBudget(opts.contextTokens))}\n\nRequest: ${userPrompt}`;
   return [{ role: 'system', content: formSystemPrompt() }, { role: 'user', content: user }];
 }
 

@@ -4,12 +4,16 @@ import type { Backend } from '../backend/backend';
 import { showOptions } from '../ide/optionsDialog';
 import type { CodeWindow } from '../ide/codeWindow';
 import type { IdeState } from '../ide/ideState';
+import type { FormDef } from '../model/types';
 import { listProcedures } from '../model/procedures';
 import { messageBox98, showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
 import { createAiAnimation } from './aiAnimation';
 import { type CodeSelection, applyCodeProposal, extractCode, skippedProblem } from './codeMode';
 import { buildCodeRequest, buildFixRequest, buildFormRequest, type FixError } from './context';
+import { detectServer, isVisionError, withDetected } from './detect';
+import { renderFormImage } from './formImage';
+import { checkLayout } from './layoutCheck';
 import { addAiLogEntry, describeRequest, finishAiLogEntry, type AiLogEntry, type AiLogMode } from './aiLog';
 import { isProse, isQuestion, showAnswer } from './answerDialog';
 import { FORM_RESPONSE_FORMAT, FORM_STRUCTURED_OUTPUTS, NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
@@ -17,7 +21,7 @@ import { type PreviewResult, showCodePreview, showFormPreview } from './previewD
 import { type AiSettings, type Thinking, loadAiSettings } from './settings';
 import { AI_CUT_OFF, type AiChatOptions, type AiUsage } from './sse';
 import { StreamLog } from './streamLog';
-import type { ChatMessage } from './types';
+import { type ChatMessage, type ContentPart, contentChars } from './types';
 import { autoFixEventNames, validateCode } from './validate';
 
 const VB_EXCLAMATION = 48;
@@ -122,13 +126,16 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   const codeWin = view.kind === 'code' && itemId ? ui.codeWindowFor(itemId) : null;
   if (!itemId || !item || (view.kind === 'code' && !codeWin)) { await warn(doc, 'Open a form or a code window first.'); return; }
 
-  const settings = await settingsOrSetup(ide, backend, doc);
-  if (!settings) return;
+  const stored = await settingsOrSetup(ide, backend, doc);
+  if (!stored) return;
+  // what the settings do not know yet (server kind, vision) is found while the user types
+  const detecting = detectServer(backend, stored);
 
   const project = ide.project;
   const codeMode = view.kind === 'code';
   const prompt = await promptDialog(doc, `Ask AI - ${item.name} (${codeMode ? 'Code' : 'Form'})`);
   if (prompt === null) return;
+  const settings = await withDetected(stored, detecting);
 
   // Code mode with a selection: the request is about it, and a bare-body answer replaces exactly it.
   const sel = codeMode ? codeWin!.getSelection?.() ?? null : null;
@@ -173,6 +180,39 @@ export async function askAiAboutError(ide: IdeState, backend: Backend, fix: Erro
 
 export interface AiSession { ide: IdeState; backend: Backend; settings: AiSettings; doc: Document }
 
+/** How form pictures are made (tests replace it: jsdom has no canvas). */
+export const formPictures = { render: (form: FormDef): Promise<string> => renderFormImage(form) };
+/** The most pictures one request carries (the server took 6 in the probe); older ones become "[earlier picture omitted]". */
+export const MAX_PICTURES = 4;
+/** "baseUrl|model" of servers that refused a picture in this session, and lower picture limits a server named. */
+const noVision = new Set<string>();
+const pictureLimit = new Map<string, number>();
+const serverKey = (s: AiSettings) => `${s.baseUrl.trim()}|${s.model.trim()}`;
+/** Whether form mode sends pictures: "Send form picture" is Auto and the model is not known to be blind. */
+export const picturesOn = (s: AiSettings): boolean => s.formPicture !== 'off' && s.vision !== false && !noVision.has(serverKey(s));
+
+const picturePart = (url: string): ContentPart => ({ type: 'image_url', image_url: { url } });
+/** `messages` with the picture after the text of the last user message. */
+function withPicture(messages: ChatMessage[], url: string, extra = ''): ChatMessage[] {
+  const out = [...messages];
+  const last = out[out.length - 1];
+  const parts: ContentPart[] = typeof last.content === 'string' ? [{ type: 'text', text: last.content + extra }] : [...last.content];
+  out[out.length - 1] = { ...last, content: [...parts, picturePart(url)] };
+  return out;
+}
+/** Only the newest `max` pictures stay; older ones (and all of them with `max` 0) become text. */
+function limitPictures(messages: ChatMessage[], max: number): ChatMessage[] {
+  let keep = max;
+  const rev = [...messages].reverse().map(m => {
+    if (typeof m.content === 'string') return m;
+    const parts = [...m.content].reverse().map(p => (p.type !== 'image_url' ? p : keep-- > 0 ? p
+      : { type: 'text' as const, text: max === 0 ? '[picture omitted]' : '[earlier picture omitted]' }));
+    return { ...m, content: parts.reverse() };
+  });
+  return rev.reverse();
+}
+const hasPictures = (messages: ChatMessage[]) => messages.some(m => typeof m.content !== 'string' && m.content.some(p => p.type === 'image_url'));
+
 /** The conversation is trimmed above about this many characters (24 000 is roughly 8 000 tokens). */
 export const MAX_CONVERSATION_CHARS = 24000;
 
@@ -182,7 +222,7 @@ export const MAX_CONVERSATION_CHARS = 24000;
  */
 export function trimConversation(messages: ChatMessage[], max = MAX_CONVERSATION_CHARS): ChatMessage[] {
   const out = [...messages];
-  const size = () => out.reduce((n, m) => n + m.content.length, 0);
+  const size = () => out.reduce((n, m) => n + contentChars(m.content), 0);
   while (size() > max && out.length >= 6) out.splice(2, 2);
   return out;
 }
@@ -239,7 +279,9 @@ type Round<A> = Done<A> | { kind: 'error'; message: string } | { kind: 'cancel' 
 type Understood<A> = { result: A | null; jsonReason: string | null };
 
 /** How a conversation runs: its log mode, its structured output (form mode), whether answers in prose are shown (code mode). */
-interface ConverseOptions { mode: AiLogMode; structured?: StructuredOutput; answers?: boolean; question?: boolean }
+interface ConverseOptions<A = unknown> { mode: AiLogMode; structured?: StructuredOutput; answers?: boolean; question?: boolean;
+  /** A picture for the check-and-fix round (form mode: the proposed form when the layout check found problems), or null. */
+  complaintPicture?: (a: A) => Promise<string | null> }
 
 /**
  * The shared flow: send `first`, check the answer (one retry at most), show the preview, and on Change... send the conversation
@@ -250,7 +292,7 @@ interface ConverseOptions { mode: AiLogMode; structured?: StructuredOutput; answ
 async function converse<A extends { notes: string[]; problems: string[] }>(
   s: AiSession, first: ChatMessage[], analyse: (text: string) => Understood<A>,
   preview: (a: A, reply: string, metrics: string) => Promise<PreviewResult>, apply: (a: A) => void | Promise<void>,
-  co: ConverseOptions,
+  co: ConverseOptions<A>,
 ): Promise<boolean> {
   const { ide, backend, settings, doc } = s;
   const project = ide.project;
@@ -291,11 +333,12 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
   };
 
   /** Follow-up rounds (the check-and-fix retry, Change...) think 'low' with "Fast follow-up rounds"; Server default stays unsent. */
-  const send = (messages: ChatMessage[], followUp: boolean, mode: AiLogMode): Start => async (o, ui) => {
+  const send = (all: ChatMessage[], followUp: boolean, mode: AiLogMode): Start => async (o, ui) => {
     const level = effort && followUp && settings.fastFollowUp !== false ? 'low' : effort;
-    const opts: AiChatOptions = { ...o, maxTokens: maxTokensFor(level ?? 'server', settings.contextTokens, messages.reduce((n, m) => n + m.content.length, 0)) };
     const partial = { content: '' };
-    const once = async (m: AiLogMode): Promise<string> => {
+    const prepared = () => limitPictures(all, picturesOn(settings) ? pictureLimit.get(server) ?? MAX_PICTURES : 0);
+    const plain = async (messages: ChatMessage[], m: AiLogMode): Promise<string> => {
+      const opts: AiChatOptions = { ...o, maxTokens: maxTokensFor(level ?? 'server', settings.contextTokens, messages.reduce((n, x) => n + contentChars(x.content), 0)) };
       const so = co.structured;
       if (so === undefined || noStructuredOutput.has(server)) return attempt(messages, level, opts, m, partial);
       const field = settings.serverKind === 'vllm' ? { structuredOutputs: so.structuredOutputs } : { responseFormat: so.responseFormat };
@@ -306,6 +349,19 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
         if (o.signal?.aborted || !(rejectsStructuredOutput(message) || (message === AI_CUT_OFF && isWhitespaceRunaway(partial.content)))) throw e;
         noStructuredOutput.add(server);
         return attempt(messages, level, opts, 'retry', partial);
+      }
+    };
+    /** A refused picture: with fewer pictures when the server named its limit, else without any for the rest of the session. */
+    const once = async (m: AiLogMode): Promise<string> => {
+      const messages = prepared();
+      try { return await plain(messages, m); }
+      catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        if (o.signal?.aborted || !hasPictures(messages) || isTransientError(message) || !isVisionError(message)) throw e;
+        const limit = /at most (\d+) image/i.exec(message);
+        if (limit && Number(limit[1]) > 0) pictureLimit.set(server, Number(limit[1]));
+        else noVision.add(server);
+        return plain(prepared(), 'retry');
       }
     };
     try { return await once(mode); }
@@ -334,8 +390,11 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
       ? `Your answer has these problems:\n${got.result.problems.map(p => `- ${p}`).join('\n')}\nFix them and answer again in exactly the same format.`
       : !got.result && got.jsonReason !== null ? `Your answer was not valid JSON (${got.jsonReason}). Answer again with ONLY the JSON object.` : null;
     if (complaint) {
-      // Keep the first answer if the second is no better understood.
-      const followUp: ChatMessage[] = [...convo, { role: 'user', content: complaint }];
+      // Keep the first answer if the second is no better understood. Layout problems come with a picture of the proposal.
+      const picture = got.result?.problems.length && co.complaintPicture && picturesOn(settings) ? await co.complaintPicture(got.result) : null;
+      const followUp: ChatMessage[] = picture
+        ? withPicture([...convo, { role: 'user', content: complaint }], picture, '\nThis is how your proposal looks; fix the listed layout problems.')
+        : [...convo, { role: 'user', content: complaint }];
       log.separator();
       const again = await waitForReply(doc, settings.model, send(followUp, true, 'retry'), log, 'Checking and fixing...');
       if (again.kind === 'cancel' || ide.project !== project) return { kind: 'cancel' };
@@ -415,7 +474,8 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
   const project = ide.project;
   const form = project.forms.find(f => f.id === o.itemId);
   if (!form) return false;
-  type A = { parsed: Extract<ReturnType<typeof parseFormOps>, { ok: true }>; notes: string[]; problems: string[] };
+  type A = { parsed: Extract<ReturnType<typeof parseFormOps>, { ok: true }>; notes: string[]; problems: string[]; proposed: FormDef | null; layout: boolean };
+  const before = new Set(checkLayout(form));
   const analyse = (text: string): Understood<A> => {
     const notes: string[] = [];
     const parsed = parseFormOps(text, form, code => fixEventNames(form, code, notes));
@@ -423,9 +483,18 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
     const extra = parsed.ops.filter((o): o is Extract<typeof o, { op: 'add' }> => o.op === 'add').map(o => ({ name: o.name, type: o.type }));
     const problems = parsed.codeText === undefined ? [] : validateCode(parsed.codeText, { moduleName: form.name, form, extraControls: extra, project });
     if (parsed.codeSkipped) problems.push(skippedProblem(parsed.codeSkipped));
-    return { result: { parsed, notes, problems }, jsonReason: null };
+    // the layout check of the proposed form: new problems of the controls the answer adds or changes (all of them when it resizes the form)
+    let proposed: FormDef | null = null;
+    try { proposed = applyFormOpsToClone(form, parsed); } catch { /* the preview reports it */ }
+    const layout = proposed ? checkLayout(proposed, touchedNames(parsed.ops, proposed)).filter(p => !before.has(p)) : [];
+    problems.push(...layout);
+    return { result: { parsed, notes, problems, proposed, layout: layout.length > 0 }, jsonReason: null };
   };
-  return converse<A>(s, o.first, analyse,
+  const pictureOf = async (f: FormDef): Promise<string | null> => { try { return await formPictures.render(f); } catch { return null; } };
+  // the first request carries the picture of the form as it is, after the text
+  const shot = picturesOn(s.settings) ? await pictureOf(form) : null;
+  const first = shot ? withPicture(o.first, shot) : o.first;
+  return converse<A>(s, first, analyse,
     (a, _reply, metrics) => {
       const { parsed } = a;
       const code = parsed.code === null ? undefined
@@ -435,7 +504,16 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
     async a => {
       try { ide.stack.execute(formOpsToCommand(ide.project, o.itemId, a.parsed, 'AI changes')); }
       catch (e) { await warn(doc, e instanceof Error ? e.message : String(e)); }
-    }, { mode: 'form', structured: { responseFormat: FORM_RESPONSE_FORMAT, structuredOutputs: FORM_STRUCTURED_OUTPUTS } });
+    }, { mode: 'form', structured: { responseFormat: FORM_RESPONSE_FORMAT, structuredOutputs: FORM_STRUCTURED_OUTPUTS },
+      complaintPicture: a => (a.layout && a.proposed ? pictureOf(a.proposed) : Promise.resolve(null)) });
+}
+
+/** The lower-case names the ops add or change; every control's when they resize the form. */
+function touchedNames(ops: Extract<ReturnType<typeof parseFormOps>, { ok: true }>['ops'], proposed: FormDef): Set<string> {
+  const all = ops.some(o => o.op === 'form' && ('Width' in o.props || 'Height' in o.props || 'BorderStyle' in o.props));
+  const names = all ? proposed.controls.map(c => c.name) : ops.flatMap(o => (o.op === 'add' || o.op === 'set' ? [o.name] : []));
+  // a control array member is reported as Name(i)
+  return new Set(names.flatMap(n => [n.toLowerCase(), ...proposed.controls.filter(c => c.name.toLowerCase() === n.toLowerCase() && c.index !== null).map(c => `${n}(${c.index})`.toLowerCase())]));
 }
 
 /** Fixes wrong event-procedure names in AI code (Form1_Load etc.) and records what it did in `notes`. */

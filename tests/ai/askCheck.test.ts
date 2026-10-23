@@ -116,7 +116,7 @@ test('unknown control event triggers a retry (form mode)', async () => {
 
 test('controls added by the ops are known to the validator', async () => {
   const s = ide('designer');
-  const reply = '{"ops":[{"op":"add","type":"Label","name":"lblHi"}],"code":"Private Sub lblHi_Click()\\nEnd Sub"}';
+  const reply = '{"ops":[{"op":"add","type":"Label","name":"lblHi","props":{"Left":2400,"Top":2400}}],"code":"Private Sub lblHi_Click()\\nEnd Sub"}';
   const b = fakeBackend([reply]);
   const p = askAi(s, b, { codeWindowFor: () => null });
   await enterPrompt('x');

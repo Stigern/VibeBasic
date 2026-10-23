@@ -21,7 +21,8 @@ const CONNECT_TIMEOUT_SECS: u64 = 10;
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ChatMessage {
   pub role: String,
-  pub content: String,
+  /// A string, or an array of OpenAI-style parts (text and image_url) for a message with a picture.
+  pub content: Value,
 }
 
 /// "http://h:11434/v1/" + "chat/completions" -> "http://h:11434/v1/chat/completions"
@@ -577,6 +578,10 @@ mod tests {
     let body = chat_body("m", &msgs(), &None, &ChatExtra { structured_outputs: Some(so.clone()), ..Default::default() }, true);
     assert_eq!(body["structured_outputs"], so);
     assert!(body.get("response_format").is_none());
+    // a message with a picture keeps its parts array
+    let parts = json!([{"type":"text","text":"hi"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]);
+    let m: ChatMessage = serde_json::from_value(json!({"role":"user","content":parts.clone()})).unwrap();
+    assert_eq!(chat_body("m", &[m], &None, &NONE, false)["messages"][0]["content"], parts);
   }
 
   #[tokio::test]

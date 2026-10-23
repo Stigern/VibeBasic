@@ -1,7 +1,7 @@
 import type { Backend } from '../backend/backend';
-import type { AiSettings, ServerKind, Thinking } from './types';
+import type { AiSettings, FormPicture, ServerKind, Thinking } from './types';
 
-export type { AiSettings, ServerKind, Thinking };
+export type { AiSettings, FormPicture, ServerKind, Thinking };
 
 export const THINKING_LEVELS: Thinking[] = ['server', 'low', 'medium', 'high'];
 
@@ -14,10 +14,13 @@ export async function loadAiSettings(b: Pick<Backend, 'loadSettings'>): Promise<
   if (!(typeof r.contextTokens === 'number' && r.contextTokens > 0)) delete r.contextTokens;
   if (typeof r.fastFollowUp !== 'boolean') delete r.fastFollowUp;
   if (r.serverKind !== 'vllm' && r.serverKind !== 'openai') delete r.serverKind;
+  if (typeof r.vision !== 'boolean') delete r.vision;
+  if (r.formPicture !== 'off') delete r.formPicture;
   return r;
 }
 
 export async function saveAiSettings(b: Pick<Backend, 'saveSettings'>, s: AiSettings): Promise<void> {
   await b.saveSettings('ai', { baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey, thinking: s.thinking, ...(s.contextTokens ? { contextTokens: s.contextTokens } : {}),
-    ...(s.fastFollowUp === false ? { fastFollowUp: false } : {}), ...(s.serverKind ? { serverKind: s.serverKind } : {}) });
+    ...(s.fastFollowUp === false ? { fastFollowUp: false } : {}), ...(s.serverKind ? { serverKind: s.serverKind } : {}),
+    ...(typeof s.vision === 'boolean' ? { vision: s.vision } : {}), ...(s.formPicture === 'off' ? { formPicture: 'off' } : {}) });
 }
