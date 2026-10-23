@@ -65,6 +65,23 @@ test('a BMP from the .frx decodes to its pixels', () => {
   expect([...img.rgba]).toEqual([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255]);
 });
 
+test('a crafted BMP header neither hangs nor allocates: palette, data length and size are checked first', () => {
+  // BITMAPFILEHEADER + BITMAPINFOHEADER (pixels at 54), then `extra` bytes
+  const bmp = (w: number, h: number, bpp: number, clrUsed: number, extra: number): Uint8Array => {
+    const b = new Uint8Array(54 + extra), v = new DataView(b.buffer);
+    b[0] = 0x42; b[1] = 0x4d; v.setUint32(10, 54, true); v.setUint32(14, 40, true);
+    v.setInt32(18, w, true); v.setInt32(22, h, true); v.setUint16(26, 1, true); v.setUint16(28, bpp, true);
+    v.setUint32(46, clrUsed, true);
+    return b;
+  };
+  const t0 = performance.now();
+  expect(() => decodeBmp(bmp(1, 1, 8, 0xffffffff, 10))).toThrow('cut short');   // 2^32-1 palette entries claimed
+  expect(() => decodeBmp(bmp(8000, 8000, 1, 0, 100))).toThrow('cut short');     // 8 MB of pixels claimed, none there
+  expect(() => decodeBmp(bmp(8193, 1, 24, 0, 8193 * 3 + 3))).toThrow('the picture is too big');
+  expect(performance.now() - t0).toBeLessThan(200);
+  expect(decodeBmp(bmp(1, 1, 1, 5, 2 * 4 + 4)).width).toBe(1);   // biClrUsed 5 on a 1-bit bitmap: 2 entries are read
+});
+
 test('a .cls becomes a class module with its Instancing', async () => {
   const { modules: [m] } = await importVb6File(`${DIR}/Class1.cls`, read);
   expect(m).toMatchObject({ name: 'Konto', kind: 'class', instancing: 1 });
