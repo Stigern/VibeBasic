@@ -335,7 +335,7 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   };
 
   function leaveLine(v: EditorView, n: number, newLine: number): void {
-    if (n > v.state.doc.lines) return;
+    if (n > v.state.doc.lines || v.state.readOnly) return;   // run / break mode: no prettifying, no syntax check
     const line = v.state.doc.line(n);
     let text = prettifyLine(line.text, known());
     text = fixMemberCase(text, form()?.name ?? '', controls().map(c => ({ name: c.name, type: c.type })), ide.project.forms.map(f => f.name));
@@ -476,6 +476,7 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
         if (!t || !ev) return;
         name = `${t.name}_${ev.name}`;
         if (!findProcedureRange(src(), name)) {
+          if (view.state.readOnly) return;   // run / break mode: only an existing procedure is shown, no stub is added
           const r = insertProcedure(src(), buildEventStub(t.name, t.isArray, ev));
           const baseLen = src().replace(/\s+$/, '').length;
           view.dispatch({

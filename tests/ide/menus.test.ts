@@ -92,3 +92,30 @@ test('Debug menu items are enabled per mode', () => {
   s.mode = 'break';
   expect(enabled()).toEqual(['Step Into', 'Step Over', 'Step Out', 'Run To Cursor', 'Toggle Breakpoint', 'Clear All Breakpoints']);
 });
+
+test('Format items are greyed out unless they can work: design mode, a designer, enough selected controls (review08 #14)', () => {
+  const s = new IdeState();
+  const f = s.project.forms[0];
+  f.controls.push({ id: 'a', type: 'Label', name: 'Label1', index: null, parentId: null, props: {} },
+    { id: 'b', type: 'Label', name: 'Label2', index: null, parentId: null, props: {} });
+  const noop = () => {};
+  const acts = { alignLefts: noop, sameBoth: noop, bringToFront: noop, lockControls: noop };
+  const format = buildMenus(acts, s).find(m => m.label === 'Format')!.items;
+  const item = (subLabel: string | null, label: string) =>
+    (subLabel ? (format.find(i => i.label === subLabel)!.submenu as MenuItem[]) : format).find(i => i.label === label)!;
+  const state = () => [item('Align', 'Lefts'), item('Make Same Size', 'Both'), item('Order', 'Bring to Front'), item(null, 'Lock Controls')]
+    .map(i => i.enabled!());
+  expect(state()).toEqual([false, false, false, false]);        // no designer active
+  s.setActiveView({ kind: 'designer', formId: f.id });
+  s.setSelection({ formId: f.id, ids: [] });
+  expect(state()).toEqual([false, false, false, true]);
+  s.setSelection({ formId: f.id, ids: ['a'] });
+  expect(state()).toEqual([false, false, true, true]);
+  s.setSelection({ formId: f.id, ids: ['a', 'b'] });
+  expect(state()).toEqual([true, true, true, true]);
+  s.setMode('run');
+  expect(state()).toEqual([false, false, false, false]);
+  s.setMode('design');
+  s.setActiveView({ kind: 'code', itemId: f.id });
+  expect(state()).toEqual([false, false, false, false]);
+});

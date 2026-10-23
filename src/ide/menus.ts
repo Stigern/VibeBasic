@@ -70,6 +70,15 @@ export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?
   const design = () => (state?.mode ?? 'design') === 'design';
   const idle = () => !state?.busy;
   const inCode = () => !state || state.activeView.kind === 'code';
+  // Format: design mode with a designer active; Align and Make Same Size need 2 selected controls, Order 1 (VB6 greys them out)
+  const inDesigner = () => !state || (design() && state.activeView.kind === 'designer');
+  const selected = (min: number) => () => {
+    if (!state) return true;
+    const v = state.activeView;
+    if (!inDesigner() || v.kind !== 'designer' || state.selection?.formId !== v.formId) return false;
+    const form = state.project.forms.find(f => f.id === v.formId);
+    return state.selection.ids.filter(i => form?.controls.some(c => c.id === i)).length >= min;
+  };
   // stepping starts the program in design mode and goes on in break mode; never while it runs
   const canStep = () => idle() && (state?.mode ?? 'design') !== 'run';
 
@@ -119,13 +128,16 @@ export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?
     ] },
     { label: 'Format', items: [
       sub('Align', [
-        mk('Lefts', 'alignLefts'), mk('Centers', 'alignCenters'), mk('Rights', 'alignRights'),
-        mk('Tops', 'alignTops'), mk('Middles', 'alignMiddles'), mk('Bottoms', 'alignBottoms'),
+        mk('Lefts', 'alignLefts', undefined, selected(2)), mk('Centers', 'alignCenters', undefined, selected(2)),
+        mk('Rights', 'alignRights', undefined, selected(2)), mk('Tops', 'alignTops', undefined, selected(2)),
+        mk('Middles', 'alignMiddles', undefined, selected(2)), mk('Bottoms', 'alignBottoms', undefined, selected(2)),
       ]),
-      sub('Make Same Size', [mk('Width', 'sameWidth'), mk('Height', 'sameHeight'), mk('Both', 'sameBoth')]),
-      sub('Order', [mk('Bring to Front', 'bringToFront', 'Ctrl+J'), mk('Send to Back', 'sendToBack', 'Ctrl+K')]),
+      sub('Make Same Size', [
+        mk('Width', 'sameWidth', undefined, selected(2)), mk('Height', 'sameHeight', undefined, selected(2)), mk('Both', 'sameBoth', undefined, selected(2)),
+      ]),
+      sub('Order', [mk('Bring to Front', 'bringToFront', 'Ctrl+J', selected(1)), mk('Send to Back', 'sendToBack', 'Ctrl+K', selected(1))]),
       sep(),
-      mk('Lock Controls', 'lockControls', undefined, undefined, { checked: () => state?.controlsLocked ?? false }),
+      mk('Lock Controls', 'lockControls', undefined, inDesigner, { checked: () => state?.controlsLocked ?? false }),
     ] },
     { label: 'Debug', items: [
       mk('Step Into', 'stepInto', 'F8', canStep),

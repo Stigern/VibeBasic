@@ -5,6 +5,7 @@
 import { assetRefCount, controlAssetIds } from './assetRefs';
 import { CONTROL_TYPES } from './controls';
 import { setControlPos } from './geometry';
+import { ssTabCount } from './ssTab';
 import type { Asset, ControlDef, FormDef, ModuleDef, Project, PropValue } from './types';
 
 export interface Command { label: string; do(p: Project): void; undo(p: Project): void }
@@ -226,30 +227,39 @@ export function reparentCmd(formId: string, items: { id: string; parentId: strin
 }
 
 /** Sets one property. A control type with linked properties (ControlTypeDef.onPropSet, e.g. SSTab Caption / Tab / TabCaption)
- *  updates them too; undo then restores all of its properties. */
+ *  updates them too; undo then restores all of its properties. When an SSTab loses tabs, the controls on the removed tabs move
+ *  to its last tab, so they stay reachable. */
 export function setPropertyCmd(formId: string, targetId: string | 'form', name: string, value: PropValue): Command {
   const newValue = clone(value);
   let had = false;
   let oldValue: PropValue = null;
   let snapshot: Record<string, PropValue> | null = null;
-  const target = (p: Project): { props: Record<string, PropValue>; hook?: (props: Record<string, PropValue>, name: string) => void } => {
+  let movedTabs: { id: string; tab: number | undefined }[] = [];
+  const target = (p: Project): { props: Record<string, PropValue>; hook?: (props: Record<string, PropValue>, name: string) => void; tabKids: ControlDef[] } => {
     const f = formOf(p, formId);
-    if (targetId === 'form') return { props: f.props };
+    if (targetId === 'form') return { props: f.props, tabKids: [] };
     const c = controlOf(f, targetId);
-    return { props: c.props, hook: CONTROL_TYPES[c.type]?.onPropSet };
+    return { props: c.props, hook: CONTROL_TYPES[c.type]?.onPropSet, tabKids: c.type === 'SSTab' ? f.controls.filter(k => k.parentId === c.id) : [] };
   };
   return {
     label: `Change ${name}`,
     do(p) {
-      const { props, hook } = target(p);
+      const { props, hook, tabKids } = target(p);
       had = name in props;
       oldValue = clone(props[name] ?? null);
       snapshot = hook ? structuredClone(props) : null;
       props[name] = clone(newValue);
       hook?.(props, name);
+      movedTabs = [];
+      const last = ssTabCount(props) - 1;
+      for (const k of tabKids) if ((k.tab ?? 0) > last) { movedTabs.push({ id: k.id, tab: k.tab }); k.tab = last; }
     },
     undo(p) {
       const { props } = target(p);
+      if (movedTabs.length) {
+        const f = formOf(p, formId);
+        for (const m of movedTabs) { const k = controlOf(f, m.id); if (m.tab === undefined) delete k.tab; else k.tab = m.tab; }
+      }
       if (snapshot) {
         for (const k of Object.keys(props)) delete props[k];
         Object.assign(props, structuredClone(snapshot));

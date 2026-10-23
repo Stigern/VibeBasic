@@ -4,7 +4,7 @@ import { openDesigner, pasteControls, registerDesignerActions } from '../../src/
 import { hitTest } from '../../src/ide/designerLogic';
 import { IdeState } from '../../src/ide/ideState';
 import type { IdeActions } from '../../src/ide/menus';
-import { addControlsCmd } from '../../src/model/commands';
+import { addControlsCmd, setPropertyCmd } from '../../src/model/commands';
 import { newControl } from '../../src/model/controls';
 import type { ControlDef } from '../../src/model/types';
 
@@ -60,4 +60,20 @@ test('SSTab in the designer: a tab click switches tabs, a drop goes onto the cur
   ide.stack.undo(); ide.stack.undo();                 // undo the paste and the tab switch
   expect(sst().props).toMatchObject({ Tab: 1, Caption: 'Tab 1' });
   expect(shown(label)).toBe(true);
+});
+
+test('lowering Tabs moves the controls on the removed tabs to the last tab (review08 #11)', () => {
+  const sst = newControl(form(), 'SSTab', { left: 0, top: 0 }, null);
+  const a = { ...newControl(form(), 'Label', { left: 100, top: 700 }, sst.id), tab: 2 };
+  const b = { ...newControl(form(), 'Label', { left: 100, top: 700 }, sst.id), name: 'Label2', tab: 0 };
+  ide.stack.execute(addControlsCmd(form().id, [sst, a, b]));
+  ide.stack.execute(setPropertyCmd(form().id, sst.id, 'Tabs', 2));
+  const tabOf = (id: string) => form().controls.find(c => c.id === id)!.tab;
+  expect([tabOf(a.id), tabOf(b.id)]).toEqual([1, 0]);
+  ide.stack.execute(setPropertyCmd(form().id, sst.id, 'Tab', 1));
+  expect(shown(form().controls[1])).toBe(true);
+  ide.stack.undo(); ide.stack.undo();
+  expect([tabOf(a.id), tabOf(b.id)]).toEqual([2, 0]);
+  ide.stack.redo();
+  expect(tabOf(a.id)).toBe(1);
 });

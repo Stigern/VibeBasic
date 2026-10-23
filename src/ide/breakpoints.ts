@@ -13,8 +13,19 @@ export const bpField = StateField.define<readonly number[]>({
   create: () => [],
   update(v, tr) {
     if (tr.docChanged && v.length) {
-      // a line-start position mapped to the right: text inserted at the start of the line pushes it down with its line
-      const m = v.map(p => tr.state.doc.lineAt(tr.changes.mapPos(p, 1)).from);
+      // A breakpoint goes with its line (VB6): when one change takes all of the line's text together with a line break, or
+      // empties it. Otherwise its line-start position is mapped to the right: text inserted at the start of the line pushes it
+      // down with its line.
+      const start = tr.startState.doc;
+      const gone = (p: number): boolean => {
+        const e = start.lineAt(p).to;
+        let hit = false;
+        tr.changes.iterChanges((fromA, toA, _fromB, _toB, ins) => {
+          if (e > p && fromA <= p && toA >= e && (fromA < p || toA > e || ins.length === 0)) hit = true;
+        });
+        return hit;
+      };
+      const m = v.filter(p => !gone(p)).map(p => tr.state.doc.lineAt(tr.changes.mapPos(p, 1)).from);
       v = [...new Set(m)].sort((a, b) => a - b);
     }
     for (const e of tr.effects) {

@@ -679,5 +679,5 @@ export function registerDesignerActions(ide: IdeState, actions: IdeActions, refr
   actions.sameBoth = same(true, true);
   actions.bringToFront = withIds(1, (f, ids) => ide.stack.execute(zOrderCmd(f.id, ids, 'front')));
   actions.sendToBack = withIds(1, (f, ids) => ide.stack.execute(zOrderCmd(f.id, ids, 'back')));
-  actions.lockControls = () => { ide.controlsLocked = !ide.controlsLocked; refresh(); };
+  actions.lockControls = () => { if (ide.mode !== 'design') return; ide.controlsLocked = !ide.controlsLocked; refresh(); };
 }
