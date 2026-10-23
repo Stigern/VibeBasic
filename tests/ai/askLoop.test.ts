@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // An answer that repeats itself: stopped at once, logged as "loop", tried once more with a nudge and a mild presence penalty.
 import { afterEach, expect, test, vi } from 'vitest';
-import { AI_STUCK, LOOP_NUDGE, LOOP_PENALTY, LOOP_RETRY_LABEL, askAi } from '../../src/ai/askDialog';
+import { AI_STUCK, LOOP_NUDGE, LOOP_PENALTY, LOOP_RETRY_LABEL, askAi, formPictures } from '../../src/ai/askDialog';
 import { aiLogEntries, clearAiLog } from '../../src/ai/aiLog';
 import type { AiChatOptions } from '../../src/ai/sse';
 import type { ChatMessage } from '../../src/ai/types';
@@ -50,10 +50,13 @@ function loop(c: Call) {
   for (let i = 0; i < 100 && !c.opts.signal!.aborted; i++) c.opts.onDelta!('content', OBSERVED);
 }
 const OPS = '{"ops":[{"op":"set","name":"Command1","props":{"Caption":"Go"}}]}';
-afterEach(() => { document.body.innerHTML = ''; clearAiLog(); });
+afterEach(() => { document.body.innerHTML = ''; clearAiLog(); vi.restoreAllMocks(); });
+
+const hasPicture = (msgs: ChatMessage[]) => msgs.some(m => Array.isArray(m.content) && m.content.some(p => p.type !== 'text'));
 
 test('a loop is stopped at once, logged and tried once more with the nudge and a mild presence penalty', async () => {
-  const { b, calls } = fakeBackend({ model: 'loop-vllm', serverKind: 'vllm' });
+  vi.spyOn(formPictures, 'render').mockResolvedValue('data:image/png;base64,AAAA');
+  const { b, calls } = fakeBackend({ model: 'loop-vllm', serverKind: 'vllm', formPicture: 'auto', vision: true });
   const { s, p } = await start(b);
   await vi.waitFor(() => expect(calls).toHaveLength(1));
   expect(calls[0].opts.presencePenalty).toBeUndefined();
@@ -61,12 +64,14 @@ test('a loop is stopped at once, logged and tried once more with the nudge and a
   expect(calls[0].opts.signal!.aborted).toBe(true);
   await vi.waitFor(() => expect(calls).toHaveLength(2));
   expect(text()).toContain(LOOP_RETRY_LABEL);
-  // the same request plus one short user message, so the cached prefix stays
-  expect(calls[1].msgs.slice(0, -1)).toEqual(calls[0].msgs);
+  // the same request plus one short user message, but without the picture and the structured output (they set the loop off)
+  expect(hasPicture(calls[0].msgs)).toBe(true);
+  expect(calls[0].opts.structuredOutputs).toBeDefined();
+  expect(hasPicture(calls[1].msgs)).toBe(false);
   expect(calls[1].msgs.at(-1)).toEqual({ role: 'user', content: LOOP_NUDGE });
   expect(calls[1].opts.presencePenalty).toBe(LOOP_PENALTY);
   expect(calls[1].opts).not.toHaveProperty('frequencyPenalty');
-  expect(calls[1].opts.structuredOutputs).toBeDefined();
+  expect(calls[1].opts.structuredOutputs).toBeUndefined();
   expect(aiLogEntries()[1].status).toBe('loop');
   expect(aiLogEntries()[1].reply).toContain(OBSERVED);
   calls[1].resolve(OPS);

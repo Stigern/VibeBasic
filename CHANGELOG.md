@@ -2,6 +2,12 @@
 
 All notable changes to VibeBasic. Format follows Keep a Changelog.
 
+## [0.8.3] - 2026-10-23
+
+### Fixed
+- An Ask AI answer that loops could loop again on the retry, in the same place ("The AI got stuck repeating itself" every time). The retry after a loop now goes without the form picture and without the structured output (the JSON grammar); the layout map and the nudge are still sent.
+- Dropdown arrows in dialogs (Tools > Options > AI: Model, Thinking, Send form picture) did nothing; only a click on the text opened the list. The row around the box is a label, which passed the arrow's click on to the text box, and that second click closed the list again.
+
 ## [0.8.2] - 2026-10-23
 
 ### Added
