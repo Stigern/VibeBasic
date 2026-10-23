@@ -327,10 +327,13 @@ const propNum = (node: FrmNode, name: string): number | null => {
   return v?.kind === 'num' ? v.n : null;
 };
 
-/** The twips per unit of a container's ScaleMode (a warning and 1 for User / Characters). */
-function scaleOf(ctx: FormContext, node: FrmNode, inherited: number): number {
+/**
+ * The twips per unit of the positions of a container's controls (a warning and 1 for User / Characters). As at run time
+ * (RunContext.container): a Form's or PictureBox's own ScaleMode; twips inside a Frame or any other container without one.
+ */
+function scaleOf(ctx: FormContext, node: FrmNode): number {
   const mode = propNum(node, 'ScaleMode');
-  if (mode === null) return node.cls.match(/^VB\.(Form|MDIForm|PictureBox)$/i) ? 1 : inherited;
+  if (mode === null || !/^VB\.(Form|MDIForm|PictureBox)$/i.test(node.cls)) return 1;
   const f = SCALE_TWIPS[mode];
   if (f === undefined) ctx.warn(`${ctx.file}: ${node.name} has ScaleMode ${mode}; the positions of its controls were read as twips.`);
   return f ?? 1;
@@ -401,10 +404,10 @@ function parseFrm(text: string, ctx: FormContext): ParsedForm {
         if (typeof props.Left === 'number' && props.Left < -60000) props.Left += 75000;   // VB6 moves the other tabs' controls away
       }
       (isMenu ? menus : controls).push(def);
-      addNodes(n.children, def, isMenu ? scale : scaleOf(ctx, n, scale), isMenu);
+      addNodes(n.children, def, isMenu ? scale : scaleOf(ctx, n), isMenu);
     }
   };
-  addNodes(root.children, null, scaleOf(ctx, root, 1), false);
+  addNodes(root.children, null, scaleOf(ctx, root), false);
   form.controls = [...controls, ...menus];
   uniqueControls(form.controls, ctx);
 
@@ -462,9 +465,10 @@ function freeName(name: string, taken: ReadonlySet<string>): string {
 /**
  * The project's name rules for imported forms, modules and classes: an invalid name becomes the next free Form<n> /
  * MDIForm<n> / Module<n> / Class<n>, a name already taken gets a `_2` suffix (each with a warning). `taken`: the names in
- * the project already (lower case); the new names are added to it.
+ * the project already (lower case); the new names are added to it. `renameTaken` false: a valid name already taken is kept
+ * (Project > Add File refuses it, as VB6 does).
  */
-export function applyNameRules(items: readonly (FormDef | ModuleDef)[], taken: Set<string>, warn: (m: string) => void): void {
+export function applyNameRules(items: readonly (FormDef | ModuleDef)[], taken: Set<string>, warn: (m: string) => void, renameTaken = true): void {
   for (const it of items) {
     const isForm = 'controls' in it;
     const base = isForm ? (it.mdi ? 'MDIForm' : 'Form') : it.kind === 'class' ? 'Class' : 'Module';
@@ -475,7 +479,7 @@ export function applyNameRules(items: readonly (FormDef | ModuleDef)[], taken: S
       while (taken.has(lc(`${base}${n}`))) n++;
       name = `${base}${n}`;
       warn(`"${it.name}" is not a valid name; the ${what} was renamed ${name}.`);
-    } else if (taken.has(lc(name))) {
+    } else if (renameTaken && taken.has(lc(name))) {
       name = freeName(name, taken);
       warn(`The name ${it.name} is already used; the ${what} was renamed ${name}.`);
     }
@@ -548,8 +552,8 @@ async function readFormFile(path: string, read: ReadBytes, warn: (m: string) => 
   return importFrm(text, f => frxFiles.get(lc(f)) ?? null, baseName(path), warn);
 }
 
-/** Project > Add File: one .frm, .bas or .cls. `taken`: the project's names (an invalid or taken name is changed, with a
- *  warning). The caller checks for a second MDI form. */
+/** Project > Add File: one .frm, .bas or .cls. `taken`: the project's names (an invalid name becomes a free Form<n> ...,
+ *  with a warning; a valid name is kept even when taken). The caller refuses a taken name and a second MDI form. */
 export async function importVb6File(path: string, read: ReadBytes, taken: readonly string[] = []): Promise<Vb6FileImport> {
   const warnings: string[] = [];
   const warn = (m: string) => { warnings.push(m); };
@@ -562,7 +566,7 @@ export async function importVb6File(path: string, read: ReadBytes, taken: readon
     const text = decode1252(await read(path));
     out.modules.push(ext === 'cls' ? importCls(text, path) : importBas(text, path));
   } else throw new Error(`${baseName(path)}: only .frm, .bas and .cls files can be added.`);
-  applyNameRules([...out.forms, ...out.modules], new Set(taken.map(lc)), warn);
+  applyNameRules([...out.forms, ...out.modules], new Set(taken.map(lc)), warn, false);
   codeWarnings([...out.forms, ...out.modules], warn);
   out.warnings = [...new Set(warnings)];
   return out;

@@ -2,7 +2,7 @@
 import { expect, test } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { decodeBmp } from '../../src/model/vb6Image';
-import { importVb6File, importVbp, parseValue } from '../../src/model/vb6Import';
+import { importFrm, importVb6File, importVbp, parseValue } from '../../src/model/vb6Import';
 import type { ControlDef, FormDef } from '../../src/model/types';
 
 const DIR = 'tests/fixtures/vb6';
@@ -142,6 +142,21 @@ test('ClientWidth / ClientHeight become the outer Width / Height', async () => {
   // Fixed Dialog: 3 px borders, no menu; ScaleMode 3 positions are pixels
   expect([f2.props.Width, f2.props.Height, f2.props.BorderStyle]).toEqual([3000 + 6 * 15, 1500 + 24 * 15, 3]);
   expect([ctl(f2, 'cmdOK').props.Left, ctl(f2, 'cmdOK').props.Width]).toEqual([120, 1215]);
+});
+
+test('controls in a Frame are in twips, in a PictureBox in its ScaleMode (as at run time)', async () => {
+  const frm = ['VERSION 5.00', 'Begin VB.Form Form1', '   ScaleMode = 3', '   ClientWidth = 400', '   ClientHeight = 300',
+    '   Begin VB.Frame Frame1', '      Left = 8', '      Top = 8', '      Width = 200', '      Height = 100',
+    '      Begin VB.Label Label1', '         Left = 120', '         Top = 240', '         Width = 600', '         Height = 255', '      End',
+    '   End',
+    '   Begin VB.PictureBox Picture1', '      ScaleMode = 3', '      Left = 8', '      Top = 120', '      Width = 100', '      Height = 100',
+    '      Begin VB.Label Label2', '         Left = 4', '         Top = 2', '         Width = 40', '         Height = 17', '      End',
+    '   End',
+    'End', ''].join('\r\n');
+  const { form: f } = await importFrm(frm, () => null, 'Form1.frm', () => {});
+  expect([ctl(f, 'Frame1').props.Left, ctl(f, 'Frame1').props.Width]).toEqual([120, 3000]);   // the form's pixels
+  expect([ctl(f, 'Label1').props.Left, ctl(f, 'Label1').props.Top, ctl(f, 'Label1').props.Width]).toEqual([120, 240, 600]);   // twips
+  expect([ctl(f, 'Label2').props.Left, ctl(f, 'Label2').props.Top, ctl(f, 'Label2').props.Width]).toEqual([60, 30, 600]);   // Picture1's pixels
 });
 
 test('Windows-1252 text decodes (æøå)', async () => {
