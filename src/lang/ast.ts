@@ -87,7 +87,8 @@ export type VBTypeName =
   | 'Integer' | 'Long' | 'Single' | 'Double' | 'Currency' | 'String' | 'Boolean'
   | 'Variant' | 'Date' | 'Byte' | 'Object'
   | { userType: string }
-  | { objectType: string };
+  /** `classModule`: a class module of the project (set by Runtime.resolveType): only its objects fit (error 13). */
+  | { objectType: string; classModule?: true };
 
 /** One array dimension: `10` (lower omitted) or `1 To 5`. */
 export interface ArrayBound { lower?: Expr; upper: Expr }
@@ -175,6 +176,10 @@ export interface ModuleAst {
   events?: EventDecl[];
   /** `Implements IFoo`: the interface classes (by name, as written). */
   implements?: string[];
+  /** A class's default member: the procedure (or Public variable) with `Attribute Name.VB_UserMemId = 0`. */
+  defaultMember?: string;
+  /** The member For Each enumerates (`Attribute NewEnum.VB_UserMemId = -4`): it returns a Collection's `[_NewEnum]`. */
+  newEnum?: string;
 }
 
 export interface DimStmt { kind: 'dim'; decls: VarDecl[]; line: number }

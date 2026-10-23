@@ -3,8 +3,10 @@
 // makes (`New ADODB.Connection`, CreateObject("ADODB.Recordset"), ADODB.Command with ? parameters). Execute runs the program's
 // own SQL as written; the controls' writes are parameterised.
 //
-// - Connections to one database file share one SQLite connection of the run (DbSession), so an Adodc and a code-made Connection
-//   on the same file see each other's transaction. BeginTrans nests (savepoints) and returns the level; Close rolls back.
+// - The data controls share one SQLite connection per database file (DbSession); each Connection code makes (and each one a
+//   Recordset opens for a connection string) has its own, with its own transaction. BeginTrans nests (savepoints) and returns
+//   the level; Close rolls back and closes its SQLite connection. SQLite has one writer per file: while one connection's
+//   transaction has written, another connection's write waits and then fails with 3260.
 
 import type { OutSlot, VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
@@ -150,7 +152,11 @@ export class ConnectionObject implements VBObject {
       this.conn = null;
       this.level = 0;
       // an open transaction is rolled back
-      return (async () => { for (let i = 0; i < n; i++) await c.transaction('rollback').catch(() => 0); return Empty; })();
+      return (async () => {
+        for (let i = 0; i < n; i++) await c.transaction('rollback').catch(() => 0);
+        await c.close();
+        return Empty;
+      })();
     }
     if (!this.conn) throw new VBRuntimeError(3704);
     switch (l) {

@@ -9,8 +9,8 @@ interface SqliteDb {
     all(...a: unknown[]): unknown[]; get(...a: unknown[]): unknown; run(...a: unknown[]): { changes: number | bigint; lastInsertRowid: number | bigint };
   };
 }
-const { DatabaseSync } = (globalThis as unknown as { process: { getBuiltinModule(n: string): { DatabaseSync: new (p: string) => SqliteDb } } })
-  .process.getBuiltinModule('node:sqlite');
+const node = (globalThis as unknown as { process: { getBuiltinModule(n: string): unknown } }).process;
+const { DatabaseSync } = node.getBuiltinModule('node:sqlite') as { DatabaseSync: new (p: string) => SqliteDb };
 
 function vbErr(e: unknown): Error {
   const m = e instanceof Error ? e.message : String(e);
@@ -27,17 +27,28 @@ export class FakeDb implements DatabaseApi {
   private conns = new Map<number, SqliteDb>();
   private next = 0;
   calls: string[] = [];
+  /** With `separate`, each dbOpen is a connection of its own (with its own transaction) to a temporary database file. */
+  private readonly dir: string | null;
+
+  constructor(opts: { separate?: boolean } = {}) {
+    if (!opts.separate) { this.dir = null; return; }
+    const fs = node.getBuiltinModule('node:fs') as { mkdtempSync(p: string): string };
+    const os = node.getBuiltinModule('node:os') as { tmpdir(): string };
+    this.dir = fs.mkdtempSync(`${os.tmpdir()}/fakedb-`);
+  }
+
+  private file(path: string): string { return `${this.dir}/${path.replace(/[^\w.]/g, '_')}`; }
 
   /** The database at `path` (made when missing), for setting up and checking data. */
   db(path: string): SqliteDb {
     let d = this.files.get(path);
-    if (!d) this.files.set(path, d = new DatabaseSync(':memory:'));
+    if (!d) this.files.set(path, d = new DatabaseSync(this.dir ? this.file(path) : ':memory:'));
     return d;
   }
 
   async dbOpen(path: string): Promise<number> {
     this.calls.push(`open ${path}`);
-    this.conns.set(++this.next, this.db(path));
+    this.conns.set(++this.next, this.dir ? new DatabaseSync(this.file(path)) : this.db(path));
     return this.next;
   }
 

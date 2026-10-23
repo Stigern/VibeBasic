@@ -44,13 +44,15 @@ export type Builtin = {
   raw?: boolean;
   /** Called with the arguments' types from the code (interp/staticTypes.ts `reportedType`). */
   types?: boolean;
+  /** Called with the declared type of each argument that is a variable, array element or record field (Len, LenB). */
+  vars?: boolean;
   /** Numeric: a Single argument comes exact (Sqr(s)); other built-ins get a Single as its 7 shown digits (CStr(s)). */
   num?: boolean;
   /** VB6's parameter names, for named arguments (`MsgBox Prompt:="x", Title:="t"`); see params.ts. */
   params?: readonly string[];
 };
 
-export interface DefOptions { raw?: boolean; types?: boolean; num?: boolean }
+export interface DefOptions { raw?: boolean; types?: boolean; vars?: boolean; num?: boolean }
 
 /** Built-in functions by lower-case name. */
 export const BUILTINS = new Map<string, Builtin>();

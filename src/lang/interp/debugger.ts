@@ -219,9 +219,14 @@ export function jumpTarget(proc: ProcDecl, at: number, line: number): Stmt | str
 // The debugger
 // ---------------------------------------------------------------------------
 
-interface BreakWatch { spec: WatchSpec; expr: Expr | null; module: string | null; proc: string | null; last?: string; lastFrame?: Frame; seen: boolean }
-
-const EVAL_FAILED = '\u0000error';
+/**
+ * A break watch: `last` is the state compared (see `stateOf`) from the last evaluation that worked; `lastValue` and
+ * `lastVersion` the array or record it was (an array or record is compared by identity and write count).
+ */
+interface BreakWatch {
+  spec: WatchSpec; expr: Expr | null; module: string | null; proc: string | null; last?: string; lastFrame?: Frame; seen: boolean;
+  lastValue?: VBArray | VBRecord; lastVersion?: number;
+}
 
 export class ProgramDebugger {
   private breakWatches: BreakWatch[] = [];
@@ -391,9 +396,7 @@ export class ProgramDebugger {
       const bf = this.frame;
       if (bf && expr && matches(bf, w.module, w.proc)) {
         const r = await this.evaluate(spec.expression);
-        w.last = r.ok ? stateOf(w, r.value) : EVAL_FAILED;
-        w.lastFrame = bf;
-        w.seen = true;
+        if (r.ok) remember(w, r.value, bf);
       }
       list.push(w);
     }
@@ -409,19 +412,18 @@ export class ProgramDebugger {
     try {
       for (const w of this.breakWatches) {
         if (!w.expr || !matches(f, w.module, w.proc)) continue;
-        let now: string;
+        let value: VBValue;
         try {
-          now = stateOf(w, yield* evalExpr(copyFrame(this.rt, f), w.expr));
+          value = yield* evalExpr(copyFrame(this.rt, f), w.expr);
         } catch (e) {
           if (e instanceof EndSignal) throw e;
-          now = EVAL_FAILED;
+          continue;   // out of context here (a procedure without that variable): no value, nothing to compare
         }
+        const now = stateOf(w, value);
         // a new call of the watch's procedure starts again (its locals are new)
         const fresh = !w.seen || (w.proc !== null && w.lastFrame !== f);
-        if (!fresh && now !== w.last && (w.spec.kind === 'breakChange' || now === 'true')) fire = true;
-        w.last = now;
-        w.lastFrame = f;
-        w.seen = true;
+        if (!fresh && now !== w.last && (w.spec.kind === 'breakChange' ? !sameContent(w, value) : now === 'true')) fire = true;
+        remember(w, value, f);
       }
     } finally {
       this.checking = false;
@@ -458,15 +460,49 @@ function stateOf(w: BreakWatch, v: VBValue): string {
   return fingerprint(v);
 }
 
+/** The value a break watch compares from now on. */
+function remember(w: BreakWatch, v: VBValue, f: Frame): void {
+  w.last = stateOf(w, v);
+  const c = v instanceof VBArray || v instanceof VBRecord ? v : undefined;
+  w.lastValue = c;
+  w.lastVersion = c?.version;
+  w.lastFrame = f;
+  w.seen = true;
+}
+
+/**
+ * Another array or record than last time (a new call's local, an assignment of a whole array) with the same contents:
+ * no change. Only checked when the identity changed, and only while the old one is unchanged since.
+ */
+function sameContent(w: BreakWatch, v: VBValue): boolean {
+  const prev = w.lastValue;
+  if (prev === undefined || prev === v || prev.version !== w.lastVersion) return false;
+  if (!(v instanceof VBArray || v instanceof VBRecord) || (prev instanceof VBArray) !== (v instanceof VBArray)) return false;
+  return contents(prev) === contents(v);
+}
+
 const ids = new WeakMap<object, number>();
 let nextId = 0;
+const idOf = (o: object): number => {
+  let id = ids.get(o);
+  if (id === undefined) ids.set(o, id = ++nextId);
+  return id;
+};
+
+/**
+ * What Break When Value Changes compares, cheaply: an array or record by identity and its write count (`version`, which
+ * counts writes to arrays and records inside it too), an object by identity, anything else by type and value.
+ */
 function fingerprint(v: VBValue): string {
-  if (v instanceof VBArray) return `${arrayType(v)}[${v.values().map(fingerprint).join(',')}]`;
-  if (v instanceof VBRecord) return `{${[...v.fields.values()].map(fingerprint).join(',')}}`;
-  if (isObject(v)) {
-    let id = ids.get(v);
-    if (id === undefined) ids.set(v, id = ++nextId);
-    return `#${id}`;
-  }
+  if (v instanceof VBArray) return `${arrayType(v)}#${idOf(v)}@${v.version}`;
+  if (v instanceof VBRecord) return `{#${idOf(v)}@${v.version}}`;
+  if (isObject(v)) return `#${idOf(v)}`;
   return `${vbTypeName(v)}:${valueText(v)}`;
+}
+
+/** The whole contents of a value (for `sameContent`). */
+function contents(v: VBValue): string {
+  if (v instanceof VBArray) return `${arrayType(v)}[${v.values().map(contents).join(',')}]`;
+  if (v instanceof VBRecord) return `{${[...v.fields.values()].map(contents).join(',')}}`;
+  return fingerprint(v);
 }

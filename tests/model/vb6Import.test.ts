@@ -68,7 +68,8 @@ test('a BMP from the .frx decodes to its pixels', () => {
 test('a .cls becomes a class module with its Instancing', async () => {
   const { modules: [m] } = await importVb6File(`${DIR}/Class1.cls`, read);
   expect(m).toMatchObject({ name: 'Konto', kind: 'class', instancing: 1 });
-  expect(m.code).toBe('Option Explicit\nPrivate mSaldo As Currency\n\nPublic Property Get Saldo() As Currency\n    Saldo = mSaldo\nEnd Property\n');
+  // the default member's Attribute line stays (the language reads it); the header attributes go
+  expect(m.code).toBe('Option Explicit\nPrivate mSaldo As Currency\n\nPublic Property Get Saldo() As Currency\nAttribute Saldo.VB_UserMemId = 0\n    Saldo = mSaldo\nEnd Property\n');
 });
 
 test('unknown controls and unsupported code are warnings', async () => {

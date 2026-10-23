@@ -5,7 +5,9 @@ import type { ConstDecl, EnumDecl, ModuleAst, ProcDecl, TypeDecl, VBTypeName } f
 import type { CodeLocation, OutSlot, VBObject } from '../host';
 import type { Builtin } from '../builtins';
 import { VBRuntimeError } from '../errors';
-import { Nothing, NothingT, VBArray, VBRecord, coerce, fitFixed, type VBValue } from '../values';
+import {
+  Counted, Nothing, NothingT, VBArray, VBRecord, coerce, dropValue, escapeValue, fitFixed, holdValue, refCounting, type VBValue,
+} from '../values';
 import type { Runtime } from './program';
 
 const LOWER = new Map<string, string>();
@@ -20,18 +22,23 @@ export function lc(name: string): string {
   return k;
 }
 
-/** Something that holds a value by reference. `VBRef` is one; so are array elements and record fields. */
-export interface Slot { value: VBValue }
+/**
+ * Something that holds a value by reference. `VBRef` is one; so are array elements and record fields. `counts`: the
+ * slot counts the references it holds itself (an array element, a record field), a Variable on it does not.
+ */
+export interface Slot { value: VBValue; readonly counts?: boolean }
 
 /** An array element passed ByRef (`Swap a(1), a(2)`). */
 export class ElementSlot implements Slot {
+  readonly counts = true;
   constructor(readonly array: VBArray, readonly index: number[]) {}
   get value(): VBValue { return this.array.get(this.index); }
-  set value(v: VBValue) { escape(v); this.array.set(this.index, v); }
+  set value(v: VBValue) { this.array.set(this.index, v); }
 }
 
 /** A record field passed ByRef (`Inc p.Age`). Stores with the field's conversion. */
 export class FieldSlot implements Slot {
+  readonly counts = true;
   constructor(readonly rt: Runtime, readonly record: VBRecord, readonly key: string) {}
   get value(): VBValue { return this.record.fields.get(this.key)!; }
   set value(v: VBValue) { setField(this.rt, this.record, this.key, v); }
@@ -47,7 +54,7 @@ export class AutoNewSlot implements Slot {
   get value(): VBValue {
     if (this.v instanceof NothingT) {
       this.v = this.create();
-      if (this.v instanceof ClassValue) this.v.inst.refs++;   // the slot holds the new object
+      holdValue(this.v);   // the slot holds the new object
     }
     return this.v;
   }
@@ -110,28 +117,36 @@ export class Variable {
   set(v: VBValue): void {
     const o = this.opts;
     if (o.isConst) throw VBRuntimeError.compile('Assignment to constant not permitted');
-    if (o.isArray) {
-      if (o.fixedArray) throw VBRuntimeError.compile("Can't assign to array");
-      if (!(v instanceof VBArray)) throw new VBRuntimeError(13);
-      this.ref.value = v.clone();
-      return;
-    }
+    if (o.isArray) { this.setArray(v); return; }
     if (classesInUse) { this.store(storeValue(v, this.type, o.fixedLength)); return; }
     this.ref.value = storeValue(v, this.type, o.fixedLength);
   }
 
-  /** Stores an already converted value, counting the references of class objects (and moving a WithEvents sink). */
+  /** `a = b` of a whole array: a copy; the old array lets go of its objects. */
+  private setArray(v: VBValue): void {
+    if (this.opts.fixedArray) throw VBRuntimeError.compile("Can't assign to array");
+    if (!(v instanceof VBArray)) throw new VBRuntimeError(13);
+    const prev = this.ref.value;
+    this.ref.value = v.clone();
+    if (classesInUse && !this.ref.counts) dropValue(prev);
+  }
+
+  /**
+   * Stores an already converted value, counting references (objects; an array or record let go of lets go of its
+   * objects) and moving a WithEvents sink.
+   */
   store(nv: VBValue): void {
     const r = this.ref;
+    if (r.counts) { r.value = nv; return; }   // an array element or field passed ByRef counts for itself
     const prev = rawValue(r);
     r.value = nv;
     if (prev === nv) return;
-    if (nv instanceof ClassValue) nv.inst.refs++;
+    holdValue(nv);
     if (this.opts.events) {
       if (prev instanceof ClassValue) prev.inst.sinks?.delete(this);
       if (nv instanceof ClassValue) (nv.inst.sinks ??= new Set()).add(this);
     }
-    if (prev instanceof ClassValue) prev.inst.release();
+    if (typeof prev === 'object') dropValue(prev);
   }
 }
 
@@ -140,10 +155,16 @@ export class Variable {
 // ---------------------------------------------------------------------------
 
 /**
- * Set when the first object of a class module is made: from then on assignments count references (`Variable.store`),
- * so that a program without classes pays nothing for it.
+ * Set when a program with class modules starts (or the first object of one is made): from then on assignments count
+ * references (`Variable.store`), so that a program without classes pays nothing for it.
  */
 export let classesInUse = false;
+
+/** References are counted from now on (variables, and the Collections and Dictionaries made from now on). */
+export function startCounting(): void {
+  classesInUse = true;
+  refCounting.on = true;
+}
 
 /**
  * An object of a class module as a value: the object itself (`ClassInstance`) or the object seen through an interface
@@ -151,11 +172,17 @@ export let classesInUse = false;
  * the class's procedures (eval.ts `classGet` ...); the VBObject methods are for host code, which can only read and
  * write Public variables.
  */
-export abstract class ClassValue implements VBObject {
+export abstract class ClassValue extends Counted implements VBObject {
   abstract readonly inst: ClassInstance;
   /** Lower-case interface name for a view (members are the class's `IFoo_Name` procedures); undefined for the object. */
   abstract readonly iface: string | undefined;
   get vbTypeName(): string { return this.inst.module.name; }
+  /** The member with `Attribute Name.VB_UserMemId = 0` (`Debug.Print obj`, `obj(2)`, `obj = v`). */
+  get defaultMember(): string | undefined { return this.iface ? undefined : this.inst.module.ast.defaultMember; }
+
+  hold(): void { this.inst.refs++; }
+  drop(): void { this.inst.release(); }
+  escape(): void { this.inst.escaped = true; }
   /** `Is` compares objects, not views. */
   get identity(): VBObject { return this.inst; }
 
@@ -166,9 +193,13 @@ export abstract class ClassValue implements VBObject {
     return m.publicVars.has(k) || m.procs.get(k)?.proc.visibility === 'public' || m.props.has(k);
   }
 
+  /** Host code (and `plain`) reading a member: a Public variable, or a Property Get / Function run now (`classCaller`). */
   getMember(name: string, args: VBValue[]): VBValue {
     const v = this.iface ? undefined : this.inst.publicVar(lc(name));
-    if (!v) throw new VBRuntimeError(438);
+    if (!v) {
+      if (classCaller && this.hasMember(name)) return classCaller(this, name, args);
+      throw new VBRuntimeError(438);
+    }
     if (args.length === 0) return v.value;
     const arr = v.value;
     if (!(arr instanceof VBArray)) throw new VBRuntimeError(13);
@@ -177,7 +208,10 @@ export abstract class ClassValue implements VBObject {
 
   setMember(name: string, args: VBValue[], value: VBValue): void {
     const v = this.iface || args.length ? undefined : this.inst.publicVar(lc(name));
-    if (!v) throw new VBRuntimeError(438);
+    if (!v) {
+      if (classCaller && this.hasMember(name)) { classCaller(this, name, args, value); return; }
+      throw new VBRuntimeError(438);
+    }
     v.set(value);
   }
 
@@ -194,12 +228,22 @@ export abstract class ClassValue implements VBObject {
   }
 }
 
+/**
+ * Runs a member of a class object now, outside the generators (host code, `plain`): a Property Get / Function, or with
+ * `value` a Property Let / Set. Set by eval.ts. Code that would wait gives an error.
+ */
+export let classCaller: ((obj: ClassValue, name: string, args: VBValue[], value?: VBValue) => VBValue) | null = null;
+export function setClassCaller(c: typeof classCaller): void { classCaller = c; }
+
 /** One object of a class module: its own module-level variables, a reference count, its WithEvents sinks. */
 export class ClassInstance extends ClassValue {
   readonly vars = new Map<string, Variable>();
-  /** References held by variables (Variable.store, AutoNewSlot, parameters, With blocks). */
+  /**
+   * Counted references: variables (Variable.store, AutoNewSlot, parameters), With blocks, a running procedure of the
+   * object (`Me`), arrays, records, Collections and Dictionaries.
+   */
   refs = 0;
-  /** Stored somewhere references are not counted (an array, a Collection, a record, host code): never terminated early. */
+  /** Stored somewhere references are not counted (host code): never terminated early. */
   escaped = false;
   /** Class_Terminate has run (or is running). */
   dead = false;
@@ -214,7 +258,7 @@ export class ClassInstance extends ClassValue {
 
   constructor(readonly rt: Runtime, readonly module: ModuleScope) {
     super();
-    classesInUse = true;
+    startCounting();
   }
 
   get inst(): ClassInstance { return this; }
@@ -253,19 +297,15 @@ export class InterfaceView extends ClassValue {
 }
 
 /** A value now held by one more counted reference. */
-export function retain(v: VBValue): void {
-  if (v instanceof ClassValue) v.inst.refs++;
-}
+export const retain = holdValue;
 
-/** A counted reference to `v` went away. */
+/** A counted reference to an object went away (an array or record is not let go of: see `dropValue`). */
 export function release(v: VBValue): void {
-  if (v instanceof ClassValue) v.inst.release();
+  if (v instanceof Counted) v.drop();
 }
 
 /** `v` is stored where references are not counted: its object lives until the program ends. */
-export function escape(v: VBValue): void {
-  if (v instanceof ClassValue) v.inst.escaped = true;
-}
+export const escape = escapeValue;
 
 /** Field layout of a user-defined type. */
 export interface FieldInfo {
@@ -285,16 +325,15 @@ export interface TypeInfo {
 
 /** `rec.field = v` with the field's declared type. */
 export function setField(rt: Runtime, rec: VBRecord, key: string, v: VBValue): void {
-  escape(v);
   const info = rt.typeInfo(rec.typeName).fields.get(key);
   if (!info) throw VBRuntimeError.compile('Method or data member not found');
   if (info.isArray) {
     if (info.bounds) throw VBRuntimeError.compile("Can't assign to array");
     if (!(v instanceof VBArray)) throw new VBRuntimeError(13);
-    rec.fields.set(key, v.clone());
+    rec.put(key, v.clone());
     return;
   }
-  rec.fields.set(key, storeValue(v, info.type, info.fixedLength));
+  rec.put(key, storeValue(v, info.type, info.fixedLength));
 }
 
 export function getField(rec: VBRecord, name: string): VBValue {

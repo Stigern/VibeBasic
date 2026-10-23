@@ -8,14 +8,14 @@ import { VBRuntimeError } from '../errors';
 import { BUILTINS, CONSTANTS } from '../builtins';
 import { BUILTIN_CLASSES } from '../builtins/collection';
 import {
-  Empty, Missing, Null, Nothing, NothingT, VBArray, VBRecord, VBRef, isObject, parseDate, single7, toCurrency, toNumber, toSingle,
-  type VBValue,
+  Empty, Missing, Null, Nothing, NothingT, RefContainer, VBArray, VBRecord, VBRef, isObject, parseDate, single7, toCurrency, toNumber,
+  toSingle, type VBValue,
 } from '../values';
 import { localeDateParser } from '../builtins/format';
-import { EndSignal, SubCall, runSync, type Gen } from './driver';
+import { EndSignal, SubCall, runCallsSync, runSync, type Gen } from './driver';
 import {
   BuiltinRef, ClassInstance, ClassValue, ConstSlot, ElementSlot, EnumRef, FieldSlot, Frame, MemberRef, ModuleRef, ModuleScope, ObjectRef,
-  ProcRef, PropRef, ValueRef, Variable, classesInUse, escape, getField, lc, setField, storeValue, type Binding,
+  ProcRef, PropRef, Run, ValueRef, Variable, classesInUse, escape, getField, lc, setClassCaller, setField, storeValue, type Binding,
 } from './scope';
 import { binaryOp, compareResult, likeMatch, plain, unaryOp } from './operators';
 import { isNumericType, noteSubtype, operatorType, reportedType, shown, staticType, type StaticType } from './staticTypes';
@@ -146,6 +146,7 @@ function formName(f: Frame, key: string, name: string, call: boolean): Binding |
 export function* formMethod(f: Frame, name: string, args: (Expr | MissingArg)[]): Gen<VBValue> {
   const me = f.module.kind === 'form' && f.proc !== null ? f.rt.host.resolveName(f.module.name, 'Me') : undefined;
   if (!me) throw compileError('Sub or Function not defined');
+  args = hostArgs(me, name, args);
   const argv = shownArgs(f, args, yield* evalArgValues(f, args));
   const notDefined = (e: unknown) => (e instanceof VBRuntimeError && e.number === 438 ? compileError('Sub or Function not defined') : e);
   let r: VBValue | Promise<VBValue>;
@@ -367,10 +368,15 @@ export function* evalExpr(f: Frame, e: Expr): Gen<VBValue> {
     case 'withMember': return yield* memberGet(f, withObject(f), e.name, null);
     case 'withObject': return withObject(f);
     case 'call': return yield* evalCall(f, e);
-    case 'unary': return unaryResult(f, e, yield* evalExpr(f, e.operand));
+    case 'unary': return unaryResult(f, e, yield* classPlain(f, yield* evalExpr(f, e.operand)));
     case 'binary': {
-      const a = yield* evalExpr(f, e.left);
-      return binaryResult(f, e, a, yield* evalExpr(f, e.right));
+      let a = yield* evalExpr(f, e.left);
+      let b = yield* evalExpr(f, e.right);
+      if (e.op !== 'is') {   // a class object's default member (Attribute VB_UserMemId = 0), with its code run here
+        if (a instanceof ClassValue) a = yield* classPlain(f, a);
+        if (b instanceof ClassValue) b = yield* classPlain(f, b);
+      }
+      return binaryResult(f, e, a, b);
     }
     case 'typeOf': return typeOfIs(yield* evalExpr(f, e.object), e.typeName);
     case 'new': {
@@ -490,9 +496,18 @@ export function* awaitHost(f: Frame, p: Promise<VBValue>): Gen<VBValue> {
 }
 
 /**
- * Host method arguments: a Single as its 7 digits (`List1.AddItem s`, `Coll.Add s`), see `shown`. Host methods have no
- * parameter names: a named argument is error 448.
+ * The arguments of a host method in its parameter order, by the names the object lists (`col.Add x, Key:="k"`,
+ * `paramNames`); a named argument for an object or method without names is error 448.
  */
+export function hostArgs(obj: VBObject, name: string, args: (Expr | MissingArg)[]): (Expr | MissingArg)[] {
+  const names = argNames(args);
+  if (!names) return args;
+  const params = obj.paramNames?.(name);
+  if (!params) throw new VBRuntimeError(448);
+  return positional(args, names, params);
+}
+
+/** Host method arguments: a Single as its 7 digits (`List1.AddItem s`, `Coll.Add s`), see `shown`. */
 export function shownArgs(f: Frame, args: (Expr | MissingArg)[], argv: VBValue[]): VBValue[] {
   if (argNames(args)) throw new VBRuntimeError(448);
   for (let i = 0; i < argv.length; i++) if (isSingleFrac(argv[i])) argv[i] = shown(f, args[i], argv[i]);
@@ -505,7 +520,8 @@ export function shownArgs(f: Frame, args: (Expr | MissingArg)[], argv: VBValue[]
  * Form as owner, a Picture) and Nothing are passed as they are.
  */
 export function methodArgs(argv: VBValue[], obj?: VBObject): VBValue[] {
-  if (classesInUse) for (const a of argv) escape(a);   // a host object may keep it (Collection.Add): no counted reference
+  // a host object may keep it without a counted reference; a Collection or Dictionary counts its own
+  if (classesInUse && !(obj instanceof RefContainer)) for (const a of argv) escape(a);
   if (obj?.rawArgs) return argv;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -586,6 +602,7 @@ export function* memberGet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: 
     let r: VBValue | Promise<VBValue>;
     if (args === null) r = base.getMember(name, []);
     else {
+      args = hostArgs(base, name, args);
       const argv = yield* evalArgValues(f, args);
       r = base.hasMember(name) ? base.getMember(name, argv)
         : base.callMethod(name, methodArgs(shownArgs(f, args, argv), base), yield* hostRefs(f, base, name, args));
@@ -682,6 +699,73 @@ function* classGet(f: Frame, obj: ClassValue, name: string, args: (Expr | Missin
   return yield* callIndexed(f, get, args ?? [], inst);
 }
 
+/** `obj.name(argv)` with argument values (a default member, host code): a Public variable, Property Get or Function. */
+function* classGetValues(f: Frame, obj: ClassValue, name: string, argv: VBValue[]): Gen<VBValue> {
+  const inst = obj.inst;
+  if (inst.initPending) yield* ready(f, inst);
+  const m = classMember(obj, name);
+  if (m === undefined) throw new VBRuntimeError(438);
+  let ref: ProcRef | undefined;
+  if (m instanceof Variable) ref = undefined;
+  else if (m instanceof ProcRef) {
+    if (m.proc.kind === 'sub') throw compileError('Expected Function or variable');
+    ref = m;
+  } else {
+    ref = usable(obj, m.get);
+    if (!ref) throw compileError('Invalid use of property');
+  }
+  // arguments for a member that takes none index its value (`obj(2)` where the default member returns an array)
+  const own = ref !== undefined && (argv.length === 0 || ref.proc.params.length > 0);
+  const v = m instanceof Variable ? m.value
+    : (yield new SubCall(invokeProc(f.run, ref!, (own ? argv : []).map(a => ({ value: a })), inst))) as VBValue;
+  if (own || argv.length === 0) return v;
+  if (v instanceof VBArray) return v.get(argv.map(toNumber));
+  if (v instanceof ClassValue) return yield* classDefault(f, v, argv);
+  if (isObject(v) && v.defaultMember !== undefined) return v.getMember(v.defaultMember, argv);
+  throw new VBRuntimeError(v instanceof NothingT ? 91 : 13);
+}
+
+/** The default member of a class object (`Attribute X.VB_UserMemId = 0`) with arguments; none: error 438. */
+function* classDefault(f: Frame, obj: ClassValue, argv: VBValue[]): Gen<VBValue> {
+  const d = obj.defaultMember;
+  if (d === undefined) throw new VBRuntimeError(438);
+  return yield* classGetValues(f, obj, d, argv);
+}
+
+/** The value For Each goes through: for a class object, what its NewEnum member (VB_UserMemId -4) returns. */
+export function* forEachSource(f: Frame, v: VBValue): Gen<VBValue> {
+  if (!(v instanceof ClassValue)) return v;
+  const name = v.iface ? undefined : v.inst.module.ast.newEnum;
+  if (name === undefined) throw new VBRuntimeError(438);
+  return yield* classGetValues(f, v, name, []);
+}
+
+/** A class object as a plain value: its default member, followed until it is no class object; other values as they are. */
+export function* classPlain(f: Frame, v: VBValue): Gen<VBValue> {
+  for (let i = 0; v instanceof ClassValue && v.defaultMember !== undefined && i < 100; i++) v = yield* classDefault(f, v, []);
+  return v;
+}
+
+// Host code and `plain` read (or write) a member of a class object outside the generators: run its code now, in an
+// Immediate-like run (an error goes to the caller; code that waits is an error).
+setClassCaller((obj, name, args, value) => {
+  const inst = obj.inst;
+  const rt = inst.rt;
+  const run = new Run(rt);
+  run.immediate = true;
+  const f = new Frame(run, inst.module, null, 0, inst);
+  run.frames.push(f);
+  rt.immediateRuns++;
+  try {
+    const gen: Gen<VBValue> = value === undefined
+      ? classGetValues(f, obj, name, args)
+      : (function* () { yield* classSet(f, obj, name, args, value, isObject(value) || value instanceof NothingT); return Empty; })();
+    return runCallsSync(gen, () => { throw new VBRuntimeError(5, `The member ${name} of ${inst.module.name} waits; use it in a statement of its own`); });
+  } finally {
+    rt.immediateRuns--;
+  }
+});
+
 /** `obj.name args` as a statement: a Sub or Function of the class (its result is dropped). */
 export function* classCall(f: Frame, obj: ClassValue, name: string, args: (Expr | MissingArg)[]): Gen<void> {
   const inst = obj.inst;
@@ -702,7 +786,6 @@ function* classSet(f: Frame, obj: ClassValue, name: string, args: VBValue[], val
     if (args.length === 0) { assignVariable(m, value, isSet); return; }
     const arr = m.value;
     if (!(arr instanceof VBArray)) throw new VBRuntimeError(13);
-    escape(value);
     arr.set(args.map(toNumber), isSet ? value : plain(value));
     return;
   }
@@ -744,6 +827,7 @@ function* evalCall(f: Frame, e: CallOrIndex): Gen<VBValue> {
 function* indexValue(f: Frame, v: VBValue, args: (Expr | MissingArg)[]): Gen<VBValue> {
   if (v instanceof VBArray) return v.get(yield* evalIndices(f, args));
   if (v instanceof NothingT) throw new VBRuntimeError(91);
+  if (v instanceof ClassValue) return yield* classDefault(f, v, yield* evalArgValues(f, args));
   if (isObject(v)) {
     const argv = yield* evalArgValues(f, args);
     if (v.item && argv.length === 1) return v.item(toNumber(argv[0]));
@@ -796,13 +880,12 @@ export function* callBuiltin(f: Frame, b: BuiltinRef, args: (Expr | MissingArg)[
 
 /** Checks a built-in's arguments (count, Missing ones, Singles shown) and calls it. */
 function builtinCall(f: Frame, b: BuiltinRef, args: (Expr | MissingArg)[], argv: VBValue[]): VBValue | Promise<VBValue> {
-  const { minArgs, maxArgs, fn, raw, types, num } = b.builtin;
+  const { minArgs, maxArgs, fn, raw, types, vars, num } = b.builtin;
   if (argv.length < minArgs || argv.length > maxArgs) throw new VBRuntimeError(450);
   // the calling module's Option Compare / Option Base (InStr, StrComp, Array)
   const ctx = f.rt.builtinCtx;
   ctx.textCompare = f.module.textCompare;
   ctx.optionBase = f.module.optionBase;
-  if (classesInUse && b.name === 'array') argv.forEach(escape);   // Array(obj1, obj2): the array keeps them
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     // a missing Optional argument passed on (`MsgBox s, , title` with title missing) counts as omitted
@@ -811,9 +894,30 @@ function builtinCall(f: Frame, b: BuiltinRef, args: (Expr | MissingArg)[], argv:
       argv[i] = undefined as unknown as VBValue;
     } else if (!num && isSingleFrac(v)) argv[i] = shown(f, args[i], v);   // CStr(s), Left(s, 3), MsgBox s: 7 digits
   }
+  if (vars) return fn(argv, f.rt.builtinCtx, args.map(a => declaredType(f, a)));
   return types
     ? fn(argv, f.rt.builtinCtx, args.map(a => (a.kind === 'missing' ? undefined : reportedType(f, a))))
     : fn(argv, f.rt.builtinCtx);
+}
+
+/**
+ * The declared type of an argument that is a variable (not an array, not a Variant), an element of a typed array or a
+ * field of a record (`Len(l)`, `Len(a(1))`, `Len(p.Age)`), when it is a plain type; undefined for anything else.
+ */
+function declaredType(f: Frame, e: Expr | MissingArg): string | undefined {
+  let t: VBTypeName | undefined;
+  if (e.kind === 'name') {
+    const b = lookup(f, lc(e.name), e.name);
+    if (b instanceof Variable && !b.opts.isArray) t = b.type;
+  } else if (e.kind === 'call' && e.target.kind === 'name') {
+    const b = lookup(f, lc(e.target.name), e.target.name, true);
+    if (b instanceof Variable && b.value instanceof VBArray) t = b.value.elemType;
+  } else if (e.kind === 'member' && e.object.kind === 'name') {
+    const b = lookup(f, lc(e.object.name), e.object.name);
+    const base = b instanceof Variable ? b.value : undefined;
+    if (base instanceof VBRecord) t = f.rt.typeInfo(base.typeName).fields.get(lc(e.name))?.type;
+  }
+  return typeof t === 'string' ? t : undefined;
 }
 
 /**
@@ -861,7 +965,6 @@ function* bindArgs(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[]): Gen<Bou
         const e = extra[k];
         if (e.kind === 'missing') { arr.set([k], Empty); continue; }
         const v = yield* evalExpr(f, e);
-        escape(v);
         arr.set([k], isSingleFrac(v) ? shown(f, e, v) : v);   // a Variant item: a Single keeps its 7 digits
         // and a number keeps the type the code gives it, as in a Variant variable (TypeName(a(0)) of `5&` is Long)
         const t = typeof v === 'number' ? reportedType(f, e) : undefined;
@@ -1039,13 +1142,27 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean, 
         const idx = yield* evalIndices(f, target.args);
         if (src !== undefined) value = into(f, src, value, container.elemType);
         if (!isSet) value = plain(value);
-        if (classesInUse) escape(value);
         container.set(idx, value instanceof VBRecord || value instanceof VBArray ? value.clone() : value);
         return;
       }
       if (container instanceof NothingT) throw new VBRuntimeError(91);
+      if (container instanceof ClassValue) {   // `c(2) = v` / `Set c("k") = obj`: the class's default member
+        const d = container.defaultMember;
+        if (d === undefined) throw new VBRuntimeError(438);
+        yield* classSet(f, container, d, yield* evalArgValues(f, target.args), value, isSet);
+        return;
+      }
+      if (isObject(container) && isSet) {
+        // `Set d(key) = obj`: the default member (Dictionary.Item) takes the reference
+        if (container.defaultMember === undefined) throw compileError('Invalid use of property');
+        const argv = yield* evalArgValues(f, target.args);
+        if (classesInUse && !(container instanceof RefContainer)) escape(value);
+        const wait = container.setMember(container.defaultMember, argv, value);
+        if (wait instanceof Promise) yield* awaitHost(f, wait.then(() => Empty));
+        else yield* afterHostCall(f);
+        return;
+      }
       if (isObject(container)) {
-        if (isSet) throw compileError('Invalid use of property');
         const argv = yield* evalArgValues(f, target.args);
         if (src !== undefined) value = into(f, src, value, undefined);
         if (container.item && argv.length === 1) setDefault(container.item(toNumber(argv[0])), [], plain(value));
@@ -1094,7 +1211,7 @@ function* memberSet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: string,
   if (base instanceof ClassValue) { yield* classSet(f, base, name, args, value, isSet); return; }
   if (!(base instanceof ModuleRef) && !(base instanceof EnumRef) && isObject(base)) {
     if (!base.hasMember(name)) throw new VBRuntimeError(438);
-    if (classesInUse) escape(value);
+    if (classesInUse && !(base instanceof RefContainer)) escape(value);
     let wait: void | Promise<void> = undefined;   // a host may finish a property write later (MMControl1.Command = "Play" with Wait)
     if (isSet) wait = base.setMember(name, args, value);
     else if (base.codeProperty?.(name)) wait = base.setMember(name, args, isObjectValue(value) ? value : plain(value));
