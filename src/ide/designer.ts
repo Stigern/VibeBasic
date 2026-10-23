@@ -3,18 +3,19 @@
 // through 'project' events (so undo/redo and the Properties window need no special handling here).
 import { formMetrics, renderFormSurface, type FormSurface } from '../controls/render';
 import {
-  addControlsCmd, compositeCmd, deleteControlsCmd, moveResizeCmd, renameCmd, reparentCmd, setPropertyCmd, zOrderCmd, type Command,
+  addAssetCmd, addControlsCmd, compositeCmd, deleteControlsCmd, moveResizeCmd, renameCmd, reparentCmd, setPropertyCmd, zOrderCmd, type Command,
 } from '../model/commands';
 import { addComponentsCmd } from '../model/components';
 import { CONTROL_TYPES, newControl, nextDefaultName, newId } from '../model/controls';
 import { ssTabAt, ssTabLayout } from '../model/ssTab';
 import { controlPos, isLine, setControlPos } from '../model/geometry';
 import { pxToTwips, twipsToPx } from '../model/twips';
-import type { ControlDef, ControlType, FormDef, PropValue } from '../model/types';
+import type { Asset, ControlDef, ControlType, FormDef, PropValue } from '../model/types';
+import { controlAssetIds } from '../model/assetRefs';
 import { messageBox98, vbYes } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
 import { createMdiWindow, type MdiWindow } from '../ui98/mdiWindow';
-import { clipboardHasControls, getClipboard, setClipboard } from './clipboard';
+import { clipboardHasControls, getClipboard, getClipboardAssets, setClipboard } from './clipboard';
 import {
   absoluteRect, alignRects, computeMove, snap, computeResize, containerAt, controlsInRect, hasSize, hitTest, shownInDesign, sizeOf,
   type AlignHow, type Handle, type Rect, type SnapOpts,
@@ -532,8 +533,11 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
 
 /** Pastes copies of `defs` into the form, or into the container `parentId` (an SSTab: onto its current tab): new ids,
  *  top-level controls (those whose parent is not in `defs`) with their group's top-left corner at (0,0) (in an SSTab just
- *  under its tabs). A name that already exists asks whether to create a control array. Components the controls need are checked. */
-export async function pasteControls(ide: IdeState, formId: string, defs: ControlDef[], parentId: string | null = null): Promise<void> {
+ *  under its tabs). A name that already exists asks whether to create a control array. Components the controls need are checked.
+ *  Pictures the controls name that the project lacks are added from `assets` (copied along). Pasted controls come last in the
+ *  tab order (VB6). */
+export async function pasteControls(ide: IdeState, formId: string, defs: ControlDef[], parentId: string | null = null,
+  assets: Record<string, Asset> = {}): Promise<void> {
   const form = formOf(ide, formId);
   if (!form || !defs.length) return;
   const container = parentId ? form.controls.find(c => c.id === parentId) : undefined;
@@ -547,6 +551,7 @@ export async function pasteControls(ide: IdeState, formId: string, defs: Control
   const renames: Command[] = [];
   const answers = new Map<string, boolean>();
   const fresh: ControlDef[] = [];
+  let nextTab = form.controls.reduce((m, c) => (typeof c.props.TabIndex === 'number' ? Math.max(m, c.props.TabIndex + 1) : m), 0);
   const lowestFree = (name: string): number => {
     const used = new Set(work.filter(w => w.name.toLowerCase() === name.toLowerCase()).map(w => w.index));
     let i = 0;
@@ -562,6 +567,7 @@ export async function pasteControls(ide: IdeState, formId: string, defs: Control
       setControlPos(nd, q.left - minL, q.top - minT + offsetTop);
       if (tab !== undefined) nd.tab = tab; else delete nd.tab;
     }
+    if (typeof nd.props.TabIndex === 'number') nd.props.TabIndex = nextTab++;
     const same = work.filter(w => w.name.toLowerCase() === d.name.toLowerCase());
     const fresh_ = () => { nd.name = nextDefaultName({ ...form, controls: work }, d.type); nd.index = null; };
     if (same.length) {
@@ -586,7 +592,8 @@ export async function pasteControls(ide: IdeState, formId: string, defs: Control
   }
   const add = addControlsCmd(formId, fresh);
   const comps = addComponentsCmd(ide.project, fresh.map(d => d.type));   // controls copied from a project with other components
-  const pre = [...(comps ? [comps] : []), ...renames];
+  const missing = [...new Set(fresh.flatMap(controlAssetIds))].filter(a => !(a in ide.project.assets) && a in assets);
+  const pre = [...(comps ? [comps] : []), ...missing.map(a => addAssetCmd(a, assets[a])), ...renames];
   ide.stack.execute(pre.length ? compositeCmd('Paste', [...pre, add]) : add);
   ide.setSelection({ formId, ids: top.map(d => idMap.get(d.id)!) });
 }
@@ -618,11 +625,13 @@ export function registerDesignerActions(ide: IdeState, actions: IdeActions, refr
       grew = false;
       for (const c of form.controls) if (c.parentId && all.has(c.parentId) && !all.has(c.id)) { all.add(c.id); grew = true; }
     }
-    setClipboard(form.controls.filter(c => all.has(c.id)).map(c => {
+    const defs = form.controls.filter(c => all.has(c.id));
+    const assets = Object.fromEntries(defs.flatMap(controlAssetIds).filter(a => a in ide.project.assets).map(a => [a, ide.project.assets[a]]));
+    setClipboard(defs.map(c => {
       const d = structuredClone(c);
       if (tops.includes(c.id)) { const a = absoluteRect(form, c.id); d.parentId = null; setControlPos(d, a.left, a.top); }
       return d;
-    }));
+    }), assets);
     refresh();
   };
   const del = (form: FormDef, ids: string[]) => { ide.stack.execute(deleteControlsCmd(form.id, topLevelOf(form, ids))); ide.setSelection({ formId: form.id, ids: [] }); };
@@ -632,9 +641,10 @@ export function registerDesignerActions(ide: IdeState, actions: IdeActions, refr
   actions.paste = () => {
     const c = ctx();
     if (!c || !clipboardHasControls()) return;
-    // with one SSTab selected: onto its current tab; otherwise onto the form
+    // with one container selected (Frame, PictureBox, SSTab: onto its current tab) into it (VB6); otherwise onto the form
     const sel = c.ids.length === 1 ? c.form.controls.find(x => x.id === c.ids[0]) : undefined;
-    void pasteControls(ide, c.form.id, getClipboard(), sel?.type === 'SSTab' ? sel.id : null);
+    const into = sel && CONTROL_TYPES[sel.type]?.isContainer ? sel.id : null;
+    void pasteControls(ide, c.form.id, getClipboard(), into, getClipboardAssets());
   };
   actions.selectAll = () => {
     const c = ctx();
@@ -669,5 +679,5 @@ export function registerDesignerActions(ide: IdeState, actions: IdeActions, refr
   actions.sameBoth = same(true, true);
   actions.bringToFront = withIds(1, (f, ids) => ide.stack.execute(zOrderCmd(f.id, ids, 'front')));
   actions.sendToBack = withIds(1, (f, ids) => ide.stack.execute(zOrderCmd(f.id, ids, 'back')));
-  actions.lockControls = () => { ide.controlsLocked = !ide.controlsLocked; refresh(); };
+  actions.lockControls = () => { if (ide.mode !== 'design') return; ide.controlsLocked = !ide.controlsLocked; refresh(); };
 }

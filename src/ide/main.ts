@@ -60,15 +60,16 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     const id = state.project.forms.find(f => f.name === state.project.startupForm)?.id ?? state.project.forms[0]?.id;
     if (id) openDesigner(state, id, env);
   };
-  actions.newProject = () => { if (state.mode === 'design') void fc.newProject(); };
-  actions.openProject = () => { if (state.mode === 'design') void fc.open(); };
-  // a value typed in the Properties window but not yet entered goes into the project first (false: it was invalid)
+  // a value typed in the Properties window but not yet entered goes into the project first (false: it was invalid). New, Open,
+  // Exit and closing the window do so too, so "Save changes?" asks about it instead of the value being lost.
   const committed = (): boolean => propsWin?.commitPendingEdit() ?? true;
+  actions.newProject = () => { if (state.mode === 'design' && committed()) void fc.newProject(); };
+  actions.openProject = () => { if (state.mode === 'design' && committed()) void fc.open(); };
   actions.saveProject = () => { if (committed()) void fc.save(); };
   actions.saveProjectAs = () => { if (committed()) void fc.saveAs(); };
   actions.makeApp = () => { if (state.mode === 'design' && committed()) void makeAppFlow(state, backend); };
-  actions.exit = () => { void fc.exit(); };
-  backend.onCloseRequested(() => fc.confirmDiscard());
+  actions.exit = () => { if (committed()) void fc.exit(); };
+  backend.onCloseRequested(async () => committed() && fc.confirmDiscard());
   // Form windows: real Tauri windows in the app, a floating layer over the MDI area in the browser
   const hostFactory = (): FormHost => {
     if (backend.kind === 'tauri') return new TauriFormHost();

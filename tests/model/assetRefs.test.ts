@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { assetRefCount, assetUsedElsewhere } from '../../src/model/assetRefs';
+import { assetRefCount, assetUsedElsewhere, controlAssetIds } from '../../src/model/assetRefs';
 import { newControl, newProject } from '../../src/model/controls';
 
 test('asset references: ListImages lines of every ImageList and picture properties count; the project icon does not', () => {
@@ -21,4 +21,24 @@ test('asset references: ListImages lines of every ImageList and picture properti
   expect(assetUsedElsewhere(p, 'asset-b', 1)).toBe(false);   // only ImageList1's own line
   expect(assetUsedElsewhere(p, 'asset-a', 1)).toBe(true);    // ImageList2 and the form icon still use it
   expect(assetUsedElsewhere(p, 'asset-d')).toBe(false);
+});
+
+test('asset references: the pictures of the 0.8 controls count (SSCommand Picture, SSRibbon PictureUp / PictureDn); ImageCombo images go through its ImageList', () => {
+  const p = newProject();
+  const f = p.forms[0];
+  const cmd = newControl(f, 'SSCommand', { left: 0, top: 0 }, null);
+  const rib = newControl(f, 'SSRibbon', { left: 0, top: 0 }, null);
+  const il = newControl(f, 'ImageList', { left: 0, top: 0 }, null);
+  const ic = newControl(f, 'ImageCombo', { left: 0, top: 0 }, null);
+  for (const [c, prop] of [[cmd, 'Picture'], [rib, 'PictureUp'], [rib, 'PictureDn']] as const) expect(prop in c.props).toBe(true);
+  cmd.props.Picture = { asset: 'asset-a' };
+  rib.props.PictureUp = { asset: 'asset-a' };
+  rib.props.PictureDn = { asset: 'asset-b' };
+  il.props.ListImages = ['one|asset-c|'];
+  ic.props.ImageList = il.name;
+  f.controls.push(cmd, rib, il, ic);
+  expect(assetRefCount(p, 'asset-a')).toBe(2);
+  expect(assetRefCount(p, 'asset-b')).toBe(1);
+  expect(assetRefCount(p, 'asset-c')).toBe(1);
+  expect(controlAssetIds(rib).sort()).toEqual(['asset-a', 'asset-b']);
 });

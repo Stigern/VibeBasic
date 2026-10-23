@@ -235,3 +235,35 @@ test('F9 on a comment, blank, Dim or Sub header line does nothing', () => {
   toLine(6); actions.toggleBreakpoint();
   expect(cw.breakpointLines()).toEqual([6]);
 });
+
+test('deleting the line of a breakpoint removes the breakpoint instead of moving it (review08 #5)', () => {
+  set('Private Sub Form_Load()\n  x = 1\n  y = 2\nEnd Sub\n');
+  expect(cw.toggleBreakpoint(2)).toBe(true);
+  const l2 = () => view.state.doc.line(2);
+  view.dispatch({ changes: { from: l2().from, to: l2().to + 1 } });   // the whole line with its line break
+  expect(view.state.doc.line(2).text).toBe('  y = 2');
+  expect(cw.breakpointLines()).toEqual([]);
+  expect(cw.toggleBreakpoint(2)).toBe(true);
+  view.dispatch({ changes: { from: view.state.doc.line(1).to, to: l2().to } });   // from the end of the line above
+  expect(cw.breakpointLines()).toEqual([]);
+  set('Private Sub Form_Load()\n  x = 1\n  y = 2\nEnd Sub\n');
+  expect(cw.toggleBreakpoint(3)).toBe(true);
+  view.dispatch({ changes: { from: l2().from + 2, to: l2().to, insert: 'x = 10' } });   // editing another line keeps it
+  view.dispatch({ changes: { from: view.state.doc.line(3).from, to: view.state.doc.line(3).to, insert: '  y = 3' } });   // retyped in place
+  expect(cw.breakpointLines()).toEqual([3]);
+});
+
+test('in break mode neither the event dropdown nor leaving a line changes the code (review08 #12)', () => {
+  const code = 'Private Sub Form_Load()\ntext1.text="x"\nx = \nEnd Sub';
+  set(code, 'Private Sub Form_Load()\ntext1.text="x"'.length);
+  ide.stack.markSaved();
+  ide.setMode('break');
+  toLine(3);                                   // leaves the unprettified line 2
+  toLine(1);                                   // leaves the bad line 3
+  cw.gotoProcedure('Command1', 'Click');       // no stub
+  expect(cw.getSource()).toBe(code);
+  expect(ide.stack.isDirty).toBe(false);
+  expect(box).not.toHaveBeenCalled();
+  cw.gotoProcedure('Form', 'Load');            // an existing procedure is still shown
+  expect(cw.getCursorLine()).toBe(2);
+});

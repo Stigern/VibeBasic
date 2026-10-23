@@ -304,10 +304,11 @@ test.each(Object.keys(CONTROL_TYPES) as ControlType[])('%s: every design-time pr
   if (defs0.some(d => IMAGE_REFS.includes(d.name))) add('ImageList', 3000);   // something for its ImageList dropdown
   if (defs0.some(d => DATA_REFS.includes(d.name))) add('Data', 3000);         // and for its DataSource dropdown
   const id = type === 'Form' ? 'form' : add(type).id;
+  if (defs0.some(d => d.name === 'TabIndex')) add('Label', 6000);   // so that TabIndex + 1 is a free position (VB6 clamps)
   ide.setSelection({ formId: form().id, ids: id === 'form' ? [] : [id] });
   const target = () => (id === 'form' ? form() : form().controls.find(c => c.id === id)!);
   const defs = CONTROL_TYPES[type].props.filter(d => d.designTime);
-  expect(rowNames()).toEqual(['(Name)', ...defs.map(d => d.name).sort((a, b) => a.localeCompare(b))]);
+  expect(rowNames()).toEqual(['(Name)', ...[...defs.map(d => d.name), ...(id === 'form' ? [] : ['Index'])].sort((a, b) => a.localeCompare(b))]);
   for (const d of defs) {
     const where = `${type}.${d.name}`;
     const before = JSON.stringify(target().props);
@@ -407,4 +408,68 @@ test('Categorized tab groups rows under VB6 categories (and is remembered)', () 
   createPropertiesWindow(host2, ide, { backend: backend as Backend });
   expect(host2.querySelector('.tabs98-tab.selected')!.textContent).toBe('Categorized');
   tab('Alphabetic').click();
+});
+
+test('Index is listed for a plain control: a number makes a one-element array, blank makes it plain again (review08 #6)', async () => {
+  const a = add('CommandButton');
+  ide.setSelection({ formId: form().id, ids: [a.id] });
+  expect(rowNames()).toContain('Index');
+  expect(rowEl('Index').textContent).toBe('Index');   // blank value
+  edit('Index', '0');
+  await flush();
+  expect(form().controls[0].index).toBe(0);
+  edit('Index', '');
+  await flush();
+  expect(form().controls[0].index).toBeNull();
+  expect(box).not.toHaveBeenCalled();
+  // a second member: blank is refused for either of them, and a taken index too
+  edit('Index', '0');
+  await flush();
+  const b = { ...newControl(form(), 'CommandButton', { left: 500, top: 0 }, null), name: a.name, index: 1 };
+  ide.stack.execute(addControlsCmd(form().id, [b]));
+  ide.setSelection({ formId: form().id, ids: [b.id] });
+  edit('Index', '');
+  await flush();
+  expect(form().controls[1].index).toBe(1);
+  edit('Index', '0');
+  await flush();
+  expect(form().controls[1].index).toBe(1);
+  expect(box).toHaveBeenCalledTimes(2);
+});
+
+test('a replaced or cleared picture leaves the project unless something else uses it (review08 #10)', async () => {
+  const a = add('PictureBox'), b = add('PictureBox', 3000);
+  vi.mocked(backend.readBinaryFile).mockResolvedValue(new Uint8Array([1]));
+  const pick = async () => {
+    vi.mocked(backend.openFileDialog).mockResolvedValueOnce('/x/a.png');
+    rowEl('Picture').click();
+    (rowEl('Picture').querySelector('.pw98-btn') as HTMLElement).click();
+    await flush();
+  };
+  const del = () => { rowEl('Picture').dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true })); };
+  ide.setSelection({ formId: form().id, ids: [a.id, b.id] });
+  await pick();                                   // one asset, used by both
+  const first = (form().controls[0].props.Picture as { asset: string }).asset;
+  ide.setSelection({ formId: form().id, ids: [a.id] });
+  await pick();                                   // a gets a new one; b still uses the first
+  const second = (form().controls[0].props.Picture as { asset: string }).asset;
+  expect(Object.keys(ide.project.assets).sort()).toEqual([first, second].sort());
+  del();                                          // cleared: the second is used by nothing
+  expect(Object.keys(ide.project.assets)).toEqual([first]);
+  ide.stack.undo();
+  expect(Object.keys(ide.project.assets).sort()).toEqual([first, second].sort());
+  ide.setSelection({ formId: form().id, ids: [b.id] });
+  await pick();                                   // b replaces the first, used by nothing else now
+  expect(ide.project.assets[first]).toBeUndefined();
+});
+
+test('setting TabIndex shifts the others so the values stay unique (review08 #9)', () => {
+  const cs = [0, 1, 2].map(i => add('CommandButton', i * 1300));
+  ide.setSelection({ formId: form().id, ids: [cs[2].id] });
+  edit('TabIndex', '0');
+  expect(form().controls.map(c => c.props.TabIndex)).toEqual([1, 2, 0]);
+  edit('TabIndex', '9');                          // past the end: the last position
+  expect(form().controls.map(c => c.props.TabIndex)).toEqual([0, 1, 2]);
+  ide.stack.undo();
+  expect(form().controls.map(c => c.props.TabIndex)).toEqual([1, 2, 0]);
 });

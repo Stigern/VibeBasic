@@ -2,6 +2,7 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 import { IdeState } from '../../src/ide/ideState';
 import { addForm, addModule, createProjectExplorer, removeItem } from '../../src/ide/projectExplorer';
+import { createPropertiesWindow } from '../../src/ide/properties';
 import { showProjectProperties } from '../../src/ide/projectDialogs';
 import { showOptions } from '../../src/ide/optionsDialog';
 import { BrowserBackend } from '../../src/backend/browserBackend';
@@ -113,7 +114,7 @@ test('options: OK updates ide.options, emits and saves; Cancel changes nothing',
   // 98.css draws a check box only as `input + label[for=id]` (a box inside its label is invisible)
   for (const cb of cbs) expect(cb.nextElementSibling?.matches(`label[for="${cb.id}"]`), cb.id).toBe(true);
   cbs[1].checked = true;                       // Require Variable Declaration
-  document.querySelectorAll<HTMLElement>('.tabs98-tab')[1].click();   // General tab
+  [...document.querySelectorAll<HTMLElement>('.tabs98-tab')].find(t => t.textContent === 'General')!.click();
   const nums = inputs().filter(i => i.type === 'text');
   nums[0].value = '0';                         // invalid grid width
   press('OK');
@@ -134,4 +135,36 @@ test('removing a form clears a selection pointing at it', () => {
   ide.setSelection({ formId: f2, ids: [] });
   removeItem(ide, f2);
   expect(ide.selection).toBeNull();
+});
+
+test('a module selected in the Project Explorer shows its (Name) in the Properties window and can be renamed (review08 #3)', async () => {
+  const props = document.createElement('div');
+  document.body.append(props);
+  createProjectExplorer(host, ide);
+  createPropertiesWindow(props, ide);
+  addModule(ide);
+  const m = ide.project.modules[0];
+  ide.setSelection({ formId: ide.project.forms[0].id, ids: [] });
+  expect(props.querySelector('.cb98-input')).toHaveProperty('value', 'Form1 Form');
+  (host.querySelector(`.pe98-row[data-id="${m.id}"]`) as HTMLElement).dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  const nameRow = () => props.querySelector('.pw98-row[data-prop="(Name)"]') as HTMLElement;
+  expect(props.querySelector('.cb98-input')).toHaveProperty('value', 'Module1 Module');
+  expect([...props.querySelectorAll('.pw98-row')].map(r => (r as HTMLElement).dataset.prop)).toEqual(['(Name)']);
+  const enter = (text: string) => {
+    nameRow().click();
+    const input = nameRow().querySelector('.pw98-editor') as HTMLInputElement;
+    input.value = text;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  };
+  enter('modMath');
+  expect(m.name).toBe('modMath');
+  expect(props.querySelector('.cb98-input')).toHaveProperty('value', 'modMath Module');
+  enter('Form1');                     // clashes with the form
+  await flush();
+  expect(m.name).toBe('modMath');
+  expect(box).toHaveBeenCalled();
+  ide.stack.undo();
+  expect(m.name).toBe('Module1');
+  ide.setSelection({ formId: ide.project.forms[0].id, ids: [] });   // a form selection shows the form again
+  expect(props.querySelector('.cb98-input')).toHaveProperty('value', 'Form1 Form');
 });

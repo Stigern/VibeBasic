@@ -15,6 +15,9 @@ const list = (v: PropValue | undefined): string[] => (Array.isArray(v) ? v.map(S
 /** Whether entry `i` of a TabEnabled / TabVisible list is True. */
 export const flagOn = (v: PropValue | undefined, i: number): boolean => list(v)[i] !== '0';
 
+/** The number of tabs of an SSTab (at least 1). */
+export const ssTabCount = (props: Record<string, PropValue>): number => Math.max(1, Math.floor(num(props.Tabs, 3)));
+
 /** Keeps Tabs, TabCaption, Tab and Caption consistent after `name` was set (design time and run time). */
 export function syncSSTab(props: Record<string, PropValue>, name: string): void {
   let caps = list(props.TabCaption);

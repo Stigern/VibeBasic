@@ -41,7 +41,7 @@ export function addModule(ide: IdeState, env?: DesignerEnv): void {
   const m = { id: newId(), name: nextFreeName(ide, 'Module'), code: ide.options.requireVariableDeclaration ? OPTION_EXPLICIT : '' };
   ide.stack.execute(addModuleCmd(m));
   ide.explorerItemId = m.id;
-  ide.emit('selection');
+  ide.setSelection(null);   // the Properties window shows the module
   if (env) openCodeWindow(ide, m.id, env);
 }
 
@@ -82,7 +82,8 @@ export function createProjectExplorer(host: HTMLElement, ide: IdeState, env?: De
   const viewObject = (id: string | null) => { if (id && isForm(id)) openDesigner(ide, id, designerEnv); };
   const select = (id: string | null) => {
     ide.explorerItemId = id;
-    if (isForm(id)) ide.setSelection({ formId: id!, ids: [] }); else ide.emit('selection');
+    // a module: no form selection, so the Properties window shows the module ((Name), VB6)
+    if (isForm(id)) ide.setSelection({ formId: id!, ids: [] }); else if (id) ide.setSelection(null); else ide.emit('selection');
   };
 
   const btn = (label: string, title: string, fn: () => void) => {
