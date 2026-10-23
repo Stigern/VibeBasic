@@ -7,6 +7,7 @@
 // one level, a letter chooses the item it underlines. The Shortcut keys (Ctrl+O ...) choose their item from anywhere in the form.
 // The dropdowns live in a layer under <body> (position: fixed), so the form's own box does not clip them.
 import { menuTree, shortcutMatches, shortcutText, type MenuNode } from '../model/menus';
+import { keyLetter } from '../model/menuShortcuts';
 import type { ControlDef, PropValue } from '../model/types';
 import { h, mnemonicNodes, parseMnemonic } from '../ui98/dom';
 
@@ -58,12 +59,6 @@ const mnemonic = (d: ControlDef): string => {
   const m = parseMnemonic(caption(d));
   return m.index >= 0 ? m.text[m.index].toLowerCase() : '';
 };
-/** The letter of a key press with Alt or without (Option changes e.key on the Mac, so the key's code counts). */
-function letterOf(e: KeyboardEvent): string {
-  const c = /^Key([A-Z])$/.exec(e.code ?? '') ?? /^Digit(\d)$/.exec(e.code ?? '');
-  if (c) return c[1].toLowerCase();
-  return e.key.length === 1 ? e.key.toLowerCase() : '';
-}
 
 export function createMenuBar(doc: Document, mode: 'design' | 'run', host: MenuBarHost, onVisibility: () => void = () => {}): MenuBar {
   const el = h('div', { class: `vb-menubar vb-${mode}` });
@@ -330,7 +325,7 @@ export function createMenuBar(doc: Document, mode: 'design' | 'run', host: MenuB
         if (n && enabled(n.def) && !opens(n) && e.key === 'Enter') { close(); host.choose(n.def.id); }
         else openTop(barIndex, true);
       } else {
-        const l = letterOf(e);
+        const l = keyLetter(e);
         const i = l ? tops.findIndex(n => mnemonic(n.def) === l) : -1;
         if (i >= 0) { const n = tops[i]; if (enabled(n.def) && !opens(n)) { close(); host.choose(n.def.id); } else openTop(i, true); }
       }
@@ -352,7 +347,7 @@ export function createMenuBar(doc: Document, mode: 'design' | 'run', host: MenuB
         if (lv.hot >= 0) activate(depth, lv.hot, true);
         return;
     }
-    const l = letterOf(e);
+    const l = keyLetter(e);
     if (!l) return;
     const hits = lv.items.map((n, i) => (selectable(n) && mnemonic(n.def) === l ? i : -1)).filter(i => i >= 0);
     if (hits.length === 1) { setHot(depth, hits[0]); activate(depth, hits[0], true); }
@@ -435,7 +430,7 @@ export function createMenuBar(doc: Document, mode: 'design' | 'run', host: MenuB
       if (bareAlt) { altArmed = !e.repeat && !e.ctrlKey && !e.metaKey && !e.shiftKey; return false; }
       if (e.key === 'F10' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) { e.preventDefault(); focusBar(firstTop()); return true; }
       if (e.altKey && !e.ctrlKey && !e.metaKey) {
-        const l = letterOf(e);
+        const l = keyLetter(e);
         const i = l ? tops.findIndex(n => mnemonic(n.def) === l) : -1;
         if (i < 0) return false;
         e.preventDefault();

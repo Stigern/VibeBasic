@@ -7,6 +7,7 @@
 import { renderFormSurface, type ControlView, type FormSurface } from '../controls/render';
 import type { MenuBarHost } from '../controls/menuBar';
 import { isMenu } from '../model/menus';
+import { keyLetter } from '../model/menuShortcuts';
 import { createMdiWorkspace, type MdiWorkspace } from './mdiWorkspace';
 import { encodeRuns, readRuns } from '../controls/richText';
 import { ribbonClick } from '../model/sheridan';
@@ -154,6 +155,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
       props = rest;
     }
     surface.update(id, props);
+    if ('DragIcon' in props) dnd.dragIconChanged(id);
     if (id === 'form') return;
     if ('TabIndex' in props) { computeTabOrder(); for (const k of defs.keys()) retab(k); } else retab(id);
   }
@@ -303,11 +305,36 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   // drag and drop (dragDrop.ts): it takes the mouse while a drag is on
   const dnd = installDragDrop({
     doc: root.ownerDocument, layer: surface.el, client: surface.clientEl, blocked: () => blocked,
-    idAt: t => targetOf(t)?.id ?? null, defOf: id => defs.get(id), propsOf, usable, elOf: id => viewOf(id)?.el,
+    // an MDI form's empty workspace is the MDI form (its children handle their own drags)
+    idAt: t => targetOf(t)?.id ?? (inChild(t) && !mdi!.childRoot(t) ? 'form' : null), defOf: id => defs.get(id), propsOf, usable, elOf: id => viewOf(id)?.el,
     fieldOf: id => { const el = viewOf(id)?.inputEl ?? null; return isTextField(el) ? el : null; },
     pos: posIn, emit: (id, event, args) => emit(id, event, args), send, asset: r => resolveAsset(r.asset),
   });
-  root.addEventListener('vbfiledrag', e => { if (!disposed) dnd.fileDrag((e as CustomEvent<FileDrag>).detail); }, { signal: ac.signal });
+  root.addEventListener('vbfiledrag', e => { if (!disposed) fileDrag((e as CustomEvent<FileDrag>).detail); }, { signal: ac.signal });
+  /** Files dragged from Finder. An MDI form passes them on to the child window under the pointer (its mount takes them as its own),
+   *  and keeps track of it: a child the drag leaves gets `leave`, the one it reaches `enter`. Outside the children: the MDI form. */
+  let fileChild: HTMLElement | null = null;
+  let filePaths: string[] = [];
+  function fileDrag(f: FileDrag): void {
+    if (!mdi) { dnd.fileDrag(f); return; }
+    const to = (child: HTMLElement | null, d: FileDrag): void => {
+      if (child) child.dispatchEvent(new CustomEvent('vbfiledrag', { detail: d })); else dnd.fileDrag(d);
+    };
+    const doc = root.ownerDocument;
+    const under = (): HTMLElement | null => mdi!.childRoot(f.x !== undefined && f.y !== undefined && typeof doc.elementFromPoint === 'function'
+      ? doc.elementFromPoint(f.x, f.y) : null);
+    if (f.type === 'enter') { filePaths = [...f.paths ?? []]; fileChild = under(); to(fileChild, f); return; }
+    if (f.type === 'over' || f.type === 'drop') {
+      const c = under();
+      if (c !== fileChild) {
+        to(fileChild, { type: 'leave', x: f.x, y: f.y });
+        to(fileChild = c, { type: 'enter', paths: f.paths ?? filePaths, x: f.x, y: f.y });
+      }
+    }
+    const c = fileChild;
+    if (f.type === 'drop' || f.type === 'leave') fileChild = null;
+    to(c, f);
+  }
   on<MouseEvent>('mousedown', e => {
     lastMouse = { x: e.clientX, y: e.clientY };
     const tg = targetOf(e.target);
@@ -514,11 +541,10 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
     for (let d = defs.get(id), n = 0; d && n < 50; d = d.parentId !== null ? defs.get(d.parentId) : undefined, n++) if (!usable(d.id)) return false;
     return true;
   }
-  /** Alt+letter: the letter of a Caption's & (the key's own letter: Option+O on a Mac types another character). The control is pressed
+  /** Alt+letter: the letter of a Caption's & (the letter the key types; its code's when Option typed another character). The control is pressed
    *  or, for a Label or Frame, the focus goes to the next control in tab order; with several matches the next one after the focused one. */
   function accelerate(e: KeyboardEvent): boolean {
-    const code = /^Key([A-Z])$/.exec(e.code) ?? /^Digit(\d)$/.exec(e.code);
-    const letter = code ? code[1].toLowerCase() : e.key.length === 1 ? e.key.toLowerCase() : null;
+    const letter = keyLetter(e);
     if (!letter) return false;
     const hits = [...tabRank].sort((a, b) => a[1] - b[1]).map(([id]) => id).filter(id => {
       const t = defs.get(id)?.type;

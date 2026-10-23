@@ -144,17 +144,28 @@ export function installDragDrop(h: DragHost) {
   function beginClassic(source: string): void {
     if (drag || ole || !h.defOf(source)) return;
     pending = null;
-    const icon = h.propsOf(source).DragIcon, url = isRef(icon) ? h.asset(icon) : null;
-    let ghost: HTMLElement | null = null, dx = 0, dy = 0;
-    if (url) setCursor(`url(${JSON.stringify(url)}) 16 16, default`);   // the DragIcon is the pointer
-    else {
-      const r = h.elOf(source)?.getBoundingClientRect();
-      ghost = ghostBox(r?.width ?? 0, r?.height ?? 0, '2px solid #808080');
-      dx = pointer.x - (r?.left ?? pointer.x); dy = pointer.y - (r?.top ?? pointer.y);
+    drag = { source, ghost: null, dx: 0, dy: 0, over: null };
+    showDragIcon();
+    moveClassic(pointer.target);
+  }
+  /** The source's DragIcon as the pointer; without one an outline of the source that follows the pointer. Again when the program
+   *  changes Source.DragIcon during the drag (in DragOver: the usual drop feedback). */
+  function showDragIcon(): void {
+    if (!drag) return;
+    const icon = h.propsOf(drag.source).DragIcon, url = isRef(icon) ? h.asset(icon) : null;
+    if (url) {
+      drag.ghost?.remove();
+      drag.ghost = null;
+      setCursor(`url(${JSON.stringify(url)}) 16 16, default`);
+    } else {
+      if (!drag.ghost) {
+        const r = h.elOf(drag.source)?.getBoundingClientRect();
+        drag.ghost = ghostBox(r?.width ?? 0, r?.height ?? 0, '2px solid #808080');
+        drag.dx = pointer.x - (r?.left ?? pointer.x); drag.dy = pointer.y - (r?.top ?? pointer.y);
+        place(drag.ghost, pointer.x - drag.dx, pointer.y - drag.dy);
+      }
       setCursor('default');
     }
-    drag = { source, ghost, dx, dy, over: null };
-    moveClassic(pointer.target);
   }
   function moveClassic(t: EventTarget | null): void {
     if (!drag) return;
@@ -277,6 +288,8 @@ export function installDragDrop(h: DragHost) {
       }
       return false;
     },
+    /** The program set a control's DragIcon: when it is the source of the drag, the pointer (or the outline) follows. */
+    dragIconChanged(id: string): void { if (drag?.source === id) showDragIcon(); },
     /** The click that ends a drag (the browser sends one to the element under both press and release). */
     eatClick(): boolean { return eat; },
     receive(m: Extract<ToWindow, { t: 'drag' | 'oleDrag' | 'oleEffect' }>): void {
