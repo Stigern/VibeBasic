@@ -44,7 +44,11 @@ export class DbSession {
     this.check();
     let p = this.open.get(path);
     if (!p) {
-      p = this.ready.then(() => this.api.dbOpen(path)).then(id => new DbConnection(this.api, id, path, this), e => { throw dbError(e, 3024); });
+      p = this.ready.then(() => this.api.dbOpen(path)).then(id => {
+        // the program ended while the database opened (shutdown has run): nobody would close this connection
+        if (this.closed) { void this.api.dbClose(id).catch(() => {}); throw new VBRuntimeError(3420); }
+        return new DbConnection(this.api, id, path, this);
+      }, e => { throw dbError(e, 3024); });
       p.catch(() => this.open.delete(path));
       this.open.set(path, p);
     }

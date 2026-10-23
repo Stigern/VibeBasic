@@ -12,7 +12,7 @@
 
 import type { OutSlot, VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
-import { Empty, Nothing, Null, coerce, toNumber, toStr, type VBValue } from '../../lang/values';
+import { Empty, Nothing, Null, VBArray, coerce, toNumber, toStr, type VBValue } from '../../lang/values';
 import type { DbValue } from '../../backend/backend';
 import type { DbConnection } from './dbSession';
 import { compileCriteria } from './criteria';
@@ -139,9 +139,9 @@ const DAO_PROPS = ['bof', 'eof', 'recordcount', 'absoluteposition', 'bookmark', 
 const ADO_PROPS = ['bof', 'eof', 'recordcount', 'absoluteposition', 'bookmark', 'editmode', 'fields', 'source', 'state', 'activeconnection',
   'cursortype', 'locktype', 'cursorlocation', 'maxrecords'];
 const DAO_METHODS = ['movefirst', 'movelast', 'movenext', 'moveprevious', 'move', 'addnew', 'edit', 'update', 'cancelupdate', 'delete',
-  'requery', 'close', 'findfirst', 'findlast', 'findnext', 'findprevious'];
+  'requery', 'close', 'findfirst', 'findlast', 'findnext', 'findprevious', 'getrows'];
 const ADO_METHODS = ['movefirst', 'movelast', 'movenext', 'moveprevious', 'move', 'addnew', 'update', 'cancelupdate', 'delete',
-  'requery', 'close', 'find'];
+  'requery', 'close', 'find', 'getrows'];
 const WRITABLE = new Set(['absoluteposition', 'bookmark']);
 
 export interface RecordsetOptions {
@@ -590,8 +590,26 @@ export class RecordsetObject implements VBObject {
       case 'find':
         if (args.length < 1 || args.length > 4) throw new VBRuntimeError(450);
         return done(this.adoFind(args));
+      case 'getrows': return this.getRows(args);
     }
     throw new VBRuntimeError(438);
+  }
+
+  /** GetRows [Rows]: the next Rows records (all that are left) from the current one as a Variant array (field, record); the
+   *  record after them becomes current. 3021 at EOF. */
+  private async getRows(args: VBValue[]): Promise<VBValue> {
+    this.checkOpen();
+    if (args.length > 1) throw new VBRuntimeError(450);
+    if (!this.hasCurrent) throw new VBRuntimeError(3021);
+    const want = args.length && args[0] !== Empty ? toNumber(coerce(args[0], 'Long')) : -1;
+    const from = this.pos, n = Math.max(0, Math.min(want < 0 ? Infinity : want, this.rows.length - from));
+    if (n === 0) throw new VBRuntimeError(3021);
+    const out = new VBArray('Variant', [[0, this.columns.length - 1], [0, n - 1]]);
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < this.columns.length; c++) out.set([c, r], toVB(this.rows[from + r].values[c], this.kindOf(c)));
+    }
+    await this.moveTo(ACT.bookmark, () => from + n);
+    return out;
   }
 
   private async addNew(): Promise<void> {

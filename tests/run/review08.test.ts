@@ -7,7 +7,10 @@ import type { ControlType, Project, PropValue } from '../../src/model/types';
 import { InlineFormHost } from '../../src/run/inlineFormHost';
 import { RunSession, type SessionCallbacks } from '../../src/run/session';
 import { FakeDb } from './fakeDb';
+import { MemoryFs } from '../../src/lang/fileio/memoryFs';
 import { compileCriteria } from '../../src/run/data/criteria';
+import { DbSession } from '../../src/run/data/dbSession';
+import type { DatabaseApi } from '../../src/backend/backend';
 import { localeDateParser } from '../../src/lang/builtins/format';
 import { setDateTextParser, type VBValue } from '../../src/lang/values';
 
@@ -359,5 +362,97 @@ End Sub`, controls: [
       ['DataGrid', 'DataGrid1'], ['TextBox', 'Text1', { DataSource: 'Data1', DataField: 'Name' }], ['CommandButton', 'Command1']] }]), {}, db);
     click('Command1'); await settle(s);
     expect(out).toEqual(['2 1 2', '3', 'Cid 1']);
+  });
+  test('17: the control that got MouseDown gets MouseMove and MouseUp, also outside it', async () => {
+    const s = await start(project([{ name: 'Form1', code: `Private Sub Picture1_MouseDown(Button As Integer, Shift As Integer, X As Single, Y As Single)
+  Debug.Print "down " & X
+End Sub
+Private Sub Picture1_MouseMove(Button As Integer, Shift As Integer, X As Single, Y As Single)
+  If Button Then Debug.Print "move " & X
+End Sub
+Private Sub Picture1_MouseUp(Button As Integer, Shift As Integer, X As Single, Y As Single)
+  Debug.Print "up " & X
+End Sub
+Private Sub Form_MouseUp(Button As Integer, Shift As Integer, X As Single, Y As Single)
+  Debug.Print "form up"
+End Sub
+Private Sub Form_MouseMove(Button As Integer, Shift As Integer, X As Single, Y As Single)
+  Debug.Print "form move"
+End Sub`, controls: [['PictureBox', 'Picture1']] }]));
+    const pic = elOf('Picture1'), client = container.querySelector<HTMLElement>('.vb-form-client')!;
+    pic.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1, clientX: 10 }));
+    client.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, buttons: 1, clientX: 200 }));
+    client.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, clientX: 300 }));
+    await settle(s);
+    client.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, clientX: 300 }));   // no capture any more
+    await settle(s);
+    expect(out).toEqual(['down 150', 'move 3000', 'up 4500', 'form up']);
+  });
+
+  test('19: LoadPicture and other program files use CurDir and drop a drive letter, as Open does', async () => {
+    const fs = new MemoryFs();
+    fs.mkdirs('/data/sub');
+    const read: string[] = [];
+    const s = await start(project([{ name: 'Form1', code: `Private Sub Form_Load()
+  ChDir "/data/sub"
+  Set Picture1.Picture = LoadPicture("spin.gif")
+  Set Picture1.Picture = LoadPicture("C:\\pics\\a.bmp")
+End Sub`, controls: [['PictureBox', 'Picture1']] }]), { readFile: async (path: string) => { read.push(path); return new Uint8Array([71, 73, 70]); } }, fs);
+    await settle(s);
+    expect(out).toEqual([]);
+    expect(read).toEqual(['/data/sub/spin.gif', '/pics/a.bmp']);
+  });
+  describe('below the cut', () => {
+    test('ImageCombo with Locked = True: the user changes neither the selection nor the text', async () => {
+      const s = await start(project([{ name: 'Form1', code: `Private Sub ImageCombo1_Click(): Debug.Print "click": End Sub
+Private Sub ImageCombo1_Dropdown(): Debug.Print "dropdown": End Sub`, controls: [['ImageCombo', 'ImageCombo1', { ComboItems: ['One|a', 'Two|b'], Locked: true }]] }]));
+      const combo = elOf('ImageCombo1');
+      combo.querySelector('.vb-combo-btn')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+      combo.querySelectorAll('.vb-item')[1].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+      combo.querySelector('input')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      await settle(s);
+      expect(out).toEqual([]);
+      expect(combo.querySelector('input')!.value).toBe('ImageCombo1');   // the design-time Text stays
+    });
+
+    test('SSRibbon that stays down (GroupAllowAllUp = False): a click on it raises no Click', async () => {
+      const s = await start(project([{ name: 'Form1', code: `Private Sub SSRibbon1_Click(Value As Integer): Debug.Print "r1 " & Value: End Sub`, controls: [
+        ['SSRibbon', 'SSRibbon1', { GroupNumber: 1, GroupAllowAllUp: false }], ['SSRibbon', 'SSRibbon2', { GroupNumber: 1, GroupAllowAllUp: false }]] }]));
+      click('SSRibbon1'); await settle(s);
+      click('SSRibbon1'); await settle(s);
+      expect(out).toEqual(['r1 -1']);
+    });
+
+    test('a database still opening at End is closed when it opens', async () => {
+      let open!: (id: number) => void;
+      const closed: number[] = [];
+      const api = { dbReset: async () => {}, dbOpen: () => new Promise<number>(r => { open = r; }), dbClose: async (id: number) => { closed.push(id); } } as unknown as DatabaseApi;
+      const db = new DbSession(api);
+      const c = db.connect('/app/x.db');
+      await tick();
+      db.shutdown();
+      open(7);
+      await expect(c).rejects.toMatchObject({ number: 3420 });
+      expect(closed).toEqual([7]);
+    });
+
+    test('criteria In (...) and Between ... And ...; Recordset.GetRows', async () => {
+      const age = (n: number) => (name: string): VBValue => (name.toLowerCase() === 'age' ? n : 'Bob');
+      const inList = compileCriteria("Age In (25, 31) And Name Not In ('Ann')"), between = compileCriteria('Age Between 26 And 40'), notB = compileCriteria('Age Not Between 26 And 40');
+      expect([25, 31, 42].map(n => inList(age(n)))).toEqual([true, true, false]);
+      expect([25, 31, 42].map(n => between(age(n)))).toEqual([false, true, false]);
+      expect([25, 31, 42].map(n => notB(age(n)))).toEqual([true, false, true]);
+      const db = peopleDb();
+      const s = await start(project([{ name: 'Form1', code: `Private Sub Command1_Click()
+  Dim rs As Recordset, a As Variant
+  Set rs = Data1.Recordset
+  a = rs.GetRows(2)
+  Debug.Print UBound(a, 1) & " " & UBound(a, 2) & " " & a(1, 0) & " " & a(1, 1) & " " & rs!Name
+  rs.FindFirst "Age Between 40 And 50"
+  Debug.Print rs!Name
+End Sub`, controls: [['Data', 'Data1', { DatabaseName: 'people.db', RecordSource: 'People' }], ['CommandButton', 'Command1']] }]), {}, db);
+      click('Command1'); await settle(s);
+      expect(out).toEqual(['3 1 Ann Bob Cid', 'Bob']);
+    });
   });
 });

@@ -25,7 +25,7 @@ export function imageCombo(c: Ctx): Renderer {
     doc().removeEventListener('mousedown', onOutside, true);
   }
   function openList(): void {
-    if (c.mode !== 'run' || open) return;
+    if (c.mode !== 'run' || open || c.bool('Locked')) return;   // Locked: the user changes neither the text nor the selection
     open = true;
     list.classList.add('open');
     doc().addEventListener('mousedown', onOutside, true);
@@ -50,7 +50,7 @@ export function imageCombo(c: Ctx): Renderer {
     pic.style.display = img ? '' : 'none';
   }
   function pick(i: number): void {
-    if (i < 1 || i > items.length) return;
+    if (i < 1 || i > items.length || c.bool('Locked')) return;
     sel = i;
     input.value = items[i - 1].text;
     c.props.Text = input.value;

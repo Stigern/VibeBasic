@@ -28,6 +28,13 @@ function markDragRegions(): void {
   for (const el of root.querySelectorAll('.title-bar, .title-bar-text, .title-bar-icon')) el.setAttribute('data-tauri-drag-region', '');
 }
 
+/** WindowState: vbNormal 0, vbMinimized 1, vbMaximized 2. */
+async function applyWindowState(state: PropValue | undefined): Promise<void> {
+  if (state === 1) await win.minimize();
+  else if (state === 2) await win.maximize();
+  else { await win.unminimize(); await win.unmaximize(); }
+}
+
 /** The form's own properties in a patch message (null when it has none). */
 function formPatch(m: ToWindow): Record<string, PropValue> | null {
   if (m.t === 'patch') return m.id === 'form' ? m.props : null;
@@ -58,6 +65,7 @@ async function startForm(): Promise<void> {
         const w = twips(fp.Width) ?? window.innerWidth, h = twips(fp.Height) ?? window.innerHeight;
         void win.setSize(new LogicalSize(Math.max(1, Math.round(w)), Math.max(1, Math.round(h)))).catch(() => {});
       }
+      if ('WindowState' in fp) void applyWindowState(fp.WindowState).catch(() => {});
       if ('Left' in fp || 'Top' in fp) {
         void (async () => {
           const pos = (await win.outerPosition()).toLogical(await win.scaleFactor());
@@ -80,6 +88,18 @@ async function startForm(): Promise<void> {
   const closeRequest = () => { if (mounted && !blocked) void send({ key, m: { t: 'closeRequest' } }); };
   await win.onCloseRequested(e => { e.preventDefault(); closeRequest(); });
   window.addEventListener('keydown', e => { if (isCloseKey(e)) { e.preventDefault(); closeRequest(); } }, true);
+  // the user moved the window: Left / Top (one report once the move has stopped, not one per step)
+  let moved: ReturnType<typeof setTimeout> | null = null;
+  await win.onMoved(() => {
+    if (moved) clearTimeout(moved);
+    moved = setTimeout(() => {
+      moved = null;
+      void (async () => {
+        const pos = (await win.outerPosition()).toLogical(await win.scaleFactor());
+        if (mounted) void send({ key, m: { t: 'moved', left: Math.round(pos.x * 15), top: Math.round(pos.y * 15) } });
+      })().catch(() => {});
+    }, 150);
+  });
   await win.listen<FormSnapshot>('vb:snapshot', async e => {
     if (mounted) return;
     root.dataset.vbWindow = '';
@@ -89,6 +109,8 @@ async function startForm(): Promise<void> {
     await frame();                       // first paint before the window appears
     firstShown = true;
     if (wantVisible) await show();
+    const ws = e.payload.form.props.WindowState;   // a form set to Maximized (or Minimized) opens so
+    if (ws === 1 || ws === 2) await applyWindowState(ws).catch(() => {});
   });
   await win.listen<ToWindow>('vb:to', e => { if (mounted) handle(e.payload); else early.push(e.payload); });
   await emit('vb:hello', key);

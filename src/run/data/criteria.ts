@@ -1,6 +1,7 @@
 // The criteria of Recordset.FindFirst / FindNext ... (DAO) and Find (ADO): a small SQL WHERE expression evaluated on the
 // records held in memory. Field names (or [bracketed names]), the comparisons = <> < > <= >=, Like (Jet's * ? # and ADO's
-// % _), Is [Not] Null, And, Or, Not and parentheses; literals: numbers, 'text' or "text", #dates#, True, False, Null.
+// % _), Is [Not] Null, [Not] In (...), [Not] Between ... And ..., And, Or, Not and parentheses; literals: numbers, 'text' or
+// "text", #dates#, True, False, Null.
 // Text compares without regard to case, as in Jet.
 
 import { VBRuntimeError } from '../../lang/errors';
@@ -19,7 +20,9 @@ type Node =
   | { k: 'and' | 'or'; a: Node; b: Node }
   | { k: 'cmp'; op: string; a: Node; b: Node }
   | { k: 'like'; a: Node; b: Node; neg: boolean }
-  | { k: 'isnull'; a: Node; neg: boolean };
+  | { k: 'isnull'; a: Node; neg: boolean }
+  | { k: 'in'; a: Node; list: Node[]; neg: boolean }
+  | { k: 'between'; a: Node; lo: Node; hi: Node; neg: boolean };
 
 interface Tok { t: 'word' | 'num' | 'str' | 'date' | 'op' | 'name'; v: string }
 
@@ -58,7 +61,7 @@ function lex(src: string): Tok[] {
     }
     const two = src.slice(i, i + 2);
     if (two === '<>' || two === '<=' || two === '>=' || two === '!=') { out.push({ t: 'op', v: two === '!=' ? '<>' : two }); i += 2; continue; }
-    if ('=<>()'.includes(c)) { out.push({ t: 'op', v: c }); i++; continue; }
+    if ('=<>(),'.includes(c)) { out.push({ t: 'op', v: c }); i++; continue; }
     const num = /^-?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?/i.exec(src.slice(i));
     if (num && (c !== '-' || out.length === 0 || out[out.length - 1].t === 'op')) { out.push({ t: 'num', v: num[0] }); i += num[0].length; continue; }
     const w = /^[\p{L}_][\p{L}\p{N}_.]*/u.exec(src.slice(i));
@@ -107,8 +110,24 @@ class Parser {
       return { k: 'isnull', a, neg };
     }
     let neg = false;
-    if (this.word('not')) { this.i++; neg = true; if (!this.word('like')) throw bad(); }
+    if (this.word('not')) { this.i++; neg = true; if (!this.word('like') && !this.word('in') && !this.word('between')) throw bad(); }
     if (this.word('like')) { this.i++; return { k: 'like', a, b: this.operand(), neg }; }
+    if (this.word('in')) {   // In (v1, v2 ...)
+      this.i++;
+      if (!this.op('(')) throw bad();
+      const list: Node[] = [];
+      do { this.i++; list.push(this.operand()); } while (this.op(','));
+      if (!this.op(')')) throw bad();
+      this.i++;
+      return { k: 'in', a, list, neg };
+    }
+    if (this.word('between')) {   // Between lo And hi
+      this.i++;
+      const lo = this.operand();
+      if (!this.word('and')) throw bad();
+      this.i++;
+      return { k: 'between', a, lo, hi: this.operand(), neg };
+    }
     if (neg) throw bad();
     return a;
   }
@@ -159,6 +178,16 @@ function evaluate(n: Node, field: (name: string) => VBValue): VBValue {
       if (a instanceof NullT || b instanceof NullT) return false;
       const pattern = toStr(b).toLowerCase().replace(/%/g, '*').replace(/_/g, '?');
       return likeMatch(toStr(a).toLowerCase(), pattern) !== n.neg;
+    }
+    case 'in': {
+      const a = evaluate(n.a, field);
+      if (a instanceof NullT) return false;
+      return n.list.some(x => { const v = evaluate(x, field); return !(v instanceof NullT) && cmpValues(a, v) === 0; }) !== n.neg;
+    }
+    case 'between': {
+      const a = evaluate(n.a, field), lo = evaluate(n.lo, field), hi = evaluate(n.hi, field);
+      if (a instanceof NullT || lo instanceof NullT || hi instanceof NullT) return false;
+      return (cmpValues(a, lo) >= 0 && cmpValues(a, hi) <= 0) !== n.neg;
     }
     case 'cmp': {
       const a = evaluate(n.a, field), b = evaluate(n.b, field);
