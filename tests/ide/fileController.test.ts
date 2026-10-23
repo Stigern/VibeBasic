@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, expect, test, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import type { Backend } from '../../src/backend/backend';
 import { FileController } from '../../src/ide/fileController';
 import { openCodeWindow } from '../../src/ide/codeWindow';
@@ -133,4 +134,33 @@ test('reopening a project closes open designer and code windows', async () => {
   expect(host.querySelectorAll('.mdi98').length).toBe(0);
   const w = openCodeWindow(ide, ide.project.forms[0].id, env);
   expect((w as unknown as { view: { state: { doc: { toString(): string } } } }).view.state.doc.toString()).toBe('new text');
+});
+
+const readFixture = async (p: string) => new Uint8Array(readFileSync(p));
+
+test('a VB6 .vbp opens as an unsaved project, then the import report', async () => {
+  backend.openProjectDialog.mockResolvedValue('tests/fixtures/vb6/Project1.vbp');
+  backend.readBinaryFile = vi.fn(readFixture);
+  const p = fc.open(); await vi.waitFor(() => expect(dialogs()).toBe(1));
+  expect(document.querySelector('.dlg98')!.textContent).toContain('Gadget1 (Foo.Gadget) is not supported');
+  press('OK'); await p;
+  expect(ide.project.name).toBe('Demo');
+  expect(ide.filePath).toBeNull();
+  expect(ide.stack.isDirty).toBe(true);
+});
+
+test('Add File adds a .frm as one undoable step; a name conflict is refused', async () => {
+  backend.openFileDialog = vi.fn(async () => 'tests/fixtures/vb6/Form2.frm');
+  backend.readBinaryFile = vi.fn(readFixture);
+  const added = vi.fn();
+  fc.onItemAdded = added;
+  await fc.addFile();
+  expect(ide.project.forms.map(f => f.name)).toEqual(['Form1', 'Form2']);
+  expect(added).toHaveBeenCalledWith(ide.project.forms[1].id);
+  const again = fc.addFile(); await vi.waitFor(() => expect(dialogs()).toBe(1));   // a second Form2
+  expect(document.querySelector('.dlg98')!.textContent).toContain('Name conflicts');
+  press('OK'); await again;
+  expect(ide.project.forms.length).toBe(2);
+  ide.stack.undo();
+  expect(ide.project.forms.map(f => f.name)).toEqual(['Form1']);
 });

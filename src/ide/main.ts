@@ -69,11 +69,15 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     const id = state.project.forms.find(f => f.name === state.project.startupForm)?.id ?? state.project.forms[0]?.id;
     if (id) openDesigner(state, id, env);
   };
+  fc.onItemAdded = id => {
+    if (state.project.forms.some(f => f.id === id)) openDesigner(state, id, env); else openCodeWindow(state, id, env);
+  };
   // a value typed in the Properties window but not yet entered goes into the project first (false: it was invalid). New, Open,
   // Exit and closing the window do so too, so "Save changes?" asks about it instead of the value being lost.
   const committed = (): boolean => propsWin?.commitPendingEdit() ?? true;
   actions.newProject = () => { if (state.mode === 'design' && committed()) void fc.newProject(); };
   actions.openProject = () => { if (state.mode === 'design' && committed()) void fc.open(); };
+  actions.addFile = () => { if (state.mode === 'design' && committed()) void fc.addFile(); };
   actions.saveProject = () => { if (committed()) void fc.save(); };
   actions.saveProjectAs = () => { if (committed()) void fc.saveAs(); };
   actions.makeApp = () => { if (state.mode === 'design' && committed()) void makeAppFlow(state, backend); };

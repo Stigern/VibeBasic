@@ -106,7 +106,7 @@ export interface DatabaseApi {
 export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, SystemApi {
   readonly kind: 'tauri' | 'browser';
   showMainWindow(): Promise<void>;
-  /** Open dialog filtered to *.vbb. Null when cancelled. */
+  /** Open dialog filtered to *.vbb and VB6 *.vbp. Null when cancelled. */
   openProjectDialog(): Promise<string | null>;
   saveProjectDialog(defaultFileName: string): Promise<string | null>;
   /** Save dialog for a made app (filter .app). Null when cancelled. */

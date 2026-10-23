@@ -27,7 +27,12 @@ export interface ControlDef { id: string; type: Exclude<ControlType, 'Form'>; na
  *  Menus are controls of type 'Menu' in `controls` too: in menu order, `parentId` the parent menu (null on the menu bar); see menus.ts.
  *  `mdi`: the project's MDI form (at most one; see mdi.ts); absent on ordinary forms. */
 export interface FormDef { id: string; name: string; props: Record<string, PropValue>; controls: ControlDef[]; code: string; mdi?: boolean }
-export interface ModuleDef { id: string; name: string; code: string }
+/**
+ * A standard module, or with `kind: 'class'` a class module (VB6 .cls). `instancing`: the class's Instancing property
+ * (VB6 values, 1 Private ... 6 GlobalMultiUse; stored only, every class is Private to the project). Both are optional:
+ * older projects have neither.
+ */
+export interface ModuleDef { id: string; name: string; code: string; kind?: 'class'; instancing?: number }
 export interface Asset { mime: string; dataBase64: string }
 /** `components`: the OCX file names checked in Project > Components (see components.ts); their controls are in the Toolbox. */
 /** A watch of the Watch window (Debug > Add Watch): `module` / `procedure` null are "(All Modules)" / "(All Procedures)". */

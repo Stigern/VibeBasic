@@ -13,7 +13,7 @@ export const ACTION_NAMES = [
   'undo', 'redo', 'cut', 'copy', 'paste', 'delete', 'selectAll', 'find',
   'toggleOutlining', 'toggleAllOutlining', 'collapseToDefinitions',
   'viewCode', 'viewObject', 'viewImmediate', 'viewLocals', 'viewWatch', 'viewCallStack', 'viewProjectExplorer', 'viewProperties', 'viewToolbox',
-  'addForm', 'addMdiForm', 'addModule', 'removeItem', 'components', 'projectProperties',
+  'addForm', 'addMdiForm', 'addModule', 'addFile', 'removeItem', 'components', 'projectProperties',
   'alignLefts', 'alignCenters', 'alignRights', 'alignTops', 'alignMiddles', 'alignBottoms',
   'sameWidth', 'sameHeight', 'sameBoth', 'bringToFront', 'sendToBack', 'lockControls',
   'stepInto', 'stepOver', 'stepOut', 'runToCursor', 'toggleBreakpoint', 'clearAllBreakpoints',
@@ -133,6 +133,7 @@ export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?
       mk('Add Form', 'addForm', undefined, design),
       mk('Add MDI Form', 'addMdiForm', undefined, () => design() && !state?.project.forms.some(f => f.mdi)),   // one per project (VB6)
       mk('Add Module', 'addModule', undefined, design),
+      mk('Add File...', 'addFile', 'Ctrl+D', design),
       sep(),
       mk(() => `Remove ${activeItemName()}`, 'removeItem', undefined, design),
       sep(),
