@@ -30,5 +30,8 @@ export interface FormDef { id: string; name: string; props: Record<string, PropV
 export interface ModuleDef { id: string; name: string; code: string }
 export interface Asset { mime: string; dataBase64: string }
 /** `components`: the OCX file names checked in Project > Components (see components.ts); their controls are in the Toolbox. */
+/** A watch of the Watch window (Debug > Add Watch): `module` / `procedure` null are "(All Modules)" / "(All Procedures)". */
+export interface WatchDef { expression: string; module: string | null; procedure: string | null; kind: 'watch' | 'breakTrue' | 'breakChange' }
+/** `watches`: the Watch window's watches, saved with the project (absent when there are none). */
 export interface Project { name: string; title: string; startupForm: string; forms: FormDef[]; modules: ModuleDef[];
-  assets: Record<string, Asset>; iconAsset: string | null; components: string[] }
+  assets: Record<string, Asset>; iconAsset: string | null; components: string[]; watches?: WatchDef[] }

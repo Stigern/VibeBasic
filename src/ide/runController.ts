@@ -5,7 +5,8 @@
 // Known limit: Break cannot interrupt a handler that waits for the host (for example `Form2.Show vbModal` or a
 // MsgBox); it takes effect when that wait is over. End always works.
 import { VBSyntaxError } from '../lang/errors';
-import type { BreakInfo } from '../lang/host';
+import type { BreakInfo, CodeLocation } from '../lang/host';
+import type { StackEntry } from '../lang/interp/debugger';
 import { findSyntaxErrors } from '../lang/parser';
 import { listProcedures } from '../model/procedures';
 import { RunSession } from '../run/session';
@@ -37,6 +38,10 @@ export class RunController {
   session: RunSession | null = null;
   private pendingBreak: ((a: 'continue' | 'end') => void) | null = null;
   private breakWin: CodeWindow | null = null;
+  /** Code windows showing a green Call Stack triangle (cleared when the break ends). */
+  private callWins: CodeWindow[] = [];
+  /** Where the program is stopped in break mode (Show Next Statement, Set Next Statement), else null. */
+  breakAt: CodeLocation | null = null;
   private errorWins: CodeWindow[] = [];
   /** Set while in break mode on an unhandled error (Tools > Ask AI about this error). */
   breakError: Omit<ErrorToFix, 'vars'> | null = null;
@@ -149,6 +154,7 @@ export class RunController {
     }
     this.session = session;
     this.syncBreakpoints();
+    void session.program.debug.setWatches(p.watches ?? []);   // Break When Value Is True / Changes
     this.ide.setMode('run');
     return session;
   }
@@ -195,7 +201,42 @@ export class RunController {
     await this.start(false);
   }
 
+  /**
+   * Debug > Set Next Statement (Ctrl+F9) on `line` of a module's code window: the program goes on from that statement of
+   * the stopped procedure (it breaks there again first). Returns null when done, else the message to show.
+   */
+  setNextStatement(moduleName: string, line: number): string | null {
+    const s = this.session, at = this.breakAt;
+    if (this.ide.mode !== 'break' || !s || !at || !this.pendingBreak) return null;
+    if (at.moduleName.toLowerCase() !== moduleName.toLowerCase() || !at.procName) return 'Can\'t set the next statement outside the current procedure';
+    const err = s.program.debug.setNextStatement(line);
+    if (err === null) this.pendingBreak('continue');
+    return err;
+  }
+
+  /** Debug > Show Next Statement: the code window of the stopped procedure at its yellow line. */
+  showNextStatement(): void {
+    const at = this.breakAt;
+    const id = at && this.itemId(at.moduleName);
+    if (at && id) this.openCode(id).gotoLine(at.line);
+  }
+
+  /** Call Stack > Show: the line of a procedure call; a caller's line (not the newest) gets the green triangle. */
+  showStackFrame(e: StackEntry, newest: boolean): void {
+    const id = this.itemId(e.moduleName);
+    if (!id) return;
+    this.clearCallLines();
+    const w = this.openCode(id);
+    w.gotoLine(e.line);
+    if (!newest && w.setCallLine) { w.setCallLine(e.line); this.callWins.push(w); }
+  }
+
+  private clearCallLines(): void {
+    for (const w of this.callWins.splice(0)) try { w.setCallLine?.(null); } catch { /* window closed */ }
+  }
+
   private async onBreak(info: BreakInfo & { askAi?: boolean }): Promise<'continue' | 'end'> {
+    this.breakAt = info.at;
     this.ide.setMode('break');
     const id = info.at.moduleName ? this.itemId(info.at.moduleName) : undefined;
     // VB6: the Immediate window is shown, but the keyboard focus goes to the code window with the caret on the yellow
@@ -218,8 +259,10 @@ export class RunController {
       return await answer;
     } finally {
       this.breakError = null;
+      this.breakAt = null;
       this.pendingBreak = null;
       this.clearBreakLine();
+      this.clearCallLines();
       if (this.ide.mode === 'break') this.ide.setMode('run');
     }
   }

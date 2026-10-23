@@ -10,7 +10,7 @@ import { buildLayout, type IdeLayout } from './layout';
 import { buildMenus, type IdeActions } from './menus';
 import { askAi, askAiAboutError } from '../ai/askDialog';
 import { showAiLog } from '../ai/aiLog';
-import { getCodeWindow, openCodeWindow, registerCodeActions } from './codeWindow';
+import { getCodeWindow, openCodeWindow, registerCodeActions, type CodeEnv } from './codeWindow';
 import { openDesigner, registerDesignerActions } from './designer';
 import { createPropertiesWindow, type PropertiesWindow } from './properties';
 import { attachToolboxWindow, createToolbox, type ToolboxLayout } from './toolbox';
@@ -22,6 +22,7 @@ import { makeAppFlow } from '../build/makeApp';
 import { FileController } from './fileController';
 import { RunController, type ErrorToFix } from './runController';
 import { createImmediateWindow } from './immediate';
+import { registerDebugActions, type CodeTarget } from './debugWindows';
 import { InlineFormHost } from '../run/inlineFormHost';
 import { TauriFormHost } from '../run/tauriFormHost';
 import type { FormHost } from '../run/formHost';
@@ -50,8 +51,9 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   const menus = buildMenus(actions, state, { breakOnError: () => !!run.rc?.breakError });
   let refresh = () => {};
   registerDesignerActions(state, actions, () => refresh());
-  registerCodeActions(state, actions, { mdiHost: layout.mdiHost, actions });
-  const env = { mdiHost: layout.mdiHost, actions };
+  // one CodeEnv for every code window (the data tips are wired below, once the run controller exists)
+  const env: CodeEnv = { mdiHost: layout.mdiHost, actions };
+  registerCodeActions(state, actions, env);
   registerProjectActions(state, actions, env);
   actions.projectProperties = () => { if (state.mode === 'design') void showProjectProperties(state, doc); };
   actions.components = () => { if (state.mode === 'design') void showComponents(state, doc); };
@@ -107,6 +109,16 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     const item = v.kind === 'code' ? [...state.project.forms, ...state.project.modules].find(x => x.id === v.itemId) : undefined;
     if (w && item) rc.runToCursor(item.name, w.getCursorLine());
   };
+  const codeTarget = (): CodeTarget | null => {
+    const v = state.activeView;
+    const w = v.kind === 'code' ? getCodeWindow(state, v.itemId) : null;
+    const item = v.kind === 'code' ? [...state.project.forms, ...state.project.modules].find(x => x.id === v.itemId) : undefined;
+    return w && item ? { moduleName: item.name, line: w.getCursorLine(), selection: w.getSelection?.()?.text ?? null, exprAtCursor: w.exprAtCursor?.() ?? null } : null;
+  };
+  const debugWins = registerDebugActions(state, actions, {
+    localsHost: layout.localsHost, watchHost: layout.watchHost, showPane: n => layout.setPaneVisible(n, true), run: rc, code: codeTarget, doc,
+  });
+  env.dataTip = debugWins.dataTip;
   const menubar = createMenubar(layout.menubarHost, menus);
 
   const toolbar = createToolbar(layout.toolbarHost, buildToolbarItems(actions, state));

@@ -12,11 +12,12 @@ export const ACTION_NAMES = [
   'newProject', 'openProject', 'saveProject', 'saveProjectAs', 'makeApp', 'exit',
   'undo', 'redo', 'cut', 'copy', 'paste', 'delete', 'selectAll', 'find',
   'toggleOutlining', 'toggleAllOutlining', 'collapseToDefinitions',
-  'viewCode', 'viewObject', 'viewImmediate', 'viewProjectExplorer', 'viewProperties', 'viewToolbox',
+  'viewCode', 'viewObject', 'viewImmediate', 'viewLocals', 'viewWatch', 'viewCallStack', 'viewProjectExplorer', 'viewProperties', 'viewToolbox',
   'addForm', 'addMdiForm', 'addModule', 'removeItem', 'components', 'projectProperties',
   'alignLefts', 'alignCenters', 'alignRights', 'alignTops', 'alignMiddles', 'alignBottoms',
   'sameWidth', 'sameHeight', 'sameBoth', 'bringToFront', 'sendToBack', 'lockControls',
   'stepInto', 'stepOver', 'stepOut', 'runToCursor', 'toggleBreakpoint', 'clearAllBreakpoints',
+  'addWatch', 'editWatch', 'quickWatch', 'setNextStatement', 'showNextStatement',
   'start', 'startFullCompile', 'break', 'end', 'restart',
   'askAi', 'askAiAboutError', 'aiLog', 'menuEditor', 'options', 'about',
 ] as const;
@@ -82,6 +83,7 @@ export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?
   };
   // stepping starts the program in design mode and goes on in break mode; never while it runs
   const canStep = () => idle() && (state?.mode ?? 'design') !== 'run';
+  const inBreak = () => !state || state.mode === 'break';
 
   return [
     { label: 'File', items: [
@@ -120,6 +122,9 @@ export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?
       mk('Object', 'viewObject', 'Shift+F7'),
       sep(),
       mk('Immediate Window', 'viewImmediate', 'Ctrl+G'),
+      mk('Locals Window', 'viewLocals'),
+      mk('Watch Window', 'viewWatch'),
+      mk('Call Stack...', 'viewCallStack', 'Ctrl+L', inBreak),
       mk('Project Explorer', 'viewProjectExplorer', 'Ctrl+R'),
       mk('Properties Window', 'viewProperties', 'F4'),
       mk('Toolbox', 'viewToolbox'),
@@ -154,8 +159,15 @@ export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?
       mk('Step Out', 'stepOut', 'Ctrl+Shift+F8', () => state?.mode === 'break'),
       mk('Run To Cursor', 'runToCursor', 'Ctrl+F8', () => canStep() && inCode()),
       sep(),
+      mk('Add Watch...', 'addWatch'),
+      mk('Edit Watch...', 'editWatch', 'Ctrl+W', () => !state || (state.project.watches?.length ?? 0) > 0),
+      mk('Quick Watch...', 'quickWatch', 'Shift+F9', () => inBreak() && inCode()),
+      sep(),
       mk('Toggle Breakpoint', 'toggleBreakpoint', 'F9', inCode),
       mk('Clear All Breakpoints', 'clearAllBreakpoints', 'Ctrl+Shift+F9', () => state?.hasBreakpoints ?? true),
+      sep(),
+      mk('Set Next Statement', 'setNextStatement', 'Ctrl+F9', () => inBreak() && inCode()),
+      mk('Show Next Statement', 'showNextStatement', undefined, inBreak),
     ] },
     { label: 'Run', items: [
       mk(() => (state?.mode === 'break' ? 'Continue' : 'Start'), 'start', 'F5', () => idle() && (state?.mode ?? 'design') !== 'run'),

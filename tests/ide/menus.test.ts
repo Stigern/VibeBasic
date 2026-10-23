@@ -35,7 +35,9 @@ test('shortcuts and submenus', () => {
   const debug = all.find(m => m.label === 'Debug')!.items;
   expect(debug.map(i => [i.label, i.shortcut])).toEqual([
     ['Step Into', 'F8'], ['Step Over', 'Shift+F8'], ['Step Out', 'Ctrl+Shift+F8'], ['Run To Cursor', 'Ctrl+F8'], ['-', undefined],
-    ['Toggle Breakpoint', 'F9'], ['Clear All Breakpoints', 'Ctrl+Shift+F9'],
+    ['Add Watch...', undefined], ['Edit Watch...', 'Ctrl+W'], ['Quick Watch...', 'Shift+F9'], ['-', undefined],
+    ['Toggle Breakpoint', 'F9'], ['Clear All Breakpoints', 'Ctrl+Shift+F9'], ['-', undefined],
+    ['Set Next Statement', 'Ctrl+F9'], ['Show Next Statement', undefined],
   ]);
   const sc = (l: string, m: string) => all.find(x => x.label === m)!.items.find(i => i.label === l)!.shortcut;
   expect(sc('Redo', 'Edit')).toBe('Ctrl+Y');

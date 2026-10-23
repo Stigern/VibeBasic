@@ -1,6 +1,6 @@
 // Public API of the interpreter (Program) and its shared state (Runtime).
 
-import type { ProcDecl, TypeDecl, VBTypeName } from '../ast';
+import type { ProcDecl, Stmt, TypeDecl, VBTypeName } from '../ast';
 import { VBRuntimeError, VBSyntaxError, internalError } from '../errors';
 import { compileProblems } from '../compileCheck';
 import { ErrObject, type BuiltinCtx } from '../builtins';
@@ -16,6 +16,7 @@ import {
 import { EndSignal, SubCall, runGenerator, runSync, type ExecScope, type Gen } from './driver';
 import { constExpr } from './eval';
 import { RETRY, declareVariable, handleError, invokeProc, isStackOverflow, type BoundArg } from './exec';
+import { ProgramDebugger } from './debugger';
 import { runImmediate } from './immediate';
 import { snapshotVariables } from './snapshot';
 
@@ -77,6 +78,10 @@ export class Runtime {
   readonly runs = new Set<Run>();
   /** The frame that is stopped in break mode (the Immediate window evaluates there). */
   breakFrame?: Frame;
+  /** Break watches (debugger.ts), asked at every statement boundary; null (the hot path skips it) when there are none. */
+  watchHook: ((f: Frame) => Gen<boolean>) | null = null;
+  /** Set Next Statement, chosen in break mode: the statement of the break frame that runs next. */
+  nextJump?: { frame: Frame; stmt: Stmt };
   /** Runs currently waiting in a time slice (`nextTick`); events arriving meanwhile are queued. */
   slicing = 0;
   /** Events that arrived during a time slice, started at the next event pump or when the run finishes. */
@@ -561,9 +566,12 @@ export class Runtime {
  */
 export class Program {
   private readonly rt: Runtime;
+  /** Break-mode debugging: call stack, Locals, watches, data tips, Set Next Statement. */
+  readonly debug: ProgramDebugger;
 
   constructor(modules: SourceModule[], host: Host, opts?: ProgramOptions) {
     this.rt = new Runtime(modules, host, opts);
+    this.debug = new ProgramDebugger(this.rt);
   }
 
   get state(): ProgramState { return this.rt.state; }

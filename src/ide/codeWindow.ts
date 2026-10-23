@@ -2,7 +2,7 @@
 // Leaving a line prettifies it (plan 01 prettifyLine + control property spelling) and, when Auto Syntax Check is on,
 // marks it red and shows the compile error box. Edits write form.code / module.code and mark the project dirty.
 import { Annotation, Compartment, EditorState, StateEffect, StateField, type Extension, type Transaction } from '@codemirror/state';
-import { Decoration, EditorView, GutterMarker, gutter, keymap, type DecorationSet } from '@codemirror/view';
+import { Decoration, EditorView, GutterMarker, gutter, hoverTooltip, keymap, type DecorationSet } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentLess, undo, redo, deleteCharForward } from '@codemirror/commands';
 import { acceptCompletion, autocompletion } from '@codemirror/autocomplete';
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search';
@@ -27,6 +27,7 @@ import { SpanCache, editorLook, refreshHighlight, vbHighlight, vbTheme } from '.
 import { collapseToDefinitions, indentGuides, outlining, procedureSeparator, revealEffects, toggleAllOutlining, toggleOutliningExpansion } from './vbOutlining';
 import { editingHelpers, vbEnter, vbTab } from './vbEditing';
 import { lineChanges } from './lineDiff';
+import { exprAt } from './debugWindows';
 import './codeWindow.css';
 
 export interface CodeWindow {
@@ -34,10 +35,14 @@ export interface CodeWindow {
   gotoProcedure(objectName: string, eventName: string): void;
   gotoLine(line: number): void;
   setBreakLine(line: number | null): void;
+  /** Call Stack > Show: the green triangle on the line of a calling procedure (null removes it). Optional for test doubles. */
+  setCallLine?(line: number | null): void;
   markErrorLines(lines: number[]): void;
   /** One undo step (plan 05). */
   applyChange(from: number, to: number, text: string): void;
   getCursorLine(): number;
+  /** The variable or `a.b` chain at the cursor (Quick Watch, Add Watch). Optional for test doubles. */
+  exprAtCursor?(): string | null;
   /** The main selection (offsets into getSource()), or null when nothing is selected. Optional for test doubles. */
   getSelection?(): { from: number; to: number; text: string } | null;
   getSource(): string;
@@ -45,7 +50,8 @@ export interface CodeWindow {
   toggleBreakpoint(line?: number): boolean;
   breakpointLines(): number[];
 }
-export interface CodeEnv { mdiHost: HTMLElement; actions?: IdeActions }
+/** `dataTip`: break mode's data tip for an expression hovered in the code of a form/module (`x = 5`), or null. */
+export interface CodeEnv { mdiHost: HTMLElement; actions?: IdeActions; dataTip?: (moduleName: string, expr: string) => string | null }
 
 const GENERAL = '(General)', DECLS = '(Declarations)';
 const INTERNAL = Annotation.define<boolean>();   // prettify edits (no leave-line handling)
@@ -80,21 +86,36 @@ const breakField = StateField.define<number | null>({
   },
 });
 const breakDeco = Decoration.line({ class: 'cm-vb-break' });
-/** The margin indicator: the yellow-line arrow, the breakpoint dot, or both. */
+/** The line Call Stack > Show marks with a green triangle (a procedure that called the stopped one). */
+const callEffect = StateEffect.define<number | null>();
+const callField = StateField.define<number | null>({
+  create: () => null,
+  update(v, tr) {
+    if (v !== null && tr.docChanged) v = tr.changes.mapPos(v);
+    for (const e of tr.effects) if (e.is(callEffect)) v = e.value;
+    return v;
+  },
+});
+/** The margin indicator: the yellow-line arrow (or the green call-stack triangle), the breakpoint dot, or both. */
 class MarginMarker extends GutterMarker {
-  constructor(readonly arrow: boolean, readonly dot: boolean) { super(); }
-  override eq(o: MarginMarker) { return o.arrow === this.arrow && o.dot === this.dot; }
+  constructor(readonly arrow: boolean, readonly dot: boolean, readonly call = false) { super(); }
+  override eq(o: MarginMarker) { return o.arrow === this.arrow && o.dot === this.dot && o.call === this.call; }
   toDOM() {
     const s = document.createElement('span');
     s.className = 'cm-vb-mark';
     if (this.dot) s.appendChild(document.createElement('span')).className = 'cm-vb-bpdot';
-    if (this.arrow) { const a = s.appendChild(document.createElement('span')); a.className = 'cm-vb-arrow'; a.textContent = '▶'; }
+    if (this.arrow || this.call) {
+      const a = s.appendChild(document.createElement('span'));
+      a.className = this.arrow ? 'cm-vb-arrow' : 'cm-vb-arrow cm-vb-callarrow';
+      a.textContent = '▶';
+    }
     return s;
   }
 }
 const arrow = new MarginMarker(true, false), dot = new MarginMarker(false, true), both = new MarginMarker(true, true);
+const callMark = new MarginMarker(false, false, true), callDot = new MarginMarker(false, true, true);
 const breakExt: Extension = [
-  breakField, bpField,
+  breakField, bpField, callField,
   EditorView.decorations.compute([breakField], s => {
     const p = s.field(breakField);
     return p === null ? Decoration.none : Decoration.set([breakDeco.range(s.doc.lineAt(p).from)]);
@@ -105,9 +126,12 @@ const breakExt: Extension = [
       const p = v.state.field(breakField);
       const isBreak = p !== null && v.state.doc.lineAt(p).from === line.from;
       const isBp = v.state.field(bpField).includes(line.from);
+      const c = v.state.field(callField);
+      if (!isBreak && c !== null && v.state.doc.lineAt(c).from === line.from) return isBp ? callDot : callMark;
       return isBreak ? (isBp ? both : arrow) : isBp ? dot : null;
     },
-    lineMarkerChange: u => u.startState.field(breakField) !== u.state.field(breakField) || u.startState.field(bpField) !== u.state.field(bpField) || u.docChanged,
+    lineMarkerChange: u => u.startState.field(breakField) !== u.state.field(breakField) || u.startState.field(bpField) !== u.state.field(bpField)
+      || u.startState.field(callField) !== u.state.field(callField) || u.docChanged,
     initialSpacer: () => arrow,
     // a click in the margin toggles the line's breakpoint (VB6)
     domEventHandlers: { mousedown: (v, line) => { toggleBreakpointAt(v, v.state.doc.lineAt(line.from).number); return true; } },
@@ -398,6 +422,24 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   const sepExt = (): Extension => (ide.options.procedureSeparator ? procedureSeparator : []);
   // control and form names (coloured like VS user types)
   const spans = new SpanCache(() => new Set([...controls().map(c => c.name.toLowerCase()), ...ide.project.forms.map(f => f.name.toLowerCase())]));
+  // break mode: hovering a variable or obj.Property shows its value (a selection hovered shows the selected expression)
+  const dataTips = hoverTooltip((v, pos) => {
+    const tip = envs.get(ide)?.dataTip;
+    const name = item()?.name;
+    if (ide.mode !== 'break' || !tip || !name) return null;
+    const sel = v.state.selection.main;
+    const line = v.state.doc.lineAt(pos);
+    let r: { from: number; to: number; text: string } | null;
+    if (!sel.empty && pos >= sel.from && pos <= sel.to && v.state.doc.lineAt(sel.from).number === v.state.doc.lineAt(sel.to).number) {
+      r = { from: sel.from, to: sel.to, text: v.state.sliceDoc(sel.from, sel.to).trim() };
+    } else {
+      const e = exprAt(line.text, pos - line.from);
+      r = e && { from: line.from + e.from, to: line.from + e.to, text: e.text };
+    }
+    const text = r && r.text ? tip(name, r.text) : null;
+    if (!r || !text) return null;
+    return { pos: r.from, end: r.to, above: false, create: () => ({ dom: h('div', { class: 'cm-vb-datatip' }, text) }) };
+  }, { hoverTime: 400 });
   const state = EditorState.create({
     doc: norm(item0.code),
     extensions: [
@@ -410,9 +452,10 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
         ...outliningKeys,
         // before defaultKeymap: its Mod-i (selectParentSyntax) would swallow Cmd+I (Tools > Ask AI...)
         { key: 'Mod-i', run: () => { envs.get(ide)?.actions?.askAi?.(); return true; } },
-        // Ctrl-m (tab focus mode) would clash with the Ctrl+M outlining chords
-        ...searchKeymap, ...historyKeymap, ...defaultKeymap.filter(b => b.key !== 'Ctrl-m'),
+        // Ctrl-m (tab focus mode) would clash with the Ctrl+M outlining chords, Mod-l (select line) with View > Call Stack
+        ...searchKeymap, ...historyKeymap, ...defaultKeymap.filter(b => b.key !== 'Ctrl-m' && b.key !== 'Mod-l'),
       ]),
+      dataTips,
     ],
   });
   const editorEl = h('div', { class: 'cw-editor' });
@@ -514,12 +557,19 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
       view.dispatch({ effects: [breakEffect.of(n === null ? null : lineStart(n)), ...(n === null ? [] : revealEffects(view.state, lineStart(n)))], scrollIntoView: false });
       if (n !== null) view.dispatch({ effects: EditorView.scrollIntoView(lineStart(n), { y: 'center' }) });
     },
+    setCallLine(n) {
+      if (!closed) view.dispatch({ effects: callEffect.of(n === null ? null : lineStart(n)) });
+    },
     markErrorLines(lines) {
       view.dispatch({ effects: errEffect.of({ replace: lines.filter(n => n >= 1 && n <= view.state.doc.lines).map(lineStart) }), annotations: INTERNAL.of(true) });
     },
     // only the lines that differ change: breakpoints, folds and the cursor on untouched lines stay (review 08 final #2)
     applyChange(from, to, text) { view.dispatch({ changes: lineChanges(src(), from, to, norm(text)) }); },
     getCursorLine: () => view.state.doc.lineAt(view.state.selection.main.head).number,
+    exprAtCursor: () => {
+      const head = view.state.selection.main.head, line = view.state.doc.lineAt(head);
+      return exprAt(line.text, head - line.from)?.text ?? null;
+    },
     getSelection: () => { const r = view.state.selection.main; return r.empty ? null : { from: r.from, to: r.to, text: view.state.sliceDoc(r.from, r.to) }; },
     getSource: () => src(),
     toggleBreakpoint: line => toggleBreakpointAt(view, line ?? api.getCursorLine()),

@@ -155,6 +155,11 @@ export const vbTheme: Extension = EditorView.baseTheme({
   '.cm-vb-mark': { position: 'relative', display: 'inline-block', width: '14px', textAlign: 'center' },
   '.cm-vb-bpdot': { display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#800000', verticalAlign: 'middle' },
   '.cm-vb-bpdot + .cm-vb-arrow': { position: 'absolute', left: '0', right: '0', top: '0', color: '#FFFF00' },
+  // Call Stack > Show: a calling procedure's line (VB6's green triangle)
+  '.cm-vb-arrow.cm-vb-callarrow, .cm-vb-bpdot + .cm-vb-arrow.cm-vb-callarrow': { color: '#00A000' },
+  // break mode data tip (`x = 5`): VB6's yellow tooltip
+  '.cm-tooltip.cm-tooltip-hover:has(> .cm-vb-datatip)': { border: 'none', backgroundColor: 'transparent' },
+  '.cm-vb-datatip': { backgroundColor: '#ffffe1', color: '#000', border: '1px solid #000', padding: '1px 3px', font: '11px Tahoma, "MS Sans Serif", sans-serif', whiteSpace: 'pre' },
   // outlining margin: VS-style boxed [+] / [-] and thin lines down each block
   '.cm-vb-fold': { width: '13px', backgroundColor: '#fff' },
   '.cm-vb-fold .cm-gutterElement': { position: 'relative', padding: '0' },

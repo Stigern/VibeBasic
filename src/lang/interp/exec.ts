@@ -53,7 +53,12 @@ export class ResumeJump {
   constructor(readonly mode: 'resume' | 'next' | 'label', readonly label = '') {}
 }
 
-export type Completion = undefined | 'exitFor' | 'exitDo' | 'exitProc' | GotoJump | ResumeJump;
+/** Set Next Statement (debugger.ts): goes up to the enclosing block that holds `stmt`, which runs next. */
+export class StmtJump {
+  constructor(readonly stmt: Stmt) {}
+}
+
+export type Completion = undefined | 'exitFor' | 'exitDo' | 'exitProc' | GotoJump | ResumeJump | StmtJump;
 
 /** Returned by `handleError` to run the failing statement (or loop step) again (Resume, Continue). */
 export const RETRY = Symbol('retry');
@@ -136,6 +141,10 @@ export function* execBlock(f: Frame, body: Stmt[], start = 0): Gen<Completion> {
       const target = jumpTo(f, body, c.label);
       if (target !== undefined) { i = target + 1; continue; }
     }
+    if (c instanceof StmtJump) {
+      const k = body.indexOf(c.stmt);
+      if (k >= 0) { i = k; continue; }   // the pause request of Set Next breaks there again
+    }
     return c;
   }
   return undefined;
@@ -157,7 +166,7 @@ function atBoundary(f: Frame, line: number): boolean {
     if (bp !== null && bp.has(line) && !f.run.immediate) rt.pauseRequested = true;
   }
   // stepping (Step Into/Over/Out): one comparison of the call depth
-  return ++rt.stmtCount >= rt.sliceSize || rt.stopping || rt.pauseRequested || rt.callDepth <= rt.stepDepth;
+  return ++rt.stmtCount >= rt.sliceSize || rt.stopping || rt.pauseRequested || rt.callDepth <= rt.stepDepth || rt.watchHook !== null;
 }
 
 /**
@@ -181,6 +190,8 @@ function* boundary(f: Frame, stoppable = true): Gen<void> {
   }
   // Immediate commands never break (the program may already be in break mode)
   if (f.run.immediate) return;
+  // Break When Value Is True / Changes watches (only while there are some)
+  if (stoppable && rt.watchHook !== null && (yield* rt.watchHook(f))) rt.pauseRequested = true;
   if (rt.pauseRequested || (stoppable && rt.callDepth <= rt.stepDepth)) yield* pauseHere(f);
 }
 
@@ -188,7 +199,14 @@ const notStoppable = (s: Stmt) => s.kind === 'dim' || s.kind === 'const' || s.ki
 
 /** Runs one statement: boundary checks, then the statement with error handling (and retry). */
 export function* execStmt(f: Frame, s: Stmt): Gen<Completion> {
-  if (atBoundary(f, s.line)) yield* boundary(f, !notStoppable(s));
+  if (atBoundary(f, s.line)) {
+    try {
+      yield* boundary(f, !notStoppable(s));
+    } catch (e) {
+      if (e instanceof Unwind) return e.completion;   // Set Next Statement chosen in a break here
+      throw e;
+    }
+  }
   for (;;) {
     try {
       return yield* execInner(f, s);
@@ -332,7 +350,7 @@ function* unhandledError(f: Frame, err: VBRuntimeError): Gen<ErrorOutcome> {
   if (rt.stopping) throw END;
   if (answer === 'debug') {
     yield* enterBreak(f, 'error', err);
-    return RETRY;
+    return takeJump(f) ?? RETRY;
   }
   rt.endProgram();
   throw END;
@@ -385,6 +403,17 @@ export function* enterBreak(f: Frame, reason: 'error' | 'pause', error?: VBRunti
 function* pauseHere(f: Frame): Gen<void> {
   f.run.rt.pauseRequested = false;
   yield* enterBreak(f, 'pause');
+  const j = takeJump(f);
+  if (j) throw new Unwind(j);
+}
+
+/** The Set Next Statement jump chosen during the break that just ended in `f` (and consumes it). */
+function takeJump(f: Frame): StmtJump | undefined {
+  const rt = f.run.rt;
+  const j = rt.nextJump;
+  if (j === undefined) return undefined;
+  rt.nextJump = undefined;
+  return j.frame === f ? new StmtJump(j.stmt) : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -716,7 +745,7 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
       rt.endProgram();
       throw END;
     case 'stop':
-      yield* enterBreak(f, 'pause');
+      yield* pauseHere(f);
       return;
     case 'unload': case 'load': {
       // `Load Command1(i)`: an element of a control array, which may not exist yet

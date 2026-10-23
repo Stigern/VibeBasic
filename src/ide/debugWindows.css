@@ -1,0 +1,32 @@
+/* Locals and Watches windows: a sunken white tree list with Expression | Value | Type (| Context) columns */
+.dbg98 { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; padding: 2px; gap: 2px; font-size: 11px; }
+.dbg98-bar { flex: none; display: flex; gap: 2px; }
+.dbg98-context { flex: 1; min-width: 0; padding: 2px 4px; background: #fff; box-shadow: var(--w98-sunken); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dbg98-more { min-width: 0; width: 22px; padding: 0; }
+.dbg98-tree { flex: 1; min-height: 0; display: flex; flex-direction: column; background: #fff; box-shadow: var(--w98-sunken); padding: 2px; }
+.dbg98-head { flex: none; display: flex; }
+.dbg98-head .dbg98-cell { background: var(--w98-face); box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080; padding: 1px 4px; }
+.dbg98-body { flex: 1; min-height: 0; overflow: auto; outline: none; }
+.dbg98-row { display: flex; min-height: 16px; cursor: default; }
+.dbg98-row.selected .dbg98-c0 { background: #000080; color: #fff; }
+.dbg98-cell { box-sizing: border-box; padding: 1px 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-right: 1px solid #c0c0c0; }
+.dbg98-c0 { flex: 0 0 30%; display: flex; align-items: center; }
+.dbg98-c1 { flex: 1 1 35%; min-width: 0; }
+.dbg98-c2 { flex: 0 0 20%; }
+.dbg98-c3 { flex: 0 0 18%; }
+.dbg98-cols3 .dbg98-c1 { flex-basis: 45%; }
+.dbg98-tog { flex: none; width: 9px; height: 9px; margin-right: 3px; border: 1px solid #808080; font: 9px/9px monospace; text-align: center; color: #000; background: #fff; }
+.dbg98-row.selected .dbg98-tog { color: #000; }
+.dbg98-tog.empty { border-color: transparent; background: transparent; }
+.dbg98-edit { box-sizing: border-box; width: 100%; height: 14px; padding: 0 2px; font-size: 11px; }
+/* docked below the code, side by side with Immediate; the row goes when all three are closed */
+.ide98-bottom { flex: none; height: 150px; display: flex; gap: 2px; }
+.ide98-bottom:not(:has(> .ide98-pane:not(.hidden))) { display: none; }
+.ide98-bottom > .ide98-pane { flex: 1 1 0; min-width: 0; height: auto; }
+/* dialogs */
+.dbg98-dlg { min-width: 340px; }
+.dbg98-dlg fieldset { display: flex; flex-direction: column; gap: 4px; }
+.dbg98-qw { padding: 2px 4px; min-height: 14px; white-space: pre-wrap; word-break: break-all; }
+.dbg98-stack { min-width: 360px; height: 120px; overflow: auto; background: #fff; box-shadow: var(--w98-sunken); padding: 2px; font-size: 11px; outline: none; }
+.dbg98-stackrow { padding: 1px 3px; white-space: nowrap; cursor: default; }
+.dbg98-stackrow.selected { background: #000080; color: #fff; }
