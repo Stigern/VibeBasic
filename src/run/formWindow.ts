@@ -4,8 +4,10 @@
 // A picture whose asset key is a data URL (LoadPicture at run time) is shown from that URL.
 // If `root.dataset.vbWindow` is set, root fills a native window: size changes of root resize the form and send `resized`.
 
-import { renderFormSurface, type ControlView } from '../controls/render';
+import { renderFormSurface, type ControlView, type FormSurface } from '../controls/render';
 import type { MenuBarHost } from '../controls/menuBar';
+import { isMenu } from '../model/menus';
+import { createMdiWorkspace, type MdiWorkspace } from './mdiWorkspace';
 import { encodeRuns, readRuns } from '../controls/richText';
 import { ribbonClick } from '../model/sheridan';
 import { userClickButton } from '../model/toolbar';
@@ -56,9 +58,26 @@ function isTextField(el: EventTarget | null): el is HTMLInputElement | HTMLTextA
   return el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && (el.type === 'text' || el.type === 'password'));
 }
 
-export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: FromWindow) => void): { receive(m: ToWindow): void; dispose(): void } {
+export interface MountedForm {
+  receive(m: ToWindow): void;
+  dispose(): void;
+  readonly surface: FormSurface;
+  /** The form's own menu events (an MDI form's window shows a child's menus with it). */
+  readonly menuHost: MenuBarHost;
+  /** Sets the form's outer size (twips) as the user would (an MDI child resized in its workspace); `report`: resized. */
+  resize(width: number, height: number, report: boolean): void;
+}
+
+/** `mdiChild`: the form is an MDI child shown in its MDI form's workspace (mdiWorkspace.ts): no menu bar of its own (its menus show
+ *  in the MDI form's), and the menu keys are the MDI form's. A snapshot of the MDI form (`form.mdi`) gets the workspace. */
+export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: FromWindow) => void, opts: { mdiChild?: boolean } = {}): MountedForm {
   // menus: a menu with items raises its Click (when it has code) and opens once that has run; a chosen item raises its Click
   const menuWaits = new Map<number, () => void>();
+  /** MDI form: the host of the menus the bar shows when they are not (only) the form's own (an active child's, the Window list). */
+  let barHost: MenuBarHost | null = null;
+  /** MDI form: the workspace, and " - [Child]" after the caption while the active child is maximized. */
+  let mdi: MdiWorkspace | null = null;
+  let captionSuffix: string | null = null;
   const menu: MenuBarHost = {
     beforeOpen: id => {
       if (blocked || !handles(id, 'Click')) return;
@@ -67,7 +86,10 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
     },
     choose: id => { if (!blocked) emit(id, 'Click'); },
   };
-  const surface = renderFormSurface(s.form, 'run', ref => s.assets[ref.asset] ?? (ref.asset.startsWith('data:') ? ref.asset : null), { menu });
+  const surface = renderFormSurface(s.form, 'run', ref => s.assets[ref.asset] ?? (ref.asset.startsWith('data:') ? ref.asset : null), {
+    menu: { beforeOpen: id => (barHost ?? menu).beforeOpen?.(id), choose: id => (barHost ?? menu).choose(id) },
+    hideMenuBar: opts.mdiChild, onLayout: () => mdi?.relayout(),
+  });
   surface.el.tabIndex = -1;   // so keys reach the form's listeners when no control has focus
   surface.el.style.outline = 'none';
   root.appendChild(surface.el);
@@ -112,6 +134,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
     const { RtfOps: ops, ...plain } = props;
     Object.assign(propsOf(id), plain);
     if (Array.isArray(ops)) for (const o of ops) Object.assign(propsOf(id), parseOp(o));   // the mirror ends where the replay ends
+    if (id === 'form' && captionSuffix && 'Caption' in props) props = { ...props, Caption: String(props.Caption ?? '') + captionSuffix };
     if (fromUser && isTextBox(id) && ('SelStart' in props || 'SelLength' in props)) {
       const { SelStart: _s, SelLength: _l, ...rest } = props;
       props = rest;
@@ -169,7 +192,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   }
 
   function targetOf(t: EventTarget | null): Target | null {
-    if (!(t instanceof Node)) return null;
+    if (!(t instanceof Node) || inChild(t)) return null;
     const el = (t instanceof Element ? t : t.parentElement)?.closest<HTMLElement>('[data-control-id]');
     if (el && surface.el.contains(el)) { const id = el.dataset.controlId!; return { id, def: defs.get(id) ?? null }; }
     return surface.clientEl.contains(t) ? { id: 'form', def: null } : null;
@@ -261,7 +284,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   // --- focus ---
   // the focus came from outside the form (another form, or the window became the key window): the form is the active one
   on<FocusEvent>('focusin', e => {
-    if (!blocked && !(e.relatedTarget instanceof Node && surface.el.contains(e.relatedTarget))) send({ t: 'activated' });
+    if (!blocked && !inChild(e.target) && !(e.relatedTarget instanceof Node && surface.el.contains(e.relatedTarget))) send({ t: 'activated' });
   });
   const view = root.ownerDocument.defaultView;
   if (root.dataset.vbWindow !== undefined && view) view.addEventListener('focus', () => { if (!blocked && !disposed) send({ t: 'activated' }); }, { signal: ac.signal });
@@ -457,9 +480,10 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   const chainOf = (id: string): string[] => (id !== 'form' && formState.KeyPreview === true ? ['form', id] : [id]);
 
   on<KeyboardEvent>('keydown', e => {
+    if (inChild(e.target)) return;   // an MDI child's own
     const tg = targetOf(e.target) ?? { id: 'form', def: null };
     if (blocked) { e.preventDefault(); return; }
-    if (surface.menuBar.keyDown(e)) return;   // Alt, F10, Alt+letter, a menu's Shortcut
+    if (!opts.mdiChild && surface.menuBar.keyDown(e)) return;   // Alt, F10, Alt+letter, a menu's Shortcut (an MDI child's: the MDI form's bar)
     const prevented = e.defaultPrevented;   // e.g. an open combo list closing on Escape
     const chain = chainOf(tg.id);
     const code = vbKeyCode(e), shift = shiftBits(e);
@@ -473,9 +497,10 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
     else if (e.key === 'Escape' && !prevented) clickButton('Cancel');
   });
   on<KeyboardEvent>('keyup', e => {
+    if (inChild(e.target)) return;
     const tg = targetOf(e.target) ?? { id: 'form', def: null };
     if (blocked) return;
-    if (surface.menuBar.keyUp(e)) return;
+    if (!opts.mdiChild && surface.menuBar.keyUp(e)) return;
     for (const id of chainOf(tg.id)) emit(id, 'KeyUp', [vbKeyCode(e), shiftBits(e)]);
   });
 
@@ -513,11 +538,38 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
       .find(id => usable(id) && (viewOf(id)?.inputEl?.tabIndex ?? -1) >= 0);
     (first ? viewOf(first)!.inputEl! : surface.el).focus();
   }
+  // --- MDI form: the workspace with the children ---
+  const ownMenus = (): ControlDef[] => [...defs.values()].filter(isMenu).map(d => ({ ...d, props: { ...state.get(d.id) } }));
+  if (s.form.mdi && !opts.mdiChild) {
+    mdi = createMdiWorkspace({
+      surface, ownMenus, ownMenuHost: menu, formProps: () => formState,
+      mount: (r, cs, p) => mountFormWindow(r, cs, p, { mdiChild: true }),
+      post: (key, m) => send({ t: 'mdiFrom', key, m }),
+      setBar: (list, host) => {
+        if (!list && !barHost) return;
+        barHost = host;
+        surface.menuBar.set(list ?? ownMenus());
+      },
+      setCaptionSuffix: suffix => {
+        if (suffix === captionSuffix) return;
+        captionSuffix = suffix;
+        surface.update('form', { Caption: String(formState.Caption ?? '') + (suffix ?? '') });
+      },
+    });
+  }
+  function inChild(t: EventTarget | null): boolean { return !!mdi && t instanceof Node && mdi.el.contains(t); }
+
   // the session sends focusInitial once Form_Activate has run (VB6: Load, Resize, Activate, then the first control's GotFocus)
   queueMicrotask(() => { if (!disposed) send({ t: 'ready' }); });
 
   return {
+    surface, menuHost: menu,
+    resize(width, height, report) {
+      apply('form', { Width: width, Height: height });
+      if (report) send({ t: 'resized', width, height });
+    },
     receive(m) {
+      if (mdi?.receive(m)) return;
       switch (m.t) {
         case 'patch': if (m.id === 'form' || defs.has(m.id)) apply(m.id, m.props); break;
         case 'patches': for (const p of m.items) if (p.id === 'form' || defs.has(p.id)) apply(p.id, p.props); break;
@@ -568,6 +620,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
       if (selTimer) clearTimeout(selTimer);
       ac.abort();
       observer?.disconnect();
+      mdi?.dispose();
       // an open combo list holds a document listener until it is closed
       for (const v of surface.views.values()) v.inputEl?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
       surface.dispose();   // media Blob URLs

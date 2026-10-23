@@ -5,6 +5,7 @@
 import { BUILTINS, CONSTANTS } from '../lang/builtins';
 import type { ModuleAst, ProcDecl } from '../lang/ast';
 import { parseModuleLenient } from '../lang/parser';
+import { formHasProp } from '../model/mdi';
 import { CONTROL_TYPES, getPropDef } from '../model/controls';
 import type { ControlType, FormDef, Project } from '../model/types';
 
@@ -46,8 +47,9 @@ const FORM_EXTRA = ['show', 'hide', 'refresh', 'move', 'setfocus', 'zorder', 'lo
 export function formMembers(form: FormDef, codeNames: Iterable<string>, extraControls: { name: string }[] = []): Set<string> {
   const out = new Set<string>([...FORM_EXTRA, ...codeNames]);
   for (const c of [...form.controls, ...extraControls]) out.add(c.name.toLowerCase());
-  for (const p of CONTROL_TYPES.Form.props) if (p.runtime !== 'none') out.add(p.name.toLowerCase());
+  for (const p of CONTROL_TYPES.Form.props) if (p.runtime !== 'none' && formHasProp(form, p.name)) out.add(p.name.toLowerCase());
   for (const m of CONTROL_TYPES.Form.methods) out.add(m.name.toLowerCase());
+  if (form.mdi) { out.add('activeform'); out.add('arrange'); }   // MDIForm
   return out;
 }
 

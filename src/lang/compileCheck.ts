@@ -46,11 +46,11 @@ function sameType(a: VBTypeName, b: VBTypeName): boolean {
   return false;
 }
 
-/** The newObject message for `New T`, null when T can be made (a Collection). Matches eval.ts objectFactory. */
-function newProblem(t: VBTypeName): string | null {
+/** The newObject message for `New T`, null when T can be made (a Collection, a form of the project). Matches eval.ts objectFactory. */
+function newProblem(t: VBTypeName, forms: ReadonlySet<string>): string | null {
   if (typeof t === 'string' || 'userType' in t) return 'Invalid use of New keyword';
   const n = lc(t.objectType);
-  if (n === 'collection' || n === 'vba.collection') return null;
+  if (n === 'collection' || n === 'vba.collection' || forms.has(n)) return null;
   return `Not supported in VibeBasic: New ${t.objectType} (there are no class modules; New can create a Collection)`;
 }
 
@@ -93,6 +93,7 @@ export function compileProblems(modules: CheckModule[], opts: CompileCheckOption
     globalOther.add(lc(m.name));
   }
   for (const m of modules) if (m.kind === 'form') globalOther.add(lc(m.name));
+  const formNames = new Set(modules.filter(m => m.kind === 'form').map(m => lc(m.name)));
 
   for (const m of modules) {
     const moduleVars = new Map<string, VarInfo>(m.ast.variables.map(d => [lc(d.name), { type: resolveType(d.type, m), isArray: d.isArray }]));
@@ -101,7 +102,7 @@ export function compileProblems(modules: CheckModule[], opts: CompileCheckOption
     const report = (line: number, message: string, hint = message) => out.push({ module: m.name, line, message, hint });
     const newDecl = (d: VarDecl) => {
       if (!d.isNew) return;
-      const msg = newProblem(resolveType(d.type, m));
+      const msg = newProblem(resolveType(d.type, m), formNames);
       if (msg) report(d.line, msg);
     };
     const declOk = opts.onlyDecls ?? (() => !opts.only);
@@ -170,7 +171,7 @@ export function compileProblems(modules: CheckModule[], opts: CompileCheckOption
       const expr = (e: Expr | MissingArg, line: number): void => {
         walkExpr(e, x => {
           if (x.kind === 'call') call(x.target, x.args, line);
-          else if (x.kind === 'new') { const msg = newProblem(resolveType({ objectType: x.typeName }, m)); if (msg) report(line, msg); }
+          else if (x.kind === 'new') { const msg = newProblem(resolveType({ objectType: x.typeName }, m), formNames); if (msg) report(line, msg); }
         });
       };
       walkStmts(proc.body, s => {

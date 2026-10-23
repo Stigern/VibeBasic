@@ -8,6 +8,7 @@ import {
 import { addComponentsCmd } from '../model/components';
 import { CONTROL_TYPES, newControl, nextDefaultName, newId } from '../model/controls';
 import { hasMenuBar, isMenu } from '../model/menus';
+import { formObjectName, mdiAllows } from '../model/mdi';
 import { ssTabAt, ssTabLayout } from '../model/ssTab';
 import { controlPos, isLine, setControlPos } from '../model/geometry';
 import { pxToTwips, twipsToPx } from '../model/twips';
@@ -58,6 +59,11 @@ function topLevelOf(form: FormDef, ids: string[]): string[] {
     for (let p = map.get(id)?.parentId, n = 0; p && n < 64; p = map.get(p)?.parentId, n++) if (set.has(p)) return false;
     return map.has(id);
   });
+}
+
+/** A PictureBox drawn on an MDI form aligns to the top (VB6). */
+function mdiDefaults(form: FormDef, def: ControlDef): void {
+  if (form.mdi && def.type === 'PictureBox' && def.parentId === null) def.props.Align = 1;
 }
 
 export function placeControlCentered(ide: IdeState, tool: ControlType | 'Pointer'): void {
@@ -288,6 +294,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
         const parentId = containerAt(form, p0.x, p0.y, []);
         const po = parentId ? absoluteRect(form, parentId) : { left: 0, top: 0 };
         const def = newControl(form, tool, { left: r.left - po.left, top: r.top - po.top, width: r.width, height: r.height }, parentId);
+        mdiDefaults(form, def);
         const tab = tabFor(form, parentId);
         if (tab !== undefined) def.tab = tab;   // onto the SSTab's current tab
         if (tool === 'Line' && moved) {   // the line runs from where the drag began to where it ended
@@ -430,7 +437,11 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     const inClient = p.x >= 0 && p.y >= 0 && p.x < pxToTwips(m.clientWidth) && p.y < pxToTwips(m.clientHeight);
     if (!inClient) { select([]); return; }
     e.preventDefault();
-    if (ide.currentTool !== 'Pointer') { startDraw(e, ide.currentTool as Exclude<ControlType, 'Form'>, form); return; }
+    if (ide.currentTool !== 'Pointer') {
+      if (form.mdi && !mdiAllows(ide.currentTool)) { ide.setTool('Pointer'); return; }   // the Toolbox greys these out on an MDI form
+      startDraw(e, ide.currentTool as Exclude<ControlType, 'Form'>, form);
+      return;
+    }
     const hit = hitTest(form, p.x, p.y);
     if (!hit) { startBand(e, form); return; }
     const hitDef = form.controls.find(c => c.id === hit);
@@ -456,7 +467,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     const p = toTwips(ev as MouseEvent), hit = hitTest(form, p.x, p.y);
     const c = hit ? form.controls.find(x => x.id === hit) : undefined;
     if (hit) select([hit]);
-    env.actions?.viewCode?.(form.id, c ? c.name : 'Form', CONTROL_TYPES[c ? c.type : 'Form'].defaultEvent);
+    env.actions?.viewCode?.(form.id, c ? c.name : formObjectName(form), CONTROL_TYPES[c ? c.type : 'Form'].defaultEvent);
   });
 
   stage.addEventListener('keydown', ev => {
@@ -488,7 +499,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
   /** Double-click in the Toolbox: centred on the current tab of the one selected SSTab, else on the form. */
   const placeCentered = (tool: ControlType) => {
     const form = getForm();
-    if (!form || tool === 'Form') return;
+    if (!form || tool === 'Form' || (form.mdi && !mdiAllows(tool))) return;
     const td = CONTROL_TYPES[tool], m = metricsOf(form), so = snapOpts(ide);
     const sel = selectedIds(), host = sel.length === 1 ? form.controls.find(c => c.id === sel[0]) : undefined;
     const parent = host?.type === 'SSTab' ? host : undefined;
@@ -502,6 +513,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     const left = Math.max(0, snapv((area.width - width) / 2, so.grid));
     const top = Math.max(bodyTop, snapv(bodyTop + (area.height - bodyTop - height) / 2, so.gridY ?? so.grid));
     const def = newControl(form, tool, fits ? { left, top, width, height } : { left, top }, parent?.id ?? null);
+    mdiDefaults(form, def);
     const tab = tabFor(form, parent?.id ?? null);
     if (tab !== undefined) def.tab = tab;
     ide.stack.execute(addControlsCmd(formId, [def]));
@@ -549,6 +561,11 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
 export async function pasteControls(ide: IdeState, formId: string, defs: ControlDef[], parentId: string | null = null,
   assets: Record<string, Asset> = {}): Promise<void> {
   const form = formOf(ide, formId);
+  if (form?.mdi && !parentId) {   // on the MDI form itself only the controls it may hold (with what they contain)
+    const keep = new Set(defs.filter(d => (!d.parentId || !defs.some(x => x.id === d.parentId)) && mdiAllows(d.type)).map(d => d.id));
+    for (let grew = true; grew;) { grew = false; for (const d of defs) if (d.parentId && keep.has(d.parentId) && !keep.has(d.id)) { keep.add(d.id); grew = true; } }
+    defs = defs.filter(d => keep.has(d.id)).map(d => (d.type === 'PictureBox' && !d.parentId ? { ...d, props: { ...d.props, Align: d.props.Align || 1 } } : d));
+  }
   if (!form || !defs.length) return;
   const container = parentId ? form.controls.find(c => c.id === parentId) : undefined;
   if (parentId && !container) parentId = null;

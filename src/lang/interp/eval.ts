@@ -369,6 +369,8 @@ export function objectFactory(rt: Runtime, type: VBTypeName, module: ModuleScope
   if (typeof t !== 'object' || 'userType' in t) throw compileError('Invalid use of New keyword');
   const name = lc(t.objectType);
   if (name === 'collection' || name === 'vba.collection') return () => new VBCollection();
+  const host = rt.host.objectFactory?.(t.objectType);   // a form: Dim f As New Form1
+  if (host) return host;
   throw compileError(`Not supported in VibeBasic: New ${t.objectType} (there are no class modules; New can create a Collection)`);
 }
 

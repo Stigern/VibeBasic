@@ -134,6 +134,8 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       en('WindowState', 0, ['Normal', 'Minimized', 'Maximized']),
       bool('KeyPreview', false),
       font(), picture(), picture('Icon'),
+      // MDI (mdi.ts): MDIChild on ordinary forms; AutoShowChildren and ScrollBars on the MDI form only
+      bool('MDIChild', false, { runtime: 'ro' }), bool('AutoShowChildren', true), bool('ScrollBars', true, { runtime: 'ro' }),
     ],
     events: [
       ev('Load'), ev('Unload', 'Cancel As Integer'), ev('QueryUnload', 'Cancel As Integer, UnloadMode As Integer'),
@@ -251,6 +253,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     defaultEvent: 'Click', defaultMember: 'Picture',
     props: [
       ...common(), picture(), bool('AutoSize', false), en('BorderStyle', 1, ['None', 'Fixed Single']), color('BackColor', BTN_FACE),
+      en('Align', 0, ['vbAlignNone', 'vbAlignTop', 'vbAlignBottom', 'vbAlignLeft', 'vbAlignRight']),
     ],
     events: [evChange(), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
@@ -1154,6 +1157,8 @@ export function validateName(name: string): boolean {
 export function newForm(name: string, code = ''): FormDef {
   const props = defaultProps('Form');
   props.Caption = name;
+  delete props.AutoShowChildren;   // the MDI form's (mdi.ts)
+  delete props.ScrollBars;
   return { id: newId(), name, props, controls: [], code };
 }
 

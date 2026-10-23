@@ -8,6 +8,7 @@ import type { ControlDef, ControlType, FormDef, Project, PropValue } from '../mo
 import { absoluteRect, sizeOf } from '../ide/designerLogic';
 import { isDocked, isLine } from '../model/geometry';
 import { SHORTCUT_LABELS, isMenu, shortcutValue } from '../model/menus';
+import { formHasProp, formObjectName, mdiAllows } from '../model/mdi';
 import { parsePropertyInput } from '../ide/propertyEditors';
 import { applyCodeProposal, extractCode, type CodeApplyResult } from './codeMode';
 import { stripThinking } from './clean';
@@ -240,6 +241,9 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
     const kind = OP_ALIASES[low] ?? low;
     if (kind === 'form') {
       const props = parseProps('Form', propsOf(raw), 'Form', warnings);
+      for (const k of Object.keys(props)) {
+        if (!formHasProp(form, k)) { delete props[k]; warnings.push(`Ignored ${k}: ${form.mdi ? 'an MDI form' : 'a form that is not the MDI form'} has no ${k}.`); }
+      }
       if (Object.keys(props).length) ops.push({ op: 'form', props });
     } else if (kind === 'menu') {
       // {"op":"menu","name":"mnuOpen","caption":"&Open...","parent":"mnuFile","shortcut":"Ctrl+O"}: an add of a Menu, after the others
@@ -303,6 +307,11 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
         else warnings.push(`Ignored unknown container ${raw.container} for ${name}.`);
       }
       const parent = container ? find(splitName(container).name, splitName(container).index)[0] : undefined;
+      if (form.mdi && !parent && !mdiAllows(type)) {
+        warnings.push(`Ignored ${type} ${name}: an MDI form holds only aligned controls (PictureBox, Toolbar, StatusBar, CoolBar) and invisible ones; put it on a child form (MDIChild = True) or in a PictureBox.`);
+        continue;
+      }
+      if (form.mdi && !parent && type === 'PictureBox' && !props.Align) props.Align = 1;   // VB6: a PictureBox on an MDI form aligns
       const tab = parent?.type === 'SSTab' && typeof raw.tab === 'number' && raw.tab >= 0 ? Math.floor(raw.tab) : undefined;
       // the working control starts where buildCommands puts it (240, 240, default size), so placement relative to it is right
       const added = newControl(work, type, { left: 240, top: 240 }, parent?.id ?? null);

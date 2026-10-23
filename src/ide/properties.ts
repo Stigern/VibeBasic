@@ -5,6 +5,7 @@ import { getBackend, type Backend } from '../backend/backend';
 import { assetOf, assetUsedElsewhere } from '../model/assetRefs';
 import { addAssetCmd, compositeCmd, removeAssetCmd, renameCmd, renameModuleCmd, setPropertyCmd, tabIndexCmd, type Command } from '../model/commands';
 import { CONTROL_TYPES, getPropDef, newId, validateName, type PropDef } from '../model/controls';
+import { formHasProp, formObjectName } from '../model/mdi';
 import type { ControlDef, ControlType, FontValue, FormDef, ModuleDef, PropValue } from '../model/types';
 import { messageBox98, vbYes } from '../ui98/dialogs';
 import { createCombo } from '../ui98/combo';
@@ -359,14 +360,14 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     const multi = ts.length > 1;
 
     // Object box: the form and all its controls
-    objectEntries = [{ label: labelOf(form.name, null, 'Form'), id: 'form' },
+    objectEntries = [{ label: labelOf(form.name, null, formObjectName(form)), id: 'form' },
       ...form.controls.map((c: ControlDef) => ({ label: labelOf(c.name, c.index, c.type), id: c.id }))];
     const first = ts[0];
     objectCombo.setItems(objectEntries.map(e => e.label));
-    objectCombo.setValue(multi ? '' : labelOf(first.name, first.index, first.type));
+    objectCombo.setValue(multi ? '' : labelOf(first.name, first.index, first.id === 'form' ? formObjectName(form) : first.type));
 
     // Rows: properties common to all selected types
-    const defs = CONTROL_TYPES[first.type].props.filter(d => d.designTime).filter(d => ts.every(t => {
+    const defs = CONTROL_TYPES[first.type].props.filter(d => d.designTime && (first.id !== 'form' || formHasProp(form, d.name))).filter(d => ts.every(t => {
       const o = getPropDef(t.type, d.name);
       return o && o.designTime && o.kind === d.kind && (d.kind !== 'enum' || JSON.stringify(o.enumValues) === JSON.stringify(d.enumValues));
     }));

@@ -5,6 +5,7 @@ import { CONTROL_TYPES, type PropDef } from '../model/controls';
 import { absoluteRect, shownInDesign } from '../ide/designerLogic';
 import { formClientTwips, isLine } from '../model/geometry';
 import { hasMenuBar, isMenu, shortcutText } from '../model/menus';
+import { formObjectName, isMdiChild } from '../model/mdi';
 import { listProcedures } from '../model/procedures';
 import type { ControlDef, ControlType, FormDef, FontValue, ModuleDef, Project, PropValue } from '../model/types';
 import type { TextMessage } from './types';
@@ -105,7 +106,9 @@ export function describeControlTypes(): string {
     + ' A DataGrid shows the DataSource\'s records (Columns(0) is the first column: Caption, Width, Value).'
     + ' DataList and DataCombo list the ListField of the RowSource\'s records; BoundText is the BoundColumn of the chosen one, bound to DataSource / DataField.'
     + ' The Sheridan 3D controls: an SSPanel (or SSFrame) is a container like a Frame (BevelOuter 0 none, 1 inset, 2 raised, BevelWidth, Font3D 0-4; FloodType 1 left to right ... 5 circle with FloodPercent makes a progress bar);'
-    + ' SSCheck and SSOption have a Boolean Value and Click(Value As Integer); SSRibbon is a toggle button (Value, PictureUp, PictureDn) and ribbons of one container with the same GroupNumber release each other.');
+    + ' SSCheck and SSOption have a Boolean Value and Click(Value As Integer); SSRibbon is a toggle button (Value, PictureUp, PictureDn) and ribbons of one container with the same GroupNumber release each other.'
+    + ' An MDIForm (events MDIForm_Load ...; AutoShowChildren, ScrollBars) holds only Align controls and invisible ones; forms with MDIChild = True show inside it.'
+    + ' MDIForm1.ActiveForm is the active child, MDIForm1.Arrange vbCascade (vbTileHorizontal, vbTileVertical); a menu with WindowList lists the children; Set f = New Form2: f.Show opens another instance.');
   return lines.join('\n');
 }
 
@@ -184,7 +187,7 @@ export function describeForm(form: FormDef, opts: { map?: boolean } = {}): strin
   const lines: string[] = [];
   const formParts = propParts('Form', form.props, new Set(['left', 'top', 'width', 'height', 'tabindex']));
   for (const k of ['Width', 'Height']) if (k in form.props) formParts.push(`${k}=${fmtValue(form.props[k])}`);
-  lines.push(['Form', form.name, ...formParts].join(' '));
+  lines.push([formObjectName(form), form.name, ...formParts].join(' '));
   const byId = new Map(form.controls.map(c => [c.id, c]));
   for (const c of form.controls) {
     const geo = ['Left', 'Top', 'Width', 'Height', 'X1', 'Y1', 'X2', 'Y2'].filter(k => k in c.props).map(k => `${k}=${fmtValue(c.props[k])}`);
@@ -211,7 +214,7 @@ function describeFormControls(f: FormDef): string {
     seen.add(k);
     items.push(`${c.name} (${c.type})`);
   }
-  return `${f.name}: ${items.length ? items.join(', ') : '(no controls)'}`;
+  return `${f.name}${f.mdi ? ' (MDIForm)' : isMdiChild(f) ? ' (MDI child)' : ''}: ${items.length ? items.join(', ') : '(no controls)'}`;
 }
 
 /** "Form1: Command1 (CommandButton), Text1 (TextBox)" per form; control arrays are listed once. */

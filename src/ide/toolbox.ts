@@ -1,5 +1,6 @@
 import { toolboxTools } from '../model/components';
 import { CONTROL_TYPES } from '../model/controls';
+import { mdiAllows } from '../model/mdi';
 import type { ControlType } from '../model/types';
 import { h } from '../ui98/dom';
 import { popupMenu } from '../ui98/popup';
@@ -178,8 +179,18 @@ export function createToolbox(host: HTMLElement, ide: IdeState, onComponents?: (
     if (ide.mode !== 'design' || !onComponents) return;
     popupMenu(grid.ownerDocument, e.clientX, e.clientY, [{ label: 'Components...', action: onComponents }]);
   });
-  const refresh = () => { for (const [t, b] of buttons) b.classList.toggle('checked', t === ide.currentTool); };
+  // on an MDI form only the controls it may hold (VB6 greys out the others)
+  const mdiForm = () => { const v = ide.activeView; return v.kind === 'designer' && !!ide.project.forms.find(f => f.id === v.formId)?.mdi; };
+  const refresh = () => {
+    const mdi = mdiForm();
+    if (mdi && ide.currentTool !== 'Pointer' && !mdiAllows(ide.currentTool)) { ide.setTool('Pointer'); return; }
+    for (const [t, b] of buttons) {
+      b.classList.toggle('checked', t === ide.currentTool);
+      b.classList.toggle('tbx98-off', mdi && t !== 'Pointer' && !mdiAllows(t as ControlType));
+    }
+  };
   ide.on('tool', refresh);
+  ide.on('activeView', refresh);
   ide.on('project', () => { rebuild(); refresh(); });
   // Inert while a program runs or is in break mode
   const lock = () => { grid.classList.toggle('tbx98-locked', ide.mode !== 'design'); if (ide.mode !== 'design') ide.setTool('Pointer'); };

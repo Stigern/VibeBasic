@@ -115,6 +115,12 @@ group({
   vbAlignNone: 0, vbAlignTop: 1, vbAlignBottom: 2, vbAlignLeft: 3, vbAlignRight: 4,
 });
 
+// Forms: QueryUnload's UnloadMode; MDIForm.Arrange
+group({
+  vbFormControlMenu: 0, vbFormCode: 1, vbAppWindows: 2, vbAppTaskManager: 3, vbFormMDIForm: 4, vbFormOwner: 5,
+  vbCascade: 0, vbTileHorizontal: 1, vbTileVertical: 2, vbArrangeIcons: 3,
+});
+
 // DTPicker (Format) and MonthView (StartOfWeek)
 group({
   dtpLongDate: 0, dtpShortDate: 1, dtpTime: 2, dtpCustom: 3,

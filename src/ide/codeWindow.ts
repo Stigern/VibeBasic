@@ -10,6 +10,7 @@ import { tokenize } from '../lang/lexer';
 import { checkLineSyntax } from '../lang/parser';
 import { collectIdentifiers, prettifyLine } from '../lang/prettify';
 import { CONTROL_TYPES, getPropDef } from '../model/controls';
+import { formEvents, formObjectName } from '../model/mdi';
 import { buildEventStub, findProcedureRange, insertProcedure, listProcedures } from '../model/procedures';
 import type { ControlType, FormDef, Project } from '../model/types';
 import { compileErrorBox } from '../ui98/dialogs';
@@ -266,22 +267,24 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     if (!form()) return [GENERAL];
     const seen = new Map<string, string>();
     for (const c of controls()) if (!seen.has(c.name.toLowerCase())) seen.set(c.name.toLowerCase(), c.name);
-    return [GENERAL, 'Form', ...[...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))];
+    return [GENERAL, formObjectName(form()), ...[...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))];
   };
   const typeOf = (obj: string): { type: ControlType; name: string; isArray: boolean } | null => {
     const f = form();
     if (!f) return null;
     const low = obj.toLowerCase();
-    if (low === 'form' || low === f.name.toLowerCase()) return { type: 'Form', name: 'Form', isArray: false };
+    if (low === formObjectName(f).toLowerCase() || low === f.name.toLowerCase()) return { type: 'Form', name: formObjectName(f), isArray: false };
     const cs = controls().filter(c => c.name.toLowerCase() === low);
     return cs.length ? { type: cs[0].type, name: cs[0].name, isArray: cs.some(c => c.index !== null) } : null;
   };
   /** (object, event) a procedure name stands for, else null (a general procedure). */
+  /** A control type's events; the form's own (an MDI form has fewer). */
+  const eventsOf = (type: ControlType) => (type === 'Form' ? formEvents(form() ?? {}) : CONTROL_TYPES[type].events);
   const resolveProc = (name: string): { obj: string; ev: string } | null => {
     for (const o of objectNames().slice(1)) {
       if (!name.toLowerCase().startsWith(`${o.toLowerCase()}_`)) continue;
       const rest = name.slice(o.length + 1), t = typeOf(o)!;
-      const ev = CONTROL_TYPES[t.type].events.find(e => e.name.toLowerCase() === rest.toLowerCase());
+      const ev = eventsOf(t.type).find(e => e.name.toLowerCase() === rest.toLowerCase());
       if (ev) return { obj: o, ev: ev.name };
     }
     return null;
@@ -308,7 +311,7 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     else {
       const t = typeOf(curObj);
       const have = new Set(procs.map(p => p.name.toLowerCase()));
-      procCombo.setItems((t ? CONTROL_TYPES[t.type].events : []).map(e => e.name), e => have.has(`${curObj}_${e}`.toLowerCase()));
+      procCombo.setItems((t ? eventsOf(t.type) : []).map(e => e.name), e => have.has(`${curObj}_${e}`.toLowerCase()));
     }
   }
   function syncCombos(): void {
@@ -328,7 +331,7 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     const f = form();
     for (const c of controls()) m.set(c.name.toLowerCase(), c.name);
     for (const fm of ide.project.forms) m.set(fm.name.toLowerCase(), fm.name);
-    if (f) m.set('form', 'Form');
+    if (f) m.set(formObjectName(f).toLowerCase(), formObjectName(f));
     return m;
   };
   const logicalRange = (doc: EditorState['doc'], n: number): [number, number] => {
@@ -489,7 +492,7 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
       let name = eventName;
       if (objectName !== GENERAL) {
         const t = typeOf(objectName);
-        const ev = t && CONTROL_TYPES[t.type].events.find(e => e.name.toLowerCase() === eventName.toLowerCase());
+        const ev = t && eventsOf(t.type).find(e => e.name.toLowerCase() === eventName.toLowerCase());
         if (!t || !ev) return;
         name = `${t.name}_${ev.name}`;
         if (!findProcedureRange(src(), name)) {

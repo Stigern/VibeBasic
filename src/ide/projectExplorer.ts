@@ -2,6 +2,7 @@
 // Selection lives in `ide.explorerItemId` so the Project menu ("Remove <name>") can follow it.
 import { addFormCmd, addModuleCmd, removeItemCmd } from '../model/commands';
 import { newForm, newId } from '../model/controls';
+import { newMdiForm } from '../model/mdi';
 import { h } from '../ui98/dom';
 import { messageBox98 } from '../ui98/dialogs';
 import { popupMenu } from '../ui98/popup';
@@ -20,16 +21,18 @@ export interface ProjectExplorer {
   focus(): void;
 }
 
-function nextFreeName(ide: IdeState, prefix: 'Form' | 'Module'): string {
+function nextFreeName(ide: IdeState, prefix: 'Form' | 'MDIForm' | 'Module'): string {
   const taken = new Set([...ide.project.forms, ...ide.project.modules].map(i => i.name.toLowerCase()));
   let n = 1;
   while (taken.has(`${prefix}${n}`.toLowerCase())) n++;
   return `${prefix}${n}`;
 }
 
-export function addForm(ide: IdeState, env?: DesignerEnv): void {
-  if (ide.mode !== 'design') return;
-  const form = newForm(nextFreeName(ide, 'Form'), ide.options.requireVariableDeclaration ? OPTION_EXPLICIT : '');
+/** Project > Add Form; `mdi`: Add MDI Form (at most one per project, as in VB6). */
+export function addForm(ide: IdeState, env?: DesignerEnv, mdi = false): void {
+  if (ide.mode !== 'design' || (mdi && ide.project.forms.some(f => f.mdi))) return;
+  const code = ide.options.requireVariableDeclaration ? OPTION_EXPLICIT : '';
+  const form = mdi ? newMdiForm(nextFreeName(ide, 'MDIForm'), code) : newForm(nextFreeName(ide, 'Form'), code);
   ide.stack.execute(addFormCmd(form));
   ide.explorerItemId = form.id;
   ide.setSelection({ formId: form.id, ids: [] });
@@ -65,9 +68,10 @@ export function removeItem(ide: IdeState, id: string): void {
   ide.emit('selection');
 }
 
-/** Registers addForm / addModule / removeItem (removes the selected item, else the active one). */
+/** Registers addForm / addMdiForm / addModule / removeItem (removes the selected item, else the active one). */
 export function registerProjectActions(ide: IdeState, actions: IdeActions, env: DesignerEnv): void {
   actions.addForm = () => addForm(ide, env);
+  actions.addMdiForm = () => addForm(ide, env, true);
   actions.addModule = () => addModule(ide, env);
   actions.removeItem = (id?: string) => { const t = id ?? ide.currentItemId(); if (t) removeItem(ide, t); };
 }

@@ -68,4 +68,7 @@ export interface Host {
   onEnd(): void;
   /** File I/O and SaveSetting (Open, Kill, Dir ...). Absent: those statements raise error 68, Device unavailable. */
   fileSystem?(): FileSystemApi | undefined;
+  /** `New T` of a host class (`Set f = New Form1`: a new instance of a form): what makes one, undefined for a name it does not
+   *  know. Asked when the New is reached (or the `As New` variable is declared), so it must be cheap and make nothing yet. */
+  objectFactory?(typeName: string): (() => VBObject) | undefined;
 }

@@ -13,7 +13,7 @@ import { CONTROL_TYPES } from '../model/controls';
 import { MENU_BAR_HEIGHT, isMenu } from '../model/menus';
 import { createMenuBar, type MenuBar, type MenuBarHost } from './menuBar';
 import { joinFields, splitFields } from '../model/fieldLines';
-import { dockEdge, isDocked } from '../model/geometry';
+import { dockEdge, isDocked, stackDocks, type Rect } from '../model/geometry';
 import { findListImage, type ImageLookup, type ImageSource } from '../model/imageList';
 import { parseBand } from '../model/coolbar';
 import { TBR_DROPDOWN, TBR_PLACEHOLDER, TBR_SEPARATOR, parseButton } from '../model/toolbar';
@@ -83,6 +83,8 @@ export interface FormSurface {
   setActive(active: boolean): void;
   /** The form's menu bar (its Menu controls go there, not into `views`). */
   menuBar: MenuBar;
+  /** The client area left by the docked controls (px, in clientEl): an MDI form's workspace. */
+  workArea(): Rect;
   /** The form closes: every control frees what it holds (Renderer.destroy). */
   dispose(): void;
 }
@@ -1691,7 +1693,11 @@ function gridImage(gx: number, gy: number): string {
 }
 
 export function renderFormSurface(form: { props: Record<string, PropValue>; controls: ControlDef[] }, mode: RenderMode, assets: AssetResolver,
-  opts: { showGrid?: boolean; gridX?: number; gridY?: number; menu?: MenuBarHost } = {}): FormSurface {
+  opts: { showGrid?: boolean; gridX?: number; gridY?: number; menu?: MenuBarHost;
+    /** An MDI child: its menus show in the MDI form's menu bar, so its own bar never shows (nor takes room). */
+    hideMenuBar?: boolean;
+    /** The client area or the docked controls changed (after the layout). */
+    onLayout?: () => void } = {}): FormSurface {
   const props: Record<string, PropValue> = { ...form.props };
   const get = (n: string): PropValue => (props[n] !== undefined ? props[n] : DEFAULTS.Form[n] ?? null);
   const num = (n: string): number => { const v = get(n); return typeof v === 'number' ? v : Number(v) || 0; };
@@ -1710,7 +1716,8 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
   // the menu bar sits between the title bar and the client area; when it appears or goes, the client area changes height
   let chromeReady = false;
   const menuBar = createMenuBar(el.ownerDocument, mode, opts.menu ?? { choose: () => {} }, () => { if (chromeReady) { layoutChrome(); dock(); bandsChanged(); } });
-  el.insertBefore(menuBar.el, clientEl);
+  if (!opts.hideMenuBar) el.insertBefore(menuBar.el, clientEl);
+  const menuShown = (): boolean => !opts.hideMenuBar && menuBar.visible;
 
   function buildTitleBar(): HTMLElement | null {
     const bs = num('BorderStyle');
@@ -1737,7 +1744,7 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
   }
 
   function layoutChrome(): void {
-    const m = formMetrics(props, menuBar.visible);
+    const m = formMetrics(props, menuShown());
     el.style.width = `${m.outerWidth}px`;
     el.style.height = `${m.outerHeight}px`;
     el.style.padding = `${m.border}px`;
@@ -1746,7 +1753,7 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
     clientEl.style.height = `${m.clientHeight}px`;
     titleBar?.remove();
     titleBar = buildTitleBar();
-    if (titleBar) el.insertBefore(titleBar, menuBar.el);
+    if (titleBar) el.insertBefore(titleBar, el.firstChild);
   }
 
   function patchClient(keys: Keys): void {
@@ -1770,18 +1777,31 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
     gridEl.style.backgroundSize = `${gx}px ${gy}px`;
   }
 
-  /** A StatusBar sits at the bottom edge of the form, full width; a Toolbar at the top (Align) or the bottom (it follows the form when it is resized). */
+  /** A StatusBar sits at the bottom edge of the form, full width; a Toolbar or CoolBar at the top (Align) or the bottom, a PictureBox
+   *  at the edge its Align names; they stack in z-order and follow the form when it is resized. */
+  let work: Rect = { left: 0, top: 0, width: 0, height: 0 };
   function dock(): void {
-    const m = formMetrics(props, menuBar.visible);
-    for (const [id, d] of defs) {
-      const v = views.get(id);
-      const edge = dockEdge(d);
-      if (!v || !edge || adopted.has(id)) continue;   // a control a CoolBar hosts sits in its band
-      const hPx = parseFloat(v.el.style.height) || twipsToPx(CONTROL_TYPES[d.type].defaultHeight);
-      v.el.style.left = '0px';
-      v.el.style.width = `${m.clientWidth}px`;
-      v.el.style.top = edge === 'top' ? '0px' : `${Math.max(0, m.clientHeight - hPx)}px`;
+    const m = formMetrics(props, menuShown());
+    const items: { key: string; edge: NonNullable<ReturnType<typeof dockEdge>>; size: number }[] = [];
+    for (const id of order) {
+      const d = defs.get(id), v = views.get(id);
+      const edge = d ? dockEdge(d) : null;
+      if (!d || !v || !edge || adopted.has(id)) continue;   // a control a CoolBar hosts sits in its band
+      const across = edge === 'left' || edge === 'right';
+      const size = across ? twipsToPx(typeof d.props.Width === 'number' ? d.props.Width : CONTROL_TYPES[d.type].defaultWidth)
+        : parseFloat(v.el.style.height) || twipsToPx(CONTROL_TYPES[d.type].defaultHeight);
+      items.push({ key: id, edge, size: d.props.Visible === false && mode === 'run' ? 0 : size });
     }
+    const r = stackDocks(items, m.clientWidth, m.clientHeight);
+    for (const [id, rc] of r.rects) {
+      const v = views.get(id)!, edge = dockEdge(defs.get(id)!);
+      v.el.style.left = `${rc.left}px`;
+      v.el.style.top = `${rc.top}px`;
+      v.el.style.width = `${rc.width}px`;
+      if (edge === 'left' || edge === 'right') v.el.style.height = `${rc.height}px`;
+    }
+    work = r.rest;
+    opts.onLayout?.();
   }
 
   // --- controls: a flat z-ordered list rendered as a tree by parentId, whatever order the array has ---
@@ -1872,6 +1892,7 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
 
   const surface: FormSurface = {
     el, clientEl, drawLayer, views, menuBar,
+    workArea: () => ({ ...work }),
     update(id, changed) {
       if (id !== 'form' && menuBar.has(id)) { menuBar.update(id, changed); return; }
       if (id !== 'form') {
@@ -1880,7 +1901,7 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
         views.get(id)?.update(changed);
         if (!d) return;
         if ('Align' in changed && !isDocked(d)) views.get(id)?.update({ Left: d.props.Left ?? 0, Top: d.props.Top ?? 0, Width: d.props.Width ?? 0, Height: d.props.Height ?? 0 });
-        if (isDocked(d)) dock();
+        if (isDocked(d) || 'Align' in changed) dock();
         if (d.type === 'ImageList') imagesChanged();
         if (d.type === 'CoolBar' || adopted.has(id) || ['Left', 'Top', 'Width', 'Height', 'Align'].some(k => k in changed)) bandsChanged();
         return;
@@ -1889,7 +1910,7 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
       Object.assign(props, changed);
       const chrome = ['Width', 'Height', 'BorderStyle', 'ControlBox', 'MinButton', 'MaxButton', 'Icon'];
       if (chrome.some(k => keys.has(k))) { layoutChrome(); dock(); bandsChanged(); }
-      else if (keys.has('Caption')) { const t = el.querySelector('.title-bar-text'); if (t) t.textContent = str('Caption'); }
+      else if (keys.has('Caption')) { const t = el.querySelector(':scope > .title-bar .title-bar-text'); if (t) t.textContent = str('Caption'); }
       patchClient(keys);
     },
     rename(id, name) {

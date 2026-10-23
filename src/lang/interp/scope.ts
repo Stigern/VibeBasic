@@ -216,7 +216,9 @@ export class ModuleScope {
   /** Lines where the program breaks (breakpoints and a Run To Cursor line); null when there are none. */
   breakpoints: Set<number> | null = null;
 
-  constructor(readonly name: string, readonly kind: 'form' | 'module', readonly ast: ModuleAst) {
+  /** `sourceName`: the module whose code this is, when it differs from `name` (another instance of a form, `New Form1`: its own
+   *  module-level variables; locations and breakpoints are the source module's). */
+  constructor(readonly name: string, readonly kind: 'form' | 'module', readonly ast: ModuleAst, readonly sourceName: string = name) {
     this.key = lc(name);
     this.ref = new ModuleRef(this);
     for (const c of ast.consts) this.consts.set(lc(c.name), new ConstSlot(c, this));
@@ -285,7 +287,7 @@ export class Frame {
   get rt(): Runtime { return this.run.rt; }
 
   location(): CodeLocation {
-    return { moduleName: this.module.name, procName: this.proc?.name ?? '', line: this.line };
+    return { moduleName: this.module.sourceName, procName: this.proc?.name ?? '', line: this.line };
   }
 }
 

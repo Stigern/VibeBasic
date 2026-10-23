@@ -23,9 +23,9 @@ const send = (p: FromPayload) => emit('vb:from', p).catch(() => {});
 /** One paint, but never stuck: WKWebView may pause rAF in a hidden (visible:false) window. */
 const frame = () => new Promise<void>(r => { requestAnimationFrame(() => r()); setTimeout(r, 50); });
 
-/** Our own Win98 title bars move the (undecorated) window. */
+/** Our own Win98 title bar moves the (undecorated) window (not those of the MDI children in an MDI form's workspace). */
 function markDragRegions(): void {
-  for (const el of root.querySelectorAll('.title-bar, .title-bar-text, .title-bar-icon')) el.setAttribute('data-tauri-drag-region', '');
+  for (const el of root.querySelectorAll('.title-bar, .title-bar-text, .title-bar-icon')) if (!el.closest('.vb-mdi-workspace')) el.setAttribute('data-tauri-drag-region', '');
 }
 
 /** WindowState: vbNormal 0, vbMinimized 1, vbMaximized 2. */
@@ -79,6 +79,7 @@ async function startForm(): Promise<void> {
 
   root.addEventListener('click', e => {
     const b = (e.target as Element).closest?.('.title-bar-controls button');
+    if (b?.closest('.vb-mdi-workspace, .vb-mdi-maxbox')) return;   // an MDI child's buttons: its workspace handles them
     const label = b?.getAttribute('aria-label');
     if (label === 'Minimize') void win.minimize();
     else if (label === 'Maximize') void win.toggleMaximize();

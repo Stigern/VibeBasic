@@ -7,6 +7,7 @@ import type { Program } from '../../lang/interp/program';
 import { Empty, Nothing, VBArray, VBRef, coerce, toBool, type VBValue } from '../../lang/values';
 import { formScaleSize } from '../../controls/render';
 import { CONTROL_TYPES, getPropDef } from '../../model/controls';
+import { formEvents, formHasProp, formObjectName, isMdiChild } from '../../model/mdi';
 import type { ControlDef, FormDef, PictureRef, PropValue } from '../../model/types';
 import type { FormHost, FormWindow } from '../formHost';
 import { localMedia } from '../mediaSource';
@@ -40,6 +41,10 @@ export interface FormSession {
   formActivated(form: FormInstance): Promise<void>;
   /** The form was hidden or unloaded: when it was the active one, the form below it becomes active. */
   formLeft(form: FormInstance, hidden: boolean): void;
+  /** The project's MDI form (null without one); its active child (MDIForm.ActiveForm) and its loaded children (newest first). */
+  mdiForm(): FormInstance | null;
+  mdiActiveChild(): FormInstance | null;
+  mdiChildren(): FormInstance[];
   pushModal(form: FormInstance): void;
   popModal(form: FormInstance): void;
   updateBlocked(): void;
@@ -68,6 +73,8 @@ const lc = (s: string): string => s.toLowerCase();
 const FORM_METHODS = new Set(['show', 'hide', 'refresh', 'move', 'setfocus', 'zorder', 'popupmenu']);
 /** Members every form has besides its registry properties: Controls, ActiveControl and Count (the number of controls). */
 const FORM_OBJECTS = new Set(['controls', 'activecontrol', 'count']);
+/** What only an MDI form has: ActiveForm (the active child) and Arrange. */
+const MDI_MEMBERS = new Set(['activeform', 'arrange']);
 let loadCounter = 0;
 const copyProps = (p: Record<string, PropValue>): Record<string, PropValue> =>
   Object.fromEntries(Object.entries(p).map(([k, v]) => [k, Array.isArray(v) ? [...v] : v]));
@@ -97,12 +104,26 @@ export class FormInstance implements VBObject {
   private readonly controlList = new ObjectList('Object', () => this.controls(), o => (o as ControlObject).name,
     n => new VBRuntimeError(730, `Control '${n}' not found`));
 
-  constructor(readonly def: FormDef, private s: FormSession) {
+  /** Show was asked for (an MDI child then does not show itself when its Load ends: AutoShowChildren). */
+  private showAsked = false;
+
+  /** `key`: the default instance has the form's name; another one (New Form1) a key of its own ("Form1:2"), which is also the
+   *  module its code runs in (Program.addFormInstance). */
+  constructor(readonly def: FormDef, private s: FormSession, readonly key: string = def.name) {
     this.controlNames = new Set(def.controls.map(c => lc(c.name)));
   }
 
   get name(): string { return this.def.name; }
-  get key(): string { return this.def.name; }
+  /** The project's MDI form (MDIForm), and an MDI child (MDIChild = True) shown in its workspace. */
+  get isMdi(): boolean { return this.def.mdi === true; }
+  get isMdiChild(): boolean { return isMdiChild(this.def); }
+  /** The name of the form's own events in its code: Form_Load, MDIForm_Load. */
+  private get objName(): string { return formObjectName(this.def); }
+
+  /** Runs `<Form|MDIForm>_<event>` of this instance. */
+  fireForm(event: string, args: VBRef[]): Promise<void> {
+    return this.s.fire(this.key, `${this.objName}_${event}`, args);
+  }
 
   /** The run-time mirror (built on first use, discarded on Unload: the next use starts from the design-time props). */
   private state(): FormState {
@@ -200,9 +221,12 @@ export class FormInstance implements VBObject {
 
   // -- life cycle ---------------------------------------------------------------------------------------------
 
-  /** Load: Form_Initialize then Form_Load. */
+  /** Load: Form_Initialize then Form_Load. An MDI child loads the MDI form first (error 366 without one) and, when the MDI form's
+   *  AutoShowChildren is True, shows itself once loaded. */
   load(): Promise<void> {
     if (this.loaded) return this.loadDone ?? Promise.resolve();
+    const parent = this.isMdiChild ? this.s.mdiForm() : null;
+    if (this.isMdiChild && !parent) throw new VBRuntimeError(366);
     this.loaded = true;
     this.loadOrder = ++loadCounter;
     const st = this.state();
@@ -212,10 +236,20 @@ export class FormInstance implements VBObject {
     // so a member access that loads the form runs Load nested in the accessing statement.
     // after Form_Load the Data controls open their recordsets (not waited for: the form shows meanwhile)
     const dataLoad = (): void => { if (this.loaded && !this.s.ended) for (const c of this.controls()) void c.formLoaded(); };
-    const runLoad = (): Promise<void> => (this.loaded && !this.s.ended ? this.s.fire(this.name, 'Form_Load', []).then(dataLoad) : Promise.resolve());
-    return this.loadDone = this.s.program.hasProcedure(this.name, 'Form_Initialize')
-      ? this.s.fire(this.name, 'Form_Initialize', []).then(runLoad)
-      : runLoad();
+    const runLoad = (): Promise<void> => (this.loaded && !this.s.ended ? this.fireForm('Load', []).then(dataLoad) : Promise.resolve());
+    const start = (): Promise<void> => (this.s.program.hasProcedure(this.key, `${this.objName}_Initialize`)
+      ? this.fireForm('Initialize', []).then(runLoad)
+      : runLoad());
+    if (!parent) return this.loadDone = start();
+    const done = (parent.loaded ? start() : parent.load().then(start)).then(() => {
+      if (this.loaded && !this.visible && !this.showAsked && !this.s.ended && parent.formProp('AutoShowChildren') !== false) void this.show(false);
+    });
+    return this.loadDone = done;
+  }
+
+  /** A property of the form as the program sees it now (the design-time value before Load). */
+  formProp(name: string): PropValue | undefined {
+    return (this.st?.form.props ?? this.def.props)[name];
   }
 
   /** VB6 loads a form when code touches one of its properties or controls (not its Public variables and procedures). */
@@ -224,9 +258,16 @@ export class FormInstance implements VBObject {
   }
 
   async show(modal: boolean): Promise<void> {
+    if (modal && (this.isMdi || this.isMdiChild)) throw new VBRuntimeError(403);   // MDI forms cannot be shown modally
+    this.showAsked = true;
     if (!this.loaded) await this.load();
     if (!this.loaded || this.s.ended) return;
     if (modal && this.visible) throw new VBRuntimeError(400, 'Form already displayed; can\'t show modally');
+    if (this.isMdiChild) {   // the MDI form shows first: the child shows in its workspace
+      const parent = this.s.mdiForm();
+      if (parent && (!parent.visible || !parent.hasWindow())) await parent.showForChild();
+      if (!parent?.hasWindow() || !this.loaded || this.s.ended) return;
+    }
     const wasVisible = this.visible;
     this.visible = true;
     this.state().form.props.Visible = true;
@@ -235,7 +276,7 @@ export class FormInstance implements VBObject {
       await this.opening;
       if (!this.window) return;
       if (modal) this.s.pushModal(this);
-      await this.s.fire(this.name, 'Form_Resize', []);
+      await this.fireForm('Resize', []);
     } else {
       if (!wasVisible) this.deliver({ t: 'show' });
       if (modal) this.s.pushModal(this);
@@ -245,9 +286,18 @@ export class FormInstance implements VBObject {
     if (modal && this.visible && this.loaded) await new Promise<void>(r => this.modalWaiters.push(r));
   }
 
+  /** The MDI form shows for a child (once, whatever the children waiting): resolves when its window is open (the child goes in
+   *  there), not after its Resize and Activate, so children show in the order they were asked to. */
+  async showForChild(): Promise<void> {
+    if (this.window) return;
+    if (!this.opening) void this.show(false);   // a loaded form sets `opening` at once
+    await this.opening;
+  }
+
   private async open(modal: boolean): Promise<void> {
     this.early = [];
-    const w = await this.s.formHost.openForm(this.snapshot(), { modal });
+    const parent = this.isMdiChild ? this.s.mdiForm() : null;
+    const w = await this.s.formHost.openForm(this.snapshot(), parent ? { modal, mdiParent: parent.key } : { modal });
     const early = this.early;
     this.early = null;
     this.opening = null;
@@ -271,19 +321,25 @@ export class FormInstance implements VBObject {
   async queryUnload(mode: number): Promise<boolean> {
     if (!this.loaded) return true;
     const cancel = new VBRef(0);
-    await this.s.fire(this.name, 'Form_QueryUnload', [cancel, new VBRef(mode)]);
+    await this.fireForm('QueryUnload', [cancel, new VBRef(mode)]);
     return !this.s.ended && !toBool(cancel.value);
   }
 
   /** QueryUnload(Cancel, UnloadMode) (unless `queried`: the app is quitting and asked every form first) then Unload(Cancel);
-   *  false when cancelled. UnloadMode: vbFormControlMenu 0, vbFormCode 1, vbAppWindows 2. */
+   *  false when cancelled. UnloadMode: vbFormControlMenu 0, vbFormCode 1, vbAppWindows 2, vbFormMDIForm 4 (an MDI child whose MDI
+   *  form unloads: the MDI form's QueryUnload, the children's QueryUnload, their Unload, then the MDI form's Unload, as in VB6). */
   async unload(mode: number, queried = false): Promise<boolean> {
     if (!this.loaded || this.unloading) return true;
     this.unloading = true;
     try {
       if (!queried && !(await this.queryUnload(mode))) return false;
+      if (this.isMdi) {   // the children first: every QueryUnload (UnloadMode vbFormMDIForm 4), then every Unload
+        const kids = this.s.mdiChildren();
+        for (const k of kids) if (!(await k.queryUnload(4))) return false;
+        for (const k of kids) if (!(await k.unload(4, true))) return false;
+      }
       const cancel2 = new VBRef(0);
-      await this.s.fire(this.name, 'Form_Unload', [cancel2]);
+      await this.fireForm('Unload', [cancel2]);
       if (this.s.ended || toBool(cancel2.value)) return false;
       if (this.st) await Promise.all(this.controls().map(c => c.beforeUnload()));   // Data controls save the bound changes
     } finally {
@@ -332,13 +388,13 @@ export class FormInstance implements VBObject {
 
   /** The events of a control that have code. */
   private handledEvents(d: ControlDef): string[] {
-    return CONTROL_TYPES[d.type].events.map(e => e.name).filter(e => this.s.program.hasProcedure(this.name, `${d.name}_${e}`));
+    return CONTROL_TYPES[d.type].events.map(e => e.name).filter(e => this.s.program.hasProcedure(this.key, `${d.name}_${e}`));
   }
 
   snapshot(): FormSnapshot {
     const st = this.state();
     const handled: Record<string, string[]> = {};
-    handled.form = CONTROL_TYPES.Form.events.map(e => e.name).filter(e => this.s.program.hasProcedure(this.name, `Form_${e}`));
+    handled.form = formEvents(this.def).map(e => e.name).filter(e => this.s.program.hasProcedure(this.key, `${this.objName}_${e}`));
     // the design-time controls and the visible elements made by Load (those without a view stay in the session)
     const design = new Set(this.def.controls.map(d => d.id));
     const controls = [...st.byId.values()].filter(c => design.has(c.def.id) || !CONTROL_TYPES[c.def.type].invisibleAtRuntime);
@@ -347,6 +403,7 @@ export class FormInstance implements VBObject {
       id: this.def.id, name: this.def.name, code: '',
       props: { ...copyProps(st.form.props), Visible: true },
       controls: controls.map(c => ({ ...c.def, props: copyProps(c.props) })),
+      ...(this.isMdi ? { mdi: true } : {}),
     };
     return { key: this.key, form, assets: this.s.assets, handled, mode: this.s.mode };
   }
@@ -358,11 +415,11 @@ export class FormInstance implements VBObject {
       case 'ready': this.s.queue.flush(); break;
       case 'focused': this.setActive(m.id); break;
       case 'activated': if (this.visible && !this.blocked) void this.s.formActivated(this); break;
-      case 'state': st.byId.get(m.id)?.applyState(m.props); break;
+      case 'state': (m.id === 'form' ? st.form : st.byId.get(m.id))?.applyState(m.props); break;   // 'form': an MDI child's WindowState
       case 'moved': st.form.applyState({ Left: m.left, Top: m.top }); break;
       case 'resized':
         st.form.applyState({ Width: m.width, Height: m.height });
-        void this.s.fire(this.name, 'Form_Resize', []);
+        void this.fireForm('Resize', []);
         break;
       case 'closeRequest': void this.unload(0); break;
       case 'event': {
@@ -371,7 +428,7 @@ export class FormInstance implements VBObject {
         if (m.state) target.applyState(m.state);
         if (m.event === 'GotFocus' && m.id !== 'form') this.setActive(m.id);
         const args = (m.id === 'form' ? m.args : target.eventArgs(m.event, m.args)).map(a => new VBRef(a));
-        const done = m.id === 'form' ? this.s.fire(this.name, `Form_${m.event}`, args) : this.fireControl(target, m.event, args);
+        const done = m.id === 'form' ? this.fireForm(m.event, args) : this.fireControl(target, m.event, args);
         if (m.requestId !== undefined) {
           const requestId = m.requestId, ref = args[args.length - 1];
           // KeyPress answers with the KeyAscii the code left; a menu's Click before it opens just says it has run
@@ -392,7 +449,7 @@ export class FormInstance implements VBObject {
   /** `<Name>_<Event>`; a control array element gets its Index as the first argument. */
   fireControl(c: ControlObject, event: string, args: VBRef[]): Promise<void> {
     const all = c.index !== null ? [new VBRef(c.index), ...args] : args;
-    return this.s.fire(this.name, `${c.name}_${event}`, all);
+    return this.s.fire(this.key, `${c.name}_${event}`, all);
   }
 
   /** VB6 raises some events when code sets a value (Text1.Text → Change, Check1.Value → Click …). */
@@ -400,7 +457,7 @@ export class FormInstance implements VBObject {
     const v = c.props[prop];
     const changed = v !== old;
     if (c.def.id === 'form') {
-      if ((prop === 'Width' || prop === 'Height') && changed && this.visible) void this.s.fire(this.name, 'Form_Resize', []);
+      if ((prop === 'Width' || prop === 'Height') && changed && this.visible) void this.fireForm('Resize', []);
       return;
     }
     let ev: string | null = null;
@@ -462,15 +519,16 @@ export class FormInstance implements VBObject {
   hasMember(name: string): boolean {
     const l = lc(name);
     if (this.controlNames.has(l) || l === 'scalewidth' || l === 'scaleheight' || l === 'name' || FORM_METHODS.has(l) || FORM_OBJECTS.has(l)) return true;
+    if (this.isMdi && MDI_MEMBERS.has(l)) return true;
     const pd = getPropDef('Form', name);
-    if (pd) return pd.runtime !== 'none';
+    if (pd) return pd.runtime !== 'none' && formHasProp(this.def, name);
     // Public variables are properties; Public Subs/Functions go through callMethod (they may wait)
     return this.publicMember(name) === 'var';
   }
 
   /** A Public variable or procedure of the form's code (not hiding the form's own properties and controls). */
   private publicMember(name: string): 'proc' | 'var' | null {
-    return this.s.program.hasPublicMember(this.name, name);
+    return this.s.program.hasPublicMember(this.key, name);
   }
 
   /** A Public member of the form's code that no property, control or built-in member of the form hides. Using one does not
@@ -478,18 +536,18 @@ export class FormInstance implements VBObject {
   private codeMember(name: string): 'proc' | 'var' | null {
     const l = lc(name);
     if (this.controlNames.has(l) || l === 'scalewidth' || l === 'scaleheight' || l === 'visible' || FORM_METHODS.has(l) || FORM_OBJECTS.has(l)
-      || getPropDef('Form', name)) return null;
+      || getPropDef('Form', name) || (this.isMdi && MDI_MEMBERS.has(l))) return null;
     return this.publicMember(name);
   }
 
   private callPublic(name: string, args: VBValue[]): Promise<VBValue> {
-    return this.s.program.callPublic(this.name, name, args);
+    return this.s.program.callPublic(this.key, name, args);
   }
 
   getMember(name: string, args: VBValue[]): VBValue {
     const pm = this.codeMember(name);
     if (pm === 'var') {
-      const v = this.s.program.getPublicVar(this.name, name);
+      const v = this.s.program.getPublicVar(this.key, name);
       return args.length && v instanceof VBArray ? v.get(args.map(a => Number(coerce(a, 'Long')))) : v;
     }
     // `x = Form2.GetCount` (no parentheses): the interpreter awaits a Promise from getMember
@@ -505,8 +563,14 @@ export class FormInstance implements VBObject {
       }
       return c;
     }
+    if (this.isMdi && l === 'activeform') {
+      if (args.length) throw new VBRuntimeError(450);
+      return this.s.mdiActiveChild() ?? Nothing;
+    }
+    if (this.isMdi && l === 'arrange') return this.callSync(l, args);
     if (l === 'scalewidth' || l === 'scaleheight') {
-      const sz = formScaleSize(st.form.props, [...st.byId.values()].some(c => c.def.type === 'Menu' && c.def.parentId === null && c.props.Visible !== false));
+      const menu = !this.isMdiChild && [...st.byId.values()].some(c => c.def.type === 'Menu' && c.def.parentId === null && c.props.Visible !== false);
+      const sz = formScaleSize(st.form.props, menu);
       return l === 'scalewidth' ? sz.width : sz.height;
     }
     if (l === 'visible') return this.visible;
@@ -516,16 +580,17 @@ export class FormInstance implements VBObject {
       if (args.length) throw new VBRuntimeError(450);
       return l === 'count' ? this.controls().length : this.activeControl();
     }
+    if (!formHasProp(this.def, name) && getPropDef('Form', name)) throw new VBRuntimeError(438);   // ScrollBars on a Form, KeyPreview on an MDIForm
     return st.form.getMember(name, args);
   }
 
   setMember(name: string, args: VBValue[], value: VBValue): void {
     if (this.codeMember(name) === 'var') {
       if (args.length) {
-        const arr = this.s.program.getPublicVar(this.name, name);
+        const arr = this.s.program.getPublicVar(this.key, name);
         if (!(arr instanceof VBArray)) throw new VBRuntimeError(13);
         arr.set(args.map(a => Number(coerce(a, 'Long'))), value);
-      } else this.s.program.setPublicVar(this.name, name, value);
+      } else this.s.program.setPublicVar(this.key, name, value);
       return;
     }
     this.autoLoad();
@@ -543,6 +608,8 @@ export class FormInstance implements VBObject {
       if (toBool(value)) void this.show(false); else this.hide();
       return;
     }
+    if (this.isMdi && l === 'activeform') throw new VBRuntimeError(383);
+    if (!formHasProp(this.def, name) && getPropDef('Form', name)) throw new VBRuntimeError(438);
     st.form.setMember(name, args, value);
   }
 
@@ -591,6 +658,14 @@ export class FormInstance implements VBObject {
     this.autoLoad();
     switch (l) {
       case 'hide': this.hide(); return Empty;
+      case 'arrange': {   // vbCascade 0, vbTileHorizontal 1, vbTileVertical 2, vbArrangeIcons 3
+        if (!this.isMdi) break;
+        const how = Number(coerce(args[0] ?? Empty, 'Long'));
+        if (how < 0 || how > 3) throw new VBRuntimeError(5);
+        this.s.queue.flush();
+        this.deliver({ t: 'mdiArrange', arrangement: how });
+        return Empty;
+      }
       case 'setfocus': case 'zorder': case 'refresh': return Empty;
       case 'show': void this.show(false); return Empty;
       case 'popupmenu': void this.popupMenu(args); return Empty;

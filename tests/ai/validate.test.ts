@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest';
 import { autoFixEventNames, validateCode } from '../../src/ai/validate';
 import { newControl, newForm, newProject } from '../../src/model/controls';
+import { newMdiForm } from '../../src/model/mdi';
 
 const form = () => {
   const f = newProject().forms[0];
@@ -362,4 +363,14 @@ test('the compile errors the run would raise at the call are found (review 08 fi
 
 test('vbUseDefault and the FirstWeekOfYear constants are known names (review 08 final #10)', () => {
   expect(inForm1(sub('    Debug.Print FormatNumber(0.5, 2, vbUseDefault), DatePart("ww", Now, vbMonday, vbFirstFourDays)'))).toEqual([]);
+});
+
+test('MDI: MDIForm_ events on the MDI form, New of a form, ActiveForm and Arrange', () => {
+  const p = newProject();
+  const mdi = newMdiForm('MDIForm1');
+  p.forms.push(mdi);
+  const check = (code: string) => validateCode(code, { moduleName: 'MDIForm1', form: mdi, project: p });
+  expect(check('Private Sub MDIForm_Load()\n    Dim f As New Form1\n    f.Show\n    Me.Arrange vbCascade\n    Debug.Print Me.ActiveForm.Name\nEnd Sub')).toEqual([]);
+  expect(check('Private Sub Form_Load()\nEnd Sub').join()).toContain('MDIForm_Load');
+  expect(check('Private Sub MDIForm_KeyPress(KeyAscii As Integer)\nEnd Sub').join()).toContain('no KeyPress event');
 });

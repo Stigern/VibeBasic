@@ -13,7 +13,7 @@ import {
   Empty, VBArray, VBRecord, VBRef, defaultValue, setDateTextFormatter, setDateTextParser, toNumber, type DateTextFormatter,
   type DateTextParser, type VBValue,
 } from '../values';
-import { EndSignal, SubCall, runGenerator, type ExecScope, type Gen } from './driver';
+import { EndSignal, SubCall, runGenerator, runSync, type ExecScope, type Gen } from './driver';
 import { constExpr } from './eval';
 import { RETRY, declareVariable, handleError, invokeProc, isStackOverflow, type BoundArg } from './exec';
 import { runImmediate } from './immediate';
@@ -355,7 +355,7 @@ export class Runtime {
     if (!m) return;
     const set = new Set(this.userBreakpoints.get(key));
     if (this.runTo?.key === key) set.add(this.runTo.line);
-    m.breakpoints = set.size ? set : null;
+    for (const x of this.moduleList) if (x === m || lc(x.sourceName) === key) x.breakpoints = set.size ? set : null;   // its form instances too
   }
 
   pauseIdle(): void {
@@ -503,37 +503,52 @@ export class Runtime {
   *ensureInit(run: Run): Gen<void> {
     if (this.initialized) return;
     this.initialized = true;
-    for (const m of this.moduleList) {
-      const f = new Frame(run, m, null, 0);
-      run.frames.push(f);
-      try {
-        for (const d of m.ast.variables) {
-          f.line = d.line;
-          let v: Variable;
-          for (;;) {
-            try {
-              v = yield* declareVariable(f, d);
-              break;
-            } catch (e) {
-              // no handlers at module level: reported (Continue retries) or ends the program
-              if ((yield* handleError(f, e)) !== RETRY) throw e;
-            }
-          }
-          m.vars.set(lc(d.name), v);
-          if (d.scope === 'public' && m.kind === 'module' && !this.globals.vars.has(lc(d.name))) {
-            this.globals.vars.set(lc(d.name), v);
+    for (const m of this.moduleList) yield* this.initModule(run, m);
+  }
+
+  /** Another instance of form module `source` (New Form1), under the key `name`; its variables are made before its first event. */
+  addFormInstance(source: string, name: string): void {
+    const src = this.modules.get(lc(source));
+    if (!src || src.kind !== 'form' || this.modules.has(lc(name))) return;
+    const m = new ModuleScope(name, 'form', src.ast, src.sourceName);
+    m.breakpoints = src.breakpoints;
+    this.modules.set(m.key, m);
+    this.moduleList.push(m);
+    // its Public variables are there at once (f.Counter = 1 before any event); declarations that would wait wait for its first event
+    if (this.initialized) try { runSync(this.initModule(this.declRun, m), () => { throw new Error('waits'); }); } catch { /* at its first event */ }
+  }
+
+  *initModule(run: Run, m: ModuleScope): Gen<void> {
+    const f = new Frame(run, m, null, 0);
+    run.frames.push(f);
+    try {
+      for (const d of m.ast.variables) {
+        f.line = d.line;
+        let v: Variable;
+        for (;;) {
+          try {
+            v = yield* declareVariable(f, d);
+            break;
+          } catch (e) {
+            // no handlers at module level: reported (Continue retries) or ends the program
+            if ((yield* handleError(f, e)) !== RETRY) throw e;
           }
         }
-        m.initialized = true;
-      } finally {
-        run.frames.pop();
+        m.vars.set(lc(d.name), v);
+        if (d.scope === 'public' && m.kind === 'module' && !this.globals.vars.has(lc(d.name))) {
+          this.globals.vars.set(lc(d.name), v);
+        }
       }
+      m.initialized = true;
+    } finally {
+      run.frames.pop();
     }
   }
 
   /** The root generator of an event: initialise modules, then call the handler. */
   *entry(run: Run, ref: ProcRef, args: VBRef[]): Gen<VBValue> {
     yield* this.ensureInit(run);
+    if (!ref.module.initialized) yield* this.initModule(run, ref.module);   // a form instance made after the start
     const bound: BoundArg[] = args.map(r => ({ slot: r }));
     return (yield new SubCall(invokeProc(run, ref, bound))) as VBValue;
   }
@@ -564,6 +579,9 @@ export class Program {
     const restore = this.rt.scope.activate();
     try { return fn(); } finally { restore(); }
   }
+
+  /** Another instance of a form's module (New Form1): its own module-level variables under `name`, the same code. */
+  addFormInstance(source: string, name: string): void { this.rt.addFormInstance(source, name); }
 
   hasProcedure(moduleName: string, procName: string): boolean {
     return this.rt.modules.get(lc(moduleName))?.procs.has(lc(procName)) ?? false;
@@ -678,7 +696,7 @@ export class Program {
     const rt = this.rt;
     if (rt.stopping) return;
     const err = e instanceof VBRuntimeError ? e : isStackOverflow(e) ? new VBRuntimeError(28) : internalError(e);
-    const at: CodeLocation = { moduleName: ref.module.name, procName: ref.proc.name, line: ref.proc.line };
+    const at: CodeLocation = { moduleName: ref.module.sourceName, procName: ref.proc.name, line: ref.proc.line };
     rt.err.setFrom(err);
     rt.eventsSuspended++;
     try {

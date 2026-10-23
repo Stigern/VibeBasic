@@ -3,6 +3,7 @@
 // rule stays silent when it is not sure (a name whose status is uncertain counts as known).
 import type { Expr, MissingArg, ModuleAst, Param, PrintItem, ProcDecl, Stmt, VBTypeName } from '../lang/ast';
 import { BUILTINS, CANONICAL_NAMES } from '../lang/builtins';
+import { formEvents, formObjectName } from '../model/mdi';
 import { compileProblems, type CheckModule } from '../lang/compileCheck';
 import { parseModuleLenient } from '../lang/parser';
 import { TYPE_KEYWORDS } from '../lang/parseStatements';
@@ -513,9 +514,11 @@ export function validateCode(code: string, ctx: ValidateContext): string[] {
       if (us <= 0 || us === p.name.length - 1) continue;
       const obj = p.name.slice(0, us), ev = p.name.slice(us + 1);
       if (!KNOWN_EVENTS.has(ev.toLowerCase())) continue;   // not event-shaped
-      const type: ControlType | undefined = obj.toLowerCase() === 'form' ? 'Form' : controls.get(obj.toLowerCase());
-      if (!type) report(`There is no control named ${obj}, so ${p.name} would never run.`);
-      else if (!eventsOf(type).has(ev.toLowerCase())) report(`A ${type} has no ${ev} event.`);
+      const formObj = formObjectName(ctx.form);   // MDIForm_Load on the MDI form
+      const type: ControlType | undefined = obj.toLowerCase() === formObj.toLowerCase() ? 'Form' : controls.get(obj.toLowerCase());
+      if (!type && ctx.form.mdi && obj.toLowerCase() === 'form') report(`The MDI form's own events are named MDIForm_<Event>: write MDIForm_${ev}, not ${p.name}.`);
+      else if (!type) report(`There is no control named ${obj}, so ${p.name} would never run.`);
+      else if (type === 'Form' ? !formEvents(ctx.form).some(e => lc(e.name) === lc(ev)) : !eventsOf(type).has(ev.toLowerCase())) report(`A${type === 'Form' && ctx.form.mdi ? 'n MDIForm' : ` ${type}`} has no ${ev} event.`);
       else {
         const decl = decls.get(lc(p.name));
         const headerOk = decl && !parsed.errors.some(e => e.line >= decl.line && e.line <= headerEnd(sourceLines, decl.line));
