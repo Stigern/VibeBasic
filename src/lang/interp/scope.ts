@@ -5,7 +5,7 @@ import type { ConstDecl, EnumDecl, ModuleAst, ProcDecl, TypeDecl, VBTypeName } f
 import type { CodeLocation, VBObject } from '../host';
 import type { Builtin } from '../builtins';
 import { VBRuntimeError } from '../errors';
-import { VBArray, VBRecord, coerce, type VBValue } from '../values';
+import { Nothing, NothingT, VBArray, VBRecord, coerce, fitFixed, type VBValue } from '../values';
 import type { Runtime } from './program';
 
 const LOWER = new Map<string, string>();
@@ -37,10 +37,21 @@ export class FieldSlot implements Slot {
   set value(v: VBValue) { setField(this.rt, this.record, this.key, v); }
 }
 
-/** Pads or truncates to a `String * n` length. */
-export function fitFixed(s: string, n: number): string {
-  return s.length >= n ? s.slice(0, n) : s.padEnd(n, ' ');
+/**
+ * The slot of `Dim x As New T`: reading it while it holds Nothing creates a new object first (VB6 auto-instantiation,
+ * also after `Set x = Nothing`).
+ */
+export class AutoNewSlot implements Slot {
+  private v: VBValue = Nothing;
+  constructor(private readonly create: () => VBValue) {}
+  get value(): VBValue {
+    if (this.v instanceof NothingT) this.v = this.create();
+    return this.v;
+  }
+  set value(v: VBValue) { this.v = v; }
 }
+
+export { fitFixed } from '../values';
 
 /** Converts `v` for storing in a slot of type `t`: records and arrays are copied (value semantics), then coerced. */
 export function storeValue(v: VBValue, t: VBTypeName, fixedLength?: number): VBValue {
@@ -62,6 +73,13 @@ export interface VarOptions {
 
 /** A named variable. `ref` may be shared with a caller (ByRef parameters). */
 export class Variable {
+  /**
+   * A Variant variable last assigned a number from a typed expression: that type (`v = CDbl(5)` is a Double for
+   * TypeName), valid while the variable still holds `subOf`.
+   */
+  sub?: VBTypeName | 'Decimal' = undefined;
+  subOf?: VBValue = undefined;
+
   constructor(
     readonly name: string,
     readonly type: VBTypeName,
@@ -248,6 +266,8 @@ export class Frame {
   handlerLabel = '';
   /** True while the `GoTo` handler runs (until Resume or the procedure ends); a new error then goes to the caller. */
   inHandler = false;
+  /** The last line number label (`20 x = 1`) passed, for `Erl`; 0 when there is none. */
+  lastLine = 0;
 
   constructor(
     readonly run: Run,

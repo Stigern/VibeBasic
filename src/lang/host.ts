@@ -18,6 +18,8 @@ import type { FileSystemApi } from './fileio/fsApi';
 export interface VBObject {
   readonly vbTypeName: string;            // "TextBox", "Form" …
   readonly defaultMember?: string;        // "Text" for TextBox, "Caption" for Label
+  /** Method arguments are passed as they are: an object argument is not turned into its default member (Collection.Add). */
+  readonly rawArgs?: boolean;
   hasMember(name: string): boolean;
   getMember(name: string, args: VBValue[]): VBValue;              // also indexed: List1.List(2)
   /** A Promise: the write finishes later and the statement waits for it. */

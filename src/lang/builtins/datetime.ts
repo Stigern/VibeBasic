@@ -5,7 +5,7 @@
 
 import { VBRuntimeError } from '../errors';
 import { plain } from '../interp/operators';
-import { Null, coerce, dateFrom, dateParts, toStr, type VBDate, type VBValue } from '../values';
+import { Null, coerce, dateFrom, dateParts, toSingle, toStr, type VBDate, type VBValue } from '../values';
 import { monthName, weekdayNameOf } from './format';
 import { def, intArg, isNullV, optInt } from './util';
 
@@ -24,9 +24,10 @@ def('Time', 0, 0, () => {
   const d = new Date();
   return date((d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()) / 86400);
 });
+/** Seconds since midnight as a Single (VB6: shown with 7 digits, e.g. 30896.12). */
 def('Timer', 0, 0, () => {
   const d = new Date();
-  return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() + d.getMilliseconds() / 1000;
+  return toSingle(d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() + d.getMilliseconds() / 1000);
 });
 
 // ---- parts ----

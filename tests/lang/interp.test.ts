@@ -184,7 +184,7 @@ describe('procedures', () => {
     expect(await run(lines(
       'Sub Main()', '  Dim a As Integer', '  a = 1', '  Bump a + 0', '  Bump (a)', '  Debug.Print a', 'End Sub',
       'Sub Bump(n As Integer)', '  n = 99', 'End Sub',
-    ))).toEqual([' 99 ']); // `Bump (a)` passes a ByRef: VB6's "parens force ByVal" is not modelled (Task 2 ruling)
+    ))).toEqual([' 1 ']); // `Bump (a)`: the parentheses make the argument an expression, a copy (as in VB6)
   });
 
   test('Optional parameters with defaults, Exit Sub/Function, Call', async () => {

@@ -250,7 +250,8 @@ export class Runtime {
     const info = this.typeInfo(typeName);
     const fields = new Map<string, VBValue>();
     for (const [k, fi] of info.fields) {
-      if (fi.isArray) fields.set(k, fi.bounds ? this.newArray(fi.type, fi.bounds, true) : this.unallocatedArray(fi.type));
+      if (fi.isArray && fi.fixedLength !== undefined) fields.set(k, VBArray.fixedString(fi.bounds ?? null, fi.fixedLength, !!fi.bounds));
+      else if (fi.isArray) fields.set(k, fi.bounds ? this.newArray(fi.type, fi.bounds, true) : this.unallocatedArray(fi.type));
       else fields.set(k, this.defaultFor(fi.type, fi.fixedLength));
     }
     return new VBRecord(info.decl.name, fields);
@@ -264,12 +265,13 @@ export class Runtime {
     return undefined;
   }
 
-  newArray(t: VBTypeName, bounds: [number, number][], fixed: boolean): VBArray {
-    return new VBArray(t, bounds, fixed, this.elementInit(t));
+  /** `init` makes each element (`Dim a(3) As New Collection`); by default the type's default value. */
+  newArray(t: VBTypeName, bounds: [number, number][], fixed: boolean, init?: () => VBValue): VBArray {
+    return new VBArray(t, bounds, fixed, init ?? this.elementInit(t));
   }
 
-  unallocatedArray(t: VBTypeName): VBArray {
-    return VBArray.unallocated(t, this.elementInit(t));
+  unallocatedArray(t: VBTypeName, init?: () => VBValue): VBArray {
+    return VBArray.unallocated(t, init ?? this.elementInit(t));
   }
 
   /** Initial value of a variable of type `t` (`String * n` starts as n spaces). */

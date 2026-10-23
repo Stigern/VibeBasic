@@ -142,7 +142,7 @@ export class Parser {
     if (level === 'not') {
       if (this.isKeyword('not')) {
         const t = this.advance();
-        return { kind: 'unary', op: 'not', operand: this.parseLevel(i), line: t.line };
+        return { kind: 'unary', op: 'not', operand: this.parseLevel(i), line: t.line, st: undefined, chk: 2, lo: -Infinity, hi: Infinity };
       }
       return this.parseLevel(i + 1);
     }
@@ -152,7 +152,7 @@ export class Parser {
       if (op === undefined || !level.ops.has(op)) return left;
       this.advance();
       const right = this.parseLevel(i + 1);
-      left = { kind: 'binary', op: op as BinaryOp, left, right, line: left.line };
+      left = { kind: 'binary', op: op as BinaryOp, left, right, line: left.line, st: undefined, chk: 2, lo: -Infinity, hi: Infinity };
     }
   }
 
@@ -161,7 +161,7 @@ export class Parser {
     const t = this.peek();
     if (t.kind === 'op' && t.text === '-') {
       this.advance();
-      return { kind: 'unary', op: 'neg', operand: this.parseUnary(), line: t.line };
+      return { kind: 'unary', op: 'neg', operand: this.parseUnary(), line: t.line, st: undefined, chk: 2, lo: -Infinity, hi: Infinity };
     }
     if (t.kind === 'op' && t.text === '+') {
       this.advance();
@@ -170,7 +170,7 @@ export class Parser {
     // `x = Not y`: Not in operand position (VB6 accepts this).
     if (this.isKeyword('not')) {
       this.advance();
-      return { kind: 'unary', op: 'not', operand: this.parseLevel(COMPARE_LEVEL), line: t.line };
+      return { kind: 'unary', op: 'not', operand: this.parseLevel(COMPARE_LEVEL), line: t.line, st: undefined, chk: 2, lo: -Infinity, hi: Infinity };
     }
     return this.parsePower();
   }
@@ -180,7 +180,7 @@ export class Parser {
     while (this.isOp('^')) {
       this.advance();
       const right = this.parsePowerOperand();
-      left = { kind: 'binary', op: '^', left, right, line: left.line };
+      left = { kind: 'binary', op: '^', left, right, line: left.line, st: undefined, chk: 2, lo: -Infinity, hi: Infinity };
     }
     return left;
   }
@@ -190,7 +190,7 @@ export class Parser {
     const t = this.peek();
     if (t.kind === 'op' && t.text === '-') {
       this.advance();
-      return { kind: 'unary', op: 'neg', operand: this.parsePowerOperand(), line: t.line };
+      return { kind: 'unary', op: 'neg', operand: this.parsePowerOperand(), line: t.line, st: undefined, chk: 2, lo: -Infinity, hi: Infinity };
     }
     if (t.kind === 'op' && t.text === '+') {
       this.advance();
@@ -231,8 +231,9 @@ export class Parser {
     switch (t.kind) {
       case 'number':
         this.advance();
-        return t.suffix
-          ? { kind: 'number', value: t.value as number, suffix: t.suffix, line: t.line }
+        if (t.suffix) return { kind: 'number', value: t.value as number, suffix: t.suffix, line: t.line };
+        return t.text[0] !== '&' && /[.eE]/.test(t.text)
+          ? { kind: 'number', value: t.value as number, isDouble: true, line: t.line }
           : { kind: 'number', value: t.value as number, line: t.line };
       case 'string':
         this.advance();
@@ -248,11 +249,17 @@ export class Parser {
           this.advance();
           const inner = this.parseExpression();
           this.expectOp(')');
-          return inner;
+          return parenthesised(inner);
         }
         if (t.text === '.') {
           this.advance();
           return { kind: 'withMember', name: this.parseMemberName(), line: t.line };
+        }
+        if (t.text === '!' && (this.peek(1).kind === 'ident' || this.peek(1).kind === 'keyword')) {
+          // `!Name` inside `With rs`: `rs("Name")`, the default member of the With object with the name as a string
+          this.advance();
+          const name: Expr = { kind: 'string', value: this.parseMemberName(), line: t.line };
+          return { kind: 'call', target: { kind: 'withObject', line: t.line }, args: [name], line: t.line };
         }
         break;
       case 'keyword': {
@@ -270,7 +277,10 @@ export class Parser {
           const n = this.peek();
           if (n.kind !== 'ident') this.fail('Expected: class name');
           this.advance();
-          return { kind: 'new', typeName: stripSuffix(n), line: t.line };
+          let typeName = stripSuffix(n);
+          // `New ADODB.Recordset`: a library-qualified class name
+          while (this.isOp('.') && this.peek(1).kind === 'ident') { this.advance(); typeName += '.' + this.advance().text; }
+          return { kind: 'new', typeName, line: t.line };
         }
         if (KEYWORD_NAMES.has(w)) {
           this.advance();
@@ -286,6 +296,14 @@ export class Parser {
     return t.suffix
       ? { kind: 'name', name: stripSuffix(t), suffix: t.suffix as TypeSuffix, line: t.line }
       : { kind: 'name', name: t.text, line: t.line };
+  }
+}
+
+/** `(e)`: a name, member, call/index or With member in its own parentheses is marked as a value (see `paren` in ast.ts). */
+export function parenthesised(e: Expr): Expr {
+  switch (e.kind) {
+    case 'name': case 'member': case 'call': case 'withMember': return { ...e, paren: true };
+    default: return e;
   }
 }
 

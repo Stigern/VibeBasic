@@ -1,6 +1,6 @@
 // Variable values of the frame stopped in break mode, as short text (for the AI's error fix request).
 
-import { EmptyT, NothingT, NullT, VBArray, VBRecord, isObject, toStr, vbTypeName, type VBValue } from '../values';
+import { EmptyT, NothingT, NullT, VBArray, VBRecord, isObject, maybeSingle, single7, toStr, vbTypeName, type VBValue } from '../values';
 import type { Frame } from './scope';
 
 /** Longest string value shown (longer ones are cut and end with `...`). */
@@ -28,7 +28,8 @@ function short(v: VBValue, depth: number): string {
   if (isObject(v)) {
     const items = depth === 0 && v.items ? v.items() : null;
     if (!items) return v.vbTypeName;
-    return `${v.vbTypeName} (${items.length} items)${items.length ? `: ${items.slice(0, FIRST).map(x => x.vbTypeName).join(', ')}${items.length > FIRST ? ', ...' : ''}` : ''}`;
+    const item = (x: VBValue) => (isObject(x) ? x.vbTypeName : short(x, depth + 1));   // a Collection holds any values
+    return `${v.vbTypeName} (${items.length} items)${items.length ? `: ${items.slice(0, FIRST).map(item).join(', ')}${items.length > FIRST ? ', ...' : ''}` : ''}`;
   }
   try { return toStr(v); } catch { return vbTypeName(v); }
 }
@@ -46,7 +47,10 @@ export function snapshotVariables(frame: Frame | undefined): { name: string; val
     if (v.opts.isConst || seen.has(key)) continue;   // a local hides a module variable of the same name
     seen.add(key);
     let value: string;
-    try { value = short(v.value, 0); } catch { value = '?'; }
+    try {
+      const x = v.value;
+      value = short(v.type === 'Single' && maybeSingle(x) ? single7(x) : x, 0);   // a Single as VB6 shows it
+    } catch { value = '?'; }
     out.push({ name: v.name, value });
   }
   return out;

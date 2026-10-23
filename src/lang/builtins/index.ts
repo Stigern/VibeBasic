@@ -6,7 +6,7 @@
 
 import { VBRuntimeError } from '../errors';
 import { VBArray, toNumber, type VBValue } from '../values';
-import { def } from './util';
+import { BUILTINS, def } from './util';
 
 export { BUILTINS, CANONICAL_NAMES, CONSTANTS, def } from './util';
 export type { Builtin, BuiltinCtx } from './util';
@@ -34,3 +34,17 @@ import './misc';
 import './files';
 import './constants';
 import './err';
+
+/**
+ * Numeric built-ins get a Single argument as its exact value (Sqr(s), CDbl(s) as in VB6); the others (CStr, Left,
+ * MsgBox, IIf ...) get its 7 shown digits (see interp/staticTypes.ts `shown`).
+ */
+for (const n of [
+  'abs', 'sgn', 'int', 'fix', 'sqr', 'log', 'exp', 'sin', 'cos', 'tan', 'atn', 'round', 'hex', 'oct', 'rnd', 'randomize',
+  'cint', 'clng', 'cdbl', 'csng', 'ccur', 'cbyte', 'cbool', 'cdate', 'cdec', 'cverr', 'year', 'month', 'day', 'hour', 'minute',
+  'second', 'weekday', 'dateserial', 'timeserial', 'dateadd', 'datediff', 'datepart', 'monthname', 'weekdayname', 'rgb', 'qbcolor',
+  'space', 'chr', 'chrw', 'lbound', 'ubound',
+]) {
+  const b = BUILTINS.get(n);
+  if (b) b.num = true;
+}

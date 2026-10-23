@@ -41,7 +41,7 @@ const KEYWORD_SPELLING: Record<string, string> = {
 };
 
 /** Names that are neither keywords nor registered built-ins but have a fixed VB6 spelling. */
-const EXTRA_NAMES = ['Debug', 'Print', 'Tab', 'Spc'];
+const EXTRA_NAMES = ['Debug', 'Print', 'Tab', 'Spc', 'LSet', 'RSet'];
 
 /** Identifiers that are keywords inside a file statement (VB6 colours them): the statement word, and Open's clauses. */
 const FILE_STATEMENT_WORDS = new Set(['print', 'write', 'input', 'get', 'put', 'seek']);
@@ -215,7 +215,8 @@ function prettifyPhysicalLine(line: string, known: Map<string, string>): string 
           sep = prev.kind === 'op' && prev.text !== ')' ? ' ' : orig === '' ? '' : ' ';
           break;
         case '(':
-          if (prev.kind === 'keyword') sep = CALL_KEYWORDS.has(prev.text.toLowerCase()) ? '' : ' ';
+          // `As Integer()` (a Function returning an array) has no space, like a call
+          if (prev.kind === 'keyword') sep = CALL_KEYWORDS.has(prev.text.toLowerCase()) || kw(tokens[i - 2], 'as') ? '' : ' ';
           else if (prev.kind === 'ident') sep = prevHead && !assignsElement(tokens, i) ? (orig === '' ? '' : ' ') : '';
           else if (isOp(prev, ')')) sep = orig === '' ? '' : ' ';
           break;

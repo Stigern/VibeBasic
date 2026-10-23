@@ -1,6 +1,6 @@
 import { VBSyntaxError } from './errors';
 import { tokenize } from './lexer';
-import { Parser } from './exprParser';
+import { Parser, parenthesised } from './exprParser';
 import type { Token } from './tokens';
 import type {
   ArrayBound, CaseTest, CompareOp, ConstDecl, DebugPrintStmt, EnumDecl, Expr, IfBranch, MissingArg,
@@ -247,7 +247,8 @@ export class StatementParser extends Parser {
       this.advance();
       return { kind: 'label', name: String(t.value), line: t.line };
     }
-    if (t.kind === 'op' && t.text === '.') return this.assignOrCall();
+    // `.Method`, `.Prop = x` and `!Field = x` inside a With block
+    if (t.kind === 'op' && (t.text === '.' || t.text === '!')) return this.assignOrCall();
     if (t.kind === 'ident') return this.identStatement(t);
     if (t.kind === 'keyword') return this.keywordStatement(t);
     return this.fail(t.kind === 'eof' || t.kind === 'newline' ? 'Expected: expression' : 'Syntax error');
@@ -280,6 +281,13 @@ export class StatementParser extends Parser {
       if (w === 'name' && !(n.kind === 'op' && (n.text === '=' || n.text === '.'))) {
         const s = this.nameStatement();
         if (s) return s;
+      }
+      if ((w === 'lset' || w === 'rset') && (n.kind === 'ident' || n.kind === 'keyword' || (n.kind === 'op' && n.text === '.'))) {
+        // `LSet s = "ab"`, `RSet .Name = x`
+        this.advance();
+        const target = this.target();
+        this.expectOp('=');
+        return { kind: w, target, value: this.parseExpression(), line: t.line };
       }
       if (UNSUPPORTED_IDENTS[w] && !(n.kind === 'op' && (n.text === '=' || n.text === '.'))) {
         if (w === 'line' && n.kind === 'ident' && n.text.toLowerCase() === 'input') this.unsupported('Line Input');
@@ -443,7 +451,14 @@ export class StatementParser extends Parser {
           return this.fail(this.procKind === 'sub' ? 'Expected: End Sub' : 'Expected: End Function');
         }
         return this.fail('Invalid inside procedure');
-      case 'me': case 'date': case 'string': case 'error': case 'empty': case 'null':
+      case 'error':
+        // `Error 7`: raises error 7 (the Error statement); `Error(7)` as an expression is the function
+        if (!this.isOp('=', 1) && !this.atEnd1()) {
+          this.advance();
+          return { kind: 'error', number: this.parseExpression(), line: t.line };
+        }
+        return this.assignOrCall();
+      case 'me': case 'date': case 'string': case 'empty': case 'null':
         return this.assignOrCall();
     }
     return this.fail('Syntax error');
@@ -461,6 +476,17 @@ export class StatementParser extends Parser {
     if (this.isOp('=')) {
       if (!this.isLvalue(head)) this.fail('Syntax error', start);
       this.advance();
+      if (head.kind === 'call' && head.target.kind === 'name' && /^midb?$/i.test(head.target.name)) {
+        // the Mid statement: `Mid(s, 3, 2) = "xy"`
+        const [target, from, length] = head.args;
+        if (head.args.length < 2 || head.args.length > 3 || target.kind === 'missing' || from.kind === 'missing' || length?.kind === 'missing'
+          || !this.isLvalue(target)) {
+          this.fail('Syntax error', start);
+        }
+        const s: Stmt = { kind: 'mid', target, start: from, value: this.parseExpression(), line: start.line };
+        if (length) s.length = length;
+        return s;
+      }
       return { kind: 'assign', target: head, value: this.parseExpression(), isSet: false, line: start.line };
     }
     if (!this.isLvalue(head)) this.fail('Syntax error', start);
@@ -474,7 +500,9 @@ export class StatementParser extends Parser {
     if (head.kind === 'call') {
       target = head.target;
       args = head.args;
-      // `Foo (x), y`: the parenthesis was only the first argument's
+      // `Foo (x)` / `Foo (x), y` without Call: the parentheses are the first argument's own, so it is a value (a ByRef
+      // parameter gets a copy, as in VB6)
+      if (!explicitCall && args.length === 1 && args[0].kind !== 'missing') args = [parenthesised(args[0])];
       if (this.isOp(',') && args.length === 1 && args[0].kind !== 'missing') {
         this.advance();
         args = [...args, ...this.parseArgList(false)];
@@ -1146,7 +1174,11 @@ export class StatementParser extends Parser {
       p.name = baseName(nameTok);
       if (kind === 'function' && nameTok.suffix) p.returnType = SUFFIX_TYPES[nameTok.suffix];
       p.params = this.params();
-      if (kind === 'function' && this.isKeyword('as')) p.returnType = this.parseAsClause().type;
+      if (kind === 'function' && this.isKeyword('as')) {
+        p.returnType = this.parseAsClause().type;
+        // `Function Nums() As Integer()`: returns an array
+        if (this.isOp('(') && this.isOp(')', 1)) { this.advance(); this.advance(); p.returnsArray = true; }
+      }
       this.expectEnd();
     } catch (e) {
       // collect mode: keep going so the body is still checked

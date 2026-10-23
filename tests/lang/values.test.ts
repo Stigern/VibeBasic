@@ -83,8 +83,10 @@ test('string to number parsing', () => {
   expect(toNumber('1.5E2')).toBe(150);
 });
 test('bad strings are type mismatch', () => {
-  for (const s of ['', ' ', 'abc', '1,5', '12abc', '&H', '&HZZ', '1.2.3', '--1', '&H123456789'])
+  for (const s of ['', ' ', 'abc', '12abc', '&H', '&HZZ', '1.2.3', '--1', '&H123456789', ',5', '5,', '$', '$1$', '(-1)', '-1-'])
     expect(() => toNumber(s)).toThrow(err(13));
+  // VB6 skips thousands separators between digits (en-US): "1,5" is 15
+  expect(toNumber('1,5')).toBe(15);
 });
 test('coerce string to typed numbers', () => {
   expect(coerce(' &H10 ', 'Integer')).toBe(16);
