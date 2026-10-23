@@ -33,6 +33,7 @@ import type { RichControl, RichHost } from './richControl';
 import { MciControl, MediaPlayerControl } from './mediaControls';
 import { AgentControl } from './agentControl';
 import { DataControl, type DataConsumer, type DataHost } from '../data/dataControl';
+import { RecordsetObject } from '../data/recordset';
 import type { DbSession } from '../data/dbSession';
 import { DataGridControl } from '../data/dataGrid';
 import { DataListControl } from '../data/dataList';
@@ -79,6 +80,8 @@ export interface RunContext {
   comm?(): CommSession;
   /** SysInfo: the system's state; null (or absent) when the host cannot tell. */
   system?(): SystemApi | null;
+  /** Runs `fn` with the program's locale current (dates shown by data binding after an await). */
+  inProgramScope?<T>(fn: () => T): T;
 }
 
 /** The property a control shows a bound field in (DataSource / DataField). */
@@ -304,6 +307,7 @@ export class ControlObject implements VBObject, DataConsumer {
       resolvePath: p => this.ctx.resolveDbPath?.(p) ?? p,
       consumers: () => this.ctx.controls?.() ?? [],
       msgBox: (p, b, t) => this.ctx.msgBox?.(p, b, t) ?? Promise.resolve(1),
+      inScope: fn => (this.ctx.inProgramScope ? this.ctx.inProgramScope(fn) : fn()),
     };
   }
 
@@ -791,8 +795,15 @@ export class ControlObject implements VBObject, DataConsumer {
     if (this.rich?.set) {
       if (args.length) throw new VBRuntimeError(450);
       // the object itself, not its default member: the ImageList a control names, the ComboItem SelectedItem becomes
-      const r = this.rich.set(pd.name, IMAGE_REFS.has(pd.name) || pd.name === 'SelectedItem' ? value : this.plain(value));
+      const r = this.rich.set(pd.name, IMAGE_REFS.has(pd.name) || DATA_REFS.has(pd.name) || pd.name === 'SelectedItem' || pd.name === 'Recordset' ? value : this.plain(value));
       if (r !== false) return r === true ? undefined : r;
+    }
+    if (this.rich instanceof DataGridControl && pd.name === 'DataSource') {
+      // Set DataGrid1.DataSource = rs: a recordset made in code is shown as it is; anything else names a data control
+      if (args.length) throw new VBRuntimeError(450);
+      const free = value instanceof RecordsetObject && !(value.owner instanceof DataControl) ? value : null;
+      if (free) { this.props.DataSource = ''; this.rich.bindRecordset(free); return; }
+      this.rich.bindRecordset(null);
     }
     if (this.chart && this.chartSet(pd, args, value)) return;
     if (pd.name === 'SelectedItem') {
@@ -1027,9 +1038,11 @@ export class ControlObject implements VBObject, DataConsumer {
       if (value === Nothing || value === Empty) return '';
       if (value instanceof ControlObject && value.def.type === 'ImageList') return value.def.name;
     }
-    if (DATA_REFS.has(pd.name)) {   // Set Text1.DataSource = Adodc1
+    if (DATA_REFS.has(pd.name)) {   // Set Text1.DataSource = Adodc1 (or its Recordset: the same)
       if (value === Nothing || value === Empty) return '';
       if (value instanceof ControlObject && value.dataSource()) return value.def.name;
+      if (value instanceof RecordsetObject && value.owner instanceof DataControl) return value.owner.name;
+      if (value instanceof RecordsetObject) throw new VBRuntimeError(13);   // only a DataGrid shows a recordset of its own
     }
     const v = this.plain(value);
     switch (pd.kind) {

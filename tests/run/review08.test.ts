@@ -7,6 +7,21 @@ import type { ControlType, Project, PropValue } from '../../src/model/types';
 import { InlineFormHost } from '../../src/run/inlineFormHost';
 import { RunSession, type SessionCallbacks } from '../../src/run/session';
 import { FakeDb } from './fakeDb';
+import { compileCriteria } from '../../src/run/data/criteria';
+import { localeDateParser } from '../../src/lang/builtins/format';
+import { setDateTextParser, type VBValue } from '../../src/lang/values';
+
+/** People(ID, Name NOT NULL, Age, Born DATE) and Orders(ID, Item, PersonID) in /app/people.db. */
+function peopleDb(): FakeDb {
+  const db = new FakeDb();
+  db.db('/app/people.db').exec(`CREATE TABLE People (ID INTEGER PRIMARY KEY, Name TEXT NOT NULL, Age INTEGER, Born DATE);
+    INSERT INTO People (Name, Age, Born) VALUES ('Ann', 31, '2000-01-02'), ('Bob', 42, '1981-03-04'), ('Cid', 25, '1999-12-31');
+    CREATE TABLE Orders (ID INTEGER PRIMARY KEY, Item TEXT, PersonID INTEGER);
+    INSERT INTO Orders (Item, PersonID) VALUES ('pen', 1), ('ink', 2), ('cup', 3);`);
+  return db;
+}
+const count = (db: FakeDb, table: string) => (db.db('/app/people.db').prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+const nav = (name: string, dir: string) => elOf(name).querySelector<HTMLElement>(`[data-nav="${dir}"]`)!.click();
 
 type C = [Exclude<ControlType, 'Form'>, string, Record<string, PropValue>?, number?];
 function project(forms: { name: string; code: string; controls?: C[]; props?: Record<string, PropValue> }[]): Project {
@@ -39,7 +54,9 @@ afterEach(() => { if (session && session.state !== 'ended') session.end(); sessi
 
 async function start(p: Project, cb: Partial<SessionCallbacks> = {}, backend?: unknown): Promise<RunSession> {
   current = p;
-  session = new RunSession(p, new InlineFormHost(container, backend as Backend | undefined), {
+  const host = new InlineFormHost(container, backend as Backend | undefined);
+  host.runtimeErrorBox = async info => { out.push(`ERR ${info.number} ${info.description}`); return 'end'; };
+  session = new RunSession(p, host, {
     debugPrint: t => { out.push(t); }, onBreak: async () => 'end', onEnded: () => { ended++; },
     readFile: async () => { throw new Error('ENOENT'); }, appPath: '/app', ...cb,
   }, 'ide');
@@ -262,5 +279,85 @@ End Sub`, controls: [['ComboBox', 'Combo1'], ['CommandButton', 'cmdOK']] }]));
     t.dispatchEvent(new Event('input', { bubbles: true }));
     click('cmdOK'); await settle(s);
     expect(out).toEqual(['1 banana', '-1 cherry']);
+  });
+  test('3: ADO drops a new record the user never touched (no blank row, no 3314)', async () => {
+    const db = peopleDb();
+    const s = await start(project([{ name: 'Form1', code: `Private Sub Adodc1_Error(ByVal ErrorNumber As Long, Description As String, ByVal Scode As Long, ByVal Source As String, ByVal HelpFile As String, ByVal HelpContext As Long, fCancelDisplay As Boolean)
+  Debug.Print "err " & ErrorNumber: fCancelDisplay = True
+End Sub
+Private Sub Command1_Click(): Unload Me: End Sub`, controls: [
+      ['Adodc', 'Adodc1', { ConnectionString: 'Data Source=people.db', RecordSource: 'People', EOFAction: 2 }],
+      ['TextBox', 'Text1', { DataSource: 'Adodc1', DataField: 'Name' }], ['CommandButton', 'Command1']] }]), {}, db);
+    nav('Adodc1', 'last'); await settle(s);
+    nav('Adodc1', 'next'); await settle(s);   // AddNew
+    nav('Adodc1', 'previous'); await settle(s);
+    nav('Adodc1', 'next'); await settle(s);   // AddNew again, then Unload
+    click('Command1'); await settle(s);
+    expect(out).toEqual([]);
+    expect(count(db, 'People')).toBe(3);
+    expect(db.calls.some(c => c.includes('INSERT'))).toBe(false);
+    expect(s.state).toBe('ended');
+  });
+
+  test('4: an edit on a read-only (join) recordset reports 3027 once and the user can still move', async () => {
+    const db = peopleDb();
+    const s = await start(project([{ name: 'Form1', code: `Private Sub Data1_Error(DataErr As Integer, Response As Integer)
+  Debug.Print "err " & DataErr: Response = 0
+End Sub
+Private Sub Data1_Reposition(): Debug.Print "at " & Text1.Text & " " & Text1.DataChanged: End Sub`, controls: [
+      ['Data', 'Data1', { DatabaseName: 'people.db', RecordSource: 'SELECT o.Item, p.Name FROM Orders o INNER JOIN People p ON p.ID = o.PersonID ORDER BY o.ID' }],
+      ['TextBox', 'Text1', { DataSource: 'Data1', DataField: 'Item' }]] }]), {}, db);
+    const t = inputOf('Text1');
+    t.value = 'pencil';
+    t.dispatchEvent(new Event('input', { bubbles: true }));
+    nav('Data1', 'next'); await settle(s);
+    nav('Data1', 'next'); await settle(s);
+    expect(out).toEqual(['at pen False', 'err 3027', 'at ink False', 'at cup False']);
+  });
+
+  test('11: bound controls and the DataGrid show dates as CStr does (the program locale), also after a move', async () => {
+    const db = peopleDb();
+    const s = await start(project([{ name: 'Form1', code: `Private Sub Data1_Reposition()
+  Debug.Print Text2.Text & "|" & CStr(Data1.Recordset!Born)
+End Sub`, controls: [
+      ['Data', 'Data1', { DatabaseName: 'people.db', RecordSource: 'People' }],
+      ['TextBox', 'Text2', { DataSource: 'Data1', DataField: 'Born' }],
+      ['DataGrid', 'DataGrid1', { DataSource: 'Data1' }]] }]), {}, db);
+    nav('Data1', 'next'); await settle(s);
+    expect(out.length).toBe(2);
+    for (const line of out) { const [a, b] = line.split('|'); expect(a).toBe(b); }
+    const born = out[1].split('|')[1];
+    expect(born).not.toBe('1981-03-04');
+    expect(elOf('DataGrid1').textContent).toContain(born);
+  });
+
+  test('12: #date# in criteria is m/d/y whatever the locale', () => {
+    const prev = setDateTextParser(localeDateParser('en-GB'));
+    try {
+      const test = compileCriteria('Born = #01/02/2000#');
+      const field = (serial: number) => (): VBValue => ({ kind: 'date', serial });
+      expect(test(field(36527))).toBe(true);    // 2 January 2000
+      expect(test(field(36557))).toBe(false);   // 1 February 2000
+    } finally { setDateTextParser(prev); }
+  });
+
+  test('18: recordsets made in code bound to a DataGrid and a data control', async () => {
+    const db = peopleDb();
+    const s = await start(project([{ name: 'Form1', code: `Private Sub Command1_Click()
+  Dim rs As Object
+  Set rs = Adodc1.Recordset.ActiveConnection.Execute("SELECT * FROM People WHERE Age > 30 ORDER BY ID")
+  Set DataGrid1.DataSource = rs
+  rs.MoveNext
+  Debug.Print DataGrid1.ApproxCount & " " & DataGrid1.Row & " " & DataGrid1.Text
+  Set DataGrid1.DataSource = Adodc1.Recordset
+  Debug.Print CStr(DataGrid1.ApproxCount)
+  Set Data1.Recordset = Data1.Database.OpenRecordset("SELECT * FROM People WHERE Age < 30")
+  Debug.Print Text1.Text & " " & Data1.Recordset.RecordCount
+End Sub`, controls: [
+      ['Adodc', 'Adodc1', { ConnectionString: 'Data Source=people.db', RecordSource: 'People' }],
+      ['Data', 'Data1', { DatabaseName: 'people.db', RecordSource: 'People' }],
+      ['DataGrid', 'DataGrid1'], ['TextBox', 'Text1', { DataSource: 'Data1', DataField: 'Name' }], ['CommandButton', 'Command1']] }]), {}, db);
+    click('Command1'); await settle(s);
+    expect(out).toEqual(['2 1 2', '3', 'Cid 1']);
   });
 });

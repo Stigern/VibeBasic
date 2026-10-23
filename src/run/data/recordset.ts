@@ -299,6 +299,15 @@ export class RecordsetObject implements VBObject {
     if (i !== undefined && this.columns[i].target === null) throw new VBRuntimeError(3164);
   }
 
+  /** The fields (by name) can be written: the recordset is updatable and each one is a column of its table. */
+  canWrite(names: string[]): boolean {
+    if (this.closed || this.readOnly || !this.table) return false;
+    return names.every(n => {   // an unknown name is left to setValues (3265)
+      const c = this.columns.find(col => col.name.toLowerCase() === n.toLowerCase());
+      return c === undefined || c.target !== null;
+    });
+  }
+
   /** Field.Value = v. DAO needs Edit / AddNew first (3020); ADO starts the edit. */
   setField(i: number, value: VBValue): void {
     this.checkWritable(i);
@@ -372,11 +381,18 @@ export class RecordsetObject implements VBObject {
     this.owner?.rowsChanged(this);
   }
 
-  /** Before a move: ADO saves an edit in progress, DAO drops it. */
+  /** Before a move: ADO saves an edit in progress, DAO drops it. A new record nothing was put in is dropped (no blank row). */
   private async settle(): Promise<void> {
     if (this.editMode === 0) return;
-    if (this.flavor === 'ado') await this.commit();
+    if (this.flavor === 'ado' && !this.dropEmptyAdd()) await this.commit();
     else { this.editMode = 0; this.buffer.clear(); }
+  }
+
+  /** AddNew without a value set: the new record is dropped (true), as VB6 does on a move or an Unload. */
+  dropEmptyAdd(): boolean {
+    if (this.editMode !== 2 || this.buffer.size > 0) return false;
+    this.editMode = 0;
+    return true;
   }
 
   // -- moving -------------------------------------------------------------------------------------------------------

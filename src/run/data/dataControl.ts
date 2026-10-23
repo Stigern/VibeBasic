@@ -40,6 +40,8 @@ export interface DataHost {
   /** The controls of the form. */
   consumers(): DataConsumer[];
   msgBox(prompt: string, buttons: number, title: string): Promise<number>;
+  /** Runs `fn` with the program's locale current: a bound control shows a date as CStr does, also after an await. */
+  inScope<T>(fn: () => T): T;
 }
 
 /** The Data Source of an ADO connection string ("Provider=...;Data Source=file.db"); a string without "=" is the path itself. */
@@ -181,19 +183,23 @@ export class DataControl implements RichControl, RecordsetOwner {
 
   /** The bound controls show the current record (or the AddNew buffer); blank without one. */
   private fillBound(rs: RecordsetObject | null): void {
-    for (const c of this.bound()) {
-      let v: VBValue | null = null;
-      if (rs && !rs.isClosed && (rs.hasCurrent || rs.mode === 2)) {
-        try { v = rs.fieldValue(rs.fieldIndex(strProp(c.props.DataField))); } catch { v = null; }
+    this.h.inScope(() => {
+      for (const c of this.bound()) {
+        let v: VBValue | null = null;
+        if (rs && !rs.isClosed && (rs.hasCurrent || rs.mode === 2)) {
+          try { v = rs.fieldValue(rs.fieldIndex(strProp(c.props.DataField))); } catch { v = null; }
+        }
+        c.showBound(v);
       }
-      c.showBound(v);
-    }
+    });
   }
 
   private notify(kind: 'reposition' | 'rows'): void {
-    for (const c of this.h.consumers()) {
-      if (same(c.props.DataSource, this.h.name) || same(c.props.RowSource, this.h.name)) c.dataNotify(this, kind);
-    }
+    this.h.inScope(() => {
+      for (const c of this.h.consumers()) {
+        if (same(c.props.DataSource, this.h.name) || same(c.props.RowSource, this.h.name)) c.dataNotify(this, kind);
+      }
+    });
   }
 
   // -- RecordsetOwner -----------------------------------------------------------------------------------------------
@@ -219,6 +225,12 @@ export class DataControl implements RichControl, RecordsetOwner {
     const values = this.dirty();
     if (!save || values.size === 0 || action === ACT.delete) return true;
     if (!rs.hasCurrent && rs.mode === 0) return true;
+    if (action !== ACT.update && !rs.canWrite([...values.keys()])) {
+      // a read-only source (a join, ReadOnly ...): the error once, the bound controls show the record again, and the move goes on
+      this.fillBound(rs);
+      await this.reportError(new VBRuntimeError(3027));
+      return true;
+    }
     if (action === ACT.update) rs.setValues(values);
     else await rs.writeValues(values);
     return true;
@@ -238,6 +250,18 @@ export class DataControl implements RichControl, RecordsetOwner {
   }
 
   // -- RichControl --------------------------------------------------------------------------------------------------
+
+  /** `Set Data1.Recordset = rs`: the control and its bound controls show `rs` (made in code) from its current record. */
+  set(name: string, value: VBValue): boolean | Promise<void> {
+    if (name !== 'Recordset') return false;
+    if (!(value instanceof RecordsetObject)) throw new VBRuntimeError(value === Nothing ? 91 : 13);
+    if (value.flavor !== this.flavor || value.isClosed) throw new VBRuntimeError(value.isClosed ? 3704 : 13);
+    this.rs = value;
+    this.opening = null;
+    value.owner = this;
+    this.rowsChanged(value);
+    return this.after(value, ACT.bookmark, true);
+  }
 
   get(name: string, args: VBValue[]): VBValue | undefined {
     switch (name) {
@@ -315,7 +339,7 @@ export class DataControl implements RichControl, RecordsetOwner {
     const rs = this.recordset();
     if (!rs || (this.dirty().size === 0 && rs.mode === 0)) return;
     try {
-      if (await this.before(rs, ACT.unload) && rs.mode !== 0 && this.flavor === 'ado') await rs.saveEdit();
+      if (await this.before(rs, ACT.unload) && rs.mode !== 0 && this.flavor === 'ado' && !rs.dropEmptyAdd()) await rs.saveEdit();
     } catch (e) { await this.reportError(e); }
   }
 

@@ -7,6 +7,10 @@ import { VBRuntimeError } from '../../lang/errors';
 import { likeMatch } from '../../lang/interp/operators';
 import { Null, NullT, compare, isDate, parseDate, toStr, type VBValue } from '../../lang/values';
 import { parseDateText } from './dbValues';
+import { localeDateParser } from '../../lang/builtins/format';
+
+/** Dates in criteria are read as Jet and ADO read them: US m/d/y (as VB's own #...# literals), not in the program's locale. */
+const US_DATES = localeDateParser('en-US');
 
 type Node =
   | { k: 'lit'; v: VBValue }
@@ -115,7 +119,7 @@ class Parser {
       case 'num': return { k: 'lit', v: Number(t.v) };
       case 'str': return { k: 'lit', v: t.v };
       case 'date': {
-        const d = parseDateText(t.v) ?? parseDate(t.v);
+        const d = parseDateText(t.v) ?? parseDate(t.v, US_DATES);   // Jet / ADO #...# is m/d/y whatever the locale
         if (!d) throw bad();
         return { k: 'lit', v: d };
       }
@@ -136,8 +140,8 @@ class Parser {
 
 /** A text compared with a date is read as a date. */
 function cmpValues(a: VBValue, b: VBValue): -1 | 0 | 1 {
-  if (isDate(a) && typeof b === 'string') b = parseDateText(b) ?? parseDate(b) ?? b;
-  else if (isDate(b) && typeof a === 'string') a = parseDateText(a) ?? parseDate(a) ?? a;
+  if (isDate(a) && typeof b === 'string') b = parseDateText(b) ?? parseDate(b, US_DATES) ?? b;
+  else if (isDate(b) && typeof a === 'string') a = parseDateText(a) ?? parseDate(a, US_DATES) ?? a;
   if (typeof a === 'boolean' && typeof b === 'boolean') return a === b ? 0 : a ? -1 : 1;
   return compare(a, b, true);
 }

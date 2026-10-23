@@ -127,6 +127,7 @@ export class FormInstance implements VBObject {
       resolveDbPath: p => this.s.program.resolvePath(p),
       controls: () => this.controls(),
       msgBox: (p, b, t) => this.s.msgBox(p, b, t),
+      inProgramScope: fn => this.s.program.inScope(fn),
     };
     // Load Name(i) / Unload Name(i). A control without a view (Winsock, Timer ...) starts from the design-time properties
     // of the lowest element; a visible one from its current properties, hidden (Visible = False) and last in the tab

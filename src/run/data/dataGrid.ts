@@ -24,6 +24,8 @@ export interface GridHost {
   /** The data control the DataSource names (null when there is none). */
   source(): DataControl | null;
   msgBox(prompt: string, buttons: number, title: string): Promise<number>;
+  /** Runs `fn` with the program's locale current (cell texts of dates). */
+  inScope?<T>(fn: () => T): T;
 }
 
 interface Column { caption: string; field: string; width: number; alignment: number; visible: boolean; locked: boolean; numberFormat: string }
@@ -104,13 +106,37 @@ export class DataGridControl implements RichControl {
   /** The fields the columns were made for (a new set of fields makes new columns). */
   private fieldsKey = '';
   private src: DataControl | null = null;
+  /** `Set DataGrid1.DataSource = rs`: a recordset made in code (no data control). */
+  private free: RecordsetObject | null = null;
   private col = 0;
   private readonly columns = new ColumnsObject(this);
   private busy = false;
 
   constructor(private h: GridHost) {}
 
-  private rs(): RecordsetObject | null { return (this.src ?? this.h.source())?.recordset() ?? null; }
+  private rs(): RecordsetObject | null {
+    if (this.free) return this.free.isClosed ? null : this.free;
+    return (this.src ?? this.h.source())?.recordset() ?? null;
+  }
+
+  /** The grid shows a recordset made in code (null: its DataSource again). It follows the recordset's moves and changes: the
+   *  grid is told after its owner, if it has one. */
+  bindRecordset(rs: RecordsetObject | null): void {
+    if (!rs && !this.free) return;
+    this.free = rs;
+    if (rs) {
+      const prev = rs.owner;
+      const grid = this;
+      rs.owner = {
+        before: (r, a) => prev?.before(r, a) ?? Promise.resolve(true),
+        async after(r, a, moved) { await prev?.after(r, a, moved); if (grid.free === r) grid.h.send(grid.cursor()); },
+        rowsChanged(r) { prev?.rowsChanged(r); if (grid.free === r) { grid.syncColumns(r); grid.sendAll(); } },
+      };
+    }
+    this.fieldsKey = '\u0001';
+    this.syncColumns(this.rs());
+    this.sendAll();
+  }
 
   column(i: number): Column { return this.cols[i]; }
   columnCount(): number { return this.cols.length; }
@@ -143,6 +169,10 @@ export class DataGridControl implements RichControl {
   }
 
   sendAll(): void {
+    if (this.h.inScope) this.h.inScope(() => this.sendRows()); else this.sendRows();
+  }
+
+  private sendRows(): void {
     const rs = this.rs();
     const rows: string[] = [];
     if (rs) {
@@ -167,6 +197,7 @@ export class DataGridControl implements RichControl {
   dataNotify(src: DataControl, kind: 'reposition' | 'rows'): void {
     if (src.name.toLowerCase() !== String(this.h.props.DataSource ?? '').toLowerCase()) return;
     this.src = src;
+    this.free = null;
     if (kind === 'rows') {
       this.syncColumns(src.recordset());
       this.sendAll();
@@ -263,6 +294,7 @@ export class DataGridControl implements RichControl {
 
   get(name: string, args: VBValue[]): VBValue | undefined {
     switch (name) {
+      case 'DataSource': return this.free ?? undefined;
       case 'Columns': return args.length ? this.columnObject(args[0]) : this.columns;
       case 'Row': { const rs = this.rs(); return rs?.hasCurrent ? rs.position : 0; }
       case 'Col': return this.col;

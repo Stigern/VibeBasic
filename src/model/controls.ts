@@ -776,7 +776,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       en('RecordsetType', 1, ['Table', 'Dynaset', 'Snapshot']), bool('ReadOnly', false), bool('Exclusive', false), int('Options', 0),
       en('BOFAction', 0, ['Move First', 'BOF']), en('EOFAction', 0, ['Move Last', 'EOF', 'Add New']),
       color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
-      rt('Recordset', 'string', '', 'ro'), rt('Database', 'string', '', 'ro'), rt('EditMode', 'int', 0, 'ro'),
+      rt('Recordset', 'string', ''), rt('Database', 'string', '', 'ro'), rt('EditMode', 'int', 0, 'ro'),
     ],
     events: [ev('Validate', 'Action As Integer, Save As Integer'), ev('Reposition'), ev('Error', 'DataErr As Integer, Response As Integer'), ...evMouse()],
     methods: [
@@ -801,7 +801,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       int('MaxRecords', 0, { min: 0 }), int('CommandTimeout', 30, { min: 0 }), int('ConnectionTimeout', 15, { min: 0 }),
       str('UserName'), str('Password'),
       color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
-      rt('Recordset', 'string', '', 'ro'),
+      rt('Recordset', 'string', ''),
     ],
     events: [
       ev('WillMove', 'ByVal adReason As ADODB.EventReasonEnum, adStatus As ADODB.EventStatusEnum, ByVal pRecordset As ADODB.Recordset'),

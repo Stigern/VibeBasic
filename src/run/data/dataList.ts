@@ -19,6 +19,8 @@ export interface ListHost {
   send(props: Record<string, PropValue>): void;
   /** The data control the RowSource names (null when there is none). */
   rowSource(): DataControl | null;
+  /** Runs `fn` with the program's locale current (list texts of dates). */
+  inScope?<T>(fn: () => T): T;
 }
 
 const str = (v: PropValue | undefined): string => (typeof v === 'string' ? v : '');
@@ -32,6 +34,10 @@ export class DataListControl implements RichControl {
 
   /** Fills the list from the RowSource's records (ReFill, and whenever they change). */
   private refill(src: DataControl | null): void {
+    if (this.h.inScope) this.h.inScope(() => this.fill(src)); else this.fill(src);
+  }
+
+  private fill(src: DataControl | null): void {
     const rs = src?.recordset();
     this.texts = []; this.bound = [];
     if (rs) {

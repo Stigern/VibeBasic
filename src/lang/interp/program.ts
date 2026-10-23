@@ -544,6 +544,12 @@ export class Program {
   /** A path of the program as a full Mac path, like Open resolves it (relative to CurDir, which starts as App.Path). */
   resolvePath(path: string): string { return this.rt.files.resolve(path); }
 
+  /** Runs `fn` with the program's locale current (date text and parsing), for work outside its code: data binding after an await. */
+  inScope<T>(fn: () => T): T {
+    const restore = this.rt.scope.activate();
+    try { return fn(); } finally { restore(); }
+  }
+
   hasProcedure(moduleName: string, procName: string): boolean {
     return this.rt.modules.get(lc(moduleName))?.procs.has(lc(procName)) ?? false;
   }
