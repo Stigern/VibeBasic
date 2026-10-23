@@ -392,3 +392,13 @@ test('validateCode: Validate, MousePointer constants, Screen.MousePointer and Va
     + 'Private Sub Form_Click()\n    Screen.MousePointer = vbHourglass\n    Text1.MousePointer = vbCrosshair\n    ValidateControls\n    Screen.MousePointer = vbDefault\nEnd Sub';
   expect(validateCode(code, { moduleName: 'Form1', form: f })).toEqual([]);
 });
+
+test('validateCode: drag and drop events, DataObject members, Drag / OLEDrag and their constants are valid (0.9 B4)', () => {
+  const f = newProject().forms[0];
+  f.controls.push(newControl(f, 'PictureBox', { left: 0, top: 0 }, null));   // Picture1
+  const code = 'Private Sub Picture1_DragDrop(Source As Control, X As Single, Y As Single)\n    Source.Move X, Y\n    Picture1.Drag vbEndDrag\nEnd Sub\n'
+    + 'Private Sub Form_OLEDragDrop(Data As DataObject, Effect As Long, Button As Integer, Shift As Integer, X As Single, Y As Single)\n'
+    + '    If Data.GetFormat(vbCFFiles) Then Caption = Data.Files(1) & Data.Files.Count\n    Effect = vbDropEffectCopy\n    Picture1.OLEDrag\n'
+    + '    Picture1.DragMode = vbAutomatic\n    Picture1.OLEDropMode = vbOLEDropManual\nEnd Sub';
+  expect(validateCode(code, { moduleName: 'Form1', form: f })).toEqual([]);
+});

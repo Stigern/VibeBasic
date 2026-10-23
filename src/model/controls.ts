@@ -147,10 +147,33 @@ const pointerProps = (): PropDef[] => [
   p('MousePointer', 'enum', 0, { enumValues: MOUSE_POINTERS.map(([value, l]) => ({ value, label: `${value} - ${l}` })) }), picture('MouseIcon'),
 ];
 
+/** Drag and drop (0.9 B4): classic (DragMode, DragIcon, Drag, DragDrop / DragOver) and OLE (OLEDragMode, OLEDropMode, OLEDrag and
+ *  the OLE events) on every visible control but Shape and Line; the Form is a drop target only (OLEDropMode, no Drag). */
+const SOURCE = 'Source As Control, X As Single, Y As Single';
+const OLE_DROP = 'Data As DataObject, Effect As Long, Button As Integer, Shift As Integer, X As Single, Y As Single';
+const dropEvents = (): EventDef[] => [
+  ev('DragDrop', SOURCE), ev('DragOver', `${SOURCE}, State As Integer`),
+  ev('OLEDragDrop', OLE_DROP), ev('OLEDragOver', `${OLE_DROP}, State As Integer`),
+];
+const dragEvents = (): EventDef[] => [
+  ev('OLEStartDrag', 'Data As DataObject, AllowedEffects As Long'), ev('OLECompleteDrag', 'Effect As Long'),
+  ev('OLESetData', 'Data As DataObject, DataFormat As Integer'),
+];
+const OLE_DROP_MODES = (): PropDef => en('OLEDropMode', 0, ['None', 'Manual', 'Automatic']);
+const dragProps = (): PropDef[] => [en('DragMode', 0, ['Manual', 'Automatic']), picture('DragIcon'), en('OLEDragMode', 0, ['Manual', 'Automatic']), OLE_DROP_MODES()];
+
 const def = (d: Omit<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'> &
   Partial<Pick<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'>>): ControlTypeDef => {
   const t: ControlTypeDef = { methods: baseMethods(), isContainer: false, invisibleAtRuntime: false, ...d };
   if (t.type === 'Form' || !(t.invisibleAtRuntime || t.type === 'Shape' || t.type === 'Line')) t.props = [...t.props, ...pointerProps()];
+  if (t.type === 'Form') {
+    t.props = [...t.props, { ...OLE_DROP_MODES(), enumValues: enumVals('None', 'Manual') }];
+    t.events = [...t.events, ...dropEvents()];
+  } else if (!(t.invisibleAtRuntime || t.type === 'Shape' || t.type === 'Line')) {
+    t.props = [...t.props, ...dragProps()];
+    t.events = [...t.events, ...dropEvents(), ...dragEvents()];
+    t.methods = [...t.methods, { name: 'Drag', params: '[Action]' }, { name: 'OLEDrag', params: '' }];
+  }
   if (t.type !== 'Form' && t.events.some(e => e.name === 'GotFocus')) {
     t.props = [...t.props, bool('CausesValidation', true)];
     t.events = [...t.events, ev('Validate', 'Cancel As Boolean')];

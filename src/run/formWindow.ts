@@ -12,6 +12,7 @@ import type { ControlDef, PropValue } from '../model/types';
 import { domText, vbPos, vbText } from '../controls/textPos';
 import { GfxLayer } from '../gfx/dom';
 import { parseMnemonic } from '../ui98/dom';
+import { installDragDrop, type FileDrag } from './dragDrop';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 
 type Props = Record<string, PropValue>;
@@ -203,7 +204,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
     const closeBtn = (e.target as Element).closest?.('.title-bar-controls button[aria-label="Close"]');
     if (closeBtn) { if (!blocked) send({ t: 'closeRequest' }); return; }
     const tg = clickTarget(e);
-    if (blocked || !tg) return;
+    if (blocked || !tg || dnd.eatClick()) return;
     // the focus is moving to this control and the Validate event of the control it leaves has not answered: Cancel eats the click
     if (validation) { validation.held.push(() => clicked(tg)); return; }
     clicked(tg);
@@ -250,17 +251,31 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   // VB6 mouse capture: the control that got MouseDown gets MouseMove and MouseUp until the button is released, also outside its
   // area (X / Y relative to it, maybe negative). The document's listeners see the pointer anywhere while a button is down.
   let captured: string | null = null;
-  function mouseTo(id: string, event: string, e: MouseEvent): void {
-    // a PictureBox: from the inside of its border (its drawing's 0, 0)
+  /** A point in twips from the origin of a control (a PictureBox: from the inside of its border, its drawing's 0, 0) or the client area. */
+  function posIn(id: string, x: number, y: number): [number, number] | null {
     const v = id === 'form' ? surface.clientEl : (defs.get(id)?.type === 'PictureBox' ? viewOf(id)?.childHost : undefined) ?? viewOf(id)?.el;
-    if (!v) return;
+    if (!v) return null;
     const box = v.getBoundingClientRect();
-    const button = event === 'MouseMove' ? e.buttons & 7 : e.button === 0 ? 1 : e.button === 2 ? 2 : e.button === 1 ? 4 : 0;
-    emit(id, event, [button, shiftBits(e), Math.round((e.clientX - box.left) * 15), Math.round((e.clientY - box.top) * 15)]);
+    return [Math.round((x - box.left) * 15), Math.round((y - box.top) * 15)];
   }
+  function mouseTo(id: string, event: string, e: MouseEvent): void {
+    const p = posIn(id, e.clientX, e.clientY);
+    if (!p) return;
+    const button = event === 'MouseMove' ? e.buttons & 7 : e.button === 0 ? 1 : e.button === 2 ? 2 : e.button === 1 ? 4 : 0;
+    emit(id, event, [button, shiftBits(e), p[0], p[1]]);
+  }
+  // drag and drop (dragDrop.ts): it takes the mouse while a drag is on
+  const dnd = installDragDrop({
+    doc: root.ownerDocument, layer: surface.el, client: surface.clientEl, blocked: () => blocked,
+    idAt: t => targetOf(t)?.id ?? null, defOf: id => defs.get(id), propsOf, usable, elOf: id => viewOf(id)?.el,
+    fieldOf: id => { const el = viewOf(id)?.inputEl ?? null; return isTextField(el) ? el : null; },
+    pos: posIn, emit: (id, event, args) => emit(id, event, args), send, asset: r => resolveAsset(r.asset),
+  });
+  root.addEventListener('vbfiledrag', e => { if (!disposed) dnd.fileDrag((e as CustomEvent<FileDrag>).detail); }, { signal: ac.signal });
   on<MouseEvent>('mousedown', e => {
     const tg = targetOf(e.target);
     if (blocked || !tg || !usable(tg.id)) return;   // a disabled control gets no mouse events
+    if (dnd.mouseDown(e, tg.id)) return;            // DragMode = 1: the drag has the mouse, no MouseDown
     const ie = tg.def && CLICK_FOCUS.has(tg.def.type) && e.button === 0 ? viewOf(tg.id)?.inputEl : undefined;
     if (ie && ie.tabIndex >= 0 && ie.ownerDocument.activeElement !== ie) { e.preventDefault(); ie.focus(); }
     captured = tg.id;
@@ -271,6 +286,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
       const id = captured;
       if (type === 'mouseup') captured = null;
       if (blocked) { captured = null; return; }
+      if (type === 'mousemove' ? dnd.mouseMove(e) : dnd.mouseUp(e)) { captured = null; return; }   // the drag's, not MouseMove / MouseUp
       if (id !== null) { if (usable(id) && (id === 'form' || defs.has(id))) mouseTo(id, event, e); return; }
       const tg = targetOf(e.target);
       if (tg && usable(tg.id)) mouseTo(tg.id, event, e);
@@ -620,6 +636,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
           break;
         }
         case 'cursor': setScreenCursor(m.css); break;
+        case 'drag': case 'oleDrag': case 'oleEffect': dnd.receive(m); break;
         case 'keyResult': {
           const p = pending.get(m.requestId);
           pending.delete(m.requestId);
@@ -634,6 +651,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
       disposed = true;
       if (selTimer) clearTimeout(selTimer);
       ac.abort();
+      dnd.dispose();
       observer?.disconnect();
       // an open combo list holds a document listener until it is closed
       for (const v of surface.views.values()) v.inputEl?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));

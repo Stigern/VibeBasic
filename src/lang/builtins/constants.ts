@@ -71,6 +71,14 @@ group({
   vbUpArrow: 10, vbHourglass: 11, vbNoDrop: 12, vbArrowHourglass: 13, vbArrowQuestion: 14, vbSizeAll: 15, vbCustom: 99,
 });
 
+// Drag and drop: DragMode, Drag's Action, DragOver's State, OLEDragMode / OLEDropMode, Effect. (vbCancel stays the MsgBox
+// result 2, as in VB6 where the VBA constant hides VBRUN's vbCancel 0: `Drag 0` cancels a drag.)
+group({
+  vbManual: 0, vbAutomatic: 1, vbBeginDrag: 1, vbEndDrag: 2, vbEnter: 0, vbLeave: 1, vbOver: 2,
+  vbOLEDragManual: 0, vbOLEDragAutomatic: 1, vbOLEDropNone: 0, vbOLEDropManual: 1, vbOLEDropAutomatic: 2,
+  vbDropEffectNone: 0, vbDropEffectCopy: 1, vbDropEffectMove: 2, vbDropEffectScroll: -2147483648,
+});
+
 // Misc
 group({ vbTrue: -1, vbFalse: 0, vbUseDefault: -2, vbObjectError: -2147221504 });   // vbTrue/vbFalse/vbUseDefault: Tristate
 

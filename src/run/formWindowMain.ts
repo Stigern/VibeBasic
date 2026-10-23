@@ -4,6 +4,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { LogicalPosition, LogicalSize } from '@tauri-apps/api/dpi';
 import { emit } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { runDialog, type DialogSpec } from './dialogSpec';
 import { mountFormWindow } from './formWindow';
@@ -13,6 +14,7 @@ import type { FormSnapshot, ToWindow } from './protocol';
 import type { PrintJob } from './printing';
 import { mountPrintPreview } from './printView';
 import type { FromPayload } from './tauriFormHost';
+import type { FileDrag } from './dragDrop';
 
 // MMControl / MediaPlayer: this window reads a file the main window opened, by its token (media_read is the only app command a
 // form window may call; capabilities/run-windows.json). The bytes come raw, never through an event.
@@ -115,6 +117,14 @@ async function startForm(): Promise<void> {
     if (ws === 1 || ws === 2) await applyWindowState(ws).catch(() => {});
   });
   await win.listen<ToWindow>('vb:to', e => { if (mounted) handle(e.payload); else early.push(e.payload); });
+  // files dragged from Finder: Tauri's drag-drop events of this window (core:event:default lets it listen) go to the form, which
+  // tells the run session (OLEDragOver / OLEDragDrop). On macOS the position is in points of the webview, i.e. CSS pixels.
+  await getCurrentWebview().onDragDropEvent(e => {
+    const p = e.payload;
+    const detail: FileDrag = p.type === 'leave' ? { type: 'leave' }
+      : { type: p.type, x: p.position.x, y: p.position.y, ...('paths' in p ? { paths: p.paths } : {}) };
+    if (mounted) root.dispatchEvent(new CustomEvent('vbfiledrag', { detail }));
+  }).catch(() => {});
   await emit('vb:hello', key);
 }
 

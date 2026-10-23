@@ -727,10 +727,18 @@ export class ControlObject implements VBObject, DataConsumer {
       case 'SelChange': if (this.def.type === 'MonthView') return args.map(a => dateValue(Number(a))); break;
       case 'Click': case 'DblClick': if ((this.def.type === 'DataList' || this.def.type === 'DataCombo') && !args.length) return [2]; break;   // dbcAreaList
       case 'MouseDown': case 'MouseMove': case 'MouseUp':   // X, Y in the ScaleMode of a Form or PictureBox
-        if (this.gfx && args.length === 4) return [args[0], args[1], ...this.gfx.mouse(Number(args[2]), Number(args[3]))];
+        if (args.length === 4) return [args[0], args[1], ...this.scalePoint(Number(args[2]), Number(args[3]))];
+        break;
+      case 'DragDrop': case 'DragOver':   // Source (its id: the form replaces it by the control), X, Y [, State]
+        if (args.length >= 3) return [args[0], ...this.scalePoint(Number(args[1]), Number(args[2])), ...args.slice(3)];
         break;
     }
     return args;
+  }
+
+  /** A point in twips from the control's origin in its own scale (the ScaleMode of a Form or PictureBox; twips for the others). */
+  scalePoint(x: number, y: number): [number, number] {
+    return this.gfx ? this.gfx.mouse(x, y) : [x, y];
   }
 
   get name(): string { return this.def.name; }
@@ -953,6 +961,17 @@ export class ControlObject implements VBObject, DataConsumer {
     }
     switch (l) {
       case 'move': return this.move(args);
+      case 'drag': {   // Drag [Action]: vbCancel 0, vbBeginDrag 1 (the default), vbEndDrag 2
+        if (args.length > 1) throw new VBRuntimeError(450);
+        const action = args.length && args[0] !== Empty ? num(this.plain(args[0])) : 1;
+        if (action < 0 || action > 2) throw new VBRuntimeError(5);
+        this.queue.send(this.formKey, { t: 'drag', id: this.def.id, action });
+        return Empty;
+      }
+      case 'oledrag':
+        if (args.length) throw new VBRuntimeError(450);
+        this.queue.send(this.formKey, { t: 'oleDrag', id: this.def.id });
+        return Empty;
       case 'setfocus': this.queue.send(this.formKey, { t: 'focus', id: this.def.id }); this.ctx.focused?.(this); return Empty;
       case 'additem': return this.addItem(args);
       case 'removeitem': return this.removeItem(args);

@@ -11,8 +11,11 @@ import { LANGUAGE_REFERENCE } from './langReference';
 import { BODY_OMITTED } from './omitted';
 import { CODE_SYSTEM_PROMPT, FORM_SYSTEM_PROMPT } from './prompts';
 
-const COMMON = new Set(['left', 'top', 'width', 'height', 'visible', 'enabled', 'tabindex', 'tabstop', 'tag', 'tooltiptext', 'mousepointer', 'mouseicon', 'causesvalidation']);
-const BASE_METHODS = new Set(['move', 'setfocus', 'refresh', 'zorder']);
+const COMMON = new Set(['left', 'top', 'width', 'height', 'visible', 'enabled', 'tabindex', 'tabstop', 'tag', 'tooltiptext', 'mousepointer', 'mouseicon', 'causesvalidation',
+  'dragmode', 'dragicon', 'oledragmode', 'oledropmode']);
+const BASE_METHODS = new Set(['move', 'setfocus', 'refresh', 'zorder', 'drag', 'oledrag']);
+/** Drag and drop events: one note for all controls (below), not on every line. */
+const DRAG_EVENTS = new Set(['Validate', 'DragDrop', 'DragOver', 'OLEDragDrop', 'OLEDragOver', 'OLEStartDrag', 'OLECompleteDrag', 'OLESetData']);
 
 /** The labels of an enum property: the registry's "0 - " numbering and "Justify" dropped, and a library prefix all of them share (ccOrientation, tvw, sld) cut off. */
 function enumLabels(values: { value: number; label: string }[]): string[] {
@@ -57,12 +60,14 @@ export function describeControlTypes(): string {
     const props = td.props.filter(p => !COMMON.has(p.name.toLowerCase()) && (p.designTime || p.runtime !== 'none')).map(propText);
     const methods = td.methods.filter(m => !BASE_METHODS.has(m.name.toLowerCase())).map(m => m.name);
     let line = `${td.type}: ${props.join(', ')}`;
-    if (td.events.length) line += ` | events: ${eventText(td.events.map(e => e.name).filter(n => n !== 'Validate')).join(', ')}`;
+    if (td.events.length) line += ` | events: ${eventText(td.events.map(e => e.name).filter(n => !DRAG_EVENTS.has(n))).join(', ')}`;
     if (methods.length) line += ` | methods: ${methods.join(', ')}`;
     lines.push(line);
   }
   lines.push('All controls also have: Left, Top, Width, Height, Visible, Enabled, TabIndex, Tag and the methods Move, SetFocus, Refresh, ZOrder.'
-    + ' Visible controls and the Form also have MousePointer (vbArrow ... vbHourglass 11, vbCustom 99 with MouseIcon); Screen.MousePointer overrides them all. A control with +focus also has CausesValidation (True) and the event Validate(Cancel As Boolean): Cancel = True keeps the focus (Me.ValidateControls validates the focused control). A & in a Caption makes Alt+letter its accelerator.'
+    + ' Visible controls and the Form have MousePointer (and MouseIcon), Screen.MousePointer too.'
+    + ' +focus controls have CausesValidation and Validate(Cancel As Boolean). A & in a Caption: Alt+letter.'
+    + ' Drag: DragMode (vbAutomatic, or Ctl.Drag), DragDrop(Source As Control, X, Y), DragOver(Source, X, Y, State); OLEDropMode 1: OLEDragDrop(Data As DataObject, Effect, Button, Shift, X, Y), also Finder files (Data.Files(1)).'
     + ' In the events, +focus is GotFocus and LostFocus, +keys KeyPress, KeyDown and KeyUp, +mouse MouseDown, MouseMove and MouseUp (VB6 parameters).'
     + ' Exceptions: Shape has no Enabled, TabIndex or SetFocus; Line has X1, Y1, X2, Y2 (twips) instead of Left, Top, Width, Height, and no Enabled, TabIndex, Move or SetFocus.'
     + ' A StatusBar always sits at the bottom of the form, full width (only its Height matters). Its Panels and a TabStrip\'s Tabs are one item per line,'
