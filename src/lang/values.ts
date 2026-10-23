@@ -308,7 +308,7 @@ function parseNumber(text: string): number | undefined {
     if (m[3] === '' && v <= 0xFFFF) return v >= 0x8000 ? v - 0x10000 : v; // Integer literal
     return v >= 0x80000000 ? v - 0x100000000 : v; // Long literal
   }
-  if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(s)) return undefined;
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(s)) return undefined;
   return Number(s);
 }
 
