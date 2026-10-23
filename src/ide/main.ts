@@ -10,17 +10,19 @@ import { buildLayout, type IdeLayout } from './layout';
 import { buildMenus, type IdeActions } from './menus';
 import { askAi, askAiAboutError } from '../ai/askDialog';
 import { showAiLog } from '../ai/aiLog';
-import { getCodeWindow, openCodeWindow, registerCodeActions } from './codeWindow';
+import { getCodeWindow, openCodeWindow, registerCodeActions, type CodeEnv } from './codeWindow';
 import { openDesigner, registerDesignerActions } from './designer';
 import { createPropertiesWindow, type PropertiesWindow } from './properties';
 import { attachToolboxWindow, createToolbox, type ToolboxLayout } from './toolbox';
 import { createProjectExplorer, registerProjectActions, type ProjectExplorer } from './projectExplorer';
 import { showComponents, showProjectProperties } from './projectDialogs';
 import { showOptions } from './optionsDialog';
+import { showMenuEditor } from './menuEditor';
 import { makeAppFlow } from '../build/makeApp';
 import { FileController } from './fileController';
 import { RunController, type ErrorToFix } from './runController';
 import { createImmediateWindow } from './immediate';
+import { registerDebugActions, type CodeTarget } from './debugWindows';
 import { InlineFormHost } from '../run/inlineFormHost';
 import { TauriFormHost } from '../run/tauriFormHost';
 import type { FormHost } from '../run/formHost';
@@ -49,12 +51,17 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   const menus = buildMenus(actions, state, { breakOnError: () => !!run.rc?.breakError });
   let refresh = () => {};
   registerDesignerActions(state, actions, () => refresh());
-  registerCodeActions(state, actions, { mdiHost: layout.mdiHost, actions });
-  const env = { mdiHost: layout.mdiHost, actions };
+  // one CodeEnv for every code window (the data tips are wired below, once the run controller exists)
+  const env: CodeEnv = { mdiHost: layout.mdiHost, actions };
+  registerCodeActions(state, actions, env);
   registerProjectActions(state, actions, env);
   actions.projectProperties = () => { if (state.mode === 'design') void showProjectProperties(state, doc); };
   actions.components = () => { if (state.mode === 'design') void showComponents(state, doc); };
   actions.options = () => { void showOptions(state, backend, doc); };
+  actions.menuEditor = () => {
+    const v = state.activeView;
+    if (state.mode === 'design' && v.kind === 'designer' && committed()) void showMenuEditor(state, v.formId, doc);
+  };
   actions.askAi = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc); };
   actions.aiLog = () => { void showAiLog(doc, text => backend.clipboardSetText(text)); };
   const fc = new FileController(state, backend, doc);
@@ -62,11 +69,15 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     const id = state.project.forms.find(f => f.name === state.project.startupForm)?.id ?? state.project.forms[0]?.id;
     if (id) openDesigner(state, id, env);
   };
+  fc.onItemAdded = id => {
+    if (state.project.forms.some(f => f.id === id)) openDesigner(state, id, env); else openCodeWindow(state, id, env);
+  };
   // a value typed in the Properties window but not yet entered goes into the project first (false: it was invalid). New, Open,
   // Exit and closing the window do so too, so "Save changes?" asks about it instead of the value being lost.
   const committed = (): boolean => propsWin?.commitPendingEdit() ?? true;
   actions.newProject = () => { if (state.mode === 'design' && committed()) void fc.newProject(); };
   actions.openProject = () => { if (state.mode === 'design' && committed()) void fc.open(); };
+  actions.addFile = () => { if (state.mode === 'design' && committed()) void fc.addFile(); };
   actions.saveProject = () => { if (committed()) void fc.save(); };
   actions.saveProjectAs = () => { if (committed()) void fc.saveAs(); };
   actions.makeApp = () => { if (state.mode === 'design' && committed()) void makeAppFlow(state, backend); };
@@ -102,6 +113,16 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     const item = v.kind === 'code' ? [...state.project.forms, ...state.project.modules].find(x => x.id === v.itemId) : undefined;
     if (w && item) rc.runToCursor(item.name, w.getCursorLine());
   };
+  const codeTarget = (): CodeTarget | null => {
+    const v = state.activeView;
+    const w = v.kind === 'code' ? getCodeWindow(state, v.itemId) : null;
+    const item = v.kind === 'code' ? [...state.project.forms, ...state.project.modules].find(x => x.id === v.itemId) : undefined;
+    return w && item ? { moduleName: item.name, line: w.getCursorLine(), selection: w.getSelection?.()?.text ?? null, exprAtCursor: w.exprAtCursor?.() ?? null } : null;
+  };
+  const debugWins = registerDebugActions(state, actions, {
+    localsHost: layout.localsHost, watchHost: layout.watchHost, showPane: n => layout.setPaneVisible(n, true), run: rc, code: codeTarget, doc,
+  });
+  env.dataTip = debugWins.dataTip;
   const menubar = createMenubar(layout.menubarHost, menus);
 
   const toolbar = createToolbar(layout.toolbarHost, buildToolbarItems(actions, state));

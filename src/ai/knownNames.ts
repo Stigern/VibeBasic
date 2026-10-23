@@ -5,11 +5,12 @@
 import { BUILTINS, CONSTANTS } from '../lang/builtins';
 import type { ModuleAst, ProcDecl } from '../lang/ast';
 import { parseModuleLenient } from '../lang/parser';
+import { formHasProp } from '../model/mdi';
 import { CONTROL_TYPES, getPropDef } from '../model/controls';
 import type { ControlType, FormDef, Project } from '../model/types';
 
 /** Objects the code may use without declaring them (lower case). */
-export const BUILTIN_OBJECTS = new Set(['app', 'screen', 'err', 'debug', 'clipboard', 'forms', 'me']);
+export const BUILTIN_OBJECTS = new Set(['app', 'screen', 'err', 'debug', 'clipboard', 'forms', 'me', 'printer', 'printers']);
 
 /** Names the language itself knows: built-in functions and constants, and Me/Empty/Null/Nothing/True/False. */
 export function isLanguageName(key: string): boolean {
@@ -46,8 +47,9 @@ const FORM_EXTRA = ['show', 'hide', 'refresh', 'move', 'setfocus', 'zorder', 'lo
 export function formMembers(form: FormDef, codeNames: Iterable<string>, extraControls: { name: string }[] = []): Set<string> {
   const out = new Set<string>([...FORM_EXTRA, ...codeNames]);
   for (const c of [...form.controls, ...extraControls]) out.add(c.name.toLowerCase());
-  for (const p of CONTROL_TYPES.Form.props) if (p.runtime !== 'none') out.add(p.name.toLowerCase());
+  for (const p of CONTROL_TYPES.Form.props) if (p.runtime !== 'none' && formHasProp(form, p.name)) out.add(p.name.toLowerCase());
   for (const m of CONTROL_TYPES.Form.methods) out.add(m.name.toLowerCase());
+  if (form.mdi) { out.add('activeform'); out.add('arrange'); }   // MDIForm
   return out;
 }
 
@@ -68,7 +70,7 @@ export function memberNamesOf(type: ControlType): string[] {
 
 /** What the project contributes: names visible from every module, and the members of each form. */
 export interface ProjectNames {
-  /** Public names of standard modules, module names and form names (lower case). */
+  /** Public names of standard modules, module, class module and form names (lower case). */
   globals: Set<string>;
   /** False when another module has syntax errors: its names are then unknown. */
   complete: boolean;
@@ -85,12 +87,13 @@ export function projectNames(project: Project, current: string): ProjectNames {
   let complete = true;
   for (const m of project.modules) {
     globals.add(m.name.toLowerCase());
-    if (m.name.toLowerCase() === current) continue;
+    // a class module's Public members belong to its objects (`x.Member`), not to every module
+    if (m.name.toLowerCase() === current || m.kind === 'class') continue;
     const ast = parseClean(m.code, m.name);
     if (!ast) { complete = false; continue; }
     for (const n of moduleNames(ast, true)) globals.add(n);
     for (const p of ast.procedures) {
-      if (p.visibility !== 'public') continue;
+      if (p.visibility !== 'public' || p.property) continue;
       const k = p.name.toLowerCase();
       procs.set(k, procs.has(k) ? null : p);
     }

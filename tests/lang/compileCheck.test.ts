@@ -46,8 +46,8 @@ test('a parenthesised array or record, New of a record or a class, LSet of a rec
   expect(compile(sub('  Dim a(2) As Long\n  Fill (a)'))).toMatch(/Type mismatch: array or user-defined type expected/);
   const rec = 'Type P\n  X As Integer\nEnd Type';
   expect(compile(sub('  Dim q As New P', rec))).toMatch(/Invalid use of New keyword/);
-  expect(compile(sub('  Dim d As Object\n  Set d = New Dictionary'))).toMatch(/Not supported in VibeBasic: New Dictionary/);
+  expect(compile(sub('  Dim d As Object\n  Set d = New Gadget'))).toMatch(/User-defined type not defined/);
   expect(compile(sub('  Dim a As P, b As P\n  LSet a = b', rec))).toMatch(/Not supported in VibeBasic: LSet of a user-defined type/);
-  expect(compile(sub('', 'Private c As New Thing'))).toMatch(/Module1:1 Not supported in VibeBasic: New Thing/);
+  expect(compile(sub('', 'Private c As New Thing'))).toMatch(/Module1:1 User-defined type not defined/);
   expect(compile(sub('  Dim c As New Collection, s As String * 4\n  Set c = New Collection\n  LSet s = "ab"'))).toBeNull();
 });

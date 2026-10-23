@@ -81,10 +81,10 @@ const inside = (r: Rect, x: number, y: number): boolean => x >= r.left && y >= r
 const intersects = (a: Rect, b: Rect): boolean =>
   a.left < b.left + b.width && b.left < a.left + a.width && a.top < b.top + b.height && b.top < a.top + a.height;
 
-/** The direct children of `parentId` that are shown: an SSTab's children on its other tabs are left out. */
+/** The direct children of `parentId` that are shown: an SSTab's children on its other tabs are left out, and menus (the menu bar's). */
 function childrenOf(form: FormDef, parentId: string | null): ControlDef[] {
   const map = byId(form);
-  return form.controls.filter(c => (c.parentId !== null && map.has(c.parentId) ? c.parentId : null) === parentId
+  return form.controls.filter(c => c.type !== 'Menu' && (c.parentId !== null && map.has(c.parentId) ? c.parentId : null) === parentId
     && onCurrentTab(c, c.parentId ? map.get(c.parentId) : undefined));
 }
 

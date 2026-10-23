@@ -33,12 +33,22 @@ export type BinaryOp =
   | '^' | '*' | '/' | '\\' | 'mod' | '+' | '-' | '&'
   | '=' | '<>' | '<' | '>' | '<=' | '>=' | 'like' | 'is'
   | 'and' | 'or' | 'xor' | 'eqv' | 'imp';
-export interface BinaryExpr extends OperatorTypeInfo { kind: 'binary'; op: BinaryOp; left: Expr; right: Expr; line: number }
+/** `text`: a comparison or Like in a module with `Option Compare Text` (case-insensitive). */
+export interface BinaryExpr extends OperatorTypeInfo { kind: 'binary'; op: BinaryOp; left: Expr; right: Expr; line: number; text?: boolean }
 /** `.Text` inside a `With` block. */
 export interface WithMemberExpr { kind: 'withMember'; name: string; line: number; paren?: boolean }
 /** The object of the innermost `With` block: the `X` of `!Name` (`X("Name")`) inside it. */
 export interface WithObjectExpr { kind: 'withObject'; line: number }
 export interface NewExpr { kind: 'new'; typeName: string; line: number }
+/** `TypeOf x Is T`: whether the object `x` is of type `T` (a control type, Form, a form or class name, Object ...). */
+export interface TypeOfExpr { kind: 'typeOf'; object: Expr; typeName: string; line: number }
+/**
+ * Named arguments (`MsgBox Prompt:="x", Title:="t"`): the parser attaches the names to the argument array, by position
+ * (undefined for a positional argument; positional ones come first). The callee puts them in place (eval.ts `positional`).
+ */
+export type ArgList = (Expr | MissingArg)[] & { names?: (string | undefined)[] };
+/** The names of a call's named arguments, or undefined when it has none. */
+export const argNames = (args: (Expr | MissingArg)[]): (string | undefined)[] | undefined => (args as ArgList).names;
 /*
  * `paren` on a name, member, call/index or With member: the expression was written in its own parentheses (`Foo (x)`,
  * `Call Foo((x))`). It is then a value, never a variable: a ByRef parameter gets a copy.
@@ -46,7 +56,7 @@ export interface NewExpr { kind: 'new'; typeName: string; line: number }
 
 export type Expr =
   | NumberLit | StringLit | DateLit | BoolLit | NothingLit | NameExpr | MemberExpr
-  | CallOrIndex | UnaryExpr | BinaryExpr | WithMemberExpr | WithObjectExpr | NewExpr;
+  | CallOrIndex | UnaryExpr | BinaryExpr | WithMemberExpr | WithObjectExpr | NewExpr | TypeOfExpr;
 
 /** S-expression rendering of an expression, used by tests. */
 export function exprToString(e: Expr | MissingArg): string {
@@ -65,6 +75,7 @@ export function exprToString(e: Expr | MissingArg): string {
     case 'withMember': return `(with. ${e.name})`;
     case 'withObject': return '(with)';
     case 'new': return `(new ${e.typeName})`;
+    case 'typeOf': return `(typeof ${exprToString(e.object)} ${e.typeName})`;
   }
 }
 
@@ -76,7 +87,8 @@ export type VBTypeName =
   | 'Integer' | 'Long' | 'Single' | 'Double' | 'Currency' | 'String' | 'Boolean'
   | 'Variant' | 'Date' | 'Byte' | 'Object'
   | { userType: string }
-  | { objectType: string };
+  /** `classModule`: a class module of the project (set by Runtime.resolveType): only its objects fit (error 13). */
+  | { objectType: string; classModule?: true };
 
 /** One array dimension: `10` (lower omitted) or `1 To 5`. */
 export interface ArrayBound { lower?: Expr; upper: Expr }
@@ -95,6 +107,8 @@ export interface VarDecl {
   bounds?: ArrayBound[];
   isNew: boolean;
   fixedLength?: number;
+  /** `Private WithEvents x As Class1`: its events run the module's `x_EventName` procedures. */
+  withEvents?: boolean;
   line: number;
 }
 
@@ -121,8 +135,13 @@ export interface TypeDecl { name: string; visibility: 'public' | 'private'; fiel
 export interface EnumMember { name: string; value: number }
 export interface EnumDecl { name: string; visibility: 'public' | 'private'; members: EnumMember[]; line: number }
 
+/**
+ * A Sub, Function or Property procedure. `Property Get` is a `function` (its name is the result variable) and
+ * `Property Let` / `Property Set` are `sub`s, with `property` set; the last parameter of a Let/Set is the value.
+ */
 export interface ProcDecl {
   kind: 'sub' | 'function';
+  property?: 'get' | 'let' | 'set';
   name: string;
   visibility: 'public' | 'private';
   /** `Static Sub`: all locals are static. */
@@ -134,18 +153,33 @@ export interface ProcDecl {
   returnsArray?: boolean;
   body: Stmt[];
   line: number;
-  /** Line of `End Sub` / `End Function`. */
+  /** Line of `End Sub` / `End Function` / `End Property`. */
   endLine: number;
 }
+
+/** `[Public] Event Name(params)` in a class module. */
+export interface EventDecl { name: string; params: Param[]; line: number }
 
 export interface ModuleAst {
   name: string;
   optionExplicit: boolean;
+  /** `Option Base 1`: the default lower bound of arrays (`Dim a(5)`, `Array()`); absent: 0. */
+  optionBase?: number;
+  /** `Option Compare Text`: =, <, Like, InStr and StrComp (without a compare argument) ignore case. */
+  optionCompareText?: boolean;
   variables: VarDecl[];
   consts: ConstDecl[];
   types: TypeDecl[];
   enums: EnumDecl[];
   procedures: ProcDecl[];
+  /** `Event` declarations (class modules). Optional: older code builds a ModuleAst without them. */
+  events?: EventDecl[];
+  /** `Implements IFoo`: the interface classes (by name, as written). */
+  implements?: string[];
+  /** A class's default member: the procedure (or Public variable) with `Attribute Name.VB_UserMemId = 0`. */
+  defaultMember?: string;
+  /** The member For Each enumerates (`Attribute NewEnum.VB_UserMemId = -4`): it returns a Collection's `[_NewEnum]`. */
+  newEnum?: string;
 }
 
 export interface DimStmt { kind: 'dim'; decls: VarDecl[]; line: number }
@@ -181,13 +215,22 @@ export interface DoStmt {
   line: number;
 }
 export interface WhileStmt { kind: 'while'; cond: Expr; body: Stmt[]; line: number }
-export interface ExitStmt { kind: 'exit'; what: 'for' | 'do' | 'sub' | 'function'; line: number }
+export interface ExitStmt { kind: 'exit'; what: 'for' | 'do' | 'sub' | 'function' | 'property'; line: number }
+/** `RaiseEvent Name[(args)]` in a class module. */
+export interface RaiseEventStmt { kind: 'raiseEvent'; name: string; args: (Expr | MissingArg)[]; line: number }
 export interface WithStmt { kind: 'with'; object: Expr; body: Stmt[]; line: number }
 /** `label` is the label name or line number as text; `goto0` is `On Error GoTo 0`. */
 export interface OnErrorStmt { kind: 'onError'; mode: 'resumeNext' | 'goto' | 'goto0'; label?: string; line: number }
 /** `Resume` (mode 'resume'), `Resume Next` (mode 'next'), `Resume label`. */
 export interface ResumeStmt { kind: 'resume'; mode: 'resume' | 'next' | 'label'; label?: string; line: number }
-export interface GotoStmt { kind: 'goto'; label: string; line: number }
+/** `GoTo label`; with `gosub`, `GoSub label` (a `Return` comes back after it). */
+export interface GotoStmt { kind: 'goto'; label: string; line: number; gosub?: boolean }
+/** `Return` (from a GoSub). */
+export interface ReturnStmt { kind: 'return'; line: number }
+/** `On n GoTo l1, l2, ...` / `On n GoSub ...`: the n-th label; n = 0 or more than the labels goes on with the next statement. */
+export interface OnGotoStmt { kind: 'onGoto'; index: Expr; labels: string[]; gosub: boolean; line: number }
+/** `Debug.Assert cond`: break mode when cond is False (in the IDE; a made app skips it). */
+export interface DebugAssertStmt { kind: 'debugAssert'; cond: Expr; line: number }
 /** `Retry:` or a bare line number (`10`); `name` is the text. */
 export interface LabelStmt { kind: 'label'; name: string; line: number }
 export interface EndStmt { kind: 'end'; line: number }
@@ -226,8 +269,36 @@ export interface SeekStmt { kind: 'seekFile'; file: Expr; pos: Expr; line: numbe
 /** `Name old As new`. */
 export interface NameStmt { kind: 'name'; from: Expr; to: Expr; line: number }
 
+// Drawing statements with their own syntax: `[obj.]Print`, `PSet`, `Line`, `Circle`, `Scale`. `object` absent: the form whose
+// code runs (Me). A point is `[Step] (x, y)`.
+export interface GfxPoint { step: boolean; x: Expr; y: Expr }
+export type GfxStmt = { kind: 'gfx'; object?: Expr; line: number } & (
+  | { method: 'print'; items: PrintItem[] }
+  | { method: 'pset'; at: GfxPoint; color?: Expr }
+  /** `Line [p1]-p2[, color][, B[F]]`. */
+  | { method: 'line'; from?: GfxPoint; to: GfxPoint; color?: Expr; box: '' | 'b' | 'bf' }
+  | { method: 'circle'; at: GfxPoint; radius: Expr; color?: Expr; start?: Expr; end?: Expr; aspect?: Expr }
+  /** `Scale` alone (back to twips) or `Scale (x1, y1)-(x2, y2)`. */
+  | { method: 'scale'; from?: GfxPoint; to?: GfxPoint });
+
+/** Every expression of a drawing statement (for the code checks). */
+export function gfxExprs(s: GfxStmt): Expr[] {
+  const out: Expr[] = s.object ? [s.object] : [];
+  const pt = (p?: GfxPoint) => { if (p) out.push(p.x, p.y); };
+  const opt = (...e: (Expr | undefined)[]) => { for (const x of e) if (x) out.push(x); };
+  switch (s.method) {
+    case 'print': for (const it of s.items) opt(it.expr, it.fn?.arg); break;
+    case 'pset': pt(s.at); opt(s.color); break;
+    case 'line': pt(s.from); pt(s.to); opt(s.color); break;
+    case 'circle': pt(s.at); opt(s.radius, s.color, s.start, s.end, s.aspect); break;
+    case 'scale': pt(s.from); pt(s.to); break;
+  }
+  return out;
+}
+
 export type Stmt =
   | DimStmt | ConstStmt | ReDimStmt | EraseStmt | AssignStmt | CallStmt | IfStmt | SelectStmt
   | ForStmt | ForEachStmt | DoStmt | WhileStmt | ExitStmt | WithStmt | OnErrorStmt | ResumeStmt
   | GotoStmt | LabelStmt | EndStmt | StopStmt | UnloadStmt | LoadStmt | DebugPrintStmt | ErrorStmt | MidStmt | AlignStmt
-  | OpenStmt | CloseStmt | FilePrintStmt | FileInputStmt | GetPutStmt | SeekStmt | NameStmt;
+  | OpenStmt | CloseStmt | FilePrintStmt | FileInputStmt | GetPutStmt | SeekStmt | NameStmt | RaiseEventStmt
+  | ReturnStmt | OnGotoStmt | DebugAssertStmt | GfxStmt;

@@ -54,6 +54,7 @@ const DESCRIPTIONS: Record<string, string> = {
   Icon: 'Returns the icon displayed when a form is minimized at run time.',
   Increment: 'Returns/sets the amount the value changes on each click of an arrow.',
   Indentation: 'Returns/sets the width of the indentation of child nodes.',
+  Instancing: 'Sets a value that specifies whether you can create instances of a public class outside a project.',
   Interval: 'Returns/sets the number of milliseconds between calls to a Timer control\'s Timer event.',
   KeyPreview: 'Returns/sets whether keyboard events for an object are invoked before keyboard events for controls on that object.',
   LargeChange: 'Returns/sets the amount of change to the Value property when the user clicks the scroll area.',

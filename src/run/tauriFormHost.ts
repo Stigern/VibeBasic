@@ -1,12 +1,13 @@
 // FormHost that shows every running form as its own Tauri window (form.html#<key>, label vbform-<key>) and every
 // MsgBox / InputBox / error dialog as a separate window (form.html#dialog-<n>, label vbdialog-<n>; n is unique for the
-// whole app, so a late dispose of an earlier run never destroys a dialog of the current one). Dialogs and modal forms
+// whole app, so a late dispose of an earlier run never destroys a dialog of the current one); a print job is form.html#print-<n>
+// (label vbdialog-print-<n>). Dialogs and modal forms
 // are child windows (`parent`) of the topmost visible form window, or of the IDE window; always-on-top only when that
 // parent does not exist.
 //
 // Wire protocol (main <-> window), all Tauri events:
 //   window -> main  'vb:hello'    key                      the page is listening; main answers:
-//   main -> window  'vb:snapshot' FormSnapshot             (form)   or   'vb:dialog' DialogSpec (dialog)
+//   main -> window  'vb:snapshot' FormSnapshot             (form)   or   'vb:dialog' DialogSpec (dialog)   or   'vb:print' PrintJob
 //   main -> window  'vb:to'       ToWindow                 emitTo(label), in order (queued until hello)
 //   window -> main  'vb:from'     { key, m: FromWindow }   or   { key, result } when a dialog closes
 // Listeners live only while a window is open; close()/dispose() destroy windows and unlisten.
@@ -23,6 +24,7 @@ import type { DialogSpec } from './dialogSpec';
 import type { RuntimeErrorInfo } from './errorDialog';
 import type { FormHost, FormWindow } from './formHost';
 import type { ClipboardApi } from './objects/globalObjects';
+import type { PrintJob, PrinterDialogRequest, PrinterDialogResult, PrinterInfo } from './printing';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 import { windowOptionsFor } from './windowOptions';
 
@@ -89,6 +91,8 @@ export class TauriFormHost implements FormHost {
   private openDialogs = 0;
   /** Open form windows in opening order (owner candidates for dialogs and modal forms). */
   private order: { label: string; visible: boolean }[] = [];
+  /** Open form windows by key: how to send to one, and the listeners of the MDI children it shows (by child key). */
+  private formWindows = new Map<string, { post(m: ToWindow): void; children: Map<string, (m: FromWindow) => void> }>();
 
   constructor(private glue: TauriGlue = tauriGlue) {}
 
@@ -138,7 +142,8 @@ export class TauriFormHost implements FormHost {
     if (this.closing.get(label) === p) this.closing.delete(label);
   }
 
-  async openForm(s: FormSnapshot, o: { modal: boolean }): Promise<FormWindow> {
+  async openForm(s: FormSnapshot, o: { modal: boolean; mdiParent?: string }): Promise<FormWindow> {
+    if (o.mdiParent !== undefined) return this.openChild(s, o.mdiParent);
     const label = `vbform-${s.key}`;
     await this.closing.get(label);
     await this.ensureListening();
@@ -150,10 +155,13 @@ export class TauriFormHost implements FormHost {
     const slot = { label, visible: true };
     this.order.push(slot);
     const w = { apply: () => ch.post('vb:to', { t: 'blocked', blocked: sessionBlocked || this.openDialogs > 0 } satisfies ToWindow) };
+    const fw = { post: (m: ToWindow) => ch.post('vb:to', m), children: new Map<string, (m: FromWindow) => void>() };
+    this.formWindows.set(s.key, fw);
     this.entries.set(s.key, {
       hello: () => ch.open(['vb:snapshot', s]),
       from: p => {
         if (!p.m) return;
+        if (p.m.t === 'mdiFrom') { fw.children.get(p.m.key)?.(p.m.m); return; }
         if (listeners.length) for (const l of listeners) l(p.m); else early.push(p.m);
       },
     });
@@ -162,6 +170,7 @@ export class TauriFormHost implements FormHost {
       if (closed) return;
       closed = true;
       this.entries.delete(s.key);
+      if (this.formWindows.get(s.key) === fw) this.formWindows.delete(s.key);
       this.forms.delete(w);
       this.order = this.order.filter(x => x !== slot);
       if (this.forms.size === 0) this.cascade = 0;
@@ -189,6 +198,31 @@ export class TauriFormHost implements FormHost {
     };
   }
 
+  /** An MDI child: no window of its own; the workspace in its MDI form's window shows it, and its messages go through that window. */
+  private async openChild(s: FormSnapshot, parentKey: string): Promise<FormWindow> {
+    const parent = this.formWindows.get(parentKey);
+    if (!parent) throw new Error(`MDI form ${parentKey} has no window`);
+    const listeners: ((m: FromWindow) => void)[] = [];
+    const early: FromWindow[] = [];
+    const listener = (m: FromWindow) => { if (listeners.length) for (const l of listeners) l(m); else early.push(m); };
+    parent.children.set(s.key, listener);
+    parent.post({ t: 'mdiOpen', snapshot: s });
+    let closed = false;
+    const close = async () => {
+      if (closed) return;
+      closed = true;
+      this.closers.delete(close);
+      if (parent.children.get(s.key) === listener) parent.children.delete(s.key);
+      parent.post({ t: 'mdiClose', key: s.key });
+    };
+    this.closers.add(close);
+    return {
+      send: m => { if (!closed) parent.post({ t: 'mdiTo', key: s.key, m }); },
+      onMessage: cb => { listeners.push(cb); for (const m of early.splice(0)) cb(m); },
+      close,
+    };
+  }
+
   /** One dialog window; every form window is blocked while any dialog is open. */
   private async dialog(spec: DialogSpec, cancelled: number | string): Promise<number | string> {
     const n = ++dialogSeq;
@@ -203,7 +237,7 @@ export class TauriFormHost implements FormHost {
     const destroy = () => (destroying ??= this.destroy(label, handle));
     const cancel = async () => { done(cancelled); await destroy(); };
     this.closers.add(cancel);
-    const title = spec.kind === 'error' ? spec.info.title : spec.kind === 'color' ? 'Color' : spec.kind === 'font' ? 'Font' : spec.title;
+    const title = spec.kind === 'error' ? spec.info.title : spec.kind === 'color' ? 'Color' : spec.kind === 'font' ? 'Font' : spec.kind === 'printer' ? spec.req.title : spec.title;
     const handle = this.glue.createWindow(label, {
       url: `form.html#${key}`, title, width: 420, height: 160, center: true,
       resizable: false, minimizable: false, maximizable: false,
@@ -229,7 +263,7 @@ export class TauriFormHost implements FormHost {
   }
 
   /** ShowOpen / ShowSave: the Mac dialog opens from this (main) window; the form windows ignore input meanwhile. */
-  async fileDialog(o: FileDialogRequest): Promise<string | null> {
+  async fileDialog(o: FileDialogRequest): Promise<string | string[] | null> {
     if (this.openDialogs++ === 0) for (const f of this.forms) f.apply();
     try {
       return await runFileDialog(getBackend(), o);
@@ -284,6 +318,59 @@ export class TauriFormHost implements FormHost {
   async fontDialog(o: { font: FontValue }): Promise<FontValue | null> {
     const r = String(await this.dialog({ kind: 'font', ...o }, ''));
     return r === '' ? null : JSON.parse(r) as FontValue;
+  }
+
+  async printerDialog(o: PrinterDialogRequest): Promise<PrinterDialogResult | null> {
+    const r = String(await this.dialog({ kind: 'printer', req: o }, ''));
+    return r === '' ? null : JSON.parse(r) as PrinterDialogResult;
+  }
+
+  /** Printers: lpstat, from this (main) window. */
+  async listPrinters(): Promise<PrinterInfo[]> { return (await getBackend().printerList?.()) ?? []; }
+
+  /**
+   * Printer.EndDoc / PrintForm: a print window (label vbdialog-print-<n>: a run window, it may call no app command) shows the pages
+   * in a Print Preview frame; when they are drawn this window asks for the macOS print dialog on it (print_window), and again for
+   * its Print button. It stays open until the user closes it, also after the program ended. Resolves when the dialog is asked for.
+   */
+  async printPages(job: PrintJob): Promise<void> {
+    const n = ++dialogSeq;
+    const key = `print-${n}`, label = `vbdialog-print-${n}`;
+    await this.ensureListening();
+    const ch = this.channel(label);
+    let ready!: () => void;
+    const shown = new Promise<void>(r => { ready = r; });
+    // window.print() does nothing in WKWebView; when the native call is not there, the page tries it anyway
+    const print = () => {
+      const b = getBackend();
+      void (b.printWindow ? b.printWindow(label) : Promise.reject(new Error('no print'))).catch(() => ch.post('vb:print-self', null));
+    };
+    let closed = false;
+    const close = async () => {
+      if (closed) return;
+      closed = true;
+      ready();
+      this.entries.delete(key);
+      await this.destroy(label, handle);
+      await this.releaseIfIdle();
+    };
+    this.entries.set(key, {
+      hello: () => ch.open(['vb:print', job]),
+      from: p => {
+        if (p.result === 'ready') { ready(); print(); } else if (p.result === 'print') print(); else if (p.result === 'close' || p.cancelled) void close();
+      },
+    });
+    const handle = this.glue.createWindow(label, {
+      url: `form.html#${key}`, title: `Print Preview - ${job.title}`, width: 700, height: 820, center: true,
+      resizable: true, minimizable: true, maximizable: true, decorations: false, visible: false, alwaysOnTop: false, focus: true,
+    });
+    try {
+      await handle;
+    } catch {
+      await close();
+      throw new VBRuntimeError(482);
+    }
+    await Promise.race([shown, new Promise(r => setTimeout(r, 20000))]);   // a page that never draws does not hold up the program
   }
 
   async runtimeErrorBox(o: RuntimeErrorInfo): Promise<'end' | 'debug' | 'ai'> {

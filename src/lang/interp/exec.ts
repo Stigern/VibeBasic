@@ -11,20 +11,25 @@
 // Exit For/Do/Sub and GoTo travel as completion values, not exceptions.
 
 import type {
-  AlignStmt, ArrayBound, CaseTest, ConstDecl, ErrorStmt, Expr, ForEachStmt, ForStmt, LabelStmt, MidStmt, MissingArg, ProcDecl, SelectStmt, Stmt,
-  VarDecl, VBTypeName,
+  AlignStmt, ArrayBound, CaseTest, CompareOp, ConstDecl, DebugAssertStmt, ErrorStmt, Expr, ForEachStmt, ForStmt, GotoStmt, LabelStmt, MidStmt, MissingArg,
+  OnGotoStmt, ProcDecl, ReturnStmt, SelectStmt, Stmt, VarDecl, VBTypeName,
 } from '../ast';
 import { VBRuntimeError, internalError } from '../errors';
 import { PrintLine } from '../printFormat';
 import {
-  Empty, Missing, NothingT, NullT, VBArray, VBRecord, VBRef, bankers, compare, isObject, maybeSingle, single7, toNumber, toStr, type VBValue,
+  Counted, Empty, Missing, NothingT, NullT, RefContainer, VBArray, VBRecord, VBRef, bankers, compare, dropValue, isObject, maybeSingle, single7,
+  toNumber, toStr, type VBValue,
 } from '../values';
-import { EndSignal, nextTick, type Gen } from './driver';
+import { EndSignal, SubCall, nextTick, type Gen } from './driver';
 import { execFileStmt, printItems } from './fileStmts';
-import { AutoNewSlot, Frame, ProcRef, Run, Variable, lc, storeValue, type Slot } from './scope';
+import { execGraphics } from './gfxStmts';
 import {
-  afterHostCall, assign, awaitHost, callBuiltin, callProc, constExpr, evalArgValues, evalExpr, formMethod, hostRefs, lookup, memberGet,
-  methodArgs, objectFactory, shownArgs, variableOf, withObject,
+  AutoNewSlot, ClassInstance, ClassValue, Frame, ProcRef, PropRef, Run, Variable, classesInUse, lc, rawValue, release, retain, storeValue,
+  type Slot,
+} from './scope';
+import {
+  afterHostCall, assign, awaitHost, callBuiltin, callProc, classCall, constExpr, evalArgValues, evalExpr, formMethod, hostRefs, lookup,
+  forEachSource, hostArgs, memberGet, methodArgs, objectFactory, shownArgs, textBinary, variableOf, withObject,
 } from './eval';
 import { compareResult, plain, truthy } from './operators';
 import { shown, type StaticType } from './staticTypes';
@@ -53,7 +58,13 @@ export class ResumeJump {
   constructor(readonly mode: 'resume' | 'next' | 'label', readonly label = '') {}
 }
 
-export type Completion = undefined | 'exitFor' | 'exitDo' | 'exitProc' | GotoJump | ResumeJump;
+/** Set Next Statement (debugger.ts): goes up to the enclosing block that holds `stmt`, which runs next. */
+export class StmtJump {
+  constructor(readonly stmt: Stmt) {}
+}
+
+/** `'return'`: a `Return` going back to its GoSub (`gosub`). */
+export type Completion = undefined | 'exitFor' | 'exitDo' | 'exitProc' | 'return' | GotoJump | ResumeJump | StmtJump;
 
 /** Returned by `handleError` to run the failing statement (or loop step) again (Resume, Continue). */
 export const RETRY = Symbol('retry');
@@ -136,6 +147,10 @@ export function* execBlock(f: Frame, body: Stmt[], start = 0): Gen<Completion> {
       const target = jumpTo(f, body, c.label);
       if (target !== undefined) { i = target + 1; continue; }
     }
+    if (c instanceof StmtJump) {
+      const k = body.indexOf(c.stmt);
+      if (k >= 0) { i = k; continue; }   // the pause request of Set Next breaks there again
+    }
     return c;
   }
   return undefined;
@@ -157,7 +172,7 @@ function atBoundary(f: Frame, line: number): boolean {
     if (bp !== null && bp.has(line) && !f.run.immediate) rt.pauseRequested = true;
   }
   // stepping (Step Into/Over/Out): one comparison of the call depth
-  return ++rt.stmtCount >= rt.sliceSize || rt.stopping || rt.pauseRequested || rt.callDepth <= rt.stepDepth;
+  return ++rt.stmtCount >= rt.sliceSize || rt.stopping || rt.pauseRequested || rt.callDepth <= rt.stepDepth || rt.watchHook !== null;
 }
 
 /**
@@ -181,6 +196,8 @@ function* boundary(f: Frame, stoppable = true): Gen<void> {
   }
   // Immediate commands never break (the program may already be in break mode)
   if (f.run.immediate) return;
+  // Break When Value Is True / Changes watches (only while there are some)
+  if (stoppable && rt.watchHook !== null && (yield* rt.watchHook(f))) rt.pauseRequested = true;
   if (rt.pauseRequested || (stoppable && rt.callDepth <= rt.stepDepth)) yield* pauseHere(f);
 }
 
@@ -188,10 +205,21 @@ const notStoppable = (s: Stmt) => s.kind === 'dim' || s.kind === 'const' || s.ki
 
 /** Runs one statement: boundary checks, then the statement with error handling (and retry). */
 export function* execStmt(f: Frame, s: Stmt): Gen<Completion> {
-  if (atBoundary(f, s.line)) yield* boundary(f, !notStoppable(s));
+  if (atBoundary(f, s.line)) {
+    try {
+      yield* boundary(f, !notStoppable(s));
+    } catch (e) {
+      if (e instanceof Unwind) return e.completion;   // Set Next Statement chosen in a break here
+      throw e;
+    }
+  }
   for (;;) {
     try {
-      return yield* execInner(f, s);
+      const c = yield* execInner(f, s);
+      // objects whose last reference went away in this statement terminate now (Class_Terminate)
+      const rt = f.run.rt;
+      if (rt.dying !== null) yield* reap(f.run, rt.callDepth);
+      return c;
     } catch (e) {
       if (e instanceof Unwind) return e.completion;
       const r = yield* handleError(f, e);
@@ -249,6 +277,8 @@ function canHandle(fr: Frame): boolean {
  */
 export function* handleError(f: Frame, e: unknown): Gen<ErrorOutcome> {
   if (e instanceof EndSignal || e instanceof Unwind) throw e;
+  // objects let go of while the error left inner procedures terminate before a handler runs (VB6 unwinds first)
+  if (f.run.rt.dying !== null) yield* reap(f.run, f.run.rt.callDepth);
   let err: VBRuntimeError;
   if (e instanceof VBRuntimeError) err = e;
   else if (isStackOverflow(e)) err = new VBRuntimeError(28);
@@ -332,7 +362,7 @@ function* unhandledError(f: Frame, err: VBRuntimeError): Gen<ErrorOutcome> {
   if (rt.stopping) throw END;
   if (answer === 'debug') {
     yield* enterBreak(f, 'error', err);
-    return RETRY;
+    return takeJump(f) ?? RETRY;
   }
   rt.endProgram();
   throw END;
@@ -385,6 +415,67 @@ export function* enterBreak(f: Frame, reason: 'error' | 'pause', error?: VBRunti
 function* pauseHere(f: Frame): Gen<void> {
   f.run.rt.pauseRequested = false;
   yield* enterBreak(f, 'pause');
+  const j = takeJump(f);
+  if (j) throw new Unwind(j);
+}
+
+/** The Set Next Statement jump chosen during the break that just ended in `f` (and consumes it). */
+function takeJump(f: Frame): StmtJump | undefined {
+  const rt = f.run.rt;
+  const j = rt.nextJump;
+  if (j === undefined) return undefined;
+  rt.nextJump = undefined;
+  return j.frame === f ? new StmtJump(j.stmt) : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Objects of class modules: Class_Terminate
+// ---------------------------------------------------------------------------
+
+/**
+ * Terminates the objects in `Runtime.dying` that were let go at call depth `depth` or deeper and still have no counted
+ * reference (a Function's result is stored by the statement that called it before this runs): Class_Terminate runs,
+ * then the object's variables let go of what they hold (which may terminate more objects).
+ */
+export function* reap(run: Run, depth: number): Gen<void> {
+  const rt = run.rt;
+  for (;;) {
+    const list = rt.dying;
+    if (list === null) return;
+    const i = list.findIndex(e => e.depth >= depth);
+    if (i < 0) return;
+    const { inst } = list[i];
+    list.splice(i, 1);
+    if (list.length === 0) rt.dying = null;
+    inst.dying = false;
+    if (inst instanceof RefContainer) {   // a Collection or Dictionary nobody holds: its items lose their references
+      if (inst.refs <= 0 && !inst.escaped) inst.releaseItems();
+      continue;
+    }
+    if (inst.refs > 0 || inst.escaped || inst.dead) continue;
+    const t = inst.initPending ? undefined : inst.module.procs.get('class_terminate');
+    if (t) {
+      inst.dead = true;
+      yield new SubCall(invokeProc(run, t, [], inst));
+    }
+    rt.dropInstance(inst);
+  }
+}
+
+/** Leaving a procedure: its own variables let go of the objects they hold (also in their arrays and records). */
+function releaseLocals(f: Frame): void {
+  for (const v of f.locals.values()) {
+    if (v.opts.shared || v.opts.isConst) continue;
+    const x = rawValue(v.ref);
+    if (typeof x === 'object') dropValue(x);
+  }
+}
+
+/** A variable gets a new value outside an assignment (ReDim of a Variant, Erase): the old one is let go. */
+function replaceValue(v: Variable, nv: VBValue): void {
+  const prev = rawValue(v.ref);
+  v.ref.value = nv;
+  if (classesInUse && !v.ref.counts && prev !== nv) dropValue(prev);
 }
 
 // ---------------------------------------------------------------------------
@@ -431,15 +522,19 @@ function bindParams(f: Frame, args: BoundArg[]): void {
     } else if ('slot' in a) {
       if (p.isArray) {
         if (!(a.slot.value instanceof VBArray)) throw new VBRuntimeError(13);
-        v = new Variable(p.name, type, a.slot, { isArray: true });
+        v = new Variable(p.name, type, a.slot, { isArray: true, shared: true });
       } else if (a.type === undefined) {
         // untyped reference from the host (event arguments): convert in place and share
         a.slot.value = storeValue(a.slot.value, type);
-        v = new Variable(p.name, type, a.slot);
+        v = new Variable(p.name, type, a.slot, { shared: true });
       } else if (sameType(a.type, type) || type === 'Variant') {
         // shared: assignments convert to the caller's declared type (an array stays an array, a String * n keeps n)
-        v = new Variable(p.name, a.type, a.slot, { isArray: a.isArray, fixedLength: a.fixedLength, variantAlias: !sameType(a.type, type) });
+        v = new Variable(p.name, a.type, a.slot, { isArray: a.isArray, fixedLength: a.fixedLength, variantAlias: !sameType(a.type, type), shared: true });
       } else if (isObjectType(a.type) && isObjectType(type)) {
+        // a variable of a host type (As Collection) for a class module's type never fits: VB6 does not compile it
+        if (typeof type === 'object' && 'objectType' in type && type.classModule && typeof a.type === 'object' && 'objectType' in a.type
+          && !a.type.classModule) throw compileError('ByRef argument type mismatch');
+        // another object type (an interface of the object): a reference of the parameter's own type
         v = new Variable(p.name, type, new VBRef(storeValue(a.slot.value, type)));
       } else {
         // VB6 does not compile a variable of another type passed to a typed ByRef parameter (`Foo (x)` passes a copy)
@@ -452,6 +547,7 @@ function bindParams(f: Frame, args: BoundArg[]): void {
       v = new Variable(p.name, type, new VBRef(storeValue(a.value, type)));
       if (a.sub !== undefined) { v.sub = a.sub; v.subOf = v.value; }
     }
+    if (classesInUse && !v.opts.shared) retain(v.value);
     f.locals.set(lc(p.name), v);
   }
   if (proc.kind === 'function') {
@@ -463,17 +559,19 @@ function bindParams(f: Frame, args: BoundArg[]): void {
   }
 }
 
-/** Runs a Sub/Function body in a new frame (run by the driver as a SubCall). */
-export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBValue> {
+/** Runs a Sub/Function body in a new frame (run by the driver as a SubCall); `inst` is `Me` of a class module's procedure. */
+export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[], inst?: ClassInstance): Gen<VBValue> {
   const rt = run.rt;
   if (run.frames.length >= MAX_CALL_DEPTH) throw new VBRuntimeError(28);
   const { module, proc } = ref;
-  const f = new Frame(run, module, proc, proc.line);
+  const f = new Frame(run, module, proc, proc.line, inst);
   const hasRest = proc.params.length > 0 && proc.params[proc.params.length - 1].paramArray === true;
   if (args.length > proc.params.length && !hasRest) throw compileError('Wrong number of arguments or invalid property assignment');
   bindParams(f, args);
   run.frames.push(f);
   rt.callDepth++;
+  // VB6 holds a reference to Me while its procedure runs: the object cannot terminate in its own code
+  if (inst) inst.refs++;
   try {
     yield* declareLocals(f);
     const c = yield* execBlock(f, proc.body);
@@ -484,6 +582,8 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBVal
   } finally {
     rt.callDepth--;
     run.frames.pop();
+    if (classesInUse) releaseLocals(f);
+    if (inst) inst.release();
   }
   return f.returnVar ? f.returnVar.value : Empty;
 }
@@ -496,7 +596,7 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBVal
 export function* evalBounds(f: Frame, bounds: ArrayBound[]): Gen<[number, number][]> {
   const out: [number, number][] = [];
   for (const b of bounds) {
-    const lo = b.lower ? toNumber(yield* evalExpr(f, b.lower)) : 0;
+    const lo = b.lower ? toNumber(yield* evalExpr(f, b.lower)) : f.module.optionBase;
     const hi = toNumber(yield* evalExpr(f, b.upper));
     out.push([lo, hi]);
   }
@@ -509,7 +609,7 @@ export function* declareVariable(f: Frame, d: VarDecl): Gen<Variable> {
 }
 
 /** The variable of a declaration, with the bounds of a fixed array. */
-function newVariable(f: Frame, d: VarDecl, bounds: [number, number][] | null): Variable {
+export function newVariable(f: Frame, d: VarDecl, bounds: [number, number][] | null): Variable {
   const rt = f.run.rt;
   const type = rt.resolveType(d.type, f.module);
   // `As New T`: each element / the variable makes its object when it is first used
@@ -580,10 +680,11 @@ function* declareLocals(f: Frame): Gen<void> {
           const type = rt.resolveType(item.decl.type, f.module);
           f.locals.set(key, new Variable(d.name, type, new VBRef(storeValue(value, type)), { isConst: true }));
         } else if (item.decl.scope === 'static' || proc.isStatic) {
-          const store = rt.staticStore(proc);
+          const store = f.instance ? f.instance.staticStore(proc) : rt.staticStore(proc);
           let v = store.get(key);
           if (!v) {
             v = yield* declareVariable(f, item.decl);
+            v.opts.shared = true;   // it outlives the call
             store.set(key, v);
           }
           f.locals.set(key, v);
@@ -626,6 +727,7 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
     case 'getFile': case 'putFile': case 'seekFile': case 'name':
       yield* execFileStmt(f, s);
       return;
+    case 'gfx': yield* execGraphics(f, s); return;
     case 'if': {
       for (const b of s.branches) {
         if (yield* guardedCond(f, b.line, b.cond, true)) return yield* execBlock(f, b.body);
@@ -676,7 +778,7 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
         if (!(v instanceof Variable) || v.opts.isConst) throw compileError('Expected: array');
         const cur = v.value;
         if (cur instanceof VBArray) cur.redim(bounds, s.preserve);
-        else if (v.type === 'Variant') v.ref.value = rt.newArray(rt.resolveType(d.type, f.module), bounds, false);
+        else if (v.type === 'Variant') replaceValue(v, rt.newArray(rt.resolveType(d.type, f.module), bounds, false));
         else throw compileError('Expected: array');
       }
       return;
@@ -687,9 +789,9 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
         const cur = v.value;
         if (!(cur instanceof VBArray)) throw new VBRuntimeError(13);
         const n = cur.fixedLength;
-        if (!v.opts.isArray) v.ref.value = Empty;
-        else if (cur.fixed) v.ref.value = n === undefined ? rt.newArray(cur.elemType, cur.bounds, true) : VBArray.fixedString(cur.bounds, n, true);
-        else v.ref.value = n === undefined ? rt.unallocatedArray(cur.elemType) : VBArray.fixedString(null, n, false);
+        if (!v.opts.isArray) replaceValue(v, Empty);
+        else if (cur.fixed) replaceValue(v, n === undefined ? rt.newArray(cur.elemType, cur.bounds, true) : VBArray.fixedString(cur.bounds, n, true));
+        else replaceValue(v, n === undefined ? rt.unallocatedArray(cur.elemType) : VBArray.fixedString(null, n, false));
       }
       return;
     }
@@ -697,17 +799,22 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
       const obj = yield* evalExpr(f, s.object);
       if (obj instanceof NothingT) throw new VBRuntimeError(91);
       f.withStack.push(obj);
+      retain(obj);   // `With New Class1`: the object lives until End With
       try {
         return yield* execBlock(f, s.body);
       } finally {
         f.withStack.pop();
+        release(obj);
       }
     }
+    case 'raiseEvent': return yield* raiseEvent(f, s.name, s.args);
     case 'label':
       if (isLineNumber(s.name)) f.lastLine = +s.name;
       return;
     case 'error': case 'mid': case 'lset': case 'rset': return yield* execStringStmt(f, s);
+    case 'return': case 'onGoto': case 'debugAssert': return yield* execJumpStmt(f, s);
     case 'goto': {
+      if (s.gosub) return yield* execJumpStmt(f, s);
       const label = lc(s.label);
       if (!f.proc || !procLabels(f.proc).has(label)) throw compileError('Label not defined');
       return new GotoJump(label);
@@ -716,7 +823,7 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
       rt.endProgram();
       throw END;
     case 'stop':
-      yield* enterBreak(f, 'pause');
+      yield* pauseHere(f);
       return;
     case 'unload': case 'load': {
       // `Load Command1(i)`: an element of a control array, which may not exist yet
@@ -768,6 +875,24 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
   }
 }
 
+/**
+ * `RaiseEvent Name(args)`: runs `x_Name(args)` in each module (and object) whose WithEvents variable `x` holds this
+ * object, in the order they were set. Arguments are passed like a call's (a ByRef parameter of the handler changes the
+ * raiser's variable). An event the module does not declare is a compile error; outside a class object nothing listens.
+ */
+function* raiseEvent(f: Frame, name: string, args: (Expr | MissingArg)[]): Gen<Completion> {
+  if (!f.module.events.has(lc(name))) throw compileError('Event not found');
+  const sinks = f.instance?.sinks;
+  if (!sinks) return;
+  for (const sink of [...sinks]) {
+    const v = rawValue(sink.ref);
+    const ev = sink.opts.events;
+    if (!(v instanceof ClassValue) || v.inst !== f.instance || !ev || ev.instance?.dead) continue;
+    const handler = ev.module.procs.get(`${lc(sink.name)}_${lc(name)}`);
+    if (handler) yield* callProc(f, handler, args, ev.instance);
+  }
+}
+
 /** `Error n`, the Mid statement, LSet and RSet (kept out of execInner, which stays small for the hot statements). */
 function* execStringStmt(f: Frame, s: ErrorStmt | MidStmt | AlignStmt): Gen<Completion> {
   switch (s.kind) {
@@ -799,6 +924,55 @@ function* execStringStmt(f: Frame, s: ErrorStmt | MidStmt | AlignStmt): Gen<Comp
   }
 }
 
+/** `GoSub`, `Return`, `On n GoTo/GoSub` and `Debug.Assert` (kept out of execInner, which stays small for the hot statements). */
+function* execJumpStmt(f: Frame, s: GotoStmt | ReturnStmt | OnGotoStmt | DebugAssertStmt): Gen<Completion> {
+  switch (s.kind) {
+    case 'goto': return yield* gosub(f, labelOf(f, s.label));
+    case 'return':
+      if (f.gosubDepth === 0) throw new VBRuntimeError(3);
+      return 'return';
+    case 'onGoto': {
+      const labels = s.labels.map(l => labelOf(f, l));
+      const n = bankers(toNumber(plain(yield* evalExpr(f, s.index))));
+      if (n < 0 || n > 255) throw new VBRuntimeError(5);
+      if (n === 0 || n > labels.length) return undefined;   // out of range: the next statement
+      return s.gosub ? yield* gosub(f, labels[n - 1]) : new GotoJump(labels[n - 1]);
+    }
+    case 'debugAssert': {
+      // a made app leaves the statement out (the expression is not evaluated)
+      if (f.rt.ignoreAsserts) return undefined;
+      if (!truthy(yield* evalExpr(f, s.cond))) yield* enterBreak(f, 'pause');
+      return undefined;
+    }
+  }
+}
+
+/** A GoTo / GoSub label of the procedure (lower case); none: "Label not defined". */
+function labelOf(f: Frame, name: string): string {
+  const label = lc(name);
+  if (!f.proc || !procLabels(f.proc).has(label)) throw compileError('Label not defined');
+  return label;
+}
+
+/**
+ * `GoSub label`: the procedure's code from the label (in the procedure's own body, not inside a block) runs until a
+ * `Return`, then the statement after the GoSub. Reaching the end of the procedure first ends the procedure.
+ */
+function* gosub(f: Frame, label: string): Gen<Completion> {
+  const body = f.proc!.body;
+  const at = jumpTo(f, body, label);
+  if (at === undefined) throw compileError('GoSub into a block is not supported');
+  f.gosubDepth++;
+  let c: Completion;
+  try {
+    c = yield* execBlock(f, body, at + 1);
+  } finally {
+    f.gosubDepth--;
+  }
+  if (c === 'return') return undefined;
+  return c ?? 'exitProc';
+}
+
 /** A call statement: `Foo 1, 2`, `Call Foo(1)`, `obj.Method x`. */
 function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Completion> {
   if (target.kind === 'name') {
@@ -807,6 +981,7 @@ function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Com
     if (f.returnVar && key === lc(f.proc!.name)) { yield* callProc(f, f.module.procs.get(key)!, args); return; }
     const b = key === 'me' ? undefined : lookup(f, key, target.name, args.length > 0);
     if (b instanceof ProcRef) { yield* callProc(f, b, args); return; }
+    if (b instanceof PropRef) throw compileError('Invalid use of property');
     if (b instanceof BuiltinRef) { yield* callBuiltin(f, b, args); return; }
     // a property of the form used as a statement: a method call, like `Me.name args`
     if (b instanceof MemberRef) { yield* callObjectMethod(f, b.obj, b.name, args); return; }
@@ -831,6 +1006,10 @@ function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Com
     }
     if (base instanceof EnumRef) throw new VBRuntimeError(438);
     if (base instanceof NothingT) throw new VBRuntimeError(91);
+    if (base instanceof ClassValue) {
+      yield* classCall(f, base, target.name, args);
+      return;
+    }
     if (isObject(base)) {
       yield* callObjectMethod(f, base, target.name, args);
       return;
@@ -842,6 +1021,7 @@ function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Com
 
 /** `obj.name args` as a statement: `callMethod` (a Promise result is awaited). */
 function* callObjectMethod(f: Frame, obj: VBObject, name: string, args: (Expr | MissingArg)[]): Gen<void> {
+  args = hostArgs(obj, name, args);
   const argv = shownArgs(f, args, yield* evalArgValues(f, args));
   const r = obj.callMethod(name, methodArgs(argv, obj), yield* hostRefs(f, obj, name, args));
   if (r instanceof Promise) yield* awaitHost(f, r);
@@ -854,6 +1034,7 @@ function* caseMatches(f: Frame, subject: VBValue, t: CaseTest): Gen<boolean> {
     const a = plain(subject);
     const b = plain(v);
     if (a instanceof NullT || b instanceof NullT) return false;
+    if (f.module.textCompare) return textBinary(op as CompareOp, a, b) === true;   // Option Compare Text
     return compareResult(op, compare(a, b));
   };
   switch (t.kind) {
@@ -927,8 +1108,20 @@ function* execFor(f: Frame, s: ForStmt): Gen<Completion> {
 
 function* execForEach(f: Frame, s: ForEachStmt): Gen<Completion> {
   const v = variableOf(f, s.variable);
-  const source = yield* evalExpr(f, s.collection);
+  // a class object: the Collection its NewEnum member (VB_UserMemId -4) gives
+  const source = yield* forEachSource(f, yield* evalExpr(f, s.collection));
   let coll = plainCollection(source);
+  // the loop keeps the objects it visits (the array or collection may be let go of meanwhile)
+  const held = classesInUse ? coll.filter(x => x instanceof Counted) : [];
+  for (const x of held) (x as Counted).hold();
+  try {
+    return yield* forEachItems(f, s, v, source, coll);
+  } finally {
+    for (const x of held) (x as Counted).drop();
+  }
+}
+
+function* forEachItems(f: Frame, s: ForEachStmt, v: Variable, source: VBValue, coll: VBValue[]): Gen<Completion> {
   // the elements of a Single array in a Variant: their 7 shown digits (see staticTypes.ts `shown`)
   if (source instanceof VBArray && source.elemType === 'Single' && v.type !== 'Single') coll = coll.map(x => (maybeSingle(x) ? single7(x) : x));
   // a ParamArray's items keep the number subtype the caller's code gave them (VBArray.noteSub)

@@ -1,6 +1,8 @@
 import { expect, test } from 'vitest';
 import { autoFixEventNames, validateCode } from '../../src/ai/validate';
+import { describeProjectSymbols } from '../../src/ai/context';
 import { newControl, newForm, newProject } from '../../src/model/controls';
+import { newMdiForm } from '../../src/model/mdi';
 
 const form = () => {
   const f = newProject().forms[0];
@@ -104,8 +106,10 @@ test('Option Explicit: undeclared variables', () => {
 test('unsupported functions and statements', () => {
   expect(inForm1(sub('    Shell "notepad.exe"'))).toEqual(['Shell is not supported in VibeBasic. Programs cannot be started.']);
   expect(inForm1(sub('    Label1.Caption = StrConv("a b", vbProperCase) & Environ("HOME")\n    Beep'))).toEqual([]);
-  expect(validateCode('Sub Main()\n    Dim o\n    Set o = CreateObject("Scripting.Dictionary")\nEnd Sub', { moduleName: 'Module2', form: null }))
-    .toEqual(['CreateObject is not supported in VibeBasic.']);
+  // 0.9: CreateObject makes the Scripting and ADODB objects; other ProgIDs are 429
+  expect(validateCode('Sub Main()\n    Dim o\n    Set o = CreateObject("Scripting.Dictionary")\nEnd Sub', { moduleName: 'Module2', form: null })).toEqual([]);
+  expect(validateCode('Sub Main()\n    Dim o\n    Set o = CreateObject("Excel.Application")\nEnd Sub', { moduleName: 'Module2', form: null })[0])
+    .toMatch(/^CreateObject\("Excel.Application"\) is not supported in VibeBasic \(error 429\)\. It has ADODB.Connection, /);
   // file I/O and the settings are supported
   expect(inForm1(sub('    SaveSetting "App", "S", "K", Text1(0).Text'))).toEqual([]);
   expect(validateCode('Sub Main()\n    Open "x" For Output As #1\n    Print #1, "x"\n    Close #1\nEnd Sub', { moduleName: 'Module2', form: null })).toEqual([]);
@@ -349,7 +353,8 @@ test('the compile errors the run would raise at the call are found (review 08 fi
   expect(mod('Sub Main()\n    Dim i As Integer\n    Debug.Print Twice(i)\nEnd Sub')).toEqual([]);
   expect(mod('Private Sub Fill(a() As Long)\nEnd Sub\nSub Main()\n    Dim a(2) As Long\n    Fill (a)\nEnd Sub')[0]).toMatch(/^Type mismatch: array or user-defined type expected/);
   expect(mod('Private Type P\n    X As Integer\nEnd Type\nSub Main()\n    Dim q As New P\nEnd Sub')).toEqual(['Invalid use of New keyword']);
-  expect(mod('Sub Main()\n    Dim d As Object\n    Set d = New Dictionary\nEnd Sub')[0]).toMatch(/^Not supported in VibeBasic: New Dictionary/);
+  expect(mod('Sub Main()\n    Dim d As Object\n    Set d = New Gadget\nEnd Sub')[0]).toMatch(/^User-defined type not defined: New Gadget/);
+  expect(mod('Sub Main()\n    Dim d As Object, c As New ADODB.Connection\n    Set d = New Scripting.Dictionary\nEnd Sub')).toEqual([]);
   expect(mod('Private Type P\n    X As Integer\nEnd Type\nSub Main()\n    Dim a As P, b As P\n    LSet a = b\nEnd Sub')).toEqual(['Not supported in VibeBasic: LSet of a user-defined type']);
   // in a form, against the form's existing procedure; and a bare body is checked too
   const p2 = project();
@@ -362,4 +367,96 @@ test('the compile errors the run would raise at the call are found (review 08 fi
 
 test('vbUseDefault and the FirstWeekOfYear constants are known names (review 08 final #10)', () => {
   expect(inForm1(sub('    Debug.Print FormatNumber(0.5, 2, vbUseDefault), DatePart("ww", Now, vbMonday, vbFirstFourDays)'))).toEqual([]);
+});
+
+test('class modules: the validator accepts class code and the project symbols list a class\'s Public members', () => {
+  const p = project();
+  p.modules.push({ id: 'c1', name: 'Worker', kind: 'class', instancing: 1, code: [
+    'Public Event Done(ByVal n As Long)', 'Private mN As Long',
+    'Public Property Get N() As Long', '    N = mN', 'End Property', 'Public Property Let N(ByVal v As Long)', '    mN = v', 'End Property',
+    'Public Sub Go()', '    RaiseEvent Done(mN)', 'End Sub'].join('\n') });
+  // a Get / Let pair, RaiseEvent of the module's event, New and members of a class variable, a WithEvents handler
+  expect(validateCode('Public Property Get Twice() As Long\n    Twice = 2 * mN\nEnd Property\nPublic Sub Again()\n    RaiseEvent Done(1)\nEnd Sub',
+    { moduleName: 'Worker', form: null, project: p })).toEqual([]);
+  expect(validateCode('Private WithEvents w As Worker\nPrivate Sub Form_Load()\n    Set w = New Worker\n    w.N = 3\n    w.Go\n    Debug.Print w.N\nEnd Sub\nPrivate Sub w_Done(ByVal n As Long)\nEnd Sub',
+    { moduleName: 'Form1', form: p.forms[0], project: p })).toEqual([]);
+  const symbols = describeProjectSymbols(p, p.forms[0].id);
+  expect(symbols).toContain('Worker (class): Public Event Done(ByVal n As Long)');
+  expect(symbols).toContain('Worker (class): Public Property Get N() As Long');
+  expect(symbols).not.toMatch(/mN/);
+});
+
+test('0.9 A2 syntax is valid to the validator', () => {
+  const f = form();
+  const code = [
+    'Option Base 1', 'Option Compare Text', '#Const BETA = 1', 'Global gCount As Integer',
+    'Private Sub Show(a As String, Optional b As String = "")', 'End Sub',
+    'Private Sub Command1_Click()',
+    '    Dim c As Control, n As Integer',
+    '    For Each c In Me.Controls',
+    '        If TypeOf c Is CommandButton And Not TypeOf c Is Timer Then n = n + 1',
+    '    Next',
+    '#If BETA Then',
+    '    MsgBox Prompt:="beta", Title:="T"',
+    '#Else',
+    '    MsgBox "release"',
+    '#End If',
+    '    Show b:="x", a:="y"',
+    '    Debug.Assert n > 0',
+    '    On n GoSub One, Two',
+    '    GoSub One',
+    '    Debug.Print Pmt(0.1, 12, -1000), LenB("ab"), Partition(5, 0, 9, 2)',
+    '    Exit Sub',
+    'One:', '    Return', 'Two:', '    Return',
+    'End Sub'].join('\n');
+  expect(validateCode(code, { moduleName: 'Form1', form: f })).toEqual([]);
+});
+
+test('validateCode: the drawing statements and methods are valid (0.9)', () => {
+  const p = newProject(), f = p.forms[0];
+  const pic = newControl(f, 'PictureBox', { left: 0, top: 0 }, null);
+  f.controls.push(pic);
+  const code = 'Option Explicit\nPrivate Sub Form_Paint()\n    Dim c As Long\n    Cls\n    ScaleMode = vbPixels\n    Print "x"; 1, Tab(3);\n'
+    + '    Line (0, 0)-Step(10, 10), vbRed, BF\n    Circle (5, 5), 3, , -1, -2, 0.5\n    PSet (1, 1): c = Point(1, 1)\n'
+    + '    Picture1.Line -(5, 5)\n    Picture1.Print TextWidth("a")\n    Picture1.PaintPicture Picture1.Picture, 0, 0\n    Scale (0, 0)-(1, 1)\n'
+    + '    SavePicture Picture1.Image, "a.bmp"\nEnd Sub\nPrivate Sub Picture1_Paint()\nEnd Sub\nPrivate Sub Picture1_Resize()\nEnd Sub';
+  expect(validateCode(code, { moduleName: f.name, form: f, project: p })).toEqual([]);
+});
+
+test('validateCode: Printer, Printers, PrintForm and ShowPrinter are valid (0.9)', () => {
+  const p = newProject(), f = p.forms[0];
+  const cd = newControl(f, 'CommonDialog', { left: 0, top: 0 }, null);
+  f.controls.push(cd);
+  const code = 'Option Explicit\nPrivate Sub Form_Click()\n    Dim i As Integer\n    For i = 0 To Printers.Count - 1\n        If Printers(i).DeviceName = "x" Then Set Printer = Printers(i)\n    Next\n'
+    + '    CommonDialog1.ShowPrinter\n    Printer.Orientation = vbPRORLandscape\n    Printer.Print "x"; Tab(3); 1\n    Printer.Line (0, 0)-(100, 100), , B\n'
+    + '    Printer.NewPage\n    Printer.EndDoc\n    PrintForm\nEnd Sub';
+  expect(validateCode(code, { moduleName: f.name, form: f, project: p })).toEqual([]);
+});
+
+test('validateCode: Validate, MousePointer constants, Screen.MousePointer and ValidateControls are valid (0.9 B3)', () => {
+  const f = newProject().forms[0];
+  f.controls.push(newControl(f, 'TextBox', { left: 0, top: 0 }, null));   // Text1
+  const code = 'Private Sub Text1_Validate(Cancel As Boolean)\n    Cancel = (Text1.Text = "")\nEnd Sub\n'
+    + 'Private Sub Form_Click()\n    Screen.MousePointer = vbHourglass\n    Text1.MousePointer = vbCrosshair\n    ValidateControls\n    Screen.MousePointer = vbDefault\nEnd Sub';
+  expect(validateCode(code, { moduleName: 'Form1', form: f })).toEqual([]);
+});
+
+test('validateCode: drag and drop events, DataObject members, Drag / OLEDrag and their constants are valid (0.9 B4)', () => {
+  const f = newProject().forms[0];
+  f.controls.push(newControl(f, 'PictureBox', { left: 0, top: 0 }, null));   // Picture1
+  const code = 'Private Sub Picture1_DragDrop(Source As Control, X As Single, Y As Single)\n    Source.Move X, Y\n    Picture1.Drag vbEndDrag\nEnd Sub\n'
+    + 'Private Sub Form_OLEDragDrop(Data As DataObject, Effect As Long, Button As Integer, Shift As Integer, X As Single, Y As Single)\n'
+    + '    If Data.GetFormat(vbCFFiles) Then Caption = Data.Files(1) & Data.Files.Count\n    Effect = vbDropEffectCopy\n    Picture1.OLEDrag\n'
+    + '    Picture1.DragMode = vbAutomatic\n    Picture1.OLEDropMode = vbOLEDropManual\nEnd Sub';
+  expect(validateCode(code, { moduleName: 'Form1', form: f })).toEqual([]);
+});
+
+test('MDI: MDIForm_ events on the MDI form, New of a form, ActiveForm and Arrange', () => {
+  const p = newProject();
+  const mdi = newMdiForm('MDIForm1');
+  p.forms.push(mdi);
+  const check = (code: string) => validateCode(code, { moduleName: 'MDIForm1', form: mdi, project: p });
+  expect(check('Private Sub MDIForm_Load()\n    Dim f As New Form1\n    f.Show\n    Me.Arrange vbCascade\n    Debug.Print Me.ActiveForm.Name\nEnd Sub')).toEqual([]);
+  expect(check('Private Sub Form_Load()\nEnd Sub').join()).toContain('MDIForm_Load');
+  expect(check('Private Sub MDIForm_KeyPress(KeyAscii As Integer)\nEnd Sub').join()).toContain('no KeyPress event');
 });

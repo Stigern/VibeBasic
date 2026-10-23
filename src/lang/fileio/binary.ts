@@ -226,7 +226,7 @@ function getValue(r: ByteReader, cur: VBValue, t: VBTypeName, fixedLength: numbe
     for (const [key, fi] of info.fields) {
       const fv = rec.fields.get(key) ?? c.types.defaultFor(fi.type, fi.fixedLength);
       if (fv instanceof VBArray) getArray(r, fv, fi.type, fi.fixedLength, c);
-      else rec.fields.set(key, getValue(r, fv, fi.type, fi.fixedLength, c, true));
+      else rec.put(key, getValue(r, fv, fi.type, fi.fixedLength, c, true));
     }
     return rec;
   }

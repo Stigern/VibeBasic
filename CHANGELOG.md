@@ -8,6 +8,26 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 - An Ask AI answer that loops could loop again on the retry, in the same place ("The AI got stuck repeating itself" every time). The retry after a loop now goes without the form picture and without the structured output (the JSON grammar); the layout map and the nudge are still sent.
 - Dropdown arrows in dialogs (Tools > Options > AI: Model, Thinking, Send form picture) did nothing; only a click on the text opened the list. The row around the box is a label, which passed the arrow's click on to the text box, and that second click closed the list again.
 
+## [0.9.0] - 2026-10-24
+
+### Added
+- Menus: the Menu Editor (Tools > Menu Editor, Ctrl+E), a Win98 menu bar in every form (designer and run time) with submenus, checkmarks, separators, shortcuts and Alt/F10 keyboard, menu control arrays (Load/Unload), and PopupMenu.
+- Graphics on forms and PictureBoxes: Print, Cls, PSet, Line (B/BF, Step), Circle (arcs, pies, ellipses), Point, PaintPicture, TextWidth/TextHeight, CurrentX/Y, DrawWidth/DrawStyle/DrawMode, FillStyle/FillColor, FontTransparent, AutoRedraw with Image, the Paint event, ScaleMode/ScaleLeft/ScaleTop/ScaleWidth/ScaleHeight, Scale, ScaleX/ScaleY and SavePicture.
+- Class modules: Property Get/Let/Set, New, Class_Initialize/Terminate, Event/RaiseEvent/WithEvents, Implements, Friend, default members and For Each (NewEnum).
+- The Locals, Watch and Call Stack windows, Add/Edit/Quick Watch with break conditions, data tips in break mode, and Set/Show Next Statement.
+- The Printer object and Printers collection (NewPage, EndDoc, KillDoc, Orientation, A4/Letter), a print preview with the macOS print dialog, Form.PrintForm and CommonDialog.ShowPrinter.
+- Opening VB6 projects (.vbp, .frm, .frx, .bas, .cls) with an import report, and Project > Add File (Ctrl+D).
+- Language: TypeOf…Is, named arguments (x:=1), Option Base and Option Compare, GoSub/Return, On…GoTo/GoSub, Global, #If/#Const, the financial functions (Pmt, FV, NPV, IRR, Rate, …), byte functions (LenB, LeftB, …), Partition and Debug.Assert.
+- MousePointer and MouseIcon on forms and controls, Screen.MousePointer, the Validate event with CausesValidation, and Alt+letter accelerators.
+- Sub Main as startup, Command$ and Environ, version information, file types and command-line arguments in Project Properties; made apps get their version, copyright and file associations; App.PrevInstance and App.LogEvent.
+- MDI forms with child windows, Arrange, the WindowList menu, merged menus, and several instances of a form with New.
+- Drag and drop: DragMode/DragDrop/DragOver, OLE drag and drop with DataObject, and files dropped from Finder.
+- ADO in code (New ADODB.Connection/Recordset/Command, transactions, Filter, Sort), CreateObject, Scripting.Dictionary and Scripting.FileSystemObject.
+- RichTextBox TextRTF/SelRTF, LoadFile/SaveFile, Find and paragraph formats; CommonDialog Flags (multiselect, DefaultExt, colour init).
+
+### Fixed
+- A thorough review of all of the above fixed 48 more issues, among them: objects in Collections and arrays are released, each ADO Connection has its own transaction, data tips never run code, crafted pictures in .frx files cannot hang an import, controls follow their container's ScaleMode, docked PictureBoxes know their size, Font* properties work everywhere, menu shortcuts follow the typed letter, and New form instances are freed after Unload.
+
 ## [0.8.2] - 2026-10-23
 
 ### Added

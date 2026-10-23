@@ -28,13 +28,50 @@ export interface VBObject {
   callMethod(name: string, args: VBValue[], refs?: (OutSlot | undefined)[]): VBValue | Promise<VBValue>;
   /** The 0-based positions of a method's ByRef parameters (`Winsock1.GetData data`); the method writes to them through `refs`. */
   byRefArgs?(name: string): readonly number[] | undefined;
+  /** A method's parameter names in order, for named arguments (`col.Add x, Key:="k"`); none: a named argument is error 448. */
+  paramNames?(name: string): readonly string[] | undefined;
   /** `Load Name(i)` / `Unload Name(i)` of a control array element (a control array object only). */
   loadElement?(index: number): void | Promise<void>;
   unloadElement?(index: number): void | Promise<void>;
   item?(index: number): VBObject;         // control arrays: Command1(2)
   /** The elements for `For Each` (a control array's controls in index order, a collection's items). */
   items?(): VBObject[];
+  /** The object `Is` compares (an object seen through an interface is the object itself); default: this object. */
+  readonly identity?: VBObject;
+  /**
+   * The object as the value of a variable declared `As <typeName>` (or `As Object`): itself, another view of it (an
+   * interface it implements), or undefined when it is not of that type (error 13). Without it any object fits.
+   * `strict` is `TypeOf x Is <typeName>`: undefined for every type the object is not (a host object may otherwise
+   * let a variable of a type it does not know hold it).
+   */
+  asType?(typeName: string, strict?: boolean): VBObject | undefined;
+  /** A property written by code (a form's Property Let/Set): an assignment does not read it first. */
+  codeProperty?(name: string): boolean;
+  /**
+   * The debugger's read (data tips, Locals and Watch property rows): a member's value now, without running any program
+   * code, starting a method or loading a form. Undefined when it has no such value (a method, a Property Get, a Public
+   * Sub, a value that would wait); throws NotLoaded for a property of a form that is not loaded. Absent: no value.
+   */
+  peekMember?(name: string): VBValue | undefined;
+  /** Print, PSet, Line, Circle and Scale on this object (Form, PictureBox, Printer); absent: error 438. */
+  graphics?(call: GraphicsCall): void | Promise<void>;
 }
+
+/** Thrown by `peekMember` for a property of an unloaded form: reading it in code would load the form. */
+export class NotLoaded extends Error {
+  constructor() { super('not loaded'); }
+}
+
+/** One piece of a Print statement on an object: text (numbers already formatted), `Spc(n)`, `Tab(n)` or the next print zone (`,`). */
+export type PrintPiece = string | { spc: number } | { tab: number } | { zone: true };
+export interface GfxCallPoint { step: boolean; x: number; y: number }
+/** A drawing statement with its arguments evaluated (see GfxStmt). Absent colour: ForeColor. */
+export type GraphicsCall =
+  | { method: 'print'; pieces: PrintPiece[]; newline: boolean }
+  | { method: 'pset'; at: GfxCallPoint; color?: number }
+  | { method: 'line'; from?: GfxCallPoint; to: GfxCallPoint; color?: number; box: '' | 'b' | 'bf' }
+  | { method: 'circle'; at: GfxCallPoint; radius: number; color?: number; start?: number; end?: number; aspect?: number }
+  | { method: 'scale'; from?: GfxCallPoint; to?: GfxCallPoint };
 
 /** A by-reference argument of a host method: assigning `value` stores into the caller's variable (converted to its type). */
 export interface OutSlot { value: VBValue }
@@ -53,6 +90,8 @@ export interface Host {
    * (`Caption = "x"`, `Width`, `Hide`).
    */
   resolveName(moduleName: string, name: string): VBObject | undefined;
+  /** `Set Name = obj` for a global object of the host that can be replaced (`Set Printer = Printers(1)`); false for other names. */
+  setGlobalObject?(name: string, value: VBValue): boolean;
   msgBox(prompt: string, buttons: number, title: string): Promise<number>;
   inputBox(prompt: string, title: string, defaultText: string): Promise<string>;
   /** One Debug.Print statement; `newline` is false after a trailing `;` or `,`. */
@@ -61,6 +100,9 @@ export interface Host {
   /** Beep: the system beep (a short tone); a host without sound may leave it out. */
   beep?(): void;
   loadPicture(path: string): Promise<VBValue>;
+  /** SavePicture: the file bytes of a picture (`ext` the file's extension, lower case: an Image is BMP for 'bmp', else PNG);
+   *  throws 481 when the value is not a picture. Absent: error 481. */
+  pictureBytes?(picture: VBValue, ext: string): Uint8Array;
   /** An unhandled run-time (or compile) error; `'end'` ends the program, `'debug'` enters break mode. */
   onRuntimeError(err: VBRuntimeError, at: CodeLocation): Promise<'end' | 'debug'>;
   onBreak(info: BreakInfo): Promise<'continue' | 'end'>;
@@ -68,4 +110,14 @@ export interface Host {
   onEnd(): void;
   /** File I/O and SaveSetting (Open, Kill, Dir ...). Absent: those statements raise error 68, Device unavailable. */
   fileSystem?(): FileSystemApi | undefined;
+  /** `New ADODB.Connection`, CreateObject("ADODB.Recordset"): the objects the run session makes (`progId` as registered);
+   *  undefined when it cannot (error 429). */
+  createObject?(progId: string): VBObject | undefined;
+  /** Command$: the program's command line ('' when absent). */
+  commandLine?(): string | Promise<string>;
+  /** Environ: the process environment as NAME / value pairs in its order (absent: Environ gives ""). */
+  environment?(): readonly (readonly [string, string])[] | Promise<readonly (readonly [string, string])[]>;
+  /** `New T` of a host class (`Set f = New Form1`: a new instance of a form): what makes one, undefined for a name it does not
+   *  know. Asked when the New is reached (or the `As New` variable is declared), so it must be cheap and make nothing yet. */
+  objectFactory?(typeName: string): (() => VBObject) | undefined;
 }

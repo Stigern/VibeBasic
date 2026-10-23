@@ -13,6 +13,30 @@ export interface FileDialogRequest {
   initDir: string;
   /** The file name in the dialog before the call (CommonDialog.FileName). */
   fileName: string;
+  /** cdlOFNAllowMultiselect on ShowOpen: the result is a list of paths. */
+  multiple?: boolean;
+  /** CommonDialog.DefaultExt: appended to the name ShowSave returns when it has no extension. */
+  defaultExt?: string;
+}
+
+/**
+ * FileName after a multiple selection, as VB6 gives it: the folder, then the names, separated by Chr(0) with cdlOFNExplorer and by
+ * a space without it. One file is just its path. Files from different folders (the Mac panel's Recents or a search): the folder
+ * they have in common, and each name relative to it ("Desktop/b.txt"), so `folder & "\" & name` still finds the file.
+ */
+export function multiFileName(paths: string[], explorer: boolean): string {
+  if (paths.length <= 1) return paths[0] ?? '';
+  const parts = paths.map(p => p.split(/[\\/]/));
+  let n = parts[0].length - 1;   // the folders of the first path
+  for (const q of parts) { let i = 0; while (i < n && i < q.length - 1 && q[i] === parts[0][i]) i++; n = i; }
+  const dir = n === 0 ? '' : parts[0].slice(0, n).join('/') || '/';
+  return [dir, ...parts.map(q => q.slice(n).join('/'))].join(explorer ? '\0' : ' ');
+}
+
+/** The name with `.ext` added when its last part has no extension (a leading dot of `ext` is fine). */
+export function withDefaultExt(path: string, ext: string): string {
+  const e = ext.replace(/^\./, '');
+  return e === '' || baseName(path).includes('.') ? path : `${path}.${e}`;
 }
 
 /** "Text (*.txt)|*.txt|All (*.*)|*.*" -> [{ name: 'Text (*.txt)', extensions: ['txt'] }, { name: 'All (*.*)', extensions: ['*'] }]. Several patterns: "*.htm;*.html". */
@@ -52,15 +76,22 @@ export function filterIndexFor(filter: string, current: number, path: string): n
   return first < 0 ? current : first + 1;
 }
 
-/** Opens the file dialog of the backend; the chosen filter comes first, "All files" (`*`) filters last. Null when cancelled. */
-export function runFileDialog(backend: Backend, r: FileDialogRequest): Promise<string | null> {
+/** Opens the file dialog of the backend; the chosen filter comes first, "All files" (`*`) filters last. Null when cancelled; a list of paths for `multiple`. */
+export async function runFileDialog(backend: Backend, r: FileDialogRequest): Promise<string | string[] | null> {
   const all = parseVbFilter(r.filter);
   const sel = Math.min(Math.max(1, Math.floor(r.filterIndex) || 1), all.length) - 1;
   const isAll = (f: FileFilter) => f.extensions.includes('*');
   const rest = all.filter((_, i) => i !== sel);
   const filters = all.length ? [all[sel], ...rest.filter(f => !isAll(f)), ...rest.filter(isAll)] : [];
   const initDir = r.initDir || dirName(r.fileName);
-  return r.kind === 'open'
-    ? backend.showOpenDialog(filters, r.title, initDir)
-    : backend.showSaveDialog(filters, r.title, initDir, baseName(r.fileName));
+  if (r.kind === 'open') {
+    if (!r.multiple) return backend.showOpenDialog(filters, r.title, initDir);
+    // the Mac dialog always asks about replacing a file on save (cdlOFNOverwritePrompt); on open it only lets existing files be chosen
+    // (cdlOFNFileMustExist, cdlOFNPathMustExist)
+    if (backend.showOpenMultipleDialog) return backend.showOpenMultipleDialog(filters, r.title, initDir);
+    const one = await backend.showOpenDialog(filters, r.title, initDir);
+    return one === null ? null : [one];
+  }
+  const path = await backend.showSaveDialog(filters, r.title, initDir, baseName(r.fileName));
+  return path === null ? null : withDefaultExt(path, r.defaultExt ?? '');
 }

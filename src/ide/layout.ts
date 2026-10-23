@@ -1,10 +1,10 @@
-// Main window layout: menu bar + toolbar on top; Toolbox left; MDI area in the middle (Immediate docked below,
-// hidden until opened); Project Explorer over Properties on the right with a draggable splitter between them.
+// Main window layout: menu bar + toolbar on top; Toolbox left; MDI area in the middle (Immediate, Locals and Watches docked
+// side by side below it, hidden until opened); Project Explorer over Properties on the right with a draggable splitter between them.
 // Later tasks fill the exposed hosts (mdiHost, projectHost, propertiesHost, immediateHost, toolboxHost).
 import { createTitleBar, h } from '../ui98/dom';
 import './ide.css';
 
-export type PaneName = 'toolbox' | 'project' | 'properties' | 'immediate';
+export type PaneName = 'toolbox' | 'project' | 'properties' | 'immediate' | 'locals' | 'watch';
 export interface Pane { el: HTMLElement; body: HTMLElement; titleText: HTMLElement }
 
 export interface IdeLayout {
@@ -19,6 +19,8 @@ export interface IdeLayout {
   projectHost: HTMLElement;
   propertiesHost: HTMLElement;
   immediateHost: HTMLElement;
+  localsHost: HTMLElement;
+  watchHost: HTMLElement;
   statusHost: HTMLElement;
   panes: Record<PaneName, Pane>;
   setPaneVisible(name: PaneName, visible: boolean): void;
@@ -41,8 +43,10 @@ export function buildLayout(root: HTMLElement): IdeLayout {
     project: mkPane('project', 'Project', 'ide98-project'),
     properties: mkPane('properties', 'Properties', 'ide98-properties'),
     immediate: mkPane('immediate', 'Immediate', 'ide98-immediate'),
+    locals: mkPane('locals', 'Locals', 'ide98-locals'),
+    watch: mkPane('watch', 'Watches', 'ide98-watch'),
   };
-  panes.immediate.el.classList.add('hidden');
+  for (const n of ['immediate', 'locals', 'watch'] as const) panes[n].el.classList.add('hidden');
 
   const menubarHost = h('div');
   const toolbarHost = h('div');
@@ -51,7 +55,8 @@ export function buildLayout(root: HTMLElement): IdeLayout {
   const right = h('div', { class: 'ide98-right' });
   const split = h('div', { class: 'ide98-split', title: 'Drag to resize' });
   right.append(panes.project.el, split, panes.properties.el);
-  const center = h('div', { class: 'ide98-center' }, mdiHost, panes.immediate.el);
+  const bottom = h('div', { class: 'ide98-bottom' }, panes.immediate.el, panes.locals.el, panes.watch.el);
+  const center = h('div', { class: 'ide98-center' }, mdiHost, bottom);
   const mainArea = h('div', { class: 'ide98-main' }, panes.toolbox.el, center, right);
   root.append(menubarHost, toolbarHost, mainArea, statusHost);
 
@@ -72,6 +77,7 @@ export function buildLayout(root: HTMLElement): IdeLayout {
     root, menubarHost, toolbarHost, mainArea, mdiHost, statusHost, panes,
     toolboxHost: panes.toolbox.body, projectHost: panes.project.body,
     propertiesHost: panes.properties.body, immediateHost: panes.immediate.body,
+    localsHost: panes.locals.body, watchHost: panes.watch.body,
     setPaneVisible(name, visible) { panes[name].el.classList.toggle('hidden', !visible); },
     isPaneVisible(name) { return !panes[name].el.classList.contains('hidden'); },
     setPaneTitle(name, title) { panes[name].titleText.textContent = title; },

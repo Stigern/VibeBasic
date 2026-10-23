@@ -5,6 +5,7 @@ import type { FileSystemApi } from '../lang/fileio/fsApi';
 import type { FontValue } from '../model/types';
 import type { FileDialogRequest } from './commonDialog';
 import type { OpenedMedia } from './mediaSource';
+import type { PrintJob, PrinterDialogRequest, PrinterDialogResult, PrinterInfo } from './printing';
 import type { ClipboardApi } from './objects/globalObjects';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 
@@ -15,11 +16,12 @@ export interface FormWindow {
 }
 
 export interface FormHost {
-  openForm(s: FormSnapshot, o: { modal: boolean }): Promise<FormWindow>;
+  /** `mdiParent`: an MDI child, shown inside the workspace of that (open) MDI form's window, not in a window of its own. */
+  openForm(s: FormSnapshot, o: { modal: boolean; mdiParent?: string }): Promise<FormWindow>;
   messageBox(o: { prompt: string; title: string; buttons: number }): Promise<number>;
   inputBox(o: { prompt: string; title: string; defaultText: string }): Promise<string>;
-  /** CommonDialog.ShowOpen / ShowSave: the Mac file dialog, opened from the main window. The chosen path, null when cancelled. */
-  fileDialog(o: FileDialogRequest): Promise<string | null>;
+  /** CommonDialog.ShowOpen / ShowSave: the Mac file dialog, opened from the main window. The chosen path (a list of them for `multiple`), null when cancelled. */
+  fileDialog(o: FileDialogRequest): Promise<string | string[] | null>;
   /** CommonDialog.ShowColor / ShowFont: the Win98 colour and font dialogs. Null when cancelled. */
   colorDialog(o: { color: number }): Promise<number | null>;
   fontDialog(o: { font: FontValue }): Promise<FontValue | null>;
@@ -42,6 +44,12 @@ export interface FormHost {
   system?(): SystemApi;
   /** Clipboard: the system clipboard (text). Absent: the program keeps its own copy. */
   clipboard?(): ClipboardApi;
+  /** Printer.EndDoc, Form.PrintForm: shows the pages and opens the print dialog; resolves when the job is handed over. Absent: error 482. */
+  printPages?(job: PrintJob): Promise<void>;
+  /** Printers: the printers of the system. Absent: none. */
+  listPrinters?(): Promise<PrinterInfo[]>;
+  /** CommonDialog.ShowPrinter: the Win98 Print dialog. Null when cancelled. */
+  printerDialog?(o: PrinterDialogRequest): Promise<PrinterDialogResult | null>;
   /** 'ai' only in the IDE: break mode on the line, then the Ask AI flow. */
   runtimeErrorBox(o: { number: number; description: string; compile: boolean; mode: 'ide' | 'app'; title: string }): Promise<'end' | 'debug' | 'ai'>;
 }

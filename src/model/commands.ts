@@ -381,6 +381,21 @@ export function renameModuleCmd(moduleId: string, newName: string): Command {
   };
 }
 
+/** A class module's Instancing property (VB6 values; stored only). */
+export function setInstancingCmd(moduleId: string, value: number): Command {
+  let old: number | undefined;
+  const mod = (p: Project): ModuleDef => {
+    const m = p.modules.find(x => x.id === moduleId);
+    if (!m) throw new Error(`Module not found: ${moduleId}`);
+    return m;
+  };
+  return {
+    label: 'Change Instancing',
+    do(p) { const m = mod(p); old = m.instancing; m.instancing = value; },
+    undo(p) { const m = mod(p); if (old === undefined) delete m.instancing; else m.instancing = old; },
+  };
+}
+
 export function zOrderCmd(formId: string, idList: string[], where: 'front' | 'back'): Command {
   const ids = [...idList];
   let oldOrder: string[] = [];
@@ -496,6 +511,23 @@ export function setProjectFieldCmd(field: 'name' | 'title' | 'startupForm', valu
     label: `Change project ${field}`,
     do(p) { old = p[field]; p[field] = value; },
     undo(p) { p[field] = old; },
+  };
+}
+
+/** The optional Project Properties fields (Startup Object Sub Main, Make tab). `undefined` in `patch` removes a field. */
+export type ProjectOptions = Pick<Project, 'subMain' | 'commandLine' | 'condComp' | 'versionInfo' | 'fileTypes'>;
+export function setProjectOptionsCmd(patch: ProjectOptions, label = 'Change project properties'): Command {
+  let old: ProjectOptions = {};
+  const keys = Object.keys(patch) as (keyof ProjectOptions)[];
+  const put = (p: Project, from: ProjectOptions) => {
+    for (const k of keys) {
+      if (from[k] === undefined) delete p[k]; else (p as unknown as Record<string, unknown>)[k] = from[k];
+    }
+  };
+  return {
+    label,
+    do(p) { old = Object.fromEntries(keys.map(k => [k, p[k]])); put(p, patch); },
+    undo(p) { put(p, old); },
   };
 }
 

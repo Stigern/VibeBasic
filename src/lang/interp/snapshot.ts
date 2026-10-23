@@ -42,7 +42,7 @@ export function snapshotVariables(frame: Frame | undefined): { name: string; val
   if (!frame) return [];
   const out: { name: string; value: string }[] = [];
   const seen = new Set<string>();
-  for (const [key, v] of [...frame.locals, ...frame.module.vars]) {
+  for (const [key, v] of [...frame.locals, ...frame.vars]) {
     if (out.length >= MAX_VARIABLES) break;
     if (v.opts.isConst || seen.has(key)) continue;   // a local hides a module variable of the same name
     seen.add(key);

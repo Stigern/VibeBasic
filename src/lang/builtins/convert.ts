@@ -29,7 +29,7 @@ export function val(text: string): number {
     const w = v % 0x100000000;
     return w >= 0x80000000 ? w - 0x100000000 : w;
   }
-  const m = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eEdD][+-]?\d+)?/.exec(s);
+  const m = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eEdD][+-]?\d+)?/.exec(s);
   if (!m) return 0;
   const n = Number(m[0].replace(/[dD]/, 'e'));
   if (!Number.isFinite(n)) throw new VBRuntimeError(6);

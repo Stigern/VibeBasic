@@ -23,6 +23,10 @@ test('all binary operators', () => {
   expect(p('If a<b And a>c Or a<=b Or a>=c Or a<>b Then')).toBe('If a < b And a > c Or a <= b Or a >= c Or a <> b Then');
 });
 test('extra spaces collapse', () => expect(p('x   =   a  +   b')).toBe('x = a + b'));
+test('drawing statements are written as VB6 does', () => {
+  expect(p('line (0,0)-step(10,10),vbred,bf')).toBe('Line (0, 0)-Step(10, 10), vbRed, bf');
+  expect(p('text1.Line -(5, 5): pset step(1,2): scale (0,9)-(9,0)')).toBe('Text1.Line -(5, 5): PSet Step(1, 2): Scale (0, 9)-(9, 0)');
+});
 test('unary minus in various places', () => {
   expect(p('Foo(-1)')).toBe('Foo(-1)');
   expect(p('x=a*-b')).toBe('x = a * -b');

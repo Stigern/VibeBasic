@@ -93,5 +93,6 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
     + '<rect x="7" y="4" width="7" height="4" fill="#fff" stroke="#000"/><rect x="7" y="10" width="7" height="3" fill="#fff" stroke="#000"/>'),
   FlatScrollBar: svg('<rect x="1" y="5" width="14" height="6" fill="#c0c0c0" stroke="#808080"/><rect x="5" y="6" width="4" height="4" fill="#c0c0c0" stroke="#808080"/><path d="M3 8l2-1.500v3zM13 8l-2-1.500v3z" fill="#000"/>'),
   Calendar: svg(box(1, 1, 14, 14) + '<rect x="2" y="2" width="12" height="3" fill="#c0c0c0"/><path d="M2 7.500h12M2 10.500h12M5.500 5v9M8.500 5v9M11.500 5v9" stroke="#808080"/><rect x="6" y="8" width="2" height="2" fill="#000080"/>'),
+  Menu: svg('<rect x="0.5" y="1.5" width="15" height="4" fill="#c0c0c0" stroke="#000"/><path d="M2 3.5h3M7 3.5h3" stroke="#000"/>' + box(2, 5, 10, 10) + '<rect x="3" y="6" width="8" height="2" fill="#000080"/><path d="M4 10.5h6M4 12.5h5" stroke="#000"/>'),
   Form: svg(box(1, 2, 14, 12, '#c0c0c0') + '<rect x="2" y="3" width="12" height="3" fill="#000080"/>'),
 };

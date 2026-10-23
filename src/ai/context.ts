@@ -1,9 +1,11 @@
 // Builds the text the AI sees: control type reference, form descriptions and chat messages.
 import type { Expr, ModuleAst, Param, ProcDecl, VarDecl, VBTypeName } from '../lang/ast';
 import { parseModuleLenient } from '../lang/parser';
-import { CONTROL_TYPES, type PropDef } from '../model/controls';
+import { CONTROL_TYPES, FONT_ALIASES, type PropDef } from '../model/controls';
 import { absoluteRect, shownInDesign } from '../ide/designerLogic';
 import { formClientTwips, isLine } from '../model/geometry';
+import { hasMenuBar, isMenu, shortcutText } from '../model/menus';
+import { formObjectName, isMdiChild } from '../model/mdi';
 import { listProcedures } from '../model/procedures';
 import type { ControlDef, ControlType, FormDef, FontValue, ModuleDef, Project, PropValue } from '../model/types';
 import type { TextMessage } from './types';
@@ -11,8 +13,11 @@ import { LANGUAGE_REFERENCE } from './langReference';
 import { BODY_OMITTED } from './omitted';
 import { CODE_SYSTEM_PROMPT, FORM_SYSTEM_PROMPT } from './prompts';
 
-const COMMON = new Set(['left', 'top', 'width', 'height', 'visible', 'enabled', 'tabindex', 'tabstop', 'tag', 'tooltiptext']);
-const BASE_METHODS = new Set(['move', 'setfocus', 'refresh', 'zorder']);
+const COMMON = new Set(['left', 'top', 'width', 'height', 'visible', 'enabled', 'tabindex', 'tabstop', 'tag', 'tooltiptext', 'mousepointer', 'mouseicon', 'causesvalidation',
+  'dragmode', 'dragicon', 'oledragmode', 'oledropmode']);
+const BASE_METHODS = new Set(['move', 'setfocus', 'refresh', 'zorder', 'drag', 'oledrag']);
+/** Drag and drop events: one note for all controls (below), not on every line. */
+const DRAG_EVENTS = new Set(['Validate', 'DragDrop', 'DragOver', 'OLEDragDrop', 'OLEDragOver', 'OLEStartDrag', 'OLECompleteDrag', 'OLESetData']);
 
 /** The labels of an enum property: the registry's "0 - " numbering and "Justify" dropped, and a library prefix all of them share (ccOrientation, tvw, sld) cut off. */
 function enumLabels(values: { value: number; label: string }[]): string[] {
@@ -28,8 +33,9 @@ function enumLabels(values: { value: number; label: string }[]): string[] {
  *  a wrong guess there only changes how a control looks. Alignment, ScrollBars, Style, MultiSelect, Value, the data and
  *  protocol enums ... keep their values (they change what a program does, and Alignment was misread without them). */
 const NAME_ONLY_ENUMS = new Set(['align', 'appearance', 'arrows', 'autosize', 'backstyle', 'bevelinner', 'bevelouter', 'borderstyle', 'daylength',
-  'fillstyle', 'floodtype', 'font3d', 'gridcelleffect', 'gridlines', 'linestyle', 'monthlength', 'orientation', 'scrolling', 'shadowstyle', 'shape',
-  'startupposition', 'tickstyle', 'windowstate']);
+  'drawmode', 'drawstyle', 'scalemode', 'fillstyle', 'floodtype', 'font3d', 'gridcelleffect', 'gridlines', 'linestyle', 'monthlength',
+  'negotiateposition', 'orientation', 'scrolling', 'shadowstyle', 'shape', 'shortcut', 'startupposition', 'tickstyle',
+  'windowstate']);   // Shortcut: written as text ("Ctrl+O")
 
 /** "Alignment(0 Left,1 Right,2 Center)": an enum property with its values; other properties by name. */
 const propText = (p: PropDef): string =>
@@ -54,21 +60,27 @@ function eventText(names: string[]): string[] {
 export function describeControlTypes(): string {
   const lines: string[] = [];
   for (const td of Object.values(CONTROL_TYPES)) {
-    const props = td.props.filter(p => !COMMON.has(p.name.toLowerCase()) && (p.designTime || p.runtime !== 'none')).map(propText);
+    const props = td.props.filter(p => !COMMON.has(p.name.toLowerCase()) && (p.designTime || p.runtime !== 'none') && !(p.name in FONT_ALIASES && !p.designTime)).map(propText);
     const methods = td.methods.filter(m => !BASE_METHODS.has(m.name.toLowerCase())).map(m => m.name);
     let line = `${td.type}: ${props.join(', ')}`;
-    if (td.events.length) line += ` | events: ${eventText(td.events.map(e => e.name)).join(', ')}`;
+    if (td.events.length) line += ` | events: ${eventText(td.events.map(e => e.name).filter(n => !DRAG_EVENTS.has(n))).join(', ')}`;
     if (methods.length) line += ` | methods: ${methods.join(', ')}`;
     lines.push(line);
   }
   lines.push('All controls also have: Left, Top, Width, Height, Visible, Enabled, TabIndex, Tag and the methods Move, SetFocus, Refresh, ZOrder.'
+    + ' Visible controls and the Form have MousePointer (and MouseIcon), Screen.MousePointer too. Those with Font also have FontName, FontSize, FontBold, FontItalic, FontUnderline, FontStrikethru.'
+    + ' In code, a control\'s Left, Top, Width, Height and its mouse X, Y are in the ScaleMode of its Form or PictureBox.'
+    + ' +focus controls have CausesValidation and Validate(Cancel As Boolean). A & in a Caption: Alt+letter.'
+    + ' Drag: DragMode (vbAutomatic, or Ctl.Drag), DragDrop(Source As Control, X, Y), DragOver(Source, X, Y, State); OLEDropMode 1: OLEDragDrop(Data As DataObject, Effect, Button, Shift, X, Y), also Finder files (Data.Files(1)).'
     + ' In the events, +focus is GotFocus and LostFocus, +keys KeyPress, KeyDown and KeyUp, +mouse MouseDown, MouseMove and MouseUp (VB6 parameters).'
     + ' Exceptions: Shape has no Enabled, TabIndex or SetFocus; Line has X1, Y1, X2, Y2 (twips) instead of Left, Top, Width, Height, and no Enabled, TabIndex, Move or SetFocus.'
     + ' A StatusBar always sits at the bottom of the form, full width (only its Height matters). Its Panels and a TabStrip\'s Tabs are one item per line,'
     + ' fields separated by | : Panels "Text|Key|Width|Alignment(0 left, 1 center, 2 right)", Tabs "Caption|Key".'
     + ' A ListView\'s ColumnHeaders are lines "Text|Key|Width|Alignment(0 left, 1 right, 2 center)"; Nodes, ListItems and the cells of an MSFlexGrid (TextMatrix) are filled by code at run time.'
-    + ' A CommonDialog is invisible at run time and has only Left and Top (no Width, Height, Enabled, TabIndex) and no Move, SetFocus, Refresh or ZOrder; code opens it with ShowOpen, ShowSave, ShowColor or ShowFont (ShowPrinter and ShowHelp do not work).'
+    + ' A CommonDialog is invisible at run time and has only Left and Top (no Width, Height, Enabled, TabIndex) and no Move, SetFocus, Refresh or ZOrder; code opens it with ShowOpen, ShowSave, ShowColor, ShowFont or ShowPrinter (ShowHelp does not work).'
     + ' Its Filter looks like "Text (*.txt)|*.txt|All (*.*)|*.*".'
+    + ' With Flags = cdlOFNAllowMultiselect Or cdlOFNExplorer, FileName is the folder, Chr(0), then the names separated by Chr(0); DefaultExt is added to a ShowSave name.'
+    + ' A RichTextBox formats with SelBold, SelColor, SelAlignment ... and reads or writes RTF with TextRTF and SelRTF; LoadFile path[, rtfText] and SaveFile path[, rtfText] use a file; Find(text, [start], [end], [options]) selects the match and returns its position (-1 if none).'
     + ' DriveListBox, DirListBox and FileListBox show the Mac\'s volumes, folders and files: Drive1.Drive is the path of a volume ("/" is the startup disk), Dir1.Path a folder, File1.Pattern "*.txt;*.bas".'
     + ' The usual link is Drive1_Change: Dir1.Path = Drive1.Drive, and Dir1_Change: File1.Path = Dir1.Path; File1.FileName is the selected file. The lists are filled asynchronously, so a read of ListCount or List(i) waits for the folder.'
     + ' An SSTab is a container with Tabs tabs (Tab is the current one, 0-based); TabCaption is one caption per line. A control added with "container" set to an SSTab goes on the tab given by "tab" (0-based, default the current tab); Top must leave room for the tabs (TabHeight, 520).'
@@ -104,7 +116,9 @@ export function describeControlTypes(): string {
     + ' A DataGrid shows the DataSource\'s records (Columns(0) is the first column: Caption, Width, Value).'
     + ' DataList and DataCombo list the ListField of the RowSource\'s records; BoundText is the BoundColumn of the chosen one, bound to DataSource / DataField.'
     + ' The Sheridan 3D controls: an SSPanel (or SSFrame) is a container like a Frame (BevelOuter 0 none, 1 inset, 2 raised, BevelWidth, Font3D 0-4; FloodType 1 left to right ... 5 circle with FloodPercent makes a progress bar);'
-    + ' SSCheck and SSOption have a Boolean Value and Click(Value As Integer); SSRibbon is a toggle button (Value, PictureUp, PictureDn) and ribbons of one container with the same GroupNumber release each other.');
+    + ' SSCheck and SSOption have a Boolean Value and Click(Value As Integer); SSRibbon is a toggle button (Value, PictureUp, PictureDn) and ribbons of one container with the same GroupNumber release each other.'
+    + ' An MDIForm (events MDIForm_Load ...; AutoShowChildren, ScrollBars) holds only Align controls and invisible ones; forms with MDIChild = True show inside it.'
+    + ' MDIForm1.ActiveForm is the active child, MDIForm1.Arrange vbCascade (vbTileHorizontal, vbTileVertical); a menu with WindowList lists the children; Set f = New Form2: f.Show opens another instance.');
   return lines.join('\n');
 }
 
@@ -135,7 +149,7 @@ function propParts(type: ControlType, props: Record<string, PropValue>, skip: Se
     const v = props[pd.name];
     // An empty Text is still worth showing: it tells the model the box is blank on purpose.
     if (same(v, pd.default) && pd.name !== 'Text') continue;
-    out.push(`${pd.name}=${fmtValue(v)}`);
+    out.push(`${pd.name}=${type === 'Menu' && pd.name === 'Shortcut' ? quote(shortcutText(v)) : fmtValue(v)}`);   // Shortcut="Ctrl+O"
   }
   for (const [k, v] of Object.entries(props)) if (!defs.has(k) && !skip.has(k.toLowerCase())) out.push(`${k}=${fmtValue(v)}`);
   return out;
@@ -150,7 +164,7 @@ export const MAP_COLS = 48, MAP_ROWS = 16;
  * Containers are drawn before their children, siblings in z-order. Controls invisible at run time and Lines are left out.
  */
 export function layoutMap(form: FormDef, cols = MAP_COLS, rows = MAP_ROWS): string {
-  const cl = formClientTwips(form.props);
+  const cl = formClientTwips(form.props, hasMenuBar(form.controls));
   const cw = Math.max(1, cl.width) / cols, ch = Math.max(1, cl.height) / rows;
   const grid = Array.from({ length: rows }, () => Array<string>(cols).fill('.'));
   const put = (y: number, x: number, ch_: string) => { if (y >= 0 && y < rows && x >= 0 && x < cols) grid[y][x] = ch_; };
@@ -158,7 +172,7 @@ export function layoutMap(form: FormDef, cols = MAP_COLS, rows = MAP_ROWS): stri
   const visit = (parentId: string | null) => { for (const c of form.controls) if (c.parentId === parentId) { order.push(c); visit(c.id); } };
   visit(null);
   for (const c of order) {
-    if (CONTROL_TYPES[c.type].invisibleAtRuntime || isLine(c) || !shownInDesign(form, c.id)) continue;
+    if (CONTROL_TYPES[c.type].invisibleAtRuntime || isLine(c) || isMenu(c) || !shownInDesign(form, c.id)) continue;
     const r = absoluteRect(form, c.id);
     const clamp = (v: number, n: number) => Math.min(n - 1, Math.max(0, v));
     const x1 = clamp(Math.floor(r.left / cw), cols), y1 = clamp(Math.floor(r.top / ch), rows);
@@ -183,7 +197,7 @@ export function describeForm(form: FormDef, opts: { map?: boolean } = {}): strin
   const lines: string[] = [];
   const formParts = propParts('Form', form.props, new Set(['left', 'top', 'width', 'height', 'tabindex']));
   for (const k of ['Width', 'Height']) if (k in form.props) formParts.push(`${k}=${fmtValue(form.props[k])}`);
-  lines.push(['Form', form.name, ...formParts].join(' '));
+  lines.push([formObjectName(form), form.name, ...formParts].join(' '));
   const byId = new Map(form.controls.map(c => [c.id, c]));
   for (const c of form.controls) {
     const geo = ['Left', 'Top', 'Width', 'Height', 'X1', 'Y1', 'X2', 'Y2'].filter(k => k in c.props).map(k => `${k}=${fmtValue(c.props[k])}`);
@@ -194,7 +208,7 @@ export function describeForm(form: FormDef, opts: { map?: boolean } = {}): strin
     lines.push([...head, ...geo, ...propParts(c.type, c.props, new Set(['left', 'top', 'width', 'height', 'x1', 'y1', 'x2', 'y2', 'tabindex']))].join(' '));
   }
   if (opts.map) {
-    const cl = formClientTwips(form.props);
+    const cl = formClientTwips(form.props, hasMenuBar(form.controls));
     lines.push(`Layout map of the client area (${cl.width} x ${cl.height} twips; one character is about ${Math.round(cl.width / MAP_COLS)} x ${Math.round(cl.height / MAP_ROWS)} twips):`, layoutMap(form));
   }
   return lines.join('\n');
@@ -210,7 +224,7 @@ function describeFormControls(f: FormDef): string {
     seen.add(k);
     items.push(`${c.name} (${c.type})`);
   }
-  return `${f.name}: ${items.length ? items.join(', ') : '(no controls)'}`;
+  return `${f.name}${f.mdi ? ' (MDIForm)' : isMdiChild(f) ? ' (MDI child)' : ''}: ${items.length ? items.join(', ') : '(no controls)'}`;
 }
 
 /** "Form1: Command1 (CommandButton), Text1 (TextBox)" per form; control arrays are listed once. */
@@ -223,8 +237,9 @@ const literal = (e: Expr): string | null =>
     : e.kind === 'unary' && e.op === 'neg' && e.operand.kind === 'number' ? `-${e.operand.value}` : null;
 const asType = (t: VBTypeName | undefined): string => t === undefined ? '' : ` As ${typeof t === 'string' ? t : 'userType' in t ? t.userType : t.objectType}`;
 const param = (p: Param): string => `${p.paramArray ? 'ParamArray ' : p.optional ? 'Optional ' : ''}${p.byRef || p.paramArray ? '' : 'ByVal '}${p.name}${p.isArray ? '()' : ''}${asType(p.type)}`;
+const procWord = (p: ProcDecl): string => (p.property ? `Property ${p.property.charAt(0).toUpperCase()}${p.property.slice(1)}` : p.kind === 'sub' ? 'Sub' : 'Function');
 const signature = (p: ProcDecl): string =>
-  `Public ${p.kind === 'sub' ? 'Sub' : 'Function'} ${p.name}(${p.params.map(param).join(', ')})${p.kind !== 'function' ? '' : p.returnsArray ? `${asType(p.returnType ?? 'Variant')}()` : asType(p.returnType)}`;
+  `Public ${procWord(p)} ${p.name}(${p.params.map(param).join(', ')})${p.kind !== 'function' ? '' : p.returnsArray ? `${asType(p.returnType ?? 'Variant')}()` : asType(p.returnType)}`;
 /** "Name As String * 20", "Items As New Collection", "a() As Long". */
 const variable = (v: VarDecl): string =>
   `${v.name}${v.isArray ? '()' : ''}${v.isNew && v.type !== undefined ? asType(v.type).replace(' As ', ' As New ') : asType(v.type)}${v.fixedLength !== undefined ? ` * ${v.fixedLength}` : ''}`;
@@ -242,6 +257,7 @@ function publicItems(ast: ModuleAst): string[] {
   }
   for (const v of ast.variables) if (v.scope === 'public') items.push({ line: v.line, text: `Public ${variable(v)}` });
   for (const p of ast.procedures) if (p.visibility === 'public') items.push({ line: p.line, text: signature(p) });
+  for (const e of ast.events ?? []) items.push({ line: e.line, text: `Public Event ${e.name}(${e.params.map(param).join(', ')})` });
   return items.sort((a, b) => a.line - b.line).map(i => i.text);
 }
 
@@ -250,14 +266,20 @@ export const SYMBOLS_MAX_CHARS = 3000;
 
 /**
  * One line per public item of the project's other modules and forms ("Module1: Public Function Add(a As Integer) As Integer"),
- * nearest first: the standard modules (their Public names are visible everywhere), then the other forms, each led by its
- * controls ("Form2: Text1 (TextBox), cmdOK (CommandButton)") unless `formControls` is false. `currentId` (its code is in the
+ * nearest first: the standard modules (their Public names are visible everywhere), then the class modules (the members of
+ * their objects: "Class1 (class): Public Property Get Count() As Long"), then the other forms, each led by its controls
+ * ("Form2: Text1 (TextBox), cmdOK (CommandButton)") unless `formControls` is false. `currentId` (its code is in the
  * message) is skipped. Capped at about `max` characters; the rest is counted in a last line.
  */
 export function describeProjectSymbols(p: Project, currentId: string, formControls = true, max = SYMBOLS_MAX_CHARS): string {
   const lines: string[] = [];
   const itemsOf = (code: string, name: string) => { const ast = parseModuleLenient(code, name).ast; return ast ? publicItems(ast) : []; };
-  for (const m of p.modules) if (m.id !== currentId) lines.push(...itemsOf(m.code, m.name).map(t => `${m.name}: ${t}`));
+  for (const m of p.modules) if (m.id !== currentId && m.kind !== 'class') lines.push(...itemsOf(m.code, m.name).map(t => `${m.name}: ${t}`));
+  for (const m of p.modules) {
+    if (m.id === currentId || m.kind !== 'class') continue;
+    const items = itemsOf(m.code, m.name);
+    lines.push(...(items.length ? items : ['(no Public members)']).map(t => `${m.name} (class): ${t}`));
+  }
   for (const f of p.forms) {
     if (f.id === currentId) continue;
     if (formControls) lines.push(describeFormControls(f));
@@ -272,6 +294,10 @@ export function describeProjectSymbols(p: Project, currentId: string, formContro
   }
   return out.join('\n');
 }
+
+/** "form Form1", "module Module1", "class module Class1". */
+const codeOf = (form: FormDef | undefined, module: ModuleDef | undefined): string =>
+  form ? `form ${form.name}` : `${module?.kind === 'class' ? 'class module' : 'module'} ${module?.name ?? ''}`;
 
 function findItem(p: Project, id: string): { form?: FormDef; module?: ModuleDef } {
   const form = p.forms.find(f => f.id === id);
@@ -339,7 +365,7 @@ export function buildCodeRequest(p: Project, itemId: string, cursorLine: number,
   const proc = listProcedures(code).find(pr => cursorLine >= pr.line && cursorLine <= pr.endLine);
   const parts = [
     projectContext(p, itemId, form),
-    `Code of ${form ? `form ${form.name}` : `module ${module?.name ?? ''}`}:\n${codeForPrompt(code, { procName: proc?.name ?? null, mention: userPrompt }, codeBudget(opts.contextTokens))}`,
+    `Code of ${codeOf(form, module)}:\n${codeForPrompt(code, { procName: proc?.name ?? null, mention: userPrompt }, codeBudget(opts.contextTokens))}`,
   ];
   if (opts.selection?.trim()) {
     parts.push(`Selected code (the request is about this):\n${opts.selection}\n`
@@ -367,7 +393,7 @@ export function buildFixRequest(p: Project, itemId: string, err: FixError, vars:
   const lineText = (lines[err.line - 1] ?? '').trim();
   const parts = [
     projectContext(p, itemId, form),
-    `Code of ${form ? `form ${form.name}` : `module ${module?.name ?? ''}`}:\n${codeForPrompt(code, { procName: proc?.name ?? null, mention: callers.join(' ') }, codeBudget(opts.contextTokens))}`,
+    `Code of ${codeOf(form, module)}:\n${codeForPrompt(code, { procName: proc?.name ?? null, mention: callers.join(' ') }, codeBudget(opts.contextTokens))}`,
     `Error: ${what}`,
     `Line ${err.line} in ${proc?.name ?? '(declarations)'}: ${lineText}`,
   ];

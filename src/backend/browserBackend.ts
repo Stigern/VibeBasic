@@ -1,4 +1,4 @@
-import type { Backend, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
+import type { Backend, MakeAppOptions, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import { AI_CUT_OFF, readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
 import { MemoryFs } from '../lang/fileio/memoryFs';
@@ -159,6 +159,9 @@ export class BrowserBackend implements Backend {
   async dbExecute(): Promise<DbExecResult> { throw new Error('3420|Object invalid or no longer set.'); }
   async dbClose(): Promise<void> { /* nothing is open */ }
   async dbReset(): Promise<void> { /* nothing is open */ }
+  async dbBeginTrans(): Promise<number> { throw new Error('3420|Object invalid or no longer set.'); }
+  async dbCommitTrans(): Promise<number> { throw new Error('3420|Object invalid or no longer set.'); }
+  async dbRollbackTrans(): Promise<number> { throw new Error('3420|Object invalid or no longer set.'); }
 
   // MSComm: no serial ports in a browser (so every CommPort is 8002); SysInfo: the browser's screen, power unknown
   async commList(): Promise<string[]> { return []; }
@@ -189,7 +192,7 @@ export class BrowserBackend implements Backend {
   }
 
   async openProjectDialog(): Promise<string | null> {
-    return this.ask('Open project (file name, *.vbb):', 'Project1.vbb');
+    return this.ask('Open project (file name, *.vbb or a VB6 *.vbp):', 'Project1.vbb');
   }
 
   async saveProjectDialog(defaultFileName: string): Promise<string | null> {
@@ -202,7 +205,7 @@ export class BrowserBackend implements Backend {
     return null;
   }
 
-  async makeApp(_o: { targetPath: string; appName: string; projectJson: string; iconPngBase64: string | null; overwrite: boolean }): Promise<void> {
+  async makeApp(_o: MakeAppOptions): Promise<void> {
     throw new Error('Make requires the desktop version of VibeBasic.');
   }
 
@@ -214,6 +217,12 @@ export class BrowserBackend implements Backend {
   async showOpenDialog(filters: FileFilter[], title: string, initDir: string): Promise<string | null> {
     const ext = filters.flatMap(f => f.extensions).map(x => '*.' + x).join(', ');
     return this.ask(`${title || 'Open'} (file name${ext ? ', ' + ext : ''}):`, initDir ? `${initDir.replace(/\/+$/, '')}/` : '');
+  }
+
+  /** The browser has no dialog: the names are asked for in one prompt, separated by `;`. */
+  async showOpenMultipleDialog(filters: FileFilter[], title: string, initDir: string): Promise<string[] | null> {
+    const r = await this.showOpenDialog(filters, title, initDir);
+    return r === null ? null : r.split(';').map(x => x.trim()).filter(Boolean);
   }
 
   async showSaveDialog(_filters: FileFilter[], title: string, initDir: string, defaultName = ''): Promise<string | null> {

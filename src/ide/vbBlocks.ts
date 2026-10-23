@@ -1,5 +1,5 @@
 // Block structure of VB source for the code window: foldable blocks (procedures, If, loops, Select Case and its Case
-// sections, With, Type / Enum, runs of 3+ comment lines), the keywords that belong together (If / ElseIf / Else /
+// sections, With, Type / Enum, #If ... #End If, runs of 3+ comment lines), the keywords that belong together (If / ElseIf / Else /
 // End If ...) and the openers that still lack their End line. A line-based scanner that tolerates syntax errors:
 // strings and comments are masked, `:` separates statements, ` _` continues a logical line.
 //
@@ -7,7 +7,8 @@
 // map lookups and a stack walk; the result is cached per document (CodeMirror Text) and only computed when asked.
 import type { EditorState, Text } from '@codemirror/state';
 
-export type BlockKind = 'proc' | 'if' | 'for' | 'do' | 'while' | 'select' | 'case' | 'with' | 'type' | 'enum' | 'comment';
+/** `ppif`: conditional compilation, `#If ... #End If` (it may wrap whole procedures: it nests apart from the code's blocks). */
+export type BlockKind = 'proc' | 'if' | 'for' | 'do' | 'while' | 'select' | 'case' | 'with' | 'type' | 'enum' | 'ppif' | 'comment';
 /** A keyword on a line: 1-based line, 0-based columns within the line. */
 export interface KwRange { line: number; from: number; to: number }
 export interface Block {
@@ -40,7 +41,7 @@ export interface BlockScan {
 type Ev =
   | { op: 'open'; kind: Exclude<BlockKind, 'case' | 'comment'>; at: number; len: number; closer: string }
   | { op: 'close'; kind: Exclude<BlockKind, 'case' | 'comment'>; at: number; len: number; n: number }
-  | { op: 'mid'; at: number; len: number }
+  | { op: 'mid'; at: number; len: number; pp?: true }
   | { op: 'case'; at: number; len: number };
 interface LineInfo { evs: Ev[]; commentOnly: boolean; blank: boolean }
 
@@ -67,6 +68,9 @@ const RX = {
   with: /^With\b/i,
   endWith: /^End\s+With\b/i,
   rem: /^Rem\b/i,
+  ppIf: /^#\s*If\b/i,
+  ppMid: /^#\s*Else(If)?\b/i,
+  ppEnd: /^#\s*End\s*If\b/i,
   lineNo: /^\d+\s+/,
 };
 const PROC_CLOSER: Record<string, string> = { sub: 'End Sub', function: 'End Function' };
@@ -117,6 +121,12 @@ export function classifyLine(text: string): LineInfo {
     let m: RegExpExecArray | null;
     if (!s) continue;
     if (RX.rem.test(s)) break;
+    if (s[0] === '#') {
+      if ((m = RX.ppIf.exec(s))) evs.push({ op: 'open', kind: 'ppif', at, len: m[0].length, closer: '#End If' });
+      else if ((m = RX.ppMid.exec(s))) evs.push({ op: 'mid', at, len: m[0].length, pp: true });
+      else if ((m = RX.ppEnd.exec(s))) evs.push({ op: 'close', kind: 'ppif', at, len: m[0].length, n: 1 });
+      break;   // a directive owns its line
+    }
     if ((m = RX.endProc.exec(s))) evs.push({ op: 'close', kind: 'proc', at, len: m[0].length, n: 1 });
     else if ((m = RX.proc.exec(s))) {
       const from = m[0].search(/Sub|Function|Property/i);   // after the Public / Private ... modifiers
@@ -173,6 +183,7 @@ export function scanBlocks(lineText: (n: number) => string, count: number): Bloc
   const blocks: Block[] = [];
   const unclosed = new Map<number, string>();
   const stack: Open[] = [];
+  const ppStack: Open[] = [];   // #If blocks
   let commentRun = 0;   // start line of the current run of comment-only lines (0: none)
   const endRun = (last: number) => {
     if (commentRun && last - commentRun >= 2) blocks.push({ kind: 'comment', start: commentRun, headEnd: commentRun, end: last, keys: [], closer: '' });
@@ -218,7 +229,10 @@ export function scanBlocks(lineText: (n: number) => string, count: number): Bloc
     if (info.commentOnly && a === b) { if (!commentRun) commentRun = a; continue; }
     endRun(a - 1);
     for (const e of info.evs) {
-      if (e.op === 'open') {
+      if (e.op === 'open' && e.kind === 'ppif') ppStack.push({ kind: 'ppif', start: a, headEnd: b, keys: [key(e.at, e.len)], closer: e.closer });
+      else if (e.op === 'close' && e.kind === 'ppif') { const o = ppStack.pop(); if (o) finish(o, b, key(e.at, e.len)); }
+      else if (e.op === 'mid' && e.pp) ppStack[ppStack.length - 1]?.keys.push(key(e.at, e.len));
+      else if (e.op === 'open') {
         if (e.kind === 'proc') while (stack.length) { const o = stack.pop()!; if (o.kind === 'case') finish(o, a - 1, null); else drop(o); }
         stack.push({ kind: e.kind, start: a, headEnd: b, keys: [key(e.at, e.len)], closer: e.closer });
       } else if (e.op === 'close') {
@@ -241,6 +255,7 @@ export function scanBlocks(lineText: (n: number) => string, count: number): Bloc
   }
   endRun(count);
   while (stack.length) drop(stack.pop()!);
+  while (ppStack.length) drop(ppStack.pop()!);
 
   blocks.sort((x, y) => x.start - y.start || y.end - x.end);
   const byStart = new Map<number, Block>();

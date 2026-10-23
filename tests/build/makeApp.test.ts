@@ -180,3 +180,14 @@ test('Make tab: replacing or clearing the icon drops the old asset (undoable); B
   await new Promise(r => setTimeout(r, 0));
   btn('Cancel').click(); await p;
 });
+
+test('the version, copyright and file types go to Make; Auto Increment adds 1 to the revision first', async () => {
+  ide.project.versionInfo = { major: 2, minor: 1, revision: 9, autoIncrement: true, legalCopyright: '(c) Stig' };
+  ide.project.fileTypes = ['kalk'];
+  await run();
+  const arg = backend.makeApp.mock.calls[0][0];
+  expect(arg.version).toEqual({ major: 2, minor: 1, revision: 10, copyright: '(c) Stig' });
+  expect(arg.fileTypes).toEqual(['kalk']);
+  expect(ide.project.versionInfo?.revision).toBe(10);
+  expect(parseProject(arg.projectJson).versionInfo?.revision).toBe(10);
+});

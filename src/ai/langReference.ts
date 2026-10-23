@@ -1,8 +1,9 @@
 // The language reference card in the code and form system prompts. Built once at module load from the language's own
 // tables (built-in functions and constants, the parser's type and unsupported-word tables), so a new built-in shows up
 // by itself. Everything is sorted: the card, and with it the system prompt, is byte-identical on every build (prefix caching).
-import { BUILTINS, CANONICAL_NAMES, CONSTANTS } from '../lang/builtins';
-import { TYPE_KEYWORDS, UNSUPPORTED_IDENTS, UNSUPPORTED_KEYWORDS } from '../lang/parseStatements';
+import { BUILTINS, CANONICAL_NAMES, CONSTANTS, PROG_IDS } from '../lang/builtins';
+import { FINANCIAL } from '../lang/builtins/financial';
+import { GFX_STATEMENTS, TYPE_KEYWORDS, UNSUPPORTED_KEYWORDS } from '../lang/parseStatements';
 import { BUILTIN_OBJECTS } from './knownNames';
 
 const byName = (a: string, b: string): number => a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0;
@@ -12,8 +13,9 @@ const cap = (s: string): string => s[0].toUpperCase() + s.slice(1);
 /** "(1): Abs, Asc, …" per argument count; `2-3` optional arguments, `2+` any number from 2. */
 function functionLines(): string[] {
   const groups = new Map<string, { min: number; max: number; names: string[] }>();
+  const financial = new Set(FINANCIAL.map(n => n.toLowerCase()));   // on a line of their own
   for (const [key, b] of BUILTINS) {
-    if (key === 'shell') continue;   // exists only to raise a clear error; the card lists it as not available
+    if (key === 'shell' || financial.has(key)) continue;   // Shell exists only to raise a clear error; the card lists it as not available
     const sig = b.maxArgs >= 100 ? `${b.minArgs}+` : b.minArgs === b.maxArgs ? `${b.minArgs}` : `${b.minArgs}-${b.maxArgs}`;
     const g = groups.get(sig) ?? { min: b.minArgs, max: b.maxArgs, names: [] };
     g.names.push(canonical(key));
@@ -50,25 +52,37 @@ const STATEMENTS = 'Option Explicit; Dim / Private / Public / Static x As Type, 
   + ' Files: Open path For Input|Output|Append|Binary|Random As #n [Len = n]; Close [#n]; Print #n, a; b; Write #n, a, b; Input #n, a, b;'
   + ' Line Input #n, s; Get / Put #n, [pos], var; Seek #n, pos; Name old As new (paths may use \\ or /, relative to CurDir = App.Path at start).'
   + ' Also: Mid(s, i, n) = x; LSet / RSet s = x; Error n (Erl gives the last line number); Dim c As New Collection / Set c = New Collection (Add, Item, Count, Remove);'
-  + ' Function F() As Long() returns an array; IsMissing(v) for an Optional Variant; !Name also works inside With rs.';
+  + ' Function F() As Long() returns an array; IsMissing(v) for an Optional Variant; !Name also works inside With rs.'
+  + ' Classes: Set x = New Class1 / Dim x As New Class1; Class_Initialize, Class_Terminate; Public vars, Sub, Function,'
+  + ' Property Get/Let/Set, Exit Property, Me; Event E(a) + RaiseEvent E(a) -> Private WithEvents x As Class1, Sub x_E(a); Implements IFoo, Sub IFoo_M();'
+  + ' default member: Attribute Item.VB_UserMemId = 0 inside its Property Get (x(2), Debug.Print x); For Each over a class:'
+  + ' Property Get NewEnum() As IUnknown with Attribute NewEnum.VB_UserMemId = -4 and Set NewEnum = mCol.[_NewEnum].'
+  + ' If TypeOf x Is TextBox (or Form, a class, Collection); named arguments MsgBox Prompt:="x", Title:="t" (skip Optionals);'
+  + ' Option Base 1, Option Compare Text; Global = Public; GoSub label ... Return; On n GoTo|GoSub a, b; Debug.Assert cond;'
+  + ' #Const X = 1, #If X Then ... #ElseIf ... #Else ... #End If. App.Major, Minor, Revision, PrevInstance, LogEvent s.';
 
 /** Builds the card from the language's tables (exported for the stability test). */
 export function buildLanguageReference(): string {
   const types = Object.values(TYPE_KEYWORDS).map(String).sort(byName);
   const objects = [...BUILTIN_OBJECTS].map(cap).sort(byName);
   const words = Object.values(UNSUPPORTED_KEYWORDS).sort(byName);
-  const drawing = Object.values(UNSUPPORTED_IDENTS).sort(byName);
+  const drawing = Object.values(GFX_STATEMENTS).sort(byName);
   return [
     'Language reference (VibeBasic dialect of VB6):',
     `Statements: ${STATEMENTS}`,
     `Types: ${types.join(', ')} (suffixes % & ! # $). Operators: + - * / \\ Mod ^ &, = <> < > <= >=, Like, Is, Not, And, Or, Xor, Eqv, Imp; rs!Name is rs("Name") (a Recordset field).`,
     `Objects: ${objects.join(', ')}.`,
+    `CreateObject(ProgID) or New: ${[...new Set([...PROG_IDS.values()].map(c => c.name))].sort(byName).join(', ')}. ADO on SQLite files:`
+      + ' cn.Open "Data Source=x.db", cn.Execute sql[, n], BeginTrans / CommitTrans / RollbackTrans; rs.Open sql, cn, adOpenStatic, adLockOptimistic;'
+      + ' rs.Filter = "A > 1 And B Like \'x*\'", rs.Sort = "B DESC". FSO: OpenTextFile / CreateTextFile -> ReadLine, WriteLine, AtEndOfStream, Close.',
+    `Drawing on a Form, PictureBox or Printer (NewPage, EndDoc prints, KillDoc): ${drawing.join(', ')} (Line (x1, y1)-(x2, y2)[, c][, B[F]]), Cls, Point, PaintPicture; AutoRedraw or Paint.`,
     'Built-in functions by argument count (String functions also have a $ form, e.g. Left$):',
     ...functionLines(),
+    `Financial: ${FINANCIAL.join(', ')} (VB6 argument order).`,
     'Constant groups (prefix, count, examples):',
     ...constantGroups(),
-    `Not available: ${words.join(', ')}; ${drawing.join(' / ')} on forms; class modules;`
-      + ' CreateObject / GetObject (no COM automation); Shell (programs cannot be started); named arguments (x:=1).',
+    `Not available: ${words.join(', ')};`
+      + ' GetObject, other ProgIDs (no COM automation); Shell (programs cannot be started).',
   ].join('\n');
 }
 

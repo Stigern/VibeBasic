@@ -1,7 +1,9 @@
 // File > Make <name>.app...: asks for a target and hands the project to the backend.
 import type { Backend } from '../backend/backend';
 import type { IdeState } from '../ide/ideState';
+import { setProjectOptionsCmd } from '../model/commands';
 import { serializeProject } from '../model/serialize';
+import { DEFAULT_VERSION } from '../model/types';
 import { messageBox98 } from '../ui98/dialogs';
 
 const vbCritical = 16;
@@ -30,8 +32,16 @@ export async function makeAppFlow(ide: IdeState, backend: Backend, doc: Document
     if (target === null) return;
     const file = target.split('/').pop() ?? target;
     const appName = file.replace(/\.app$/i, '');
+    // Auto Increment: as VB6, every Make adds 1 to the Revision (the project is changed, and the made app has the new number)
+    const old = p.versionInfo ?? DEFAULT_VERSION;
+    if (old.autoIncrement && old.revision < 9999) ide.stack.execute(setProjectOptionsCmd({ versionInfo: { ...old, revision: old.revision + 1 } }, 'Auto Increment'));
+    const v = ide.project.versionInfo ?? DEFAULT_VERSION;
     const icon = p.iconAsset ? p.assets[p.iconAsset]?.dataBase64 ?? null : null;
-    await backend.makeApp({ targetPath: target, appName, projectJson: serializeProject(p), iconPngBase64: icon, overwrite: true });
+    await backend.makeApp({
+      targetPath: target, appName, projectJson: serializeProject(ide.project), iconPngBase64: icon, overwrite: true,
+      version: { major: v.major, minor: v.minor, revision: v.revision, copyright: v.legalCopyright ?? '' },
+      fileTypes: ide.project.fileTypes ?? [],
+    });
   } catch (e) {
     await messageBox98(doc, { prompt: e instanceof Error ? e.message : String(e), title: 'VibeBasic', buttons: vbCritical });
   } finally {

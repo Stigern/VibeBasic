@@ -24,10 +24,26 @@ group({
 // File attributes (Dir, GetAttr, SetAttr)
 group({ vbNormal: 0, vbReadOnly: 1, vbHidden: 2, vbSystem: 4, vbVolume: 8, vbDirectory: 16, vbArchive: 32, vbAlias: 64 });
 
+// App.LogEvent
+group({ vbLogEventTypeError: 1, vbLogEventTypeWarning: 2, vbLogEventTypeInformation: 4 });
+
 // Colours (VB6 Long: &H00BBGGRR)
 group({
   vbBlack: 0, vbRed: 0xff, vbGreen: 0xff00, vbYellow: 0xffff,
   vbBlue: 0xff0000, vbMagenta: 0xff00ff, vbCyan: 0xffff00, vbWhite: 0xffffff,
+});
+
+// Drawing: DrawMode, DrawStyle, FillStyle, ScaleMode (ScaleX / ScaleY also vbHimetric and the container), PaintPicture opcodes
+group({
+  vbBlackness: 1, vbNotMergePen: 2, vbMaskNotPen: 3, vbNotCopyPen: 4, vbMaskPenNot: 5, vbInvert: 6, vbXorPen: 7, vbNotMaskPen: 8,
+  vbMaskPen: 9, vbNotXorPen: 10, vbNop: 11, vbMergeNotPen: 12, vbCopyPen: 13, vbMergePenNot: 14, vbMergePen: 15, vbWhiteness: 16,
+  vbSolid: 0, vbDash: 1, vbDot: 2, vbDashDot: 3, vbDashDotDot: 4, vbInvisible: 5, vbInsideSolid: 6,
+  vbFSSolid: 0, vbFSTransparent: 1, vbHorizontalLine: 2, vbVerticalLine: 3, vbUpwardDiagonal: 4, vbDownwardDiagonal: 5, vbCross: 6, vbDiagonalCross: 7,
+  vbUser: 0, vbTwips: 1, vbPoints: 2, vbPixels: 3, vbCharacters: 4, vbInches: 5, vbMillimeters: 6, vbCentimeters: 7, vbHimetric: 8,
+  vbContainerPosition: 9, vbContainerSize: 10,
+  vbSrcCopy: 0xcc0020, vbSrcPaint: 0xee0086, vbSrcAnd: 0x8800c6, vbSrcInvert: 0x660046, vbSrcErase: 0x440328, vbNotSrcCopy: 0x330008,
+  vbNotSrcErase: 0x1100a6, vbMergeCopy: 0xc000ca, vbMergePaint: 0xbb0226, vbPatCopy: 0xf00021, vbPatPaint: 0xfb0a09, vbPatInvert: 0x5a0049,
+  vbDstInvert: 0x550009,
 });
 
 // Keys
@@ -44,12 +60,29 @@ for (let i = 1; i <= 12; i++) c('vbKeyF' + i, 111 + i);
 // Shift masks and mouse buttons (event arguments)
 group({ vbShiftMask: 1, vbCtrlMask: 2, vbAltMask: 4, vbLeftButton: 1, vbRightButton: 2, vbMiddleButton: 4 });
 
+// PopupMenu flags
+group({ vbPopupMenuLeftAlign: 0, vbPopupMenuCenterAlign: 4, vbPopupMenuRightAlign: 8, vbPopupMenuLeftButton: 0, vbPopupMenuRightButton: 2 });
+
 // CheckBox / forms / comparison
 group({
   vbUnchecked: 0, vbChecked: 1, vbGrayed: 2,
   vbModal: 1, vbModeless: 0,
   vbUpperCase: 1, vbLowerCase: 2, vbProperCase: 3, vbWide: 4, vbNarrow: 8, vbUnicode: 64, vbFromUnicode: 128,
   vbTextCompare: 1, vbBinaryCompare: 0, vbUseCompareOption: -1,
+});
+
+// MousePointer
+group({
+  vbDefault: 0, vbArrow: 1, vbCrosshair: 2, vbIbeam: 3, vbIconPointer: 4, vbSizePointer: 5, vbSizeNESW: 6, vbSizeNS: 7, vbSizeNWSE: 8, vbSizeWE: 9,
+  vbUpArrow: 10, vbHourglass: 11, vbNoDrop: 12, vbArrowHourglass: 13, vbArrowQuestion: 14, vbSizeAll: 15, vbCustom: 99,
+});
+
+// Drag and drop: DragMode, Drag's Action, DragOver's State, OLEDragMode / OLEDropMode, Effect. (vbCancel stays the MsgBox
+// result 2, as in VB6 where the VBA constant hides VBRUN's vbCancel 0: `Drag 0` cancels a drag.)
+group({
+  vbManual: 0, vbAutomatic: 1, vbBeginDrag: 1, vbEndDrag: 2, vbEnter: 0, vbLeave: 1, vbOver: 2,
+  vbOLEDragManual: 0, vbOLEDragAutomatic: 1, vbOLEDropNone: 0, vbOLEDropManual: 1, vbOLEDropAutomatic: 2,
+  vbDropEffectNone: 0, vbDropEffectCopy: 1, vbDropEffectMove: 2, vbDropEffectScroll: -2147483648,
 });
 
 // Misc
@@ -84,14 +117,18 @@ group({
   flexAlignCenterBottom: 5, flexAlignRightTop: 6, flexAlignRightCenter: 7, flexAlignRightBottom: 8, flexAlignGeneral: 9,
 });
 
-// CommonDialog (Flags are stored but not used) and RichTextBox
+// CommonDialog (cdlOFNAllowMultiselect and cdlOFNExplorer are honoured, the other Flags are stored) and RichTextBox
 group({
   cdlCancel: 32755,
   cdlOFNReadOnly: 0x1, cdlOFNOverwritePrompt: 0x2, cdlOFNHideReadOnly: 0x4, cdlOFNNoChangeDir: 0x8, cdlOFNAllowMultiselect: 0x200,
   cdlOFNPathMustExist: 0x800, cdlOFNFileMustExist: 0x1000, cdlOFNCreatePrompt: 0x2000, cdlOFNExplorer: 0x80000,
   cdlCCRGBInit: 0x1, cdlCCFullOpen: 0x2, cdlCCPreventFullOpen: 0x4,
   cdlCFScreenFonts: 0x1, cdlCFPrinterFonts: 0x2, cdlCFBoth: 0x3, cdlCFEffects: 0x100,
+  cdlOFNNoValidate: 0x100, cdlOFNExtensionDifferent: 0x400, cdlOFNNoNetworkButton: 0x20000, cdlOFNLongNames: 0x200000,
+  cdlCCHelpButton: 0x8, cdlCFANSIOnly: 0x400, cdlCFNoSimulations: 0x1000, cdlCFLimitSize: 0x2000, cdlCFFixedPitchOnly: 0x4000,
+  cdlCFWYSIWYG: 0x8000, cdlCFForceFontExist: 0x10000, cdlCFScalableOnly: 0x20000, cdlCFTTOnly: 0x40000, cdlCFNoFaceSel: 0x80000,
   rtfNone: 0, rtfHorizontal: 1, rtfVertical: 2, rtfBoth: 3,
+  rtfRTF: 0, rtfText: 1, rtfLeft: 0, rtfRight: 1, rtfCenter: 2, rtfWholeWord: 2, rtfMatchCase: 4, rtfNoHighlight: 8,
 });
 
 // StatusBar / TabStrip
@@ -110,6 +147,12 @@ group({
   tbrDefault: 0, tbrCheck: 1, tbrButtonGroup: 2, tbrSeparator: 3, tbrPlaceholder: 4, tbrDropdown: 5,
   tbrUnpressed: 0, tbrPressed: 1, tbrStandard: 0, tbrFlat: 1,
   vbAlignNone: 0, vbAlignTop: 1, vbAlignBottom: 2, vbAlignLeft: 3, vbAlignRight: 4,
+});
+
+// Forms: QueryUnload's UnloadMode; MDIForm.Arrange
+group({
+  vbFormControlMenu: 0, vbFormCode: 1, vbAppWindows: 2, vbAppTaskManager: 3, vbFormMDIForm: 4, vbFormOwner: 5,
+  vbCascade: 0, vbTileHorizontal: 1, vbTileVertical: 2, vbArrangeIcons: 3,
 });
 
 // DTPicker (Format) and MonthView (StartOfWeek)
@@ -184,6 +227,20 @@ group({
   mpReadyStateUninitialized: 0, mpReadyStateLoading: 1, mpReadyStateInteractive: 3, mpReadyStateComplete: 4,
 });
 
+// Printer (Orientation, PaperSize: only Letter and A4 print as such, ColorMode, PrintQuality, Duplex) and CommonDialog.ShowPrinter
+group({
+  vbPRORPortrait: 1, vbPRORLandscape: 2,
+  vbPRPSLetter: 1, vbPRPSLetterSmall: 2, vbPRPSTabloid: 3, vbPRPSLedger: 4, vbPRPSLegal: 5, vbPRPSStatement: 6, vbPRPSExecutive: 7,
+  vbPRPSA3: 8, vbPRPSA4: 9, vbPRPSA4Small: 10, vbPRPSA5: 11, vbPRPSB4: 12, vbPRPSB5: 13, vbPRPSUser: 256,
+  vbPRCMMonochrome: 1, vbPRCMColor: 2, vbPRPQDraft: -1, vbPRPQLow: -2, vbPRPQMedium: -3, vbPRPQHigh: -4,
+  vbPRDPSimplex: 1, vbPRDPHorizontal: 2, vbPRDPVertical: 3,
+  cdlPortrait: 1, cdlLandscape: 2,
+  cdlPDAllPages: 0, cdlPDSelection: 0x1, cdlPDPageNums: 0x2, cdlPDNoSelection: 0x4, cdlPDNoPageNums: 0x8, cdlPDCollate: 0x10,
+  cdlPDPrintToFile: 0x20, cdlPDPrintSetup: 0x40, cdlPDNoWarning: 0x80, cdlPDReturnDC: 0x100, cdlPDReturnIC: 0x200,
+  cdlPDReturnDefault: 0x400, cdlPDHelpButton: 0x800, cdlPDUseDevModeCopies: 0x40000, cdlPDDisablePrintToFile: 0x80000,
+  cdlPDHidePrintToFile: 0x100000,
+});
+
 // Clipboard formats (GetFormat, GetText, SetText): only vbCFText is supported
 group({ vbCFText: 1, vbCFBitmap: 2, vbCFMetafile: 3, vbCFDIB: 8, vbCFPalette: 9, vbCFEMetafile: 14, vbCFFiles: 15, vbCFLink: -16640, vbCFRTF: -16639 });
 
@@ -215,7 +272,16 @@ group({
   adDoMoveFirst: 0, adStayBOF: 1, adDoMoveLast: 0, adStayEOF: 1, adDoAddNew: 2,
   adSmallInt: 2, adInteger: 3, adSingle: 4, adDouble: 5, adCurrency: 6, adDate: 7, adBoolean: 11, adVariant: 12, adTinyInt: 16,
   adBigInt: 20, adVarWChar: 202, adLongVarWChar: 203, adLongVarBinary: 205,
+  adEmpty: 0, adChar: 129, adWChar: 130, adNumeric: 131, adDBDate: 133, adDBTimeStamp: 135, adVarChar: 200, adLongVarChar: 201,
+  adFilterNone: 0, adFilterPendingRecords: 1, adFilterAffectedRecords: 2, adFilterFetchedRecords: 3, adFilterConflictingRecords: 5,
+  adExecuteNoRecords: 128, adOpenUnspecified: -1, adLockUnspecified: -1,
+  adParamInput: 1, adParamOutput: 2, adParamInputOutput: 3, adParamReturnValue: 4,
+  adAddNew: 0x1000400, adDelete: 0x1000800, adUpdate: 0x1008000, adBookmark: 0x2000, adMovePrevious: 0x200, adHoldRecords: 0x100,
+  adApproxPosition: 0x4000, adFind: 0x80000, adResync: 0x20000, adUpdateBatch: 0x10000, adIndex: 0x100000, adSeek: 0x400000, adNotify: 0x40000,
 });
+
+// Scripting runtime: OpenTextFile's IOMode
+group({ ForReading: 1, ForWriting: 2, ForAppending: 8 });
 
 // DataGrid (MSDATGRD.OCX), DataList / DataCombo (MSDATLST.OCX)
 group({

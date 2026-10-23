@@ -6,17 +6,23 @@
 // - `Item(index | key)` (the default member, so `c(1)`, `c("k")` and `c!k` work), `Count`, `Remove index | key`.
 //   An index out of range is error 9, an unknown key error 5.
 // - `For Each` visits the items in order. Items are read-only (`c(1) = x` is error 424 for a value, as in VB6).
-// - Objects are kept as references (an object argument is not turned into its default member: `rawArgs`).
+// - Objects are kept as references (an object argument is not turned into its default member: `rawArgs`), counted: an
+//   object leaves with Remove, and when the Collection itself goes (RefContainer).
+// - Named arguments: Add (Item, Key, Before, After), Item and Remove (Index). `[_NewEnum]` is the Collection itself
+//   (a class's NewEnum member returns it for For Each).
 
 import { VBRuntimeError } from '../errors';
 import type { VBObject } from '../host';
-import { Empty, EmptyT, VBArray, VBRecord, isObject, toNumber, type VBValue } from '../values';
+import type { BuiltinCtx } from './util';
+import { Empty, EmptyT, RefContainer, VBArray, VBRecord, isObject, toNumber, type VBValue } from '../values';
 
 interface Entry { value: VBValue; key: string | null }
 
 const given = (v: VBValue | undefined): v is VBValue => v !== undefined && !(v instanceof EmptyT);
 
-export class VBCollection implements VBObject {
+const PARAMS: Record<string, readonly string[]> = { add: ['Item', 'Key', 'Before', 'After'], item: ['Index'], remove: ['Index'] };
+
+export class VBCollection extends RefContainer implements VBObject {
   readonly vbTypeName = 'Collection';
   readonly defaultMember = 'Item';
   /** Arguments reach `callMethod` as they are (an object stays an object). */
@@ -25,6 +31,10 @@ export class VBCollection implements VBObject {
 
   /** For Each. */
   items(): VBObject[] { return this.list.map(e => e.value) as VBObject[]; }
+
+  protected heldValues(): VBValue[] { return this.list.map(e => e.value); }
+
+  paramNames(name: string): readonly string[] | undefined { return PARAMS[name.toLowerCase()]; }
 
   /** 0-based position of an index or key argument; `missing` is the error for a key that is not there. */
   private position(at: VBValue, missing: number): number {
@@ -53,12 +63,13 @@ export class VBCollection implements VBObject {
     if (given(before)) at = this.position(before, 5);
     else if (given(after)) at = this.position(after, 5) + 1;
     const value = item instanceof VBArray || item instanceof VBRecord ? item.clone() : item;
+    this.keep(value);
     this.list.splice(at, 0, { value, key: k });
   }
 
   hasMember(name: string): boolean {
     const n = name.toLowerCase();
-    return n === 'item' || n === 'count';
+    return n === 'item' || n === 'count' || n === '_newenum';
   }
 
   getMember(name: string, args: VBValue[]): VBValue {
@@ -69,6 +80,9 @@ export class VBCollection implements VBObject {
       case 'item':
         if (args.length !== 1 || !given(args[0])) throw new VBRuntimeError(450);
         return this.list[this.position(args[0], 5)].value;
+      case '_newenum':
+        if (args.length) throw new VBRuntimeError(450);
+        return this;
     }
     throw new VBRuntimeError(438);
   }
@@ -85,11 +99,48 @@ export class VBCollection implements VBObject {
         return Empty;
       case 'remove':
         if (args.length !== 1 || !given(args[0])) throw new VBRuntimeError(450);
-        this.list.splice(this.position(args[0], 5), 1);
+        this.letGo(this.list.splice(this.position(args[0], 5), 1)[0].value);
         return Empty;
-      case 'item': case 'count':
+      case 'item': case 'count': case '_newenum':
         return this.getMember(name, args);
     }
     throw new VBRuntimeError(438);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Classes New can make without a class module
+// ---------------------------------------------------------------------------
+
+/**
+ * A class `New T` (and `Dim x As New T`) can make that is not a class module of the project. `create` gets the program's
+ * built-in context (its host, for classes that need native services). Register more with `defClass`.
+ */
+export interface BuiltinClass { name: string; create(ctx: BuiltinCtx): VBObject }
+
+/** Built-in classes by lower-case name; a library-qualified name (`vba.collection`) is a key of its own. */
+export const BUILTIN_CLASSES = new Map<string, BuiltinClass>();
+
+/** The classes CreateObject makes, by lower-case ProgID ("scripting.dictionary"). */
+export const PROG_IDS = new Map<string, BuiltinClass>();
+
+/** Registers a built-in class under each of `names` (the first is its display name); `progId`: its dotted names are ProgIDs too. */
+export function defClass(names: string[], create: (ctx: BuiltinCtx) => VBObject, progId = false): void {
+  const c: BuiltinClass = { name: names[0], create };
+  for (const n of names) {
+    BUILTIN_CLASSES.set(n.toLowerCase(), c);
+    if (progId && n.includes('.')) PROG_IDS.set(n.toLowerCase(), c);
+  }
+}
+
+/** A class the run session makes (ADO: it needs the program's databases); 429 without one. */
+export const hostClass = (progId: string) => (ctx: BuiltinCtx): VBObject => {
+  const o = ctx.host.createObject?.(progId);
+  if (!o) throw new VBRuntimeError(429);
+  return o;
+};
+
+defClass(['Collection', 'VBA.Collection'], () => new VBCollection());
+defClass(['ADODB.Connection', 'Connection'], hostClass('ADODB.Connection'), true);
+defClass(['ADODB.Recordset', 'Recordset'], hostClass('ADODB.Recordset'), true);
+defClass(['ADODB.Command', 'Command'], hostClass('ADODB.Command'), true);

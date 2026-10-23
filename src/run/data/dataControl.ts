@@ -13,7 +13,9 @@ import { Empty, Nothing, VBRef, toBool, toNumber, toStr, type VBValue } from '..
 import type { RichControl } from '../objects/richControl';
 import { userAction } from '../objects/richControl';
 import type { DbConnection, DbSession } from './dbSession';
-import { ConnectionObject, DatabaseObject } from './dbObjects';
+import { ConnectionObject, DatabaseObject, dataSourceOf } from './dbObjects';
+
+export { dataSourceOf };
 import { ACT, RecordsetObject, type Flavor, type RecordsetOwner } from './recordset';
 
 /** A control of the form as the data control sees it (see ControlObject). */
@@ -42,19 +44,6 @@ export interface DataHost {
   msgBox(prompt: string, buttons: number, title: string): Promise<number>;
   /** Runs `fn` with the program's locale current: a bound control shows a date as CStr does, also after an await. */
   inScope<T>(fn: () => T): T;
-}
-
-/** The Data Source of an ADO connection string ("Provider=...;Data Source=file.db"); a string without "=" is the path itself. */
-export function dataSourceOf(cs: string): string {
-  const t = cs.trim();
-  if (!t.includes('=')) return t;
-  for (const part of t.split(';')) {
-    const i = part.indexOf('=');
-    if (i < 0) continue;
-    const key = part.slice(0, i).trim().toLowerCase().replace(/\s+/g, ' ');
-    if (['data source', 'datasource', 'dbq', 'database', 'filename', 'file name'].includes(key)) return part.slice(i + 1).trim().replace(/^(["'])(.*)\1$/, '$2');
-  }
-  return '';
 }
 
 /** ADO's EventReasonEnum for a vbDataAction. */

@@ -1,4 +1,5 @@
 import { BrowserBackend } from './browserBackend';
+import type { PrinterInfo } from '../run/printing';
 import { TauriBackend } from './tauriBackend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import type { AiChatOptions } from '../ai/sse';
@@ -79,7 +80,17 @@ export interface SysInfoData {
   workLeft: number; workTop: number; workWidth: number; workHeight: number;
   acStatus: number; batteryLifePercent: number; batteryLifeTime: number; batteryFullTime: number; batteryStatus: number;
 }
-export interface SystemApi { sysInfo(): Promise<SysInfoData> }
+export interface SystemApi {
+  sysInfo(): Promise<SysInfoData>;
+  /** Environ: the process environment as NAME / value pairs, in the process's order. */
+  environment?(): Promise<[string, string][]>;
+  /** A made app's Command$: the files opened with it (Finder), else its arguments after the executable, joined with spaces. */
+  commandLine?(): Promise<string>;
+  /** App.PrevInstance: another instance of this made app (the same bundle id) runs. */
+  prevInstance?(): Promise<boolean>;
+  /** App.LogEvent: appends one line to the made app's log file (in its data folder). */
+  logEvent?(line: string): Promise<void>;
+}
 
 /** A database value as the Rust side sends it: SQLite NULL, a number, a string, or the bytes of a BLOB. */
 export type DbValue = null | number | string | { blob: string };
@@ -100,22 +111,36 @@ export interface DatabaseApi {
   dbClose(id: number): Promise<void>;
   /** Closes every connection (the end of a run). */
   dbReset(): Promise<void>;
+  /** ADO BeginTrans (nested levels are savepoints): the new level. */
+  dbBeginTrans(id: number): Promise<number>;
+  /** CommitTrans / RollbackTrans of the innermost level: the level left. Rejects "-2147168242|No transaction is active." without one. */
+  dbCommitTrans(id: number): Promise<number>;
+  dbRollbackTrans(id: number): Promise<number>;
+}
+
+/** Make: the project, the icon, the version for Info.plist (Major.Minor.Revision, Legal Copyright) and the file extensions it opens. */
+export interface MakeAppOptions {
+  targetPath: string; appName: string; projectJson: string; iconPngBase64: string | null; overwrite: boolean;
+  version?: { major: number; minor: number; revision: number; copyright: string };
+  fileTypes?: string[];
 }
 
 /** FileSystemApi: the files of a running program (Open, Kill, Dir ...) and SaveSetting, made by the main window. */
 export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, SystemApi {
   readonly kind: 'tauri' | 'browser';
   showMainWindow(): Promise<void>;
-  /** Open dialog filtered to *.vbb. Null when cancelled. */
+  /** Open dialog filtered to *.vbb and VB6 *.vbp. Null when cancelled. */
   openProjectDialog(): Promise<string | null>;
   saveProjectDialog(defaultFileName: string): Promise<string | null>;
   /** Save dialog for a made app (filter .app). Null when cancelled. */
   saveAppDialog(defaultName: string): Promise<string | null>;
   /** Builds a standalone .app from the project (desktop only). Rejects with the error text. */
-  makeApp(o: { targetPath: string; appName: string; projectJson: string; iconPngBase64: string | null; overwrite: boolean }): Promise<void>;
+  makeApp(o: MakeAppOptions): Promise<void>;
   openFileDialog(filters: FileFilter[]): Promise<string | null>;
   /** Generic open dialog (CommonDialog.ShowOpen): `filters` in the order shown (the first is selected), `initDir` '' for the default folder. Null when cancelled. An extension `*` means every file. */
   showOpenDialog(filters: FileFilter[], title: string, initDir: string): Promise<string | null>;
+  /** CommonDialog.ShowOpen with cdlOFNAllowMultiselect: the same, for one or more files (the full paths, in the order the dialog gives them). */
+  showOpenMultipleDialog(filters: FileFilter[], title: string, initDir: string): Promise<string[] | null>;
   /** Generic save dialog (CommonDialog.ShowSave). `defaultName` is the file name suggested ('' for none). Null when cancelled. */
   showSaveDialog(filters: FileFilter[], title: string, initDir: string, defaultName?: string): Promise<string | null>;
   /** DriveListBox: the startup disk "/" first, then /Volumes/*. */
@@ -134,6 +159,10 @@ export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, 
   /** The bytes of an opened media file. */
   mediaRead?(token: string): Promise<Uint8Array>;
   mediaClose?(token: string): Promise<void>;
+  /** Printers (desktop only): the printers of the system. */
+  printerList?(): Promise<PrinterInfo[]>;
+  /** The macOS print dialog for a print window (label vbdialog-print-<n>), as a sheet on it. */
+  printWindow?(label: string): Promise<void>;
   /** Small JSON settings (IDE options ...) kept in localStorage under `vibebasic.settings:<key>`. Null when absent. In the
    *  desktop app the 'ai' settings (with the API key) are kept by the Rust side instead, out of reach of the form windows,
    *  which share the localStorage (src/backend/aiSettingsStore.ts). */

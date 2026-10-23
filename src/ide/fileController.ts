@@ -1,17 +1,26 @@
-// File operations (New / Open / Save / Save As / Exit) and the "Save changes?" prompt.
+// File operations (New / Open / Save / Save As / Exit), the "Save changes?" prompt, and the VB6 import: Open Project with a .vbp
+// and Project > Add File with a .frm / .bas / .cls (model/vb6Import.ts), each followed by the import report when there were problems.
 import type { Backend } from '../backend/backend';
+import { addAssetCmd, addFormCmd, addModuleCmd, compositeCmd, type Command } from '../model/commands';
+import { normalizeComponents, setComponentsCmd } from '../model/components';
 import { newProject } from '../model/controls';
 import { parseProject, serializeProject } from '../model/serialize';
+import { importVb6File, importVbp } from '../model/vb6Import';
 import { h } from '../ui98/dom';
 import { messageBox98, showDialog98 } from '../ui98/dialogs';
 import { OPTION_EXPLICIT, type IdeState } from './ideState';
 
 const VB_CRITICAL = 16;
+const VB_EXCLAMATION = 48;
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const isVbp = (path: string) => /\.vbp$/i.test(path);
+const VB6_FILES = { name: 'Visual Basic Files', extensions: ['frm', 'bas', 'cls'] };
 
 export class FileController {
   /** Called after a project was replaced; main.ts hooks this to open the startup form's designer. */
   onProjectReplaced: (() => void) | null = null;
+  /** Called after Project > Add File added a form or module; main.ts opens its designer / code window. */
+  onItemAdded: ((id: string) => void) | null = null;
 
   constructor(private ide: IdeState, private backend: Backend, private doc: Document = document) {}
 
@@ -42,15 +51,64 @@ export class FileController {
     if (!(await this.confirmDiscard())) return;
     const path = await this.backend.openProjectDialog();
     if (!path) return;
-    let project;
+    let project, warnings: string[] = [];
     try {
-      project = parseProject(await this.backend.readTextFile(path));
+      if (isVbp(path)) ({ project, warnings } = await importVbp(path, p => this.backend.readBinaryFile(p)));
+      else project = parseProject(await this.backend.readTextFile(path));
     } catch (e) {
       await this.error(errText(e));
       return;
     }
-    this.replace(project, path);
+    // an imported VB6 project opens as a new, unsaved .vbb (Save asks for its name)
+    this.replace(project, isVbp(path) ? null : path);
+    if (isVbp(path)) this.ide.stack.markDirtyExternal();
     this.onProjectReplaced?.();
+    if (warnings.length) await this.importReport(warnings);
+  }
+
+  /** Project > Add File: a VB6 .frm (with its .frx), .bas or .cls into the current project, as one undoable step. */
+  async addFile(): Promise<void> {
+    if (this.ide.mode !== 'design') return;
+    const path = await this.backend.openFileDialog([VB6_FILES]);
+    if (!path) return;
+    const p = this.ide.project;
+    const taken = [p.name, ...p.forms.map(f => f.name), ...p.modules.map(m => m.name)];
+    let r;
+    try {
+      // an invalid name is changed (the import report says so); a name the project has already is refused below
+      r = await importVb6File(path, f => this.backend.readBinaryFile(f), taken);
+    } catch (e) {
+      await this.error(errText(e));
+      return;
+    }
+    const item = r.forms[0] ?? r.modules[0];
+    if (taken.some(n => n.toLowerCase() === item.name.toLowerCase())) {   // VB6 adds nothing (only Open Project renames)
+      await messageBox98(this.doc, { prompt: 'Name conflicts with existing module, project, or object library', title: 'VibeBasic', buttons: VB_EXCLAMATION });
+      return;
+    }
+    if (r.forms[0]?.mdi && p.forms.some(f => f.mdi)) {
+      await messageBox98(this.doc, { prompt: 'Only one MDI Form allowed', title: 'VibeBasic', buttons: VB_EXCLAMATION });
+      return;
+    }
+    const cmds: Command[] = Object.entries(r.assets).map(([id, a]) => addAssetCmd(id, a));
+    const comps = normalizeComponents(p.components, r.components);
+    if (comps.length !== p.components.length) cmds.push(setComponentsCmd(comps));
+    cmds.push(r.forms[0] ? addFormCmd(r.forms[0]) : addModuleCmd(r.modules[0]));
+    this.ide.stack.execute(compositeCmd(`Add ${item.name}`, cmds));
+    this.ide.explorerItemId = item.id;
+    if (r.forms[0]) this.ide.setSelection({ formId: item.id, ids: [] }); else this.ide.setSelection(null);
+    this.onItemAdded?.(item.id);
+    if (r.warnings.length) await this.importReport(r.warnings);
+  }
+
+  /** The import report: what was left out or will not run. */
+  private async importReport(warnings: string[]): Promise<void> {
+    const list = h('div', { class: 'dlg98-filelist dlg98-report' }, ...warnings.map(w => h('div', {}, w)));
+    await showDialog98(this.doc, {
+      title: 'Import Report',
+      content: h('div', {}, h('div', { class: 'dlg98-text' }, 'The project was imported. These parts were left out or are not supported:'), list),
+      buttons: [{ label: 'OK', value: 'ok', default: true, cancel: true }],
+    });
   }
 
   async save(): Promise<boolean> {

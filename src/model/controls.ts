@@ -7,6 +7,8 @@ import { syncSSTab } from './ssTab';
 import { MAX_DATE, MIN_DATE, nowSerial, systemStartOfWeek } from './dateControls';
 import { fitText } from './mask';
 import { CHART_TYPE_NAMES } from './chart';
+import { MOUSE_POINTERS } from '../controls/cursor';
+import { SHORTCUT_LABELS } from './menuShortcuts';
 import type { ControlDef, ControlType, FontValue, FormDef, PropValue, Project } from './types';
 
 export type PropKind = 'string' | 'text' | 'int' | 'bool' | 'color' | 'enum' | 'font' | 'picture' | 'list'
@@ -87,6 +89,35 @@ const listMethods = (): MethodDef[] => [
 ];
 
 // ---------------------------------------------------------------------------------------------------------------
+// Drawing (Form and PictureBox: see run/objects/drawSurface.ts)
+
+const DRAW_MODES = ['Blackness', 'Not Merge Pen', 'Mask Not Pen', 'Not Copy Pen', 'Mask Pen Not', 'Invert', 'Xor Pen', 'Not Mask Pen',
+  'Mask Pen', 'Not Xor Pen', 'Nop', 'Merge Not Pen', 'Copy Pen', 'Merge Pen Not', 'Merge Pen', 'Whiteness'];
+const FILL_STYLES = ['Solid', 'Transparent', 'Horizontal Line', 'Vertical Line', 'Upward Diagonal', 'Downward Diagonal', 'Cross', 'Diagonal Cross'];
+/** AutoRedraw ... ScaleMode, ScaleLeft/Top/Width/Height (Single; stored for ScaleMode 0, the user scale, which a VB6 form can have at
+ *  design time; the Properties window shows them then), and the run-time CurrentX/Y, hDC and Image. */
+const drawProps = (): PropDef[] => [
+  bool('AutoRedraw', false), bool('ClipControls', true),
+  p('DrawMode', 'enum', 13, { enumValues: DRAW_MODES.map((l, i) => ({ value: i + 1, label: `${i + 1} - ${l}` })) }),
+  en('DrawStyle', 0, ['Solid', 'Dash', 'Dot', 'Dash-Dot', 'Dash-Dot-Dot', 'Transparent', 'Inside Solid']),
+  int('DrawWidth', 1, { min: 1, max: 32767 }), color('FillColor', 0), en('FillStyle', 1, FILL_STYLES),
+  bool('FontTransparent', true), bool('HasDC', true, { runtime: 'ro' }),
+  en('ScaleMode', 1, ['User', 'Twip', 'Point', 'Pixel', 'Character', 'Inch', 'Millimeter', 'Centimeter']),
+  int('ScaleLeft', 0), int('ScaleTop', 0), int('ScaleWidth', 0), int('ScaleHeight', 0),
+  rt('CurrentX', 'int', 0), rt('CurrentY', 'int', 0), rt('hDC', 'int', 0, 'ro'), rt('Image', 'picture', null, 'ro'),
+];
+const drawMethods = (): MethodDef[] => [
+  { name: 'Cls', params: '' }, { name: 'Print', params: '[a; b, c]' }, { name: 'PSet', params: '[Step] (X, Y), [Color]' },
+  { name: 'Line', params: '[[Step] (X1, Y1)]-[Step] (X2, Y2), [Color], [B[F]]' },
+  { name: 'Circle', params: '[Step] (X, Y), Radius, [Color], [Start], [End], [Aspect]' },
+  { name: 'Point', params: 'X As Single, Y As Single' },
+  { name: 'PaintPicture', params: 'Picture, X1, Y1, [Width1], [Height1], [X2], [Y2], [Width2], [Height2], [Opcode]' },
+  { name: 'Scale', params: '[(X1, Y1)-(X2, Y2)]' }, { name: 'ScaleX', params: 'Width As Single, [FromScale], [ToScale]' },
+  { name: 'ScaleY', params: 'Height As Single, [FromScale], [ToScale]' },
+  { name: 'TextWidth', params: 'Str As String' }, { name: 'TextHeight', params: 'Str As String' },
+];
+
+// ---------------------------------------------------------------------------------------------------------------
 // The registry
 
 const scrollProps = (): PropDef[] => [
@@ -113,9 +144,53 @@ const SS_ALIGNMENTS = ['Left Top', 'Left Middle', 'Left Bottom', 'Right Top', 'R
 const SS_BEVELS = ['None', 'Inset', 'Raised'];
 const SS_FONT3D = ['None', 'Raised with light shading', 'Raised with heavy shading', 'Inset with light shading', 'Inset with heavy shading'];
 
+/** MousePointer and MouseIcon (every visible control but Shape and Line; the Form), CausesValidation and the Validate event (every control with GotFocus). */
+const pointerProps = (): PropDef[] => [
+  p('MousePointer', 'enum', 0, { enumValues: MOUSE_POINTERS.map(([value, l]) => ({ value, label: `${value} - ${l}` })) }), picture('MouseIcon'),
+];
+
+/** Drag and drop (0.9 B4): classic (DragMode, DragIcon, Drag, DragDrop / DragOver) and OLE (OLEDragMode, OLEDropMode, OLEDrag and
+ *  the OLE events) on every visible control but Shape and Line; the Form is a drop target only (OLEDropMode, no Drag). */
+const SOURCE = 'Source As Control, X As Single, Y As Single';
+const OLE_DROP = 'Data As DataObject, Effect As Long, Button As Integer, Shift As Integer, X As Single, Y As Single';
+const dropEvents = (): EventDef[] => [
+  ev('DragDrop', SOURCE), ev('DragOver', `${SOURCE}, State As Integer`),
+  ev('OLEDragDrop', OLE_DROP), ev('OLEDragOver', `${OLE_DROP}, State As Integer`),
+];
+const dragEvents = (): EventDef[] => [
+  ev('OLEStartDrag', 'Data As DataObject, AllowedEffects As Long'), ev('OLECompleteDrag', 'Effect As Long'),
+  ev('OLESetData', 'Data As DataObject, DataFormat As Integer'),
+];
+const OLE_DROP_MODES = (): PropDef => en('OLEDropMode', 0, ['None', 'Manual', 'Automatic']);
+const dragProps = (): PropDef[] => [en('DragMode', 0, ['Manual', 'Automatic']), picture('DragIcon'), en('OLEDragMode', 0, ['Manual', 'Automatic']), OLE_DROP_MODES()];
+
+/** The Font as separate run-time properties, as VB6 has them on every object with a Font (FontName ... FontStrikethru are Font.Name
+ *  ... Font.Strikethrough; see run/objects/controlObject.ts). Not in the props of a control; the AI's control list says so once. */
+export const FONT_ALIASES: Readonly<Record<string, keyof FontValue>> = {
+  FontName: 'name', FontSize: 'size', FontBold: 'bold', FontItalic: 'italic', FontUnderline: 'underline', FontStrikethru: 'strikethrough',
+};
+const fontAliases = (): PropDef[] => [rt('FontName', 'string', DEFAULT_FONT.name), rt('FontSize', 'int', DEFAULT_FONT.size),
+  ...['FontBold', 'FontItalic', 'FontUnderline', 'FontStrikethru'].map(n => rt(n, 'bool', false))];
+
 const def = (d: Omit<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'> &
-  Partial<Pick<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'>>): ControlTypeDef =>
-  ({ methods: baseMethods(), isContainer: false, invisibleAtRuntime: false, ...d });
+  Partial<Pick<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'>>): ControlTypeDef => {
+  const t: ControlTypeDef = { methods: baseMethods(), isContainer: false, invisibleAtRuntime: false, ...d };
+  if (t.type === 'Form' || !(t.invisibleAtRuntime || t.type === 'Shape' || t.type === 'Line')) t.props = [...t.props, ...pointerProps()];
+  if (t.type === 'Form') {
+    t.props = [...t.props, { ...OLE_DROP_MODES(), enumValues: enumVals('None', 'Manual') }];
+    t.events = [...t.events, ...dropEvents()];
+  } else if (!(t.invisibleAtRuntime || t.type === 'Shape' || t.type === 'Line')) {
+    t.props = [...t.props, ...dragProps()];
+    t.events = [...t.events, ...dropEvents(), ...dragEvents()];
+    t.methods = [...t.methods, { name: 'Drag', params: '[Action]' }, { name: 'OLEDrag', params: '' }];
+  }
+  if (t.props.some(pd => pd.kind === 'font')) t.props = [...t.props, ...fontAliases()];
+  if (t.type !== 'Form' && t.events.some(e => e.name === 'GotFocus')) {
+    t.props = [...t.props, bool('CausesValidation', true)];
+    t.events = [...t.events, ev('Validate', 'Cancel As Boolean')];
+  }
+  return t;
+};
 
 export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
   // Form is not a "real" control: it has no TabIndex/TabStop/ToolTipText, so only the applicable common props.
@@ -132,16 +207,20 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       bool('ControlBox', true, { runtime: 'ro' }), bool('MaxButton', true, { runtime: 'ro' }), bool('MinButton', true, { runtime: 'ro' }),
       en('WindowState', 0, ['Normal', 'Minimized', 'Maximized']),
       bool('KeyPreview', false),
-      font(), picture(), picture('Icon'),
+      font(), picture(), picture('Icon'), ...drawProps(),
+      // MDI (mdi.ts): MDIChild on ordinary forms; AutoShowChildren and ScrollBars on the MDI form only
+      bool('MDIChild', false, { runtime: 'ro' }), bool('AutoShowChildren', true), bool('ScrollBars', true, { runtime: 'ro' }),
     ],
     events: [
       ev('Load'), ev('Unload', 'Cancel As Integer'), ev('QueryUnload', 'Cancel As Integer, UnloadMode As Integer'),
-      ev('Activate'), ev('Deactivate'), ev('Resize'), ev('Initialize'),
+      ev('Activate'), ev('Deactivate'), ev('Resize'), ev('Initialize'), ev('Paint'),
       evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse(),
     ],
     methods: [
       { name: 'Show', params: '[Modal], [OwnerForm]' }, { name: 'Hide', params: '' },
-      { name: 'Refresh', params: '' }, { name: 'Move', params: MOVE },
+      { name: 'Refresh', params: '' }, { name: 'Move', params: MOVE }, { name: 'PrintForm', params: '' },
+      { name: 'ValidateControls', params: '' }, ...drawMethods(),
+      { name: 'PopupMenu', params: 'Menu As Object, [Flags], [X], [Y], [DefaultMenu]' },
     ],
   }),
 
@@ -249,8 +328,11 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     defaultEvent: 'Click', defaultMember: 'Picture',
     props: [
       ...common(), picture(), bool('AutoSize', false), en('BorderStyle', 1, ['None', 'Fixed Single']), color('BackColor', BTN_FACE),
+      color('ForeColor', BTN_TEXT), font(), ...drawProps(),
+      en('Align', 0, ['vbAlignNone', 'vbAlignTop', 'vbAlignBottom', 'vbAlignLeft', 'vbAlignRight']),
     ],
-    events: [evChange(), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
+    events: [evChange(), evClick(), evDbl(), ev('Paint'), ev('Resize'), ...evFocus(), ...evKeys(), ...evMouse()],
+    methods: [...baseMethods(), ...drawMethods()],
   }),
 
   Image: def({
@@ -411,26 +493,32 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
     events: [evClick(), evDbl(), ev('RowColChange'), ev('SelChange'), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
-  // Invisible at run time, like Timer (Left and Top only). ShowOpen / ShowSave / ShowColor / ShowFont are run by the run session;
-  // ShowPrinter and ShowHelp are not supported (438). FileTitle is run-time only.
+  // Invisible at run time, like Timer (Left and Top only). ShowOpen / ShowSave / ShowColor / ShowFont / ShowPrinter are run by the run
+  // session; ShowHelp is not supported (438). FileTitle is run-time only. Flags: cdlOFNAllowMultiselect (with cdlOFNExplorer FileName is
+  // "folder" & Chr(0) & "a" & Chr(0) & "b"), cdlCCRGBInit (Color is the first colour) and the print flags are used; MaxFileSize and the
+  // other Flags are stored. DefaultExt is added to a ShowSave name without extension.
   CommonDialog: def({
     type: 'CommonDialog', component: 'COMDLG32.OCX', namePrefix: 'CommonDialog', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true, toolboxTooltip: 'CommonDialog',
     defaultEvent: '', defaultMember: null,
     props: [
       int('Left', 0), int('Top', 0), str('Tag'),
       str('FileName'), rt('FileTitle', 'string', ''), str('Filter'), int('FilterIndex', 1, { min: 0 }),
-      str('DialogTitle'), str('InitDir'), int('Flags', 0),
+      str('DialogTitle'), str('InitDir'), int('Flags', 0), str('DefaultExt'), int('MaxFileSize', 260, { min: 1, max: 32767 }),
       color('Color', 0), str('FontName', 'MS Sans Serif'), int('FontSize', 8, { min: 1, max: 999 }),
       bool('FontBold', false), bool('FontItalic', false), bool('FontUnderline', false),
       bool('CancelError', false),
+      int('Copies', 1, { min: 1, max: 9999 }), int('Orientation', 1, { min: 1, max: 2 }), int('FromPage', 0, { min: 0 }), int('ToPage', 0, { min: 0 }),
+      int('Min', 0, { min: 0 }), int('Max', 0, { min: 0 }), bool('PrinterDefault', true),
     ],
     events: [],
     methods: [
       { name: 'ShowOpen', params: '' }, { name: 'ShowSave', params: '' }, { name: 'ShowColor', params: '' }, { name: 'ShowFont', params: '' },
+      { name: 'ShowPrinter', params: '' },
     ],
   }),
 
-  // Text is plain text; the formatting of the selection is run-time only (SelBold ...). The window reports SelStart, SelLength and the Sel* format.
+  // Text is plain text; the formatting (SelBold ..., the paragraph formats SelAlignment ...) is run-time only and reaches RTF through TextRTF, SelRTF,
+  // LoadFile and SaveFile. The window reports SelStart, SelLength and the Sel* format.
   RichTextBox: def({
     type: 'RichTextBox', component: 'RICHTX32.OCX', namePrefix: 'RichTextBox', defaultWidth: 2415, defaultHeight: 975, toolboxTooltip: 'RichTextBox',
     defaultEvent: 'Change', defaultMember: 'Text',
@@ -441,8 +529,16 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       rt('SelStart', 'int', 0), rt('SelLength', 'int', 0), rt('SelText', 'string', ''),
       rt('SelBold', 'bool', false), rt('SelItalic', 'bool', false), rt('SelUnderline', 'bool', false),
       rt('SelColor', 'color', WIN_TEXT), rt('SelFontName', 'string', 'MS Sans Serif'), rt('SelFontSize', 'int', 8),
+      rt('SelStrikeThru', 'bool', false), rt('SelAlignment', 'int', 0), rt('SelBullet', 'bool', false), rt('SelIndent', 'int', 0),
+      rt('SelRightIndent', 'int', 0), rt('SelHangingIndent', 'int', 0), rt('SelCharOffset', 'int', 0), int('RightMargin', 0, { min: 0 }),
+      rt('TextRTF', 'string', ''), rt('SelRTF', 'string', ''),
     ],
     events: [evChange(), ev('SelChange'), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
+    methods: [
+      ...baseMethods(), { name: 'LoadFile', params: 'FileName As String, [FileType]' }, { name: 'SaveFile', params: 'FileName As String, [FileType]' },
+      { name: 'Find', params: 'Str As String, [Start], [End], [Options]' }, { name: 'Span', params: 'Characters As String, [Forward], [Negate]' },
+      { name: 'UpTo', params: 'Characters As String, [Forward], [Negate]' }, { name: 'GetLineFromChar', params: 'CharPos As Long' },
+    ],
   }),
   // The drives, folders and files come from the backend at run time. Drive is the path of a volume ("/" is the startup disk);
   // Drives ('path|name' lines), and a folder / file list (the full paths of the sub-folders, the file names) are the window's data.
@@ -1056,6 +1152,23 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     methods: [...baseMethods(), ...['Next', 'Previous'].flatMap(d => ['Day', 'Week', 'Month', 'Year'].map(u => ({ name: `${d}${u}`, params: '' }))),
       { name: 'Today', params: '' }],
   }),
+
+  // A menu of the form's menu bar (made in Tools > Menu Editor, not in the Toolbox): a top-level menu (parentId null) or an
+  // item / submenu of the menu its parentId names (see menus.ts). No position or size. Caption "-" is a separator line.
+  // Shortcut (the position in SHORTCUT_LABELS) and NegotiatePosition exist at design time only; WindowList is read-only at run time.
+  Menu: def({
+    type: 'Menu', namePrefix: 'Menu', defaultWidth: 0, defaultHeight: 0, toolboxTooltip: 'Menu',
+    defaultEvent: 'Click', defaultMember: null,
+    props: [
+      str('Caption'), bool('Checked', false), bool('Enabled', true), bool('Visible', true), bool('WindowList', false, { runtime: 'ro' }),
+      p('Shortcut', 'enum', 0, { runtime: 'none', enumValues: SHORTCUT_LABELS.map((label, value) => ({ value, label })) }),
+      int('HelpContextID', 0, { min: 0 }),
+      en('NegotiatePosition', 0, ['None', 'Left', 'Middle', 'Right'], { runtime: 'none' }),
+      str('Tag'),
+    ],
+    events: [evClick()],
+    methods: [],
+  }),
 };
 
 /** VB6 toolbox order: every control type. The Toolbox shows the intrinsic ones, then the checked components' ones
@@ -1115,7 +1228,7 @@ export function newControl(form: FormDef, type: Exclude<ControlType, 'Form'>,
   if (type === 'Line') {
     props.X1 = rect.left; props.Y1 = rect.top;
     props.X2 = rect.left + (rect.width ?? td.defaultWidth); props.Y2 = rect.top + (rect.height ?? td.defaultHeight);
-  } else { props.Left = rect.left; props.Top = rect.top; }
+  } else if ('Left' in props) { props.Left = rect.left; props.Top = rect.top; }   // a Menu has no position
   if ('Width' in props) {
     props.Width = rect.width ?? td.defaultWidth;
     props.Height = rect.height ?? td.defaultHeight;
@@ -1135,6 +1248,8 @@ export function validateName(name: string): boolean {
 export function newForm(name: string, code = ''): FormDef {
   const props = defaultProps('Form');
   props.Caption = name;
+  delete props.AutoShowChildren;   // the MDI form's (mdi.ts)
+  delete props.ScrollBars;
   return { id: newId(), name, props, controls: [], code };
 }
 

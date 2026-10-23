@@ -1,4 +1,5 @@
 mod ai;
+mod appinfo;
 mod ai_settings;
 mod clipboard;
 mod comm;
@@ -10,6 +11,7 @@ mod inet;
 mod io_util;
 mod make_app;
 mod media;
+mod printing;
 mod sysinfo;
 mod winsock;
 mod app_commands;
@@ -24,6 +26,7 @@ pub fn run() {
     .manage(fileio::OpenFiles::default())
     .manage(db::Databases::default())
     .manage(comm::Ports::default())
+    .manage(appinfo::OpenedFiles::default())
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       ai::ai_list_models,
@@ -57,6 +60,9 @@ pub fn run() {
       db::db_execute,
       db::db_close,
       db::db_reset,
+      db::db_begin_trans,
+      db::db_commit_trans,
+      db::db_rollback_trans,
       clipboard::clipboard_get_text,
       clipboard::clipboard_set_text,
       inet::inet_request,
@@ -85,7 +91,13 @@ pub fn run() {
       embedded::get_embedded_project,
       embedded::quit_app,
       embedded::get_app_dir,
-      embedded::get_app_name
+      embedded::get_app_name,
+      appinfo::get_command_line,
+      appinfo::get_environment,
+      appinfo::app_prev_instance,
+      appinfo::app_log_event,
+      printing::printer_list,
+      printing::print_window
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {
@@ -98,8 +110,16 @@ pub fn run() {
       embedded::setup_runtime(app.handle())?;
       Ok(())
     })
-    .run(tauri::generate_context!())
-    .expect("error while building tauri application");
+    .build(tauri::generate_context!())
+    .expect("error while building tauri application")
+    .run(|_app, _event| {
+      // A document opened with the app (Finder, a made app's file types): its path is Command$.
+      #[cfg(target_os = "macos")]
+      if let tauri::RunEvent::Opened { urls } = _event {
+        let paths = urls.iter().filter_map(|u| u.to_file_path().ok()).map(|p| p.to_string_lossy().into_owned());
+        tauri::Manager::state::<appinfo::OpenedFiles>(_app).set(paths);
+      }
+    });
 }
 
 #[cfg(test)]

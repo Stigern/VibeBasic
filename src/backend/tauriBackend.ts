@@ -2,9 +2,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import type { Backend, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DbValue, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
+import type { Backend, MakeAppOptions, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DbValue, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import { dialogFilters } from './dialogFilters';
+import type { PrinterInfo } from '../run/printing';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
 import type { FileAccess, FileMode, FileStat } from '../lang/fileio/fsApi';
 import { AI_SETTINGS_KEY, loadAiSettingsFrom, saveAiSettingsTo, type AiSettingsIo } from './aiSettingsStore';
@@ -64,7 +65,7 @@ export class TauriBackend implements Backend {
   }
 
   openProjectDialog(): Promise<string | null> {
-    return this.openFileDialog([PROJECT_FILTER]);
+    return this.openFileDialog([{ name: 'Visual Basic Project', extensions: ['vbb', 'vbp'] }]);
   }
 
   async saveProjectDialog(defaultFileName: string): Promise<string | null> {
@@ -75,10 +76,10 @@ export class TauriBackend implements Backend {
     return (await save({ defaultPath: defaultName, filters: [{ name: 'Application', extensions: ['app'] }] })) ?? null;
   }
 
-  async makeApp(o: { targetPath: string; appName: string; projectJson: string; iconPngBase64: string | null; overwrite: boolean }): Promise<void> {
+  async makeApp(o: MakeAppOptions): Promise<void> {
     await call<void>('make_app', {
       targetPath: o.targetPath, appName: o.appName, projectJson: o.projectJson,
-      iconPngBase64: o.iconPngBase64, overwrite: o.overwrite,
+      iconPngBase64: o.iconPngBase64, overwrite: o.overwrite, version: o.version ?? null, fileTypes: o.fileTypes ?? null,
     });
   }
 
@@ -90,6 +91,11 @@ export class TauriBackend implements Backend {
   async showOpenDialog(filters: FileFilter[], title: string, initDir: string): Promise<string | null> {
     const r = await open({ multiple: false, directory: false, title: title || undefined, defaultPath: initDir || undefined, filters: dialogFilters(filters) });
     return typeof r === 'string' ? r : null;
+  }
+
+  async showOpenMultipleDialog(filters: FileFilter[], title: string, initDir: string): Promise<string[] | null> {
+    const r = await open({ multiple: true, directory: false, title: title || undefined, defaultPath: initDir || undefined, filters: dialogFilters(filters) });
+    return Array.isArray(r) ? r : typeof r === 'string' ? [r] : null;
   }
 
   async showSaveDialog(filters: FileFilter[], title: string, initDir: string, defaultName = ''): Promise<string | null> {
@@ -175,6 +181,9 @@ export class TauriBackend implements Backend {
   dbExecute(id: number, sql: string, params: DbValue[]): Promise<DbExecResult> { return call('db_execute', { id, sql, params }); }
   async dbClose(id: number): Promise<void> { await call<void>('db_close', { id }); }
   async dbReset(): Promise<void> { await call<void>('db_reset', {}); }
+  dbBeginTrans(id: number): Promise<number> { return call('db_begin_trans', { id }); }
+  dbCommitTrans(id: number): Promise<number> { return call('db_commit_trans', { id }); }
+  dbRollbackTrans(id: number): Promise<number> { return call('db_rollback_trans', { id }); }
 
   // -- MSComm and SysInfo (comm.rs, sysinfo.rs) --
   commList(): Promise<string[]> { return call('comm_list', {}); }
@@ -193,6 +202,13 @@ export class TauriBackend implements Backend {
     });
   }
   sysInfo(): Promise<SysInfoData> { return call('sys_info', {}); }
+  environment(): Promise<[string, string][]> { return call('get_environment', {}); }
+  commandLine(): Promise<string> { return call('get_command_line', {}); }
+  prevInstance(): Promise<boolean> { return call('app_prev_instance', {}); }
+  logEvent(line: string): Promise<void> { return call('app_log_event', { line }); }
+
+  printerList(): Promise<PrinterInfo[]> { return call<PrinterInfo[]>('printer_list', {}); }
+  printWindow(label: string): Promise<void> { return call<void>('print_window', { label }); }
 
   mediaOpen(path: string): Promise<string> { return call<string>('media_open', { path }); }
   async mediaRead(token: string): Promise<Uint8Array> {

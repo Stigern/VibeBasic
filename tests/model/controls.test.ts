@@ -18,7 +18,7 @@ const ALL = Object.keys(CONTROL_TYPES) as ControlType[];
 const NON_FORM = ALL.filter(t => t !== 'Form') as Exclude<ControlType, 'Form'>[];
 
 test('registry has every ControlType keyed by its own type', () => {
-  expect(ALL.sort()).toEqual(['CheckBox', 'ComboBox', 'CommandButton', 'Form', 'Frame', 'HScrollBar', 'Image', 'Label', 'ListBox', 'OptionButton', 'PictureBox', 'ProgressBar', 'TextBox', 'Timer', 'VScrollBar', 'Shape', 'Line', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'DriveListBox', 'DirListBox', 'FileListBox', 'SSTab', 'ImageList', 'Toolbar', 'DTPicker', 'MonthView', 'MaskedEdit', 'WebBrowser', 'Inet', 'Winsock', 'MSComm', 'SysInfo', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Data', 'Adodc', 'DataGrid', 'DataList', 'DataCombo', 'SSPanel', 'SSCommand', 'SSCheck', 'SSOption', 'SSFrame', 'SSRibbon', 'Animation', 'ImageCombo', 'CoolBar', 'FlatScrollBar', 'Calendar'].sort());
+  expect(ALL.sort()).toEqual(['CheckBox', 'ComboBox', 'CommandButton', 'Form', 'Frame', 'HScrollBar', 'Image', 'Label', 'ListBox', 'OptionButton', 'PictureBox', 'ProgressBar', 'TextBox', 'Timer', 'VScrollBar', 'Shape', 'Line', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'DriveListBox', 'DirListBox', 'FileListBox', 'SSTab', 'ImageList', 'Toolbar', 'DTPicker', 'MonthView', 'MaskedEdit', 'WebBrowser', 'Inet', 'Winsock', 'MSComm', 'SysInfo', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Data', 'Adodc', 'DataGrid', 'DataList', 'DataCombo', 'SSPanel', 'SSCommand', 'SSCheck', 'SSOption', 'SSFrame', 'SSRibbon', 'Animation', 'ImageCombo', 'CoolBar', 'FlatScrollBar', 'Calendar', 'Menu'].sort());
   for (const [k, d] of Object.entries(CONTROL_TYPES)) expect(d.type).toBe(k);
 });
 
@@ -47,7 +47,7 @@ test('event and method names are unique per type', () => {
 });
 
 test('common properties on every type except Timer; Timer has exactly its five', () => {
-  for (const t of NON_FORM.filter(x => x !== 'Timer' && x !== 'CommonDialog' && x !== 'Shape' && x !== 'Line' && x !== 'StatusBar' && x !== 'Toolbar' && x !== 'CoolBar' && x !== 'ImageList' && x !== 'Inet' && x !== 'Winsock' && x !== 'MSComm' && x !== 'SysInfo' && x !== 'Agent' && x !== 'Data' && x !== 'Adodc')) {   // StatusBar, Toolbar, CoolBar, Data, Adodc: no TabIndex/TabStop; ImageList: Left, Top, Tag only
+  for (const t of NON_FORM.filter(x => x !== 'Timer' && x !== 'CommonDialog' && x !== 'Shape' && x !== 'Line' && x !== 'StatusBar' && x !== 'Toolbar' && x !== 'CoolBar' && x !== 'ImageList' && x !== 'Inet' && x !== 'Winsock' && x !== 'MSComm' && x !== 'SysInfo' && x !== 'Agent' && x !== 'Data' && x !== 'Adodc' && x !== 'Menu')) {   // StatusBar, Toolbar, CoolBar, Data, Adodc: no TabIndex/TabStop; ImageList: Left, Top, Tag only
     for (const p of ['Left', 'Top', 'Width', 'Height', 'Visible', 'Enabled', 'TabIndex', 'TabStop', 'Tag', 'ToolTipText'])
       expect(getPropDef(t, p), `${t}.${p}`).toBeDefined();
   }
@@ -143,21 +143,22 @@ test('event coverage per type', () => {
   expect(names('CommandButton')).toEqual(expect.arrayContaining(['Click', 'GotFocus', 'LostFocus', 'KeyPress', 'KeyDown', 'KeyUp', 'MouseDown', 'MouseMove', 'MouseUp']));
   expect(names('TextBox')).toEqual(expect.arrayContaining(['Change', 'Click', 'DblClick', 'GotFocus', 'LostFocus', 'KeyPress']));
   expect(names('Frame')).toEqual(expect.arrayContaining(['Click', 'DblClick', 'MouseDown', 'MouseMove', 'MouseUp']));
-  expect(names('ProgressBar')).toEqual(['Click', 'MouseDown', 'MouseMove', 'MouseUp']);
+  expect(names('ProgressBar').filter(n => !/Drag|^OLE/.test(n))).toEqual(['Click', 'MouseDown', 'MouseMove', 'MouseUp']);
   expect(names('VScrollBar')).toEqual(expect.arrayContaining(['Change', 'Scroll']));
   expect(names('Form')).toEqual(expect.arrayContaining(['Load', 'Unload', 'QueryUnload', 'Activate', 'Deactivate', 'Resize', 'Initialize']));
 });
 
 test('methods', () => {
   const m = (t: ControlType, n: string) => CONTROL_TYPES[t].methods.find(x => x.name === n);
-  for (const t of NON_FORM.filter(x => !['Timer', 'CommonDialog', 'Shape', 'Line', 'ImageList', 'Inet', 'Winsock', 'MSComm', 'SysInfo', 'Agent', 'Data', 'Adodc'].includes(x))) for (const n of ['Move', 'SetFocus', 'Refresh', 'ZOrder']) expect(m(t, n), `${t}.${n}`).toBeDefined();
+  for (const t of NON_FORM.filter(x => !['Timer', 'CommonDialog', 'Shape', 'Line', 'ImageList', 'Inet', 'Winsock', 'MSComm', 'SysInfo', 'Agent', 'Data', 'Adodc', 'Menu'].includes(x))) for (const n of ['Move', 'SetFocus', 'Refresh', 'ZOrder']) expect(m(t, n), `${t}.${n}`).toBeDefined();
   expect(m('CommandButton', 'Move')?.params).toBe('Left As Single, [Top], [Width], [Height]');
   expect(m('CommandButton', 'ZOrder')?.params).toBe('[Position]');
   expect(m('ListBox', 'AddItem')?.params).toBe('Item As String, [Index]');
   expect(m('ComboBox', 'RemoveItem')?.params).toBe('Index As Integer');
   expect(m('ComboBox', 'Clear')).toBeDefined();
   expect(m('TextBox', 'AddItem')).toBeUndefined();
-  expect(CONTROL_TYPES.Form.methods.map(x => x.name).sort()).toEqual(['Hide', 'Move', 'Refresh', 'Show']);
+  expect(CONTROL_TYPES.Form.methods.map(x => x.name).sort()).toEqual(['Circle', 'Cls', 'Hide', 'Line', 'Move', 'PSet', 'PaintPicture',
+    'Point', 'PopupMenu', 'Print', 'PrintForm', 'Refresh', 'Scale', 'ScaleX', 'ScaleY', 'Show', 'TextHeight', 'TextWidth', 'ValidateControls']);
   expect(m('Form', 'Show')?.params).toBe('[Modal], [OwnerForm]');
 });
 

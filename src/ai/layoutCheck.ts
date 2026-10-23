@@ -4,6 +4,7 @@
 import { sizeOf } from '../ide/designerLogic';
 import { CONTROL_TYPES } from '../model/controls';
 import { dockedRect, formClientTwips, isDocked, isLine } from '../model/geometry';
+import { hasMenuBar } from '../model/menus';
 import type { ControlDef, ControlType, FontValue, FormDef } from '../model/types';
 
 const TW = 15;
@@ -87,7 +88,7 @@ export function layoutProblems(form: FormDef, only?: Set<string>): LayoutProblem
   const items: Item[] = [];
   for (const c of form.controls) {
     const td = CONTROL_TYPES[c.type];
-    if (td.invisibleAtRuntime || isLine(c) || c.type === 'Shape' || c.props.Visible === false) continue;
+    if (td.invisibleAtRuntime || isLine(c) || c.type === 'Shape' || c.type === 'Menu' || c.props.Visible === false) continue;
     const parent = c.parentId ? byId.get(c.parentId) : undefined;
     const r = isDocked(c) ? dockedRect(form, c) : { left: Number(c.props.Left) || 0, top: Number(c.props.Top) || 0, ...sizeOf(c) };
     items.push({ c, name: nameOf(c), ...r, key: `${c.parentId ?? ''}|${parent?.type === 'SSTab' ? c.tab ?? 0 : ''}` });
@@ -99,7 +100,7 @@ export function layoutProblems(form: FormDef, only?: Set<string>): LayoutProblem
     const key = `${rule}|${names.map(n => n.toLowerCase()).sort().join(',')}`;
     if (!seen.has(key)) { seen.add(key); problems.push({ key, text }); }
   };
-  const client = formClientTwips(form.props);
+  const client = formClientTwips(form.props, hasMenuBar(form.controls));
 
   for (const it of items) {
     const { c, name } = it;

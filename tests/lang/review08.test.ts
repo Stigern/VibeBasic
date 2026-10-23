@@ -87,8 +87,8 @@ Err.Clear: x = d("nope"): Debug.Print Err.Number`))).toEqual([' 3 zbbb', 'zab', 
 });
 
 test('#7 New of a type that cannot be made is a compile error', async () => {
-  expect((await run(main('Dim x As New Class1\nx.Foo')))[0]).toMatch(/Compile error: Not supported in VibeBasic: New Class1/);
-  expect((await run(main('Dim x As Object\nSet x = New Class1')))[0]).toMatch(/Compile error: Not supported in VibeBasic: New Class1/);
+  expect((await run(main('Dim x As New Class1\nx.Foo')))[0]).toMatch(/Compile error: User-defined type not defined/);
+  expect((await run(main('Dim x As Object\nSet x = New Class1')))[0]).toMatch(/Compile error: User-defined type not defined/);
   expect((await run(main('Dim p As New Pt', 'Type Pt\n  X As Integer\nEnd Type')))[0]).toMatch(/Compile error: Invalid use of New keyword/);
   expect((await run(main('Dim i As New Integer')))[0]).toMatch(/Compile error: Invalid use of New keyword/);
 });

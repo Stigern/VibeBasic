@@ -135,7 +135,7 @@ describe('mountFormWindow', () => {
     const b = mk('CommandButton');
     const get = mount([b], { [b.id]: ['MouseDown'] });
     inputOf(get(b)).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 10, clientY: 20 }));
-    expect(sent).toEqual([{ t: 'event', id: b.id, event: 'MouseDown', args: [1, 0, 150, 300] }]);
+    expect(sent.filter(m => m.t === 'event')).toEqual([{ t: 'event', id: b.id, event: 'MouseDown', args: [1, 0, 150, 300] }]);
   });
 
   test('right button and ctrl map to VB bits', () => {

@@ -1,5 +1,6 @@
-// The databases of one run: SQLite connections of the main window (DatabaseApi), one per database file. The session makes it
-// when a Data control, Adodc or Recordset first opens a database; at the end of the program every connection is closed.
+// The databases of one run: SQLite connections of the main window (DatabaseApi). The data controls share one per database
+// file, opened when one first needs it; each ADODB.Connection code makes opens its own (`connectOwn`: its own transaction).
+// At the end of the program every connection is closed.
 
 import type { DatabaseApi, DbExecResult, DbQueryResult, DbValue } from '../../backend/backend';
 import { VBRuntimeError } from '../../lang/errors';
@@ -14,7 +15,14 @@ export function dbError(e: unknown, fallback = 3146): VBRuntimeError {
 
 /** An open database file: queries and statements on it (rejections become VB errors). */
 export class DbConnection {
-  constructor(private readonly api: DatabaseApi, private readonly id: number, readonly path: string, private readonly session: DbSession) {}
+  constructor(private readonly api: DatabaseApi, private readonly id: number, readonly path: string, private readonly session: DbSession,
+    /** Opened for one Connection object (`connectOwn`): closed with it. */
+    readonly own = false) {}
+
+  /** Closes a connection of its own (a shared one stays open for the other users). */
+  async close(): Promise<void> {
+    if (this.own) await this.api.dbClose(this.id).catch(() => {});
+  }
 
   async query(sql: string, params: DbValue[] = []): Promise<DbQueryResult> {
     this.session.check();
@@ -24,6 +32,14 @@ export class DbConnection {
   async execute(sql: string, params: DbValue[] = []): Promise<DbExecResult> {
     this.session.check();
     try { return await this.api.dbExecute(this.id, sql, params); } catch (e) { throw dbError(e); }
+  }
+
+  /** BeginTrans / CommitTrans / RollbackTrans: the transaction level after it (savepoints for nested levels). */
+  async transaction(op: 'begin' | 'commit' | 'rollback'): Promise<number> {
+    this.session.check();
+    try {
+      return await (op === 'begin' ? this.api.dbBeginTrans(this.id) : op === 'commit' ? this.api.dbCommitTrans(this.id) : this.api.dbRollbackTrans(this.id));
+    } catch (e) { throw dbError(e); }
   }
 }
 
@@ -53,6 +69,15 @@ export class DbSession {
       this.open.set(path, p);
     }
     return p;
+  }
+
+  /** A new connection to the database file at `path`, for one ADODB.Connection (its transactions are its own). */
+  connectOwn(path: string): Promise<DbConnection> {
+    this.check();
+    return this.ready.then(() => this.api.dbOpen(path)).then(id => {
+      if (this.closed) { void this.api.dbClose(id).catch(() => {}); throw new VBRuntimeError(3420); }
+      return new DbConnection(this.api, id, path, this, true);
+    }, e => { throw dbError(e, 3024); });
   }
 
   /** The end of the program: every connection closed. */

@@ -121,8 +121,8 @@ function logic(op: BinaryOp, a: VBValue, b: VBValue): VBValue {
   throw new Error(`logic: ${op}`);
 }
 
-/** VB `Like` (binary compare): `*`, `?`, `#`, `[list]`, `[!list]`, ranges `a-z`. */
-export function likeMatch(text: string, pattern: string): boolean {
+/** VB `Like`: `*`, `?`, `#`, `[list]`, `[!list]`, ranges `a-z`; binary compare, or without case (`ci`, Option Compare Text). */
+export function likeMatch(text: string, pattern: string, ci = false): boolean {
   let re = '';
   for (let i = 0; i < pattern.length; i++) {
     const c = pattern[i];
@@ -140,7 +140,7 @@ export function likeMatch(text: string, pattern: string): boolean {
       i = end;
     } else re += c.replace(/[.*+?^${}()|[\]\\/]/g, m => '\\' + m);
   }
-  return new RegExp('^' + re + '$', 'u').test(text);
+  return new RegExp('^' + re + '$', ci ? 'ui' : 'u').test(text);
 }
 
 const COMPARE_OPS = new Set<BinaryOp>(['=', '<>', '<', '>', '<=', '>=']);
@@ -163,7 +163,7 @@ export function binaryOp(op: BinaryOp, a: VBValue, b: VBValue): VBValue {
     const okA = a instanceof NothingT || isObject(a);
     const okB = b instanceof NothingT || isObject(b);
     if (!okA || !okB) throw new VBRuntimeError(424);
-    return a === b;
+    return (isObject(a) ? a.identity ?? a : a) === (isObject(b) ? b.identity ?? b : b);
   }
   a = plain(a);
   b = plain(b);

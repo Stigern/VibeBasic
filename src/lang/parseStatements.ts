@@ -1,9 +1,10 @@
 import { VBSyntaxError } from './errors';
 import { tokenize } from './lexer';
 import { Parser, parenthesised } from './exprParser';
+import { directiveLineError, preprocess, type CondConsts } from './condComp';
 import type { Token } from './tokens';
 import type {
-  ArrayBound, CaseTest, CompareOp, ConstDecl, DebugPrintStmt, EnumDecl, Expr, IfBranch, MissingArg,
+  ArgList, ArrayBound, CaseTest, CompareOp, ConstDecl, DebugPrintStmt, EnumDecl, EventDecl, Expr, GfxPoint, GfxStmt, IfBranch, MissingArg,
   ModuleAst, NameExpr, OpenMode, OpenStmt, Param, PrintItem, ProcDecl, ReDimDecl, Stmt, TypeDecl, TypeSuffix, VarDecl, VBTypeName,
 } from './ast';
 
@@ -25,7 +26,7 @@ import type {
  */
 
 type Closer =
-  | 'end if' | 'end select' | 'end with' | 'end sub' | 'end function' | 'end type' | 'end enum'
+  | 'end if' | 'end select' | 'end with' | 'end sub' | 'end function' | 'end property' | 'end type' | 'end enum'
   | 'next' | 'loop' | 'wend' | 'else' | 'elseif' | 'case';
 
 export const TYPE_KEYWORDS: Record<string, VBTypeName> = {
@@ -36,12 +37,11 @@ const SUFFIX_TYPES: Record<TypeSuffix, VBTypeName> = { '%': 'Integer', '&': 'Lon
 
 /** Unsupported VB6 keywords (see KEYWORDS in tokens.ts), with the name shown in the error. */
 export const UNSUPPORTED_KEYWORDS: Record<string, string> = {
-  declare: 'Declare', property: 'Property', implements: 'Implements',
-  event: 'Event', raiseevent: 'RaiseEvent', withevents: 'WithEvents', friend: 'Friend', global: 'Global',
-  lib: 'Lib', alias: 'Alias', gosub: 'GoSub', return: 'Return',
+  declare: 'Declare', lib: 'Lib', alias: 'Alias',
 };
-/** Unsupported statements that are plain identifiers; only unsupported when they start a statement and are not assigned to / member-accessed. */
-export const UNSUPPORTED_IDENTS: Record<string, string> = { print: 'Print', line: 'Line', circle: 'Circle', pset: 'PSet' };
+/** The drawing statements with their own syntax (`[obj.]Line (x1, y1)-(x2, y2), , B`): plain identifiers, statements only when
+ *  they start one (or end its object part) and are not assigned to or member-accessed. */
+export const GFX_STATEMENTS: Record<string, string> = { print: 'Print', pset: 'PSet', line: 'Line', circle: 'Circle', scale: 'Scale' };
 /** File I/O statements that are an identifier followed by `#` (also `Line Input #`, and `Open`/`Close` as keywords). */
 export const HASH_STATEMENTS: Record<string, string> = { print: 'Print', write: 'Write', input: 'Input', get: 'Get', put: 'Put', seek: 'Seek' };
 
@@ -51,6 +51,7 @@ const STRAY_MESSAGES: Record<Closer, string> = {
   'end with': 'End With without With',
   'end sub': 'Invalid outside procedure',
   'end function': 'Invalid outside procedure',
+  'end property': 'Invalid outside procedure',
   'end type': 'Invalid outside procedure',
   'end enum': 'Invalid outside procedure',
   next: 'Next without For',
@@ -61,7 +62,8 @@ const STRAY_MESSAGES: Record<Closer, string> = {
   case: 'Case without Select Case',
 };
 const END_WORDS: Record<string, Closer> = {
-  if: 'end if', select: 'end select', with: 'end with', sub: 'end sub', function: 'end function', type: 'end type', enum: 'end enum',
+  if: 'end if', select: 'end select', with: 'end with', sub: 'end sub', function: 'end function', property: 'end property',
+  type: 'end type', enum: 'end enum',
 };
 /** Keywords that can start an argument of a paren-less call. */
 const ARG_START_KEYWORDS = new Set(['true', 'false', 'nothing', 'new', 'not', 'me', 'date', 'string', 'error', 'empty', 'null']);
@@ -71,6 +73,10 @@ const OPEN_MODES = new Set<string>(['input', 'output', 'append', 'binary', 'rand
 const lower = (t: Token) => t.text.toLowerCase();
 const baseName = (t: Token) => (t.suffix ? t.text.slice(0, -1) : t.text);
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+type ProcKind = 'sub' | 'function' | 'property';
+const END_NAMES: Record<ProcKind, string> = { sub: 'End Sub', function: 'End Function', property: 'End Property' };
+const END_CLOSERS: Record<ProcKind, Closer> = { sub: 'end sub', function: 'end function', property: 'end property' };
+const isProcCloser = (c: Closer) => c === 'end sub' || c === 'end function' || c === 'end property';
 
 export class StatementParser extends Parser {
   /** When set, errors are recorded here and parsing continues. */
@@ -80,6 +86,8 @@ export class StatementParser extends Parser {
 
   private singleLine = 0;
   private nextQueue: string[] = [];
+  /** `Attribute Name.VB_UserMemId = n` lines seen: the member by id (0 default member, -4 NewEnum). */
+  private memberIds = new Map<number, string>();
   private nextTokLine = 0;   // line of the last `Next` keyword (shared by the loops `Next j, i` closes)
   /** Set when a block opener reported a missing closer without throwing (collect mode). */
   private unclosed = false;
@@ -191,7 +199,7 @@ export class StatementParser extends Parser {
   // ---- blocks and statements ----
 
   private inProc = false;
-  private procKind: 'sub' | 'function' = 'sub';
+  private procKind: ProcKind = 'sub';
   /** Number of `For` loops whose body is being parsed; queued `Next j, i` names are only drained while one is open. */
   private forDepth = 0;
 
@@ -205,6 +213,7 @@ export class StatementParser extends Parser {
       if (this.peek().kind === 'eof') return { body, closer: null };
       const closer = this.closerAt();
       if (closer) return { body, closer };
+      if (this.attributeLine()) continue;
       const s = this.recovering(() => this.statementChecked());
       if (s) body.push(s);
     }
@@ -269,6 +278,10 @@ export class StatementParser extends Parser {
       if (w === 'debug' && this.isOp('.', 1) && this.peek(2).kind === 'ident' && lower(this.peek(2)) === 'print') {
         return this.debugPrint();
       }
+      if (w === 'debug' && this.isOp('.', 1) && this.peek(2).kind === 'ident' && lower(this.peek(2)) === 'assert') {
+        this.advance(); this.advance(); this.advance();
+        return { kind: 'debugAssert', cond: this.parseExpression(), line: t.line };
+      }
       if (HASH_STATEMENTS[w] && this.isOp('#', 1)) return this.fileStatement(w);
       // `Seek 1, 100`, `Get 1, , x`: the # is optional
       if ((w === 'seek' || w === 'get' || w === 'put') && !(n.kind === 'op' && (n.text === '=' || n.text === '.')) && !this.atEnd1()) {
@@ -289,9 +302,9 @@ export class StatementParser extends Parser {
         this.expectOp('=');
         return { kind: w, target, value: this.parseExpression(), line: t.line };
       }
-      if (UNSUPPORTED_IDENTS[w] && !(n.kind === 'op' && (n.text === '=' || n.text === '.'))) {
+      if (GFX_STATEMENTS[w] && !(n.kind === 'op' && (n.text === '=' || n.text === '.'))) {
         if (w === 'line' && n.kind === 'ident' && n.text.toLowerCase() === 'input') this.unsupported('Line Input');
-        this.unsupported(UNSUPPORTED_IDENTS[w]);
+        return this.gfxStatement(undefined);
       }
     }
     return this.assignOrCall();
@@ -427,15 +440,18 @@ export class StatementParser extends Parser {
       case 'while': return this.whileStatement();
       case 'with': return this.withStatement();
       case 'exit': return this.exitStatement();
-      case 'on': return this.onErrorStatement();
+      case 'on': return this.onStatement();
       case 'resume': return this.resumeStatement();
       case 'goto': return this.gotoStatement();
+      case 'gosub': this.advance(); return { kind: 'goto', label: this.labelTarget(), gosub: true, line: t.line };
+      case 'return': this.advance(); return { kind: 'return', line: t.line };
       case 'call': return this.callStatement();
       case 'let': case 'set': return this.explicitAssign(w === 'set');
       case 'end': this.advance(); return { kind: 'end', line: t.line };
       case 'open': return this.openStatement();
       case 'close': return this.closeStatement();
       case 'stop': this.advance(); return { kind: 'stop', line: t.line };
+      case 'raiseevent': return this.raiseEventStatement();
       case 'unload': case 'load': {
         this.advance();
         const target = this.parseExpression();
@@ -444,11 +460,13 @@ export class StatementParser extends Parser {
       case 'option':
         if (this.lineMode) { this.parseOption(); return { kind: 'end', line: t.line }; }
         return this.fail('Invalid inside procedure');
-      case 'private': case 'public': case 'sub': case 'function': case 'type': case 'enum':
+      case 'private': case 'public': case 'friend': case 'global': case 'sub': case 'function': case 'property': case 'type': case 'enum':
+      case 'event': case 'implements':
         if (this.lineMode) { this.moduleItem(null); return { kind: 'end', line: t.line }; }
         // a procedure header inside a procedure: the open one is missing its End
-        if (w === 'sub' || w === 'function' || ((w === 'private' || w === 'public') && (this.isKeyword('sub', 1) || this.isKeyword('function', 1)))) {
-          return this.fail(this.procKind === 'sub' ? 'Expected: End Sub' : 'Expected: End Function');
+        if (w === 'sub' || w === 'function' || w === 'property'
+          || ((w === 'private' || w === 'public' || w === 'friend' || w === 'global') && (this.isKeyword('sub', 1) || this.isKeyword('function', 1) || this.isKeyword('property', 1)))) {
+          return this.fail(`Expected: ${END_NAMES[this.procKind]}`);
         }
         return this.fail('Invalid inside procedure');
       case 'error':
@@ -472,6 +490,14 @@ export class StatementParser extends Parser {
 
   private assignOrCall(): Stmt {
     const start = this.peek();
+    const dot = this.gfxDot();
+    if (dot >= 0) {
+      // `Picture1.Line (0, 0)-(9, 9)`, `.Circle ...` inside With: the object part, then the statement's own syntax
+      const object: Expr = dot === this.pos ? { kind: 'withObject', line: start.line }
+        : new StatementParser([...this.tokens.slice(this.pos, dot), { ...this.tokens[dot], kind: 'eof', text: '' }]).objectPart();
+      this.pos = dot + 1;
+      return this.gfxStatement(object);
+    }
     const head = this.parsePostfix();
     if (this.isOp('=')) {
       if (!this.isLvalue(head)) this.fail('Syntax error', start);
@@ -493,6 +519,111 @@ export class StatementParser extends Parser {
     return this.callFrom(head, start, false);
   }
 
+  // ---- drawing statements ----
+
+  /** The object part of `obj.Line ...` (a sub-parser over just those tokens). */
+  objectPart(): Expr {
+    const e = this.parsePostfix();
+    if (this.peek().kind !== 'eof') this.fail('Syntax error');
+    return e;
+  }
+
+  /**
+   * The index of the `.` before a drawing statement word that ends the head of this statement (`Picture1(i).Line`, `Me.Print`,
+   * `.Circle` in a With block), when the word is not assigned to or followed by a member; -1 otherwise.
+   */
+  private gfxDot(): number {
+    const tk = this.tokens;
+    const isGfx = (j: number): boolean => {
+      const t = tk[j], n = tk[j + 1];
+      return t?.kind === 'ident' && !t.suffix && GFX_STATEMENTS[lower(t)] !== undefined
+        && !(n?.kind === 'op' && (n.text === '=' || n.text === '.' || n.text === '!'));
+    };
+    let i = this.pos;
+    const t0 = tk[i];
+    if (t0.kind === 'op' && t0.text === '.') {
+      if (isGfx(i + 1)) return i;
+      if (tk[i + 1]?.kind !== 'ident') return -1;
+      i += 2;
+    } else if (t0.kind === 'ident' || (t0.kind === 'keyword' && lower(t0) === 'me')) i++;
+    else return -1;
+    for (;;) {
+      const t = tk[i];
+      if (t.kind === 'op' && t.text === '(') {
+        let depth = 0;
+        for (; i < tk.length; i++) {
+          const u = tk[i];
+          if (u.kind === 'newline' || u.kind === 'eof') return -1;
+          if (u.kind === 'op' && u.text === '(') depth++;
+          else if (u.kind === 'op' && u.text === ')' && --depth === 0) break;
+        }
+        i++;
+      } else if (t.kind === 'op' && (t.text === '.' || t.text === '!') && (tk[i + 1]?.kind === 'ident' || tk[i + 1]?.kind === 'keyword')) {
+        if (t.text === '.' && isGfx(i + 1)) return i;
+        i += 2;
+      } else return -1;
+    }
+  }
+
+  /** `[Step] (x, y)`. */
+  private gfxPoint(allowStep: boolean): GfxPoint {
+    let step = false;
+    if (allowStep && this.isKeyword('step')) { this.advance(); step = true; }
+    this.expectOp('(');
+    const x = this.parseExpression();
+    this.expectOp(',');
+    const y = this.parseExpression();
+    this.expectOp(')');
+    return { step, x, y };
+  }
+
+  /** Print / PSet / Line / Circle / Scale; the cursor is on the word. */
+  private gfxStatement(object: Expr | undefined): GfxStmt {
+    const t = this.advance();
+    const line = t.line;
+    const base = object ? { kind: 'gfx' as const, object, line } : { kind: 'gfx' as const, line };
+    const comma = (): boolean => { if (!this.isOp(',')) return false; this.advance(); return true; };
+    const optional = (): Expr | undefined => (this.isOp(',') || this.atEnd() ? undefined : this.parseExpression());
+    switch (lower(t)) {
+      case 'print': return { ...base, method: 'print', items: this.printItems() };
+      case 'pset': {
+        const at = this.gfxPoint(true);
+        return { ...base, method: 'pset', at, color: comma() ? this.parseExpression() : undefined };
+      }
+      case 'line': {
+        const from = this.isOp('-') ? undefined : this.gfxPoint(true);
+        this.expectOp('-');
+        const to = this.gfxPoint(true);
+        let color: Expr | undefined, box: '' | 'b' | 'bf' = '';
+        if (comma()) {
+          color = optional();
+          if (comma()) {
+            const b = this.peek();
+            if (b.kind !== 'ident' || b.suffix || !/^bf?$/i.test(b.text)) this.fail('Syntax error');
+            this.advance();
+            box = lower(b) as 'b' | 'bf';
+          }
+        }
+        return { ...base, method: 'line', from, to, color, box };
+      }
+      case 'circle': {
+        const at = this.gfxPoint(true);
+        this.expectOp(',');
+        const radius = this.parseExpression();
+        const rest: (Expr | undefined)[] = [];
+        while (rest.length < 4 && comma()) rest.push(optional());
+        const [color, start, end, aspect] = rest;
+        return { ...base, method: 'circle', at, radius, color, start, end, aspect };
+      }
+      default: {   // scale
+        if (!this.isOp('(')) return { ...base, method: 'scale' };
+        const from = this.gfxPoint(false);
+        this.expectOp('-');
+        return { ...base, method: 'scale', from, to: this.gfxPoint(false) };
+      }
+    }
+  }
+
   /** Turns a parsed head expression plus optional paren-less arguments into a CallStmt. */
   private callFrom(head: Expr, start: Token, explicitCall: boolean): Stmt {
     let target: Expr = head;
@@ -502,10 +633,14 @@ export class StatementParser extends Parser {
       args = head.args;
       // `Foo (x)` / `Foo (x), y` without Call: the parentheses are the first argument's own, so it is a value (a ByRef
       // parameter gets a copy, as in VB6)
+      if ((args as ArgList).names) return { kind: 'call', target, args, explicitCall, line: start.line };   // `Foo(a:=1)`
       if (!explicitCall && args.length === 1 && args[0].kind !== 'missing') args = [parenthesised(args[0])];
       if (this.isOp(',') && args.length === 1 && args[0].kind !== 'missing') {
         this.advance();
-        args = [...args, ...this.parseArgList(false)];
+        const rest = this.parseArgList(false);
+        const names = (rest as ArgList).names;
+        args = [...args, ...rest];
+        if (names) (args as ArgList).names = [undefined, ...names];   // `Foo (x), b:=2`
       }
     } else if (!explicitCall && this.canStartArg()) {
       args = this.parseArgList(false);
@@ -631,7 +766,11 @@ export class StatementParser extends Parser {
   }
 
   private varDecl(scope: VarDecl['scope'], requireAs: boolean): VarDecl {
-    if (this.isKeyword('withevents')) this.unsupported('WithEvents');
+    const withEvents = this.isKeyword('withevents');
+    if (withEvents) {
+      if (!this.inModuleDecls) this.fail('Only valid in object module');
+      this.advance();
+    }
     const nameTok = this.expectIdent();
     let isArray = false;
     let bounds: ArrayBound[] | undefined;
@@ -646,6 +785,11 @@ export class StatementParser extends Parser {
       this.fail('Expected: As');
     }
     const d: VarDecl = { name: baseName(nameTok), scope, isArray, isNew, line: nameTok.line };
+    if (withEvents) {
+      // VB6: `WithEvents x As Class1`, a single object variable with a class type, no New
+      if (isArray || isNew || type === undefined || typeof type !== 'object' || !('objectType' in type)) this.fail('Expected: identifier', nameTok);
+      d.withEvents = true;
+    }
     if (type !== undefined) d.type = type;
     if (bounds !== undefined) d.bounds = bounds;
     if (fixedLength !== undefined) d.fixedLength = fixedLength;
@@ -960,13 +1104,20 @@ export class StatementParser extends Parser {
     const n = this.peek();
     if (n.kind === 'keyword') {
       const w = lower(n);
-      if (w === 'for' || w === 'do' || w === 'sub' || w === 'function') {
+      if (w === 'for' || w === 'do' || w === 'sub' || w === 'function' || w === 'property') {
         this.advance();
         return { kind: 'exit', what: w, line: t.line };
       }
-      if (w === 'property') this.unsupported('Property');
     }
-    return this.fail('Expected: For, Do, Sub or Function');
+    return this.fail('Expected: For, Do, Sub, Function or Property');
+  }
+
+  /** `RaiseEvent Name[(args)]`. */
+  private raiseEventStatement(): Stmt {
+    const t = this.advance();
+    const name = this.expectIdent();
+    const args = this.isOp('(') ? this.parseParenArgs() : [];
+    return { kind: 'raiseEvent', name: baseName(name), args, line: t.line };
   }
 
   private labelTarget(): string {
@@ -974,6 +1125,21 @@ export class StatementParser extends Parser {
     if (t.kind === 'ident' && !t.suffix) { this.advance(); return t.text; }
     if (t.kind === 'number' && !t.suffix && Number.isInteger(t.value as number)) { this.advance(); return String(t.value); }
     return this.fail('Expected: identifier');
+  }
+
+  /** `On Error ...`, or `On n GoTo l1, l2` / `On n GoSub l1, l2`. */
+  private onStatement(): Stmt {
+    if (!this.isKeyword('error', 1)) {
+      const t = this.advance();
+      const index = this.parseExpression();
+      const gosub = this.isKeyword('gosub');
+      if (!gosub && !this.isKeyword('goto')) this.fail('Expected: GoTo or GoSub');
+      this.advance();
+      const labels = [this.labelTarget()];
+      while (this.isOp(',')) { this.advance(); labels.push(this.labelTarget()); }
+      return { kind: 'onGoto', index, labels, gosub, line: t.line };
+    }
+    return this.onErrorStatement();
   }
 
   private onErrorStatement(): Stmt {
@@ -1016,6 +1182,7 @@ export class StatementParser extends Parser {
       if (this.peek().kind === 'eof') return;
       const closer = this.closerAt();
       if (closer) { this.lineCloser(closer); continue; }
+      if (this.attributeLine()) continue;
       const t = this.peek();
       // `X As Integer` / `V(1 To 3) As Integer`: a line inside a Type block
       if (t.kind === 'ident' && !t.suffix && (this.isKeyword('as', 1) || (this.isOp('(', 1) && this.fieldAhead()))) {
@@ -1056,21 +1223,67 @@ export class StatementParser extends Parser {
 
   // ---- module level ----
 
-  private parseOption(): void {
+  /** `Option Explicit`, `Option Base 0|1`, `Option Compare Binary|Text`, `Option Private Module` (accepted, no effect). */
+  private parseOption(ast: ModuleAst | null = null): void {
     this.advance(); // Option
-    if (this.isKeyword('explicit')) { this.advance(); return; }
+    if (this.isKeyword('explicit')) { this.advance(); if (ast) ast.optionExplicit = true; return; }
     const t = this.peek();
-    if (t.kind === 'ident' || t.kind === 'keyword') this.unsupported(`Option ${cap(t.text)}`);
+    const w = t.kind === 'ident' || t.kind === 'keyword' ? lower(t) : '';
+    const n = this.peek(1);
+    const next = n.kind === 'ident' ? lower(n) : '';
+    if (w === 'base') {
+      this.advance();
+      if (n.kind !== 'number' || (n.value !== 0 && n.value !== 1) || n.suffix) this.fail('Expected: 0 or 1');
+      this.advance();
+      if (ast) ast.optionBase = n.value as number;
+      return;
+    }
+    if (w === 'compare') {
+      this.advance();
+      if (next !== 'binary' && next !== 'text') this.fail('Expected: Binary or Text');
+      this.advance();
+      if (ast) ast.optionCompareText = next === 'text';
+      this.textCompare = next === 'text';
+      return;
+    }
+    if (w === 'private' && next === 'module') { this.advance(); this.advance(); return; }
+    if (w) this.unsupported(`Option ${cap(t.text)}`);
     this.fail('Syntax error');
   }
 
   parseModuleAst(name: string): ModuleAst {
-    const ast: ModuleAst = { name, optionExplicit: false, variables: [], consts: [], types: [], enums: [], procedures: [] };
+    const ast: ModuleAst = { name, optionExplicit: false, variables: [], consts: [], types: [], enums: [], procedures: [], events: [], implements: [] };
     for (;;) {
       this.skipSeparators();
-      if (this.peek().kind === 'eof') return ast;
+      if (this.peek().kind === 'eof') {
+        const def = this.memberIds.get(0), en = this.memberIds.get(-4);
+        if (def !== undefined) ast.defaultMember = def;
+        if (en !== undefined) ast.newEnum = en;
+        return ast;
+      }
+      if (this.attributeLine()) continue;
       this.recovering(() => { this.moduleItem(ast); this.expectEnd(); });
     }
+  }
+
+  /**
+   * A member attribute of a VB6 class file (`Attribute Value.VB_UserMemId = 0`, `Attribute NewEnum.VB_MemberFlags = "40"`),
+   * at module level or inside the procedure it belongs to: consumed whole. VB_UserMemId 0 makes the default member, -4
+   * the member For Each enumerates; the others change nothing. False (nothing consumed) for anything else.
+   */
+  private attributeLine(): boolean {
+    const t = this.peek();
+    if (t.kind !== 'ident' || t.suffix || lower(t) !== 'attribute' || this.peek(1).kind !== 'ident' || !this.isOp('.', 2)
+      || this.peek(3).kind !== 'ident' || !this.isOp('=', 4)) return false;
+    const member = baseName(this.peek(1));
+    const attr = this.peek(3).text.toLowerCase();
+    for (let i = 0; i < 5; i++) this.advance();
+    let sign = 1;
+    if (this.isOp('-')) { this.advance(); sign = -1; }
+    const v = this.peek();
+    if (attr === 'vb_usermemid' && v.kind === 'number') this.memberIds.set(sign * (v.value as number), member);
+    this.skipLine();
+    return true;
   }
 
   /** One module-level item. With `ast` null (line mode) only headers are parsed. */
@@ -1079,26 +1292,44 @@ export class StatementParser extends Parser {
     const w = first.kind === 'keyword' ? lower(first) : '';
     if (w === 'option') {
       if (ast && ast.procedures.length > 0) this.fail('Option Explicit must precede any procedure');
-      this.parseOption();
-      if (ast) ast.optionExplicit = true;
+      this.parseOption(ast);
       return;
     }
     let visibility: 'public' | 'private' | undefined;
     let isStatic = false;
-    if (w === 'private' || w === 'public') {
-      visibility = w;
+    const procNext = (o: number) => this.isKeyword('sub', o) || this.isKeyword('function', o) || this.isKeyword('property', o);
+    if (w === 'private' || w === 'public' || w === 'friend' || w === 'global') {
+      // `Friend` (visible to the project, not to other programs): Public in VibeBasic; `Global` is the old word for Public
+      visibility = w === 'friend' || w === 'global' ? 'public' : w;
       this.advance();
-    } else if (w === 'static' && (this.isKeyword('sub', 1) || this.isKeyword('function', 1))) {
+      if (this.isKeyword('static') && procNext(1)) { isStatic = true; this.advance(); }
+    } else if (w === 'static' && procNext(1)) {
       isStatic = true;
       this.advance();
     }
     const t = this.peek();
     const k = t.kind === 'keyword' ? lower(t) : '';
-    if (UNSUPPORTED_KEYWORDS[k] && k !== 'withevents') this.unsupported(UNSUPPORTED_KEYWORDS[k]);
+    if (UNSUPPORTED_KEYWORDS[k]) this.unsupported(UNSUPPORTED_KEYWORDS[k]);
     switch (k) {
-      case 'sub': case 'function': {
+      case 'sub': case 'function': case 'property': {
         const p = this.procedure(visibility ?? 'public', isStatic, first);
         if (ast) ast.procedures.push(p);
+        return;
+      }
+      case 'event': {
+        this.advance();
+        const nameTok = this.expectIdent();
+        const d: EventDecl = { name: baseName(nameTok), params: this.params(), line: nameTok.line };
+        if (ast) ast.events!.push(d);
+        return;
+      }
+      case 'implements': {
+        if (visibility) break;
+        this.advance();
+        const nameTok = this.expectIdent();
+        let name = nameTok.text;
+        while (this.isOp('.') && this.peek(1).kind === 'ident') { this.advance(); name += '.' + this.advance().text; }
+        if (ast) ast.implements!.push(name);
         return;
       }
       case 'type': { const d = this.typeDecl(visibility ?? 'public'); if (ast) ast.types.push(d); return; }
@@ -1112,22 +1343,26 @@ export class StatementParser extends Parser {
       case 'dim': {
         if (visibility) break;
         this.advance();
-        const decls = this.varDecls('dim');
+        const decls = this.moduleVarDecls('dim');
         if (ast) ast.variables.push(...decls);
         return;
       }
-      case 'withevents': this.unsupported('WithEvents');
     }
-    if (visibility && t.kind === 'ident') {
-      const decls = this.varDecls(visibility);
+    if (visibility && (t.kind === 'ident' || k === 'withevents')) {
+      const decls = this.moduleVarDecls(visibility);
       if (ast) ast.variables.push(...decls);
       return;
     }
     if (visibility) this.fail('Expected: identifier');
-    if (first.kind === 'ident' && UNSUPPORTED_IDENTS[lower(first)] && !this.isOp('=', 1) && !this.isOp('.', 1)) {
-      this.unsupported(UNSUPPORTED_IDENTS[lower(first)]);
-    }
     this.fail('Invalid outside procedure');
+  }
+
+  /** Set while module-level variables are declared: `WithEvents` is allowed there only. */
+  private inModuleDecls = false;
+
+  private moduleVarDecls(scope: VarDecl['scope']): VarDecl[] {
+    this.inModuleDecls = true;
+    try { return this.varDecls(scope); } finally { this.inModuleDecls = false; }
   }
 
   private params(): Param[] {
@@ -1167,13 +1402,27 @@ export class StatementParser extends Parser {
 
   private procedure(visibility: 'public' | 'private', isStatic: boolean, first: Token): ProcDecl {
     const kwTok = this.advance();
-    const kind = lower(kwTok) as 'sub' | 'function';
+    const word = lower(kwTok) as ProcKind;
+    let property: ProcDecl['property'];
+    if (word === 'property') {
+      // `Property Get|Let|Set Name(...)`: Get and Let/Set are a word and keywords
+      const g = this.peek();
+      const gw = g.kind === 'ident' || g.kind === 'keyword' ? lower(g) : '';
+      if (gw !== 'get' && gw !== 'let' && gw !== 'set') this.fail('Expected: Get or Let or Set');
+      this.advance();
+      property = gw;
+    }
+    const kind: 'sub' | 'function' = word === 'property' ? (property === 'get' ? 'function' : 'sub') : word;
     const p: ProcDecl = { kind, name: '?', visibility, isStatic, params: [], body: [], line: first.line, endLine: first.line };
+    if (property) p.property = property;
     try {
       const nameTok = this.expectIdent();
       p.name = baseName(nameTok);
       if (kind === 'function' && nameTok.suffix) p.returnType = SUFFIX_TYPES[nameTok.suffix];
       p.params = this.params();
+      if ((property === 'let' || property === 'set') && (p.params.length === 0 || p.params[p.params.length - 1].optional || p.params.some(x => x.paramArray))) {
+        this.fail('Definitions of property procedures for the same property are inconsistent, or property procedure has an optional parameter, a ParamArray, or an invalid Set final parameter', nameTok);
+      }
       if (kind === 'function' && this.isKeyword('as')) {
         p.returnType = this.parseAsClause().type;
         // `Function Nums() As Integer()`: returns an array
@@ -1190,11 +1439,11 @@ export class StatementParser extends Parser {
 
     const savedInProc = this.inProc;
     this.inProc = true;
-    this.procKind = kind;
+    this.procKind = word;
     this.forDepth = 0;
     this.nextQueue = [];
-    const endCloser: Closer = kind === 'sub' ? 'end sub' : 'end function';
-    const endName = kind === 'sub' ? 'End Sub' : 'End Function';
+    const endCloser = END_CLOSERS[word];
+    const endName = END_NAMES[word];
     for (;;) {
       const { body, closer } = this.block();
       p.body.push(...body);
@@ -1204,7 +1453,7 @@ export class StatementParser extends Parser {
         this.advance(); this.advance();
         break;
       }
-      const bad = closer === 'end sub' || closer === 'end function'
+      const bad = isProcCloser(closer)
         ? new VBSyntaxError(`Expected: ${endName}`, this.peek().line, this.peek().col)
         : new VBSyntaxError(STRAY_MESSAGES[closer], this.peek().line, this.peek().col);
       if (!this.collect) throw bad;
@@ -1301,10 +1550,13 @@ function evalConst(e: Expr, known: Map<string, number>, bad: () => never): numbe
 
 // ---- public API ----
 
-/** Parses a module; throws the first VBSyntaxError (with `moduleName` set). */
-export function parseModule(source: string, moduleName: string): ModuleAst {
+/**
+ * Parses a module; throws the first VBSyntaxError (with `moduleName` set). `consts`: the project's conditional
+ * compilation constants for `#If` (see condComp.ts).
+ */
+export function parseModule(source: string, moduleName: string, consts?: CondConsts): ModuleAst {
   try {
-    return new StatementParser(tokenize(source)).parseModuleAst(moduleName);
+    return new StatementParser(tokenize(preprocess(source, consts))).parseModuleAst(moduleName);
   } catch (e) {
     if (e instanceof VBSyntaxError) e.moduleName = moduleName;
     throw e;
@@ -1313,8 +1565,10 @@ export function parseModule(source: string, moduleName: string): ModuleAst {
 
 /** Checks one logical line without requiring blocks to match (VB6 "Auto Syntax Check"). */
 export function checkLineSyntax(line: string): VBSyntaxError | null {
+  const directive = directiveLineError(line);
+  if (directive !== undefined) return directive;
   try {
-    new StatementParser(tokenize(line)).parseLine();
+    new StatementParser(tokenize(preprocess(line))).parseLine();
     return null;
   } catch (e) {
     if (e instanceof VBSyntaxError) return e;
@@ -1327,9 +1581,9 @@ export function checkLineSyntax(line: string): VBSyntaxError | null {
  * everything that did parse (a failing statement is skipped to the end of its line). `ast` is null only when
  * the lexer never got through the source.
  */
-export function parseModuleLenient(source: string, moduleName: string): { ast: ModuleAst | null; errors: VBSyntaxError[] } {
+export function parseModuleLenient(source: string, moduleName: string, consts?: CondConsts): { ast: ModuleAst | null; errors: VBSyntaxError[] } {
   const errors: VBSyntaxError[] = [];
-  let src = source;
+  let src = preprocess(source, consts, errors);
   let tokens: Token[] | null = null;
   // The lexer stops at its first error; blank that line out and try again.
   for (let attempt = 0; attempt < 1000 && !tokens; attempt++) {
@@ -1360,6 +1614,6 @@ export function parseModuleLenient(source: string, moduleName: string): { ast: M
 }
 
 /** All syntax errors of a module (each with `moduleName` set); after an error parsing resumes on the next line. */
-export function findSyntaxErrors(source: string, moduleName: string): VBSyntaxError[] {
-  return parseModuleLenient(source, moduleName).errors;
+export function findSyntaxErrors(source: string, moduleName: string, consts?: CondConsts): VBSyntaxError[] {
+  return parseModuleLenient(source, moduleName, consts).errors;
 }

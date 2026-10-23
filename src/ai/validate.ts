@@ -1,14 +1,15 @@
 // Checks the code the AI proposed: cheap automatic fixes plus a list of problems that is fed back to the model once.
 // The checks only report; none of them changes the code. A false report costs a slow extra model round, so every
 // rule stays silent when it is not sure (a name whose status is uncertain counts as known).
-import type { Expr, MissingArg, ModuleAst, Param, PrintItem, ProcDecl, Stmt, VBTypeName } from '../lang/ast';
-import { BUILTINS, CANONICAL_NAMES } from '../lang/builtins';
+import { gfxExprs, type Expr, type MissingArg, type ModuleAst, type Param, type PrintItem, type ProcDecl, type Stmt, type VBTypeName } from '../lang/ast';
+import { BUILTINS, CANONICAL_NAMES, PROG_IDS } from '../lang/builtins';
+import { formEvents, formObjectName } from '../model/mdi';
 import { compileProblems, type CheckModule } from '../lang/compileCheck';
 import { parseModuleLenient } from '../lang/parser';
 import { TYPE_KEYWORDS } from '../lang/parseStatements';
 import { CONTROL_TYPES } from '../model/controls';
 import { listProcedures } from '../model/procedures';
-import type { ControlType, FormDef, Project } from '../model/types';
+import { moduleKind, type ControlType, type FormDef, type Project } from '../model/types';
 import {
   BUILTIN_OBJECTS, controlHasMember, formMembers, isLanguageName, memberNamesOf, moduleNames, projectNames,
 } from './knownNames';
@@ -80,7 +81,7 @@ export function autoFixEventNames(code: string, formName: string): { code: strin
   return { code: lines.join('\n'), notes };
 }
 
-const DECL_OR_COMMENT = /^\s*(?:$|'|Rem(?:\s|$)|(?:Dim|Const|Public|Private|Global|Static|Option|Type|Enum|Declare|End\s+(?:Type|Enum))\b)/i;
+const DECL_OR_COMMENT = /^\s*(?:$|'|Rem(?:\s|$)|(?:Dim|Const|Public|Private|Friend|Global|Static|Option|Type|Enum|Declare|Event|Implements|End\s+(?:Type|Enum))\b)/i;
 const BARE_PROC = 'AiBody__';
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -93,7 +94,7 @@ const ALTERNATIVES: Record<string, string> = {
 };
 /** Functions that parse fine but do not exist in VibeBasic, with the name as written in VB6. */
 const UNSUPPORTED_CALLS: Record<string, string> = {
-  createobject: 'CreateObject', getobject: 'GetObject', shell: 'Shell',
+  getobject: 'GetObject', shell: 'Shell',
 };
 const unsupported = (name: string): string => {
   const alt = ALTERNATIVES[name.toLowerCase()];
@@ -184,6 +185,7 @@ function procNames(p: ProcDecl): { declared: Set<string>; implicit: Set<string> 
     else if (e.kind === 'member') expr(e.object);
     else if (e.kind === 'unary') expr(e.operand);
     else if (e.kind === 'binary') { expr(e.left); expr(e.right); }
+    else if (e.kind === 'typeOf') expr(e.object);
   };
   /** A variable the statement writes (Input #, Get #, Mid, LSet...): a bare name may be created implicitly. */
   const target = (t: Expr) => { if (t.kind === 'name') implicit.add(lc(t.name)); expr(t); };
@@ -197,6 +199,7 @@ function procNames(p: ProcDecl): { declared: Set<string>; implicit: Set<string> 
         case 'erase': for (const t of s.targets) implicit.add(lc(t.name)); break;
         case 'assign': target(s.target); expr(s.value); break;
         case 'call': argNames(s.args); s.args.forEach(expr); break;
+        case 'raiseEvent': argNames(s.args); s.args.forEach(expr); break;
         case 'for': implicit.add(lc(s.variable.name)); expr(s.from); expr(s.to); if (s.step) expr(s.step); stmts(s.body); break;
         case 'forEach': implicit.add(lc(s.variable.name)); expr(s.collection); stmts(s.body); break;
         case 'if': for (const b of s.branches) { expr(b.cond); stmts(b.body); } if (s.elseBody) stmts(s.elseBody); break;
@@ -217,7 +220,10 @@ function procNames(p: ProcDecl): { declared: Set<string>; implicit: Set<string> 
         case 'putFile': expr(s.file); if (s.rec) expr(s.rec); expr(s.target); break;
         case 'seekFile': expr(s.file); expr(s.pos); break;
         case 'name': expr(s.from); expr(s.to); break;
-        case 'exit': case 'onError': case 'resume': case 'goto': case 'label': case 'end': case 'stop': break;
+        case 'onGoto': expr(s.index); break;
+        case 'debugAssert': expr(s.cond); break;
+        case 'gfx': gfxExprs(s).forEach(expr); break;
+        case 'exit': case 'onError': case 'resume': case 'goto': case 'return': case 'label': case 'end': case 'stop': break;
         default: { const never: never = s; void never; }
       }
     }
@@ -283,6 +289,11 @@ function checkProc(c: Checker, p: ProcDecl): void {
   const callTarget = (name: string, args: (Expr | MissingArg)[], expression: boolean) => {
     callName(name);
     const k = lc(name);
+    // CreateObject("Excel.Application"): only the ProgIDs VibeBasic has (429 at run time)
+    const a0 = args[0];
+    if (k === 'createobject' && !shadowed(k) && a0?.kind === 'string' && !PROG_IDS.has(a0.value.trim().toLowerCase())) {
+      c.report(`CreateObject("${a0.value}") is not supported in VibeBasic (error 429). It has ${[...PROG_IDS.values()].map(x => x.name).filter((n, i, all) => all.indexOf(n) === i).join(', ')}.`);
+    }
     if (!c.namesKnown || UNSUPPORTED_CALLS[k]) return;
     if (!known(k) && !implicit.has(k)) {
       if (!reportedNames.has(k)) c.report(`Sub or Function not defined: ${name}`);
@@ -342,6 +353,7 @@ function checkProc(c: Checker, p: ProcDecl): void {
         return;
       case 'unary': expr(e.operand); return;
       case 'binary': expr(e.left); expr(e.right); return;
+      case 'typeOf': expr(e.object); return;
     }
   }
 
@@ -395,7 +407,11 @@ function checkProc(c: Checker, p: ProcDecl): void {
         case 'putFile': expr(s.file); if (s.rec) expr(s.rec); expr(s.target); break;
         case 'seekFile': expr(s.file); expr(s.pos); break;
         case 'name': expr(s.from); expr(s.to); break;
-        case 'exit': case 'onError': case 'resume': case 'goto': case 'label': case 'end': case 'stop': break;
+        case 'raiseEvent': s.args.forEach(expr); break;
+        case 'onGoto': expr(s.index); break;
+        case 'debugAssert': expr(s.cond); break;
+        case 'gfx': gfxExprs(s).forEach(expr); break;
+        case 'exit': case 'onError': case 'resume': case 'goto': case 'return': case 'label': case 'end': case 'stop': break;
         default: { const never: never = s; void never; }
       }
     }
@@ -423,7 +439,8 @@ function checkNames(ast: ModuleAst, syntaxOk: boolean, ctx: ValidateContext, rep
   if (form) forms.set(lc(form.name), me);
 
   const procs = new Map<string, ProcDecl>();
-  for (const p of [...existing.ast?.procedures ?? [], ...ast.procedures]) if (p.name !== BARE_PROC) procs.set(lc(p.name), p);
+  // Property procedures share a name (Get and Let): their arity is not checked, the name is a module name
+  for (const p of [...existing.ast?.procedures ?? [], ...ast.procedures]) if (p.name !== BARE_PROC && !p.property) procs.set(lc(p.name), p);
 
   const bareExtra = new Set<string>();
   for (const p of existing.ast?.procedures ?? []) { const n = procNames(p); for (const k of [...n.declared, ...n.implicit]) bareExtra.add(k); }
@@ -451,10 +468,12 @@ function compileRules(ast: ModuleAst, existing: ModuleAst | null, isForm: boolea
     variables: [...existing?.variables ?? [], ...ast.variables], consts: [...existing?.consts ?? [], ...ast.consts],
     types: [...existing?.types ?? [], ...ast.types], enums: [...existing?.enums ?? [], ...ast.enums],
     procedures: [...(existing?.procedures ?? []).filter(p => !replaced.has(lc(p.name))), ...ast.procedures],
+    events: [...existing?.events ?? [], ...ast.events ?? []], implements: [...existing?.implements ?? [], ...ast.implements ?? []],
   };
-  const modules: CheckModule[] = [{ name: ctx.moduleName, kind: isForm ? 'form' : 'module', ast: merged }];
+  const self = ctx.project.modules.find(m => lc(m.name) === name);
+  const modules: CheckModule[] = [{ name: ctx.moduleName, kind: isForm ? 'form' : self ? moduleKind(self) : 'module', ast: merged }];
   const others = [...ctx.project.forms.map(f => ({ name: f.name, kind: 'form' as const, code: f.code })),
-    ...ctx.project.modules.map(m => ({ name: m.name, kind: 'module' as const, code: m.code }))];
+    ...ctx.project.modules.map(m => ({ name: m.name, kind: moduleKind(m), code: m.code }))];
   for (const o of others) {
     if (lc(o.name) === name) continue;
     const r = parseModuleLenient(o.code, o.name);
@@ -495,7 +514,7 @@ export function validateCode(code: string, ctx: ValidateContext): string[] {
   const procs = listProcedures(code);
   const seen = new Set<string>();
   for (const p of procs) {
-    const k = lc(p.name);
+    const k = `${lc(p.name)} ${p.property ?? ''}`;   // a Property Get, Let and Set of one name belong together
     if (seen.has(k)) report(`${p.name} is defined more than once; keep one.`);
     seen.add(k);
   }
@@ -507,15 +526,21 @@ export function validateCode(code: string, ctx: ValidateContext): string[] {
     for (const c of ctx.form.controls) { controls.set(lc(c.name), c.type); isArray.set(lc(c.name), c.index !== null); }
     for (const c of ctx.extraControls ?? []) controls.set(lc(c.name), c.type);
     const decls = new Map((bare ? [] : parsed.ast?.procedures ?? []).map(d => [lc(d.name), d] as const));
+    // `Private WithEvents w As Worker`: w_Event handles the class's events, not a control's
+    const eventVars = new Set([...parsed.ast?.variables ?? [], ...parseModuleLenient(ctx.form.code, ctx.moduleName).ast?.variables ?? []]
+      .filter(v => v.withEvents).map(v => lc(v.name)));
     for (const p of procs) {
-      if (p.kind !== 'sub') continue;
+      if (p.kind !== 'sub' || p.property) continue;
       const us = p.name.lastIndexOf('_');
       if (us <= 0 || us === p.name.length - 1) continue;
       const obj = p.name.slice(0, us), ev = p.name.slice(us + 1);
+      if (eventVars.has(lc(obj))) continue;
       if (!KNOWN_EVENTS.has(ev.toLowerCase())) continue;   // not event-shaped
-      const type: ControlType | undefined = obj.toLowerCase() === 'form' ? 'Form' : controls.get(obj.toLowerCase());
-      if (!type) report(`There is no control named ${obj}, so ${p.name} would never run.`);
-      else if (!eventsOf(type).has(ev.toLowerCase())) report(`A ${type} has no ${ev} event.`);
+      const formObj = formObjectName(ctx.form);   // MDIForm_Load on the MDI form
+      const type: ControlType | undefined = obj.toLowerCase() === formObj.toLowerCase() ? 'Form' : controls.get(obj.toLowerCase());
+      if (!type && ctx.form.mdi && obj.toLowerCase() === 'form') report(`The MDI form's own events are named MDIForm_<Event>: write MDIForm_${ev}, not ${p.name}.`);
+      else if (!type) report(`There is no control named ${obj}, so ${p.name} would never run.`);
+      else if (type === 'Form' ? !formEvents(ctx.form).some(e => lc(e.name) === lc(ev)) : !eventsOf(type).has(ev.toLowerCase())) report(`A${type === 'Form' && ctx.form.mdi ? 'n MDIForm' : ` ${type}`} has no ${ev} event.`);
       else {
         const decl = decls.get(lc(p.name));
         const headerOk = decl && !parsed.errors.some(e => e.line >= decl.line && e.line <= headerEnd(sourceLines, decl.line));

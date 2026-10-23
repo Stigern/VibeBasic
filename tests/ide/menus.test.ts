@@ -29,13 +29,16 @@ test('make item and project-properties use project name', () => {
   const items = buildMenus({}, s).find(m => m.label === 'Project')!.items;
   expect(items.map(i => i.label)).toContain('Kalk Properties...');
   expect(items.map(i => i.label)).toContain('Remove Form1');
+  expect(items.slice(0, 5).map(i => i.label)).toEqual(['Add Form', 'Add MDI Form', 'Add Module', 'Add Class Module', 'Add File...']);
 });
 test('shortcuts and submenus', () => {
   const all = buildMenus({});
   const debug = all.find(m => m.label === 'Debug')!.items;
   expect(debug.map(i => [i.label, i.shortcut])).toEqual([
     ['Step Into', 'F8'], ['Step Over', 'Shift+F8'], ['Step Out', 'Ctrl+Shift+F8'], ['Run To Cursor', 'Ctrl+F8'], ['-', undefined],
-    ['Toggle Breakpoint', 'F9'], ['Clear All Breakpoints', 'Ctrl+Shift+F9'],
+    ['Add Watch...', undefined], ['Edit Watch...', 'Ctrl+W'], ['Quick Watch...', 'Shift+F9'], ['-', undefined],
+    ['Toggle Breakpoint', 'F9'], ['Clear All Breakpoints', 'Ctrl+Shift+F9'], ['-', undefined],
+    ['Set Next Statement', 'Ctrl+F9'], ['Show Next Statement', undefined],
   ]);
   const sc = (l: string, m: string) => all.find(x => x.label === m)!.items.find(i => i.label === l)!.shortcut;
   expect(sc('Redo', 'Edit')).toBe('Ctrl+Y');
@@ -65,7 +68,7 @@ test('startIde builds shell: toolbox, toolbar, designer window, immediate hidden
   expect(title).toHaveBeenCalledWith(`Project1 - VibeBasic ${__APP_VERSION__} [design]`);
   // a new project has no components checked: Pointer and the 18 intrinsic controls only, as in VB6
   expect(root.querySelectorAll('.tbx98-btn').length).toBe(20);
-  expect(root.querySelectorAll('.tb98-tool').length).toBe(18);
+  expect(root.querySelectorAll('.tb98-tool').length).toBe(19);   // with the Menu Editor
   expect(root.querySelector('.ide98-mdi .vb-form')).not.toBeNull();
   expect(root.querySelector('.ide98-mdi .mdi98 > .title-bar .title-bar-text')!.textContent).toBe('Project1 - Form1 (Form)');
   expect(ide.layout.isPaneVisible('immediate')).toBe(false);

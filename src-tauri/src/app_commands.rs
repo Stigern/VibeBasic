@@ -35,6 +35,9 @@ pub const APP_COMMANDS: &[&str] = &[
   "db_execute",
   "db_close",
   "db_reset",
+  "db_begin_trans",
+  "db_commit_trans",
+  "db_rollback_trans",
   "inet_request",
   "inet_cancel",
   "sock_connect",
@@ -64,6 +67,12 @@ pub const APP_COMMANDS: &[&str] = &[
   "quit_app",
   "get_app_dir",
   "get_app_name",
+  "get_command_line",
+  "get_environment",
+  "app_prev_instance",
+  "app_log_event",
+  "printer_list",
+  "print_window",
 ];
 
 /// The app commands the form and dialog windows of a running program may call (capabilities/run-windows.json): reading a media

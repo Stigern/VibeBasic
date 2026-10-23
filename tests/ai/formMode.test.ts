@@ -5,6 +5,8 @@ import { showFormPreview } from '../../src/ai/previewDialogs';
 import { CommandStack } from '../../src/model/commands';
 import { newControl, newForm, newProject } from '../../src/model/controls';
 import type { Project } from '../../src/model/types';
+import { newMdiForm } from '../../src/model/mdi';
+import { describeForm } from '../../src/ai/context';
 
 function setup(): { p: Project; stack: CommandStack } {
   const p = newProject();
@@ -151,4 +153,40 @@ test('all ops ignored: warnings go into the details text', () => {
   const r = parseFormOps('{"ops":[{"op":"add","type":"Gizmo"}]}', setup().p.forms[0]);
   expect(r.ok).toBe(false);
   if (!r.ok) expect(r.raw).toContain('Ignored unknown control type Gizmo.');
+});
+
+test('the menu op adds menus in order (one undo step); describeForm lists them and the validator accepts their Click code', async () => {
+  const { validateCode } = await import('../../src/ai/validate');
+  const { menuTree } = await import('../../src/model/menus');
+  const { p, stack } = setup();
+  const reply = JSON.stringify({ ops: [
+    { op: 'menu', name: 'mnuFile', caption: '&File', parent: null },
+    { op: 'menu', name: 'mnuOpen', caption: '&Open...', parent: 'mnuFile', shortcut: 'Ctrl+O' },
+    { op: 'menu', name: 'mnuRecent', caption: 'Recent', parent: 'mnuFile', index: 0, checked: true },
+    { op: 'menu', name: 'mnuLost', caption: 'Lost', parent: 'mnuNothing' }],
+    code: 'Private Sub mnuOpen_Click()\n    PopupMenu mnuFile\nEnd Sub\nPrivate Sub mnuRecent_Click(Index As Integer)\nEnd Sub' });
+  const r = parseFormOps(reply, p.forms[0]);
+  if (!r.ok) throw new Error('not parsed');
+  expect(describeOps(r).slice(0, 3)).toEqual(['Add Menu mnuFile', 'Add Menu mnuOpen', 'Add Menu mnuRecent(0)']);
+  expect(r.warnings).toEqual(['Ignored menu mnuLost: there is no menu mnuNothing.']);
+  stack.execute(formOpsToCommand(p, p.forms[0].id, r, 'AI'));
+  const tree = menuTree(p.forms[0].controls);
+  expect(tree.map(n => [n.def.name, n.children.map(c => [c.def.name, c.def.index, c.def.props.Shortcut, c.def.props.Checked])]))
+    .toEqual([['mnuFile', [['mnuOpen', null, 15, false], ['mnuRecent', 0, 0, true]]]]);
+  expect(describeForm(p.forms[0])).toContain('Menu mnuOpen in mnuFile Caption="&Open..." Shortcut="Ctrl+O"');
+  expect(validateCode(p.forms[0].code, { moduleName: 'Form1', form: p.forms[0], project: p })).toEqual([]);
+  stack.undo();
+  expect(p.forms[0].controls.some(c => c.type === 'Menu')).toBe(false);
+});
+
+test('MDI: the form op and the description know the MDI form; it takes only aligned and invisible controls', () => {
+  const mdi = newMdiForm('MDIForm1');
+  expect(describeForm(mdi).split('\n')[0]).toMatch(/^MDIForm MDIForm1 /);
+  const r = parseFormOps(JSON.stringify({ ops: [
+    { op: 'add', type: 'CommandButton', name: 'cmdX' }, { op: 'add', type: 'PictureBox', name: 'picBar' },
+    { op: 'form', props: { AutoShowChildren: false, KeyPreview: true } }] }), mdi);
+  expect(r.ok && r.ops.map(o => (o.op === 'add' ? `${o.name} ${String(o.props.Align)}` : 'props' in o ? JSON.stringify(o.props) : o.op))).toEqual(['picBar 1', '{"AutoShowChildren":false}']);
+  expect(r.ok && r.warnings.join(' ')).toMatch(/Ignored CommandButton cmdX.*Ignored KeyPreview/);
+  const child = parseFormOps(JSON.stringify({ ops: [{ op: 'form', props: { MDIChild: true } }] }), newForm('Form2'));
+  expect(child.ok && child.ops).toEqual([{ op: 'form', props: { MDIChild: true } }]);
 });

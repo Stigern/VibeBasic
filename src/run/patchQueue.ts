@@ -4,8 +4,8 @@ import type { PropValue } from '../model/types';
 import type { ToWindow } from './protocol';
 
 /** Props whose queued values are appended, not replaced: an ordered list of changes the window replays (RichTextBox: see
- *  ControlObject.send). */
-const APPEND_PROPS = new Set(['RtfOps']);
+ *  ControlObject.send; GfxOps: the drawing of a Form or PictureBox, see DrawSurface). */
+const APPEND_PROPS = new Set(['RtfOps', 'GfxOps']);
 
 export class PatchQueue {
   private forms = new Map<string, Map<string, Record<string, PropValue>>>();
@@ -18,10 +18,18 @@ export class PatchQueue {
     let form = this.forms.get(formKey);
     if (!form) this.forms.set(formKey, form = new Map());
     const cur = form.get(id);
-    if (!cur) { form.set(id, { ...props }); return; }
+    // the queue owns the lists it appends to (copied in, then pushed to: a loop of 10000 PSet stays linear)
+    const own = (k: string, v: PropValue): PropValue => (APPEND_PROPS.has(k) && Array.isArray(v) ? [...v] : v);
+    if (!cur) {
+      const copy: Record<string, PropValue> = {};
+      for (const [k, v] of Object.entries(props)) copy[k] = own(k, v);
+      form.set(id, copy);
+      return;
+    }
     for (const [k, v] of Object.entries(props)) {
       const was = cur[k];
-      cur[k] = APPEND_PROPS.has(k) && Array.isArray(was) && Array.isArray(v) ? [...was, ...v] : v;
+      if (APPEND_PROPS.has(k) && Array.isArray(was) && Array.isArray(v)) (was as string[]).push(...(v as string[]));
+      else cur[k] = own(k, v);
     }
   }
 

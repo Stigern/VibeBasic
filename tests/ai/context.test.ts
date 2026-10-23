@@ -78,7 +78,7 @@ test('enum properties list their values; the whole system prompt stays within bu
   const p = project();
   for (const content of [buildCodeRequest(p, 'm1', 1, 'x')[0].content, buildFormRequest(p, p.forms[0].id, 'x')[0].content]) {
     // card + control types + rules, at about 3.5 characters per token. 7,000 before the 0.8 components (about 25 more controls)
-    expect(content.length / 3.5).toBeLessThanOrEqual(9000);
+    expect(content.length / 3.5).toBeLessThanOrEqual(10500);
   }
 });
 test('system prompts contain format rules', () => { expect(CODE_SYSTEM_PROMPT).toContain('```vb'); expect(FORM_SYSTEM_PROMPT).toContain('"ops"'); });
@@ -144,7 +144,15 @@ test('language reference: stable, within budget, in both system prompts', () => 
   // review 08 language additions: built-ins come from the table, statements from the card's own line
   for (const name of ['IsMissing', 'FormatNumber', 'FormatCurrency', 'FormatPercent', 'Filter', 'CDec', 'IsError', 'CVErr', 'Erl']) expect(LANGUAGE_REFERENCE).toMatch(new RegExp(`[:,] ${name}\\b`));
   for (const text of ['Mid(s, i, n) = x', 'LSet / RSet', 'Error n', 'New Collection', 'As Long() returns an array']) expect(LANGUAGE_REFERENCE).toContain(text);
-  expect(LANGUAGE_REFERENCE.length / 3.5).toBeLessThanOrEqual(1500);
+  // 0.9 A2: the new syntax is on the card, the financial functions on one line, GoSub / Global no longer "not available"
+  for (const text of ['TypeOf x Is', 'Prompt:=', 'Option Base 1', 'GoSub label', 'On n GoTo', '#If X Then', 'Debug.Assert', 'Financial: DDB,']) expect(LANGUAGE_REFERENCE).toContain(text);
+  for (const name of ['LenB', 'MidB', 'ChrB', 'Partition']) expect(LANGUAGE_REFERENCE).toMatch(new RegExp(`[:,] ${name}\\b`));
+  expect(LANGUAGE_REFERENCE).not.toMatch(/Not available: .*(GoSub|Global|named arguments)/);
+  expect(LANGUAGE_REFERENCE).not.toMatch(/\(3-5\): .*\bPmt\b/);
+  // 0.9 A3: CreateObject / New of the ADODB and Scripting classes
+  for (const text of ['Scripting.Dictionary', 'ADODB.Recordset', 'rs.Filter =', 'BeginTrans']) expect(LANGUAGE_REFERENCE).toContain(text);
+  expect(LANGUAGE_REFERENCE).not.toMatch(/Not available: .*CreateObject/);
+  expect(LANGUAGE_REFERENCE.length / 3.5).toBeLessThanOrEqual(2000);
   const p = project();
   expect(buildCodeRequest(p, 'm1', 1, 'x')[0].content).toContain(LANGUAGE_REFERENCE);
   expect(buildFormRequest(p, p.forms[0].id, 'x')[0].content).toContain(LANGUAGE_REFERENCE);

@@ -11,7 +11,7 @@
 // - keywords, built-in functions, constants: canonical casing (KEYWORD_CASE);
 //   declared names: the spelling in `known` (see collectIdentifiers);
 //   names after `.` / `!` are left alone (plan 02 fixes control properties),
-//   except `Debug.Print`.
+//   except `Debug.Print` and `Debug.Assert`.
 // - one space around binary operators, none after a unary +/-; one space
 //   after `,` and `;`, none before; none inside parentheses; none around `.`;
 //   `:=` unspaced; `:` is written as `: ` (a label `Name:` stays as is).
@@ -41,7 +41,7 @@ const KEYWORD_SPELLING: Record<string, string> = {
 };
 
 /** Names that are neither keywords nor registered built-ins but have a fixed VB6 spelling. */
-const EXTRA_NAMES = ['Debug', 'Print', 'Tab', 'Spc', 'LSet', 'RSet', 'Collection'];
+const EXTRA_NAMES = ['Debug', 'Print', 'Tab', 'Spc', 'LSet', 'RSet', 'Collection', 'PSet', 'Line', 'Circle', 'Scale', 'Cls'];
 
 /** Identifiers that are keywords inside a file statement (VB6 colours them): the statement word, and Open's clauses. */
 const FILE_STATEMENT_WORDS = new Set(['print', 'write', 'input', 'get', 'put', 'seek']);
@@ -50,7 +50,7 @@ const OPEN_WORDS = new Set(['input', 'output', 'append', 'binary', 'random', 'ac
 /**
  * Indexes of the identifier tokens that act as keywords in a file statement: `Print #`, `Line Input #`, `Get #`, ...,
  * `Name ... As`, and in `Open ... For Input Access Read Lock Write As #1 Len = 8` the mode and clause words; also the
- * `LSet` / `RSet` of `LSet s = value` (identifiers to the lexer too).
+ * `LSet` / `RSet` of `LSet s = value` (identifiers to the lexer too), and the `Get` of `Property Get`.
  */
 export function fileStatementWords(tokens: Token[]): Set<number> {
   const out = new Set<number>();
@@ -68,6 +68,7 @@ export function fileStatementWords(tokens: Token[]): Set<number> {
       else if (l === 'name' && tokens.slice(i + 1).some(x => x.kind === 'keyword' && x.text.toLowerCase() === 'as')) out.add(i);
       else if ((l === 'lset' || l === 'rset') && next?.kind === 'ident') out.add(i);
     }
+    if (t.kind === 'ident' && !t.suffix && l === 'get' && tokens[i - 1]?.kind === 'keyword' && tokens[i - 1].text.toLowerCase() === 'property') out.add(i);
     if (t.kind === 'keyword' && l === 'open' && start) open = 'path';
     else if (open && t.kind === 'keyword' && (l === 'for' || l === 'as')) open = l === 'for' ? 'for' : 'as';
     // the mode and Access / Lock words after `For`, `Len` after `As #n`
@@ -158,6 +159,7 @@ function prettifyPhysicalLine(line: string, known: Map<string, string>): string 
   const parts: string[] = [];
   let prev: Token | undefined;
   let prevUnary = false;
+  let gfx = '';             // in a drawing statement (its word): `Line (x1, y1)-Step(x2, y2)` is written as VB6 does
   let head = true;          // the statement so far is just a leading name (a.b.c)
   let prevHead = false;     // prev is the last name of that leading chain
 
@@ -179,7 +181,7 @@ function prettifyPhysicalLine(line: string, known: Map<string, string>): string 
       const afterMember = prev && (isOp(prev, '.') || isOp(prev, '!'));
       if (afterMember) {
         const before = tokens[i - 2];
-        if (isOp(prev, '.') && before?.kind === 'ident' && !before.suffix && before.text.toLowerCase() === 'debug' && lower === 'print') text = 'Print';
+        if (isOp(prev, '.') && before?.kind === 'ident' && !before.suffix && before.text.toLowerCase() === 'debug' && (lower === 'print' || lower === 'assert')) text = lower === 'print' ? 'Print' : 'Assert';
       } else {
         const key = baseOf(t).toLowerCase();
         const cased = known.get(key) ?? (t.suffix ? KEYWORD_CASE.get(key + t.suffix) : undefined) ?? KEYWORD_CASE.get(key);
@@ -191,7 +193,9 @@ function prettifyPhysicalLine(line: string, known: Map<string, string>): string 
     if (t.kind === 'comment') text = text.trimEnd();
 
     // ---- unary +/-
-    if (t.kind === 'op' && (t.text === '+' || t.text === '-')) {
+    const gfxDash = (gfx === 'line' || gfx === 'scale') && isOp(t, '-') && (isOp(prev, ')') || (prev?.kind === 'ident' && prev.text.toLowerCase() === gfx));
+    if (gfxDash) unary = true;
+    else if (t.kind === 'op' && (t.text === '+' || t.text === '-')) {
       if (!prev) {
         unary = next !== undefined && body.slice(end(t), start(next)) === '';
         // a leading +/- (continuation line) keeps the written spacing
@@ -207,7 +211,9 @@ function prettifyPhysicalLine(line: string, known: Map<string, string>): string 
     else if (t.kind === 'comment') sep = prev.kind === 'colon' ? ' ' : orig === '' ? ' ' : orig;
     else if (prev.kind === 'colon') sep = ' ';
     else if (t.kind === 'colon') sep = '';
+    else if (gfxDash) sep = isOp(prev, ')') ? '' : ' ';
     else if (prevUnary) sep = '';
+    else if (gfx && isOp(t, '(') && kw(prev, 'step')) sep = '';
     else if (prev.kind === 'op' && (prev.text === '(' || prev.text === '.' || prev.text === '!' || prev.text === '#' || prev.text === ':=')) sep = '';
     else if (t.kind === 'op') {
       switch (t.text) {
@@ -228,6 +234,8 @@ function prettifyPhysicalLine(line: string, known: Map<string, string>): string 
     parts.push(sep, text);
 
     // ---- statement bookkeeping
+    if (t.kind === 'ident' && head && (lower === 'line' || lower === 'scale' || lower === 'pset' || lower === 'circle')) gfx = lower;
+    if (t.kind === 'colon') gfx = '';
     if (t.kind === 'colon' || (t.kind === 'keyword' && STATEMENT_STARTERS.has(lower))) { head = true; prevHead = false; }
     else {
       if (!(t.kind === 'ident' || isOp(t, '.') || (t.kind === 'keyword' && lower === 'me'))) head = false;

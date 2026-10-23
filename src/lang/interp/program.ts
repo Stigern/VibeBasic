@@ -1,6 +1,6 @@
 // Public API of the interpreter (Program) and its shared state (Runtime).
 
-import type { ProcDecl, TypeDecl, VBTypeName } from '../ast';
+import type { ProcDecl, Stmt, TypeDecl, VBTypeName } from '../ast';
 import { VBRuntimeError, VBSyntaxError, internalError } from '../errors';
 import { compileProblems } from '../compileCheck';
 import { ErrObject, type BuiltinCtx } from '../builtins';
@@ -9,13 +9,15 @@ import { generalDateText, localeDateParser } from '../builtins/format';
 import { newRndState } from '../builtins/util';
 import { FileIO } from '../fileio/fileIO';
 import { parseModule } from '../parser';
+import { parseCondConsts, type CondConsts } from '../condComp';
 import {
-  Empty, VBArray, VBRecord, VBRef, defaultValue, setDateTextFormatter, setDateTextParser, toNumber, type DateTextFormatter,
+  Empty, NothingT, RefContainer, VBArray, VBRecord, VBRef, defaultValue, dropValue, isObject, refCounting, setDateTextFormatter, setDateTextParser, toNumber, type DateTextFormatter,
   type DateTextParser, type VBValue,
 } from '../values';
-import { EndSignal, SubCall, runGenerator, type ExecScope, type Gen } from './driver';
+import { EndSignal, SubCall, runGenerator, runSync, type ExecScope, type Gen } from './driver';
 import { constExpr } from './eval';
-import { RETRY, declareVariable, handleError, invokeProc, isStackOverflow, type BoundArg } from './exec';
+import { RETRY, declareVariable, handleError, invokeProc, isStackOverflow, newVariable, reap, type BoundArg } from './exec';
+import { ProgramDebugger } from './debugger';
 import { runImmediate } from './immediate';
 import { snapshotVariables } from './snapshot';
 
@@ -27,12 +29,13 @@ import { snapshotVariables } from './snapshot';
  */
 export const MAX_EVENT_NESTING = 100;
 import {
-  Frame, GlobalScope, ModuleScope, ProcRef, Run, Variable, fitFixed, lc, type FieldInfo, type TypeInfo,
+  ClassInstance, Frame, GlobalScope, ModuleScope, ProcRef, Run, Variable, fitFixed, lc, rawValue, startCounting, type FieldInfo, type TypeInfo,
 } from './scope';
 
 const now = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
-export interface SourceModule { name: string; kind: 'form' | 'module'; source: string }
+/** `kind` 'class': a class module (`New Name` makes an object of it). */
+export interface SourceModule { name: string; kind: 'form' | 'module' | 'class'; source: string }
 export interface ProgramOptions {
   /**
    * Statements between clock checks (default 1000). Without `sliceMs` an
@@ -46,6 +49,10 @@ export interface ProgramOptions {
   appTitle?: string;
   /** App.Path: where CurDir starts (default '/'). */
   appPath?: string;
+  /** The project's conditional compilation arguments for `#If` (`DEBUG = 1 : BETA = 0`, see condComp.ts). */
+  condComp?: string;
+  /** A made app: `Debug.Assert` does nothing (the IDE breaks when its condition is False). */
+  ignoreAsserts?: boolean;
 }
 
 export type ProgramState = 'idle' | 'running' | 'break' | 'ended';
@@ -77,6 +84,10 @@ export class Runtime {
   readonly runs = new Set<Run>();
   /** The frame that is stopped in break mode (the Immediate window evaluates there). */
   breakFrame?: Frame;
+  /** Break watches (debugger.ts), asked at every statement boundary; null (the hot path skips it) when there are none. */
+  watchHook: ((f: Frame) => Gen<boolean>) | null = null;
+  /** Set Next Statement, chosen in break mode: the statement of the break frame that runs next. */
+  nextJump?: { frame: Frame; stmt: Stmt };
   /** Runs currently waiting in a time slice (`nextTick`); events arriving meanwhile are queued. */
   slicing = 0;
   /** Events that arrived during a time slice, started at the next event pump or when the run finishes. */
@@ -123,6 +134,19 @@ export class Runtime {
   private readonly resolvedTypes = new WeakMap<object, VBTypeName>();
   private readonly typeInfos = new Map<string, TypeInfo>();
   private initialized = false;
+  /** Class modules by lower-case name. */
+  readonly classes = new Map<string, ModuleScope>();
+  /** Objects of class modules that have not terminated, in the order they were made. */
+  readonly instances = new Set<ClassInstance>();
+  /** `Debug.Assert` is skipped (a made app). */
+  readonly ignoreAsserts: boolean;
+  /**
+   * Objects whose last counted reference went away, with the call depth at that moment: a statement at that depth or
+   * shallower terminates them when it ends (exec.ts `reap`), unless they were stored again meanwhile.
+   */
+  dying: { inst: ClassInstance | RefContainer; depth: number }[] | null = null;
+  /** Where this program's Collections and Dictionaries without references wait (refCounting.sink while its code runs). */
+  private readonly sink = (c: RefContainer): void => this.queueDying(c);
 
   constructor(sources: SourceModule[], readonly host: Host, opts: ProgramOptions = {}) {
     this.sliceSize = Math.max(1, opts.sliceSize ?? 1000);
@@ -138,20 +162,34 @@ export class Runtime {
       activate: () => {
         const prev = setDateTextFormatter(this.dateText);
         const prevParse = setDateTextParser(this.dateParse);
+        const prevSink = refCounting.sink;
+        refCounting.sink = this.sink;
         return () => {
           setDateTextFormatter(prev);
           setDateTextParser(prevParse);
+          refCounting.sink = prevSink;
         };
       },
       cancellable: p => this.cancellable(p),
     };
     this.declRun = new Run(this);
+    this.ignoreAsserts = opts.ignoreAsserts === true;
+    let consts: CondConsts | undefined;
+    try {
+      consts = opts.condComp ? parseCondConsts(opts.condComp) : undefined;
+    } catch (e) {
+      if (e instanceof VBSyntaxError) throw new VBSyntaxError(`Conditional compilation arguments: ${e.message}`, 1, 1);
+      throw e;
+    }
     for (const src of sources) {
-      const m = new ModuleScope(src.name, src.kind, parseModule(src.source, src.name));
+      const m = new ModuleScope(src.name, src.kind, parseModule(src.source, src.name, consts));
       this.modules.set(m.key, m);
       this.moduleList.push(m);
       if (m.kind === 'module') this.globals.addModule(m);
+      else if (m.kind === 'class' && !this.classes.has(m.key)) this.classes.set(m.key, m);
     }
+    // objects of class modules can end (Class_Terminate): count references from the start, also in the Collections made first
+    if (this.classes.size > 0) startCounting();
     // the compile errors VB6 finds before the program starts (a ByRef type mismatch, New of a record ...)
     const problem = compileProblems(this.moduleList.map(m => ({ name: m.name, kind: m.kind, ast: m.ast })))[0];
     if (problem) {
@@ -214,6 +252,8 @@ export class Runtime {
       if (m.enums.has(key) || this.globals.enums.has(key) || this.moduleList.some(o => o.enums.has(key))) r = 'Long';
       // an enum of a type library (ADODB.EventReasonEnum, MSComctlLib.ListLabelEditConstants): a Long
       else if (/\.\w*(enum|constants)$/i.test(name)) r = 'Long';
+      // a class module of the project (`As Thing`, `As Project1.Thing`)
+      else if (this.classes.has(lc(name.slice(name.lastIndexOf('.') + 1)))) r = { objectType: name, classModule: true };
     } else throw VBRuntimeError.compile('User-defined type not defined');
     this.resolvedTypes.set(t, r);
     return r;
@@ -242,7 +282,7 @@ export class Runtime {
       };
       if (d.bounds) {
         fi.bounds = d.bounds.map(b => [
-          b.lower ? toNumber(constExpr(frame, b.lower)) : 0,
+          b.lower ? toNumber(constExpr(frame, b.lower)) : found.module.optionBase,
           toNumber(constExpr(frame, b.upper)),
         ]);
       }
@@ -275,11 +315,11 @@ export class Runtime {
 
   /** `init` makes each element (`Dim a(3) As New Collection`); by default the type's default value. */
   newArray(t: VBTypeName, bounds: [number, number][], fixed: boolean, init?: () => VBValue): VBArray {
-    return new VBArray(t, bounds, fixed, init ?? this.elementInit(t));
+    return new VBArray(t, bounds, fixed, init ?? this.elementInit(t)).own();
   }
 
   unallocatedArray(t: VBTypeName, init?: () => VBValue): VBArray {
-    return VBArray.unallocated(t, init ?? this.elementInit(t));
+    return VBArray.unallocated(t, init ?? this.elementInit(t)).own();
   }
 
   /** Initial value of a variable of type `t` (`String * n` starts as n spaces). */
@@ -287,6 +327,42 @@ export class Runtime {
     if (typeof t === 'object' && 'userType' in t) return this.newRecord(t.userType);
     if (fixedLength !== undefined) return fitFixed('', fixedLength);
     return defaultValue(t);
+  }
+
+  // ---- objects of class modules ----
+
+  /** A new object of a class module: its own module-level variables; Class_Initialize runs later (eval.ts `ready`). */
+  newInstance(m: ModuleScope): ClassInstance {
+    const inst = new ClassInstance(this, m);
+    const frame = this.moduleFrame(m);
+    for (const d of m.ast.variables) {
+      const v = newVariable(frame, d, d.isArray && d.bounds ? d.bounds.map(b => [
+        b.lower ? toNumber(constExpr(frame, b.lower)) : m.optionBase, toNumber(constExpr(frame, b.upper)),
+      ] as [number, number]) : null);
+      if (d.withEvents) v.opts.events = { module: m, instance: inst };
+      inst.vars.set(lc(d.name), v);
+    }
+    this.instances.add(inst);
+    return inst;
+  }
+
+  /**
+   * `inst` has no counted reference left: it terminates at the end of the statement (see `dying`); a Collection or
+   * Dictionary lets go of its items then.
+   */
+  queueDying(inst: ClassInstance | RefContainer): void {
+    (this.dying ??= []).push({ inst, depth: this.callDepth });
+  }
+
+  /** The object is gone (Class_Terminate has run or is about to): its variables let go of what they hold. */
+  dropInstance(inst: ClassInstance): void {
+    inst.dead = true;
+    this.instances.delete(inst);
+    for (const v of inst.vars.values()) {
+      const x = rawValue(v.ref);
+      if (v.opts.events && x instanceof ClassInstance) x.sinks?.delete(v);
+      if (!v.opts.isConst) dropValue(x);
+    }
   }
 
   // ---- lifecycle ----
@@ -355,7 +431,7 @@ export class Runtime {
     if (!m) return;
     const set = new Set(this.userBreakpoints.get(key));
     if (this.runTo?.key === key) set.add(this.runTo.line);
-    m.breakpoints = set.size ? set : null;
+    for (const x of this.moduleList) if (x === m || lc(x.sourceName) === key) x.breakpoints = set.size ? set : null;   // its form instances too
   }
 
   pauseIdle(): void {
@@ -504,38 +580,79 @@ export class Runtime {
     if (this.initialized) return;
     this.initialized = true;
     for (const m of this.moduleList) {
-      const f = new Frame(run, m, null, 0);
-      run.frames.push(f);
-      try {
-        for (const d of m.ast.variables) {
-          f.line = d.line;
-          let v: Variable;
-          for (;;) {
-            try {
-              v = yield* declareVariable(f, d);
-              break;
-            } catch (e) {
-              // no handlers at module level: reported (Continue retries) or ends the program
-              if ((yield* handleError(f, e)) !== RETRY) throw e;
-            }
-          }
-          m.vars.set(lc(d.name), v);
-          if (d.scope === 'public' && m.kind === 'module' && !this.globals.vars.has(lc(d.name))) {
-            this.globals.vars.set(lc(d.name), v);
+      if (m.kind === 'class') { m.initialized = true; continue; }   // each object has its own variables
+      yield* this.initModule(run, m);
+    }
+  }
+
+  /** Another instance of form module `source` (New Form1), under the key `name`; its variables are made before its first event. */
+  addFormInstance(source: string, name: string): void {
+    const src = this.modules.get(lc(source));
+    if (!src || src.kind !== 'form' || this.modules.has(lc(name))) return;
+    const m = new ModuleScope(name, 'form', src.ast, src.sourceName);
+    m.breakpoints = src.breakpoints;
+    this.modules.set(m.key, m);
+    this.moduleList.push(m);
+    // its Public variables are there at once (f.Counter = 1 before any event); declarations that would wait wait for its first event
+    if (this.initialized) try { runSync(this.initModule(this.declRun, m), () => { throw new Error('waits'); }); } catch { /* at its first event */ }
+  }
+
+  /** A `New` form instance is gone (no variable holds it any more): its module and its module-level variables go too. */
+  removeFormInstance(name: string): void {
+    const m = this.modules.get(lc(name));
+    if (!m || m.kind !== 'form' || m.key === lc(m.sourceName)) return;   // not a form's own module
+    this.modules.delete(m.key);
+    const i = this.moduleList.indexOf(m);
+    if (i >= 0) this.moduleList.splice(i, 1);
+  }
+
+  *initModule(run: Run, m: ModuleScope): Gen<void> {
+    const f = new Frame(run, m, null, 0);
+    run.frames.push(f);
+    try {
+      for (const d of m.ast.variables) {
+        f.line = d.line;
+        let v: Variable;
+        for (;;) {
+          try {
+            v = yield* declareVariable(f, d);
+            break;
+          } catch (e) {
+            // no handlers at module level: reported (Continue retries) or ends the program
+            if ((yield* handleError(f, e)) !== RETRY) throw e;
           }
         }
-        m.initialized = true;
-      } finally {
-        run.frames.pop();
+        if (d.withEvents) v.opts.events = { module: m };
+        m.vars.set(lc(d.name), v);
+        if (d.scope === 'public' && m.kind === 'module' && !this.globals.vars.has(lc(d.name))) {
+          this.globals.vars.set(lc(d.name), v);
+        }
       }
+      m.initialized = true;
+    } finally {
+      run.frames.pop();
     }
   }
 
   /** The root generator of an event: initialise modules, then call the handler. */
-  *entry(run: Run, ref: ProcRef, args: VBRef[]): Gen<VBValue> {
+  *entry(run: Run, ref: ProcRef, args: VBRef[], inst?: ClassInstance): Gen<VBValue> {
     yield* this.ensureInit(run);
+    if (!ref.module.initialized) yield* this.initModule(run, ref.module);   // a form instance made after the start
     const bound: BoundArg[] = args.map(r => ({ slot: r }));
-    return (yield new SubCall(invokeProc(run, ref, bound))) as VBValue;
+    const depth = this.callDepth;
+    const r = (yield new SubCall(invokeProc(run, ref, bound, inst))) as VBValue;
+    if (this.dying !== null) yield* reap(run, depth);
+    return r;
+  }
+
+  /** Runs Class_Terminate of every object still alive (in the order they were made), as the program ends by itself. */
+  *terminateAll(run: Run): Gen<void> {
+    for (const inst of [...this.instances]) {
+      if (inst.dead) continue;
+      const t = inst.initPending ? undefined : inst.module.procs.get('class_terminate');
+      this.dropInstance(inst);
+      if (t) yield new SubCall(invokeProc(run, t, [], inst));
+    }
   }
 }
 
@@ -546,9 +663,12 @@ export class Runtime {
  */
 export class Program {
   private readonly rt: Runtime;
+  /** Break-mode debugging: call stack, Locals, watches, data tips, Set Next Statement. */
+  readonly debug: ProgramDebugger;
 
   constructor(modules: SourceModule[], host: Host, opts?: ProgramOptions) {
     this.rt = new Runtime(modules, host, opts);
+    this.debug = new ProgramDebugger(this.rt);
   }
 
   get state(): ProgramState { return this.rt.state; }
@@ -564,6 +684,13 @@ export class Program {
     const restore = this.rt.scope.activate();
     try { return fn(); } finally { restore(); }
   }
+
+  /** Another instance of a form's module (New Form1): its own module-level variables under `name`, the same code. */
+  addFormInstance(source: string, name: string): void { this.rt.addFormInstance(source, name); }
+  /** That instance is gone (nothing holds it): its module goes too. */
+  removeFormInstance(name: string): void { this.rt.removeFormInstance(name); }
+  /** Whether a module of that name is there (a form's, a `New` form instance's ...). */
+  hasModule(name: string): boolean { return this.rt.modules.has(lc(name)); }
 
   hasProcedure(moduleName: string, procName: string): boolean {
     return this.rt.modules.get(lc(moduleName))?.procs.has(lc(procName)) ?? false;
@@ -619,13 +746,50 @@ export class Program {
    * Sub/Function that is not Private (procedures are Public by default), `'var'` for a `Public` variable,
    * else null.
    */
-  hasPublicMember(moduleName: string, name: string): 'proc' | 'var' | null {
+  hasPublicMember(moduleName: string, name: string): 'proc' | 'var' | 'prop' | null {
     const m = this.rt.modules.get(lc(moduleName));
     if (!m) return null;
     const key = lc(name);
     if (m.procs.get(key)?.proc.visibility === 'public') return 'proc';
+    if (m.props.get(key)?.isPublic) return 'prop';
     if (m.ast.variables.some(d => d.scope === 'public' && lc(d.name) === key)) return 'var';
     return null;
+  }
+
+  /**
+   * A Public Property of a module from host code (`Form2.Total`, `Form2.Total = 5`): runs its Property Get (`args` are the
+   * index arguments) or its Property Let / Set (`value` is the new value: Set for an object when there is a Property Set)
+   * like `callPublic`. Throws 438 when there is no such Public property procedure.
+   */
+  async callProperty(moduleName: string, name: string, args: VBValue[], value?: VBValue): Promise<VBValue> {
+    const rt = this.rt;
+    const prop = rt.modules.get(lc(moduleName))?.props.get(lc(name));
+    const isObj = value !== undefined && typeof value === 'object' && (value instanceof NothingT || isObject(value));
+    const ref = value === undefined ? prop?.get : isObj && prop?.set ? prop.set : prop?.let;
+    if (!ref || ref.proc.visibility !== 'public') throw new VBRuntimeError(438);
+    return this.callRef(ref, value === undefined ? args : [...args, value]);
+  }
+
+  /** The objects of class modules still alive. */
+  get liveObjects(): number { return this.rt.instances.size; }
+
+  /**
+   * The program ends by itself (no form left): Class_Terminate runs for every object still alive (objects kept in
+   * arrays, Collections or module-level variables), as VB6 releases them. Resolves when they have run.
+   */
+  async terminateObjects(): Promise<void> {
+    const rt = this.rt;
+    if (rt.instances.size === 0 || !rt.acceptsEvents) return;
+    const run = new Run(rt);
+    const finish = rt.beginRun(run);
+    rt.state = 'running';
+    try {
+      await runGenerator(rt.terminateAll(run), rt.runScope(run));
+    } catch (e) {
+      if (!(e instanceof EndSignal)) console.error('VibeBasic: Class_Terminate failed', e);
+    } finally {
+      finish();
+    }
   }
 
   /**
@@ -638,7 +802,11 @@ export class Program {
   async callPublic(moduleName: string, name: string, args: VBValue[]): Promise<VBValue> {
     const rt = this.rt;
     if (this.hasPublicMember(moduleName, name) !== 'proc') throw new VBRuntimeError(438);
-    const ref = rt.modules.get(lc(moduleName))!.procs.get(lc(name))!;
+    return this.callRef(rt.modules.get(lc(moduleName))!.procs.get(lc(name))!, args);
+  }
+
+  private async callRef(ref: ProcRef, args: VBValue[]): Promise<VBValue> {
+    const rt = this.rt;
     if (rt.state === 'ended') return Empty;
     if (rt.runs.size >= MAX_EVENT_NESTING) throw new VBRuntimeError(28);
     const run = new Run(rt);
@@ -678,7 +846,7 @@ export class Program {
     const rt = this.rt;
     if (rt.stopping) return;
     const err = e instanceof VBRuntimeError ? e : isStackOverflow(e) ? new VBRuntimeError(28) : internalError(e);
-    const at: CodeLocation = { moduleName: ref.module.name, procName: ref.proc.name, line: ref.proc.line };
+    const at: CodeLocation = { moduleName: ref.module.sourceName, procName: ref.proc.name, line: ref.proc.line };
     rt.err.setFrom(err);
     rt.eventsSuspended++;
     try {

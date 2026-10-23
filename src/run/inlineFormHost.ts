@@ -11,8 +11,10 @@ import { runDialog } from './dialogSpec';
 import type { RuntimeErrorInfo } from './errorDialog';
 import type { FormHost, FormWindow } from './formHost';
 import type { ClipboardApi } from './objects/globalObjects';
-import { mountFormWindow } from './formWindow';
-import type { FormSnapshot, FromWindow } from './protocol';
+import { mountFormWindow, type MountedForm } from './formWindow';
+import type { PrintJob, PrinterDialogRequest, PrinterDialogResult, PrinterInfo } from './printing';
+import { mountPrintPreview } from './printView';
+import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 
 export class InlineFormHost implements FormHost {
   private z = 1;
@@ -20,13 +22,16 @@ export class InlineFormHost implements FormHost {
   private openDialogs = 0;
   private dialogs = new Set<Element>();
   private windows = new Set<{ sessionBlocked: boolean; apply(): void }>();
+  /** Open form windows by key, and the listeners of the MDI children they show (by child key). */
+  private mounted = new Map<string, { mounted: MountedForm; children: Map<string, (m: FromWindow) => void> }>();
 
   /** `backend` shows the file dialogs (CommonDialog); default: the app's backend. */
   constructor(private container: HTMLElement, private backend?: Backend) {}
 
   private get doc(): Document { return this.container.ownerDocument; }
 
-  async openForm(s: FormSnapshot, _o: { modal: boolean }): Promise<FormWindow> {
+  async openForm(s: FormSnapshot, o: { modal: boolean; mdiParent?: string }): Promise<FormWindow> {
+    if (o.mdiParent !== undefined) return this.openChild(s, o.mdiParent);
     const p = s.form.props;
     const m = formMetrics(p);
     const box = this.container.getBoundingClientRect();
@@ -42,9 +47,13 @@ export class InlineFormHost implements FormHost {
 
     const listeners: ((m: FromWindow) => void)[] = [];
     const early: FromWindow[] = [];
+    const children = new Map<string, (m: FromWindow) => void>();
     const mounted = mountFormWindow(wrapper, s, m => {
+      if (m.t === 'mdiFrom') { children.get(m.key)?.(m.m); return; }
       if (listeners.length) for (const l of listeners) l(m); else early.push(m);
     });
+    const entry = { mounted, children };
+    this.mounted.set(s.key, entry);
     // Effective blocked = requested by the session (modal form / break) OR a dialog is open.
     const w = { sessionBlocked: false, apply: () => mounted.receive({ t: 'blocked', blocked: w.sessionBlocked || this.openDialogs > 0 }) };
     this.windows.add(w);
@@ -56,7 +65,29 @@ export class InlineFormHost implements FormHost {
         listeners.push(cb);
         for (const m of early.splice(0)) cb(m);
       },
-      close: async () => { this.windows.delete(w); mounted.dispose(); wrapper.remove(); },
+      close: async () => { this.windows.delete(w); if (this.mounted.get(s.key) === entry) this.mounted.delete(s.key); mounted.dispose(); wrapper.remove(); },
+    };
+  }
+
+  /** An MDI child: shown by the workspace of its MDI form's window; its messages go through that window. */
+  private async openChild(s: FormSnapshot, parentKey: string): Promise<FormWindow> {
+    const parent = this.mounted.get(parentKey);
+    if (!parent) throw new Error(`MDI form ${parentKey} has no window`);
+    const listeners: ((m: FromWindow) => void)[] = [];
+    const early: FromWindow[] = [];
+    const listener = (m: FromWindow) => { if (listeners.length) for (const l of listeners) l(m); else early.push(m); };
+    parent.children.set(s.key, listener);
+    parent.mounted.receive({ t: 'mdiOpen', snapshot: s });
+    let closed = false;
+    return {
+      send: (m: ToWindow) => { if (!closed) parent.mounted.receive({ t: 'mdiTo', key: s.key, m }); },
+      onMessage: cb => { listeners.push(cb); for (const m of early.splice(0)) cb(m); },
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        if (parent.children.get(s.key) === listener) parent.children.delete(s.key);
+        parent.mounted.receive({ t: 'mdiClose', key: s.key });
+      },
     };
   }
 
@@ -81,7 +112,7 @@ export class InlineFormHost implements FormHost {
     return this.withDialog(() => runDialog(this.doc, { kind: 'input', ...o })) as Promise<string>;
   }
 
-  fileDialog(o: FileDialogRequest): Promise<string | null> {
+  fileDialog(o: FileDialogRequest): Promise<string | string[] | null> {
     return this.withDialog(() => runFileDialog(this.backend ?? getBackend(), o));
   }
 
@@ -105,6 +136,26 @@ export class InlineFormHost implements FormHost {
   async fontDialog(o: { font: FontValue }): Promise<FontValue | null> {
     const r = await this.withDialog(() => runDialog(this.doc, { kind: 'font', ...o }));
     return r === '' ? null : JSON.parse(String(r)) as FontValue;
+  }
+
+  async printerDialog(o: PrinterDialogRequest): Promise<PrinterDialogResult | null> {
+    const r = await this.withDialog(() => runDialog(this.doc, { kind: 'printer', req: o }));
+    return r === '' ? null : JSON.parse(String(r)) as PrinterDialogResult;
+  }
+
+  async listPrinters(): Promise<PrinterInfo[]> { return (await (this.backend ?? getBackend()).printerList?.()) ?? []; }
+
+  /** The pages in a Print Preview overlay of this document; the browser's print prints only them (print CSS hides the rest). */
+  async printPages(job: PrintJob): Promise<void> {
+    const overlay = h('div', { class: 'vb-print-overlay' });
+    overlay.style.cssText = 'position:fixed;inset:24px;z-index:100000;display:flex';
+    const style = this.doc.createElement('style');
+    style.textContent = '@media print { body > :not(.vb-print-overlay) { display: none !important; } .vb-print-overlay { position: static !important; } }';
+    this.doc.head.appendChild(style);
+    this.doc.body.appendChild(overlay);
+    const print = () => { try { this.doc.defaultView?.print(); } catch { /* no printing here */ } };
+    const view = await mountPrintPreview(overlay, job, { onPrint: print, onClose: () => { view.dispose(); overlay.remove(); style.remove(); } });
+    print();
   }
 
   /** Closes dialogs this host opened that are still on screen (End during a MsgBox / error dialog). */

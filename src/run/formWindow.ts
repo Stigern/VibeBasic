@@ -4,18 +4,30 @@
 // A picture whose asset key is a data URL (LoadPicture at run time) is shown from that URL.
 // If `root.dataset.vbWindow` is set, root fills a native window: size changes of root resize the form and send `resized`.
 
-import { renderFormSurface, type ControlView } from '../controls/render';
+import { renderFormSurface, type ControlView, type FormSurface } from '../controls/render';
+import type { MenuBarHost } from '../controls/menuBar';
+import { isMenu } from '../model/menus';
+import { keyLetter } from '../model/menuShortcuts';
+import { createMdiWorkspace, type MdiWorkspace } from './mdiWorkspace';
 import { encodeRuns, readRuns } from '../controls/richText';
 import { ribbonClick } from '../model/sheridan';
 import { userClickButton } from '../model/toolbar';
 import type { ControlDef, PropValue } from '../model/types';
 import { domText, vbPos, vbText } from '../controls/textPos';
+import { GfxLayer } from '../gfx/dom';
+import { parseMnemonic } from '../ui98/dom';
+import { installDragDrop, type FileDrag } from './dragDrop';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 
 type Props = Record<string, PropValue>;
 type Target = { id: string; def: ControlDef | null };
 
 const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'Toolbar', 'DTPicker', 'MSChart', 'TreeView', 'ListView', 'MSFlexGrid', 'RichTextBox', 'DataGrid', 'SSPanel', 'SSFrame', 'SSCommand', 'CoolBar', 'Animation']);   // Calendar raises its own Click
+/** Alt+letter presses these (their Caption's &), or moves the focus to the next control in tab order (a Label's or Frame's). */
+const ACCEL_CLICK = new Set(['CommandButton', 'CheckBox', 'OptionButton', 'SSCommand', 'SSCheck', 'SSOption', 'SSRibbon']);
+const ACCEL_FOCUS = new Set(['Label', 'Frame', 'SSFrame']);
+/** The controls a mouse press focuses by hand: WebKit does not focus a button or check box on a click, VB6 does (GotFocus, Validate). */
+const CLICK_FOCUS = new Set(['CommandButton', 'CheckBox', 'OptionButton']);
 const KEY_CODES: Record<string, number> = {
   Backspace: 8, Tab: 9, Enter: 13, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34, End: 35, Home: 36,
   ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46,
@@ -55,8 +67,38 @@ function isTextField(el: EventTarget | null): el is HTMLInputElement | HTMLTextA
   return el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && (el.type === 'text' || el.type === 'password'));
 }
 
-export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: FromWindow) => void): { receive(m: ToWindow): void; dispose(): void } {
-  const surface = renderFormSurface(s.form, 'run', ref => s.assets[ref.asset] ?? (ref.asset.startsWith('data:') ? ref.asset : null));
+export interface MountedForm {
+  receive(m: ToWindow): void;
+  dispose(): void;
+  readonly surface: FormSurface;
+  /** The form's own menu events (an MDI form's window shows a child's menus with it). */
+  readonly menuHost: MenuBarHost;
+  /** Sets the form's outer size (twips) as the user would (an MDI child resized in its workspace); `report`: resized. */
+  resize(width: number, height: number, report: boolean): void;
+}
+
+/** `mdiChild`: the form is an MDI child shown in its MDI form's workspace (mdiWorkspace.ts): no menu bar of its own (its menus show
+ *  in the MDI form's), and the menu keys are the MDI form's. A snapshot of the MDI form (`form.mdi`) gets the workspace. */
+export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: FromWindow) => void, opts: { mdiChild?: boolean } = {}): MountedForm {
+  // menus: a menu with items raises its Click (when it has code) and opens once that has run; a chosen item raises its Click
+  const menuWaits = new Map<number, () => void>();
+  /** MDI form: the host of the menus the bar shows when they are not (only) the form's own (an active child's, the Window list). */
+  let barHost: MenuBarHost | null = null;
+  /** MDI form: the workspace, and " - [Child]" after the caption while the active child is maximized. */
+  let mdi: MdiWorkspace | null = null;
+  let captionSuffix: string | null = null;
+  const menu: MenuBarHost = {
+    beforeOpen: id => {
+      if (blocked || !handles(id, 'Click')) return;
+      const requestId = ++reqSeq;
+      return new Promise<void>(r => { menuWaits.set(requestId, r); send({ t: 'event', id, event: 'Click', args: [], requestId }); });
+    },
+    choose: id => { if (!blocked) emit(id, 'Click'); },
+  };
+  const surface = renderFormSurface(s.form, 'run', ref => s.assets[ref.asset] ?? (ref.asset.startsWith('data:') ? ref.asset : null), {
+    menu: { beforeOpen: id => (barHost ?? menu).beforeOpen?.(id), choose: id => (barHost ?? menu).choose(id) },
+    hideMenuBar: opts.mdiChild, onLayout: () => mdi?.relayout(),
+  });
   surface.el.tabIndex = -1;   // so keys reach the form's listeners when no control has focus
   surface.el.style.outline = 'none';
   root.appendChild(surface.el);
@@ -98,19 +140,40 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   /** Applies props to the mirror and the DOM (also keeps text typed by the user across rebuilds of the control). The user's own
    *  TextBox selection (`fromUser`) is already in the field: it goes to the mirror only (selecting again would lose its direction). */
   function apply(id: string, props: Props, fromUser = false): void {
+    if ('GfxOps' in props) {   // drawing (Form, PictureBox): to its canvas, not a property
+      const { GfxOps: gfx, ...rest } = props;
+      if (Array.isArray(gfx)) layerOf(id)?.push(gfx);
+      if (!Object.keys(rest).length) return;
+      props = rest;
+    }
     const { RtfOps: ops, ...plain } = props;
     Object.assign(propsOf(id), plain);
     if (Array.isArray(ops)) for (const o of ops) Object.assign(propsOf(id), parseOp(o));   // the mirror ends where the replay ends
+    if (id === 'form' && captionSuffix && 'Caption' in props) props = { ...props, Caption: String(props.Caption ?? '') + captionSuffix };
     if (fromUser && isTextBox(id) && ('SelStart' in props || 'SelLength' in props)) {
       const { SelStart: _s, SelLength: _l, ...rest } = props;
       props = rest;
     }
     surface.update(id, props);
+    if ('DragIcon' in props) dnd.dragIconChanged(id);
     if (id === 'form') return;
     if ('TabIndex' in props) { computeTabOrder(); for (const k of defs.keys()) retab(k); } else retab(id);
   }
   computeTabOrder();
   for (const id of defs.keys()) retab(id);
+
+  // --- drawing: one canvas layer per Form / PictureBox, made on its first op ---
+  const layers = new Map<string, GfxLayer>();
+  const resolveAsset = (src: string): string | null => s.assets[src] ?? (src.startsWith('data:') ? src : null);
+  function layerOf(id: string): GfxLayer | null {
+    let l = layers.get(id);
+    if (l) return l;
+    const host = id === 'form' ? surface.drawLayer : surface.views.get(id)?.childHost?.querySelector<HTMLElement>(':scope > .draw-layer');
+    if (!host) return null;
+    layers.set(id, l = new GfxLayer(host, resolveAsset));
+    return l;
+  }
+  for (const [id, ops] of Object.entries(s.gfx ?? {})) layerOf(id)?.push(ops);
 
   // --- TextBox selection ---
   // The user's caret and selection reach the run session as state only when they differ from what it knows, and only before the
@@ -158,7 +221,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   }
 
   function targetOf(t: EventTarget | null): Target | null {
-    if (!(t instanceof Node)) return null;
+    if (!(t instanceof Node) || inChild(t)) return null;
     const el = (t instanceof Element ? t : t.parentElement)?.closest<HTMLElement>('[data-control-id]');
     if (el && surface.el.contains(el)) { const id = el.dataset.controlId!; return { id, def: defs.get(id) ?? null }; }
     return surface.clientEl.contains(t) ? { id: 'form', def: null } : null;
@@ -177,7 +240,12 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
     const closeBtn = (e.target as Element).closest?.('.title-bar-controls button[aria-label="Close"]');
     if (closeBtn) { if (!blocked) send({ t: 'closeRequest' }); return; }
     const tg = clickTarget(e);
-    if (blocked || !tg) return;
+    if (blocked || !tg || dnd.eatClick()) return;
+    // the focus is moving to this control and the Validate event of the control it leaves has not answered: Cancel eats the click
+    if (validation) { validation.held.push(() => clicked(tg)); return; }
+    clicked(tg);
+  });
+  function clicked(tg: Target): void {
     if (tg.id === 'form') { emit('form', 'Click'); return; }
     const type = tg.def!.type;
     if (!usable(tg.id)) return;
@@ -212,31 +280,78 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
       if (r.value === (me.Value === true)) return;   // a ribbon that stays down (GroupAllowAllUp = False): nothing changed, no Click
       emit(tg.id, 'Click', [r.value ? -1 : 0], { Value: r.value });
     }
-  });
+  }
   on<MouseEvent>('dblclick', e => { const tg = clickTarget(e); if (!blocked && tg && usable(tg.id)) emit(tg.id, 'DblClick'); });
 
   // --- mouse ---
   // VB6 mouse capture: the control that got MouseDown gets MouseMove and MouseUp until the button is released, also outside its
   // area (X / Y relative to it, maybe negative). The document's listeners see the pointer anywhere while a button is down.
   let captured: string | null = null;
-  function mouseTo(id: string, event: string, e: MouseEvent): void {
-    const v = id === 'form' ? surface.clientEl : viewOf(id)?.el;
-    if (!v) return;
+  /** Where the mouse was last seen (viewport px): PopupMenu without X and Y shows the menu there. */
+  let lastMouse: { x: number; y: number } | null = null;
+  /** A point in twips from the origin of a control (a PictureBox: from the inside of its border, its drawing's 0, 0) or the client area. */
+  function posIn(id: string, x: number, y: number): [number, number] | null {
+    const v = id === 'form' ? surface.clientEl : (defs.get(id)?.type === 'PictureBox' ? viewOf(id)?.childHost : undefined) ?? viewOf(id)?.el;
+    if (!v) return null;
     const box = v.getBoundingClientRect();
+    return [Math.round((x - box.left) * 15), Math.round((y - box.top) * 15)];
+  }
+  function mouseTo(id: string, event: string, e: MouseEvent): void {
+    const p = posIn(id, e.clientX, e.clientY);
+    if (!p) return;
     const button = event === 'MouseMove' ? e.buttons & 7 : e.button === 0 ? 1 : e.button === 2 ? 2 : e.button === 1 ? 4 : 0;
-    emit(id, event, [button, shiftBits(e), Math.round((e.clientX - box.left) * 15), Math.round((e.clientY - box.top) * 15)]);
+    emit(id, event, [button, shiftBits(e), p[0], p[1]]);
+  }
+  // drag and drop (dragDrop.ts): it takes the mouse while a drag is on
+  const dnd = installDragDrop({
+    doc: root.ownerDocument, layer: surface.el, client: surface.clientEl, blocked: () => blocked,
+    // an MDI form's empty workspace is the MDI form (its children handle their own drags)
+    idAt: t => targetOf(t)?.id ?? (inChild(t) && !mdi!.childRoot(t) ? 'form' : null), defOf: id => defs.get(id), propsOf, usable, elOf: id => viewOf(id)?.el,
+    fieldOf: id => { const el = viewOf(id)?.inputEl ?? null; return isTextField(el) ? el : null; },
+    pos: posIn, emit: (id, event, args) => emit(id, event, args), send, asset: r => resolveAsset(r.asset),
+  });
+  root.addEventListener('vbfiledrag', e => { if (!disposed) fileDrag((e as CustomEvent<FileDrag>).detail); }, { signal: ac.signal });
+  /** Files dragged from Finder. An MDI form passes them on to the child window under the pointer (its mount takes them as its own),
+   *  and keeps track of it: a child the drag leaves gets `leave`, the one it reaches `enter`. Outside the children: the MDI form. */
+  let fileChild: HTMLElement | null = null;
+  let filePaths: string[] = [];
+  function fileDrag(f: FileDrag): void {
+    if (!mdi) { dnd.fileDrag(f); return; }
+    const to = (child: HTMLElement | null, d: FileDrag): void => {
+      if (child) child.dispatchEvent(new CustomEvent('vbfiledrag', { detail: d })); else dnd.fileDrag(d);
+    };
+    const doc = root.ownerDocument;
+    const under = (): HTMLElement | null => mdi!.childRoot(f.x !== undefined && f.y !== undefined && typeof doc.elementFromPoint === 'function'
+      ? doc.elementFromPoint(f.x, f.y) : null);
+    if (f.type === 'enter') { filePaths = [...f.paths ?? []]; fileChild = under(); to(fileChild, f); return; }
+    if (f.type === 'over' || f.type === 'drop') {
+      const c = under();
+      if (c !== fileChild) {
+        to(fileChild, { type: 'leave', x: f.x, y: f.y });
+        to(fileChild = c, { type: 'enter', paths: f.paths ?? filePaths, x: f.x, y: f.y });
+      }
+    }
+    const c = fileChild;
+    if (f.type === 'drop' || f.type === 'leave') fileChild = null;
+    to(c, f);
   }
   on<MouseEvent>('mousedown', e => {
+    lastMouse = { x: e.clientX, y: e.clientY };
     const tg = targetOf(e.target);
     if (blocked || !tg || !usable(tg.id)) return;   // a disabled control gets no mouse events
+    if (dnd.mouseDown(e, tg.id)) return;            // DragMode = 1: the drag has the mouse, no MouseDown
+    const ie = tg.def && CLICK_FOCUS.has(tg.def.type) && e.button === 0 ? viewOf(tg.id)?.inputEl : undefined;
+    if (ie && ie.tabIndex >= 0 && ie.ownerDocument.activeElement !== ie) { e.preventDefault(); ie.focus(); }
     captured = tg.id;
     mouseTo(tg.id, 'MouseDown', e);
   });
   for (const [type, event] of [['mousemove', 'MouseMove'], ['mouseup', 'MouseUp']] as const) {
     root.ownerDocument.addEventListener(type, (e: MouseEvent) => {
+      if (surface.el.contains(e.target as Node)) lastMouse = { x: e.clientX, y: e.clientY };
       const id = captured;
       if (type === 'mouseup') captured = null;
       if (blocked) { captured = null; return; }
+      if (type === 'mousemove' ? dnd.mouseMove(e) : dnd.mouseUp(e)) { captured = null; return; }   // the drag's, not MouseMove / MouseUp
       if (id !== null) { if (usable(id) && (id === 'form' || defs.has(id))) mouseTo(id, event, e); return; }
       const tg = targetOf(e.target);
       if (tg && usable(tg.id)) mouseTo(tg.id, event, e);
@@ -246,20 +361,31 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   // --- focus ---
   // the focus came from outside the form (another form, or the window became the key window): the form is the active one
   on<FocusEvent>('focusin', e => {
-    if (!blocked && !(e.relatedTarget instanceof Node && surface.el.contains(e.relatedTarget))) send({ t: 'activated' });
+    if (!blocked && !inChild(e.target) && !(e.relatedTarget instanceof Node && surface.el.contains(e.relatedTarget))) send({ t: 'activated' });
   });
   const view = root.ownerDocument.defaultView;
   if (root.dataset.vbWindow !== undefined && view) view.addEventListener('focus', () => { if (!blocked && !disposed) send({ t: 'activated' }); }, { signal: ac.signal });
+  // Validate: when the focus leaves a control that has Validate code for a control whose CausesValidation is True, the event goes to the
+  // program first; LostFocus, GotFocus and the click on the new control wait for its answer (`held`). Cancel puts the focus back, silently.
+  let validation: { requestId: number; from: string; held: (() => void)[] } | null = null;
+  let silent = false;
+  const later = (f: () => void): void => { if (validation) validation.held.push(f); else f(); };
   on<FocusEvent>('focusin', e => {
     const tg = targetOf(e.target);
-    if (blocked || !tg?.def || targetOf(e.relatedTarget)?.id === tg.id) return;
-    if (handles(tg.id, 'GotFocus')) emit(tg.id, 'GotFocus');
-    else send({ t: 'focused', id: tg.id });   // the run session keeps ActiveControl
+    if (silent || blocked || !tg?.def || targetOf(e.relatedTarget)?.id === tg.id) return;
+    later(() => {
+      if (handles(tg.id, 'GotFocus')) emit(tg.id, 'GotFocus');
+      else send({ t: 'focused', id: tg.id });   // the run session keeps ActiveControl
+    });
   });
   on<FocusEvent>('focusout', e => {
-    const tg = targetOf(e.target);
-    if (blocked || !tg?.def || targetOf(e.relatedTarget)?.id === tg.id) return;
-    emit(tg.id, 'LostFocus');
+    const tg = targetOf(e.target), to = targetOf(e.relatedTarget);
+    if (silent || blocked || !tg?.def || to?.id === tg.id) return;
+    if (!validation && to?.def && handles(tg.id, 'Validate') && propsOf(to.id).CausesValidation !== false && usable(to.id)) {
+      validation = { requestId: ++reqSeq, from: tg.id, held: [] };
+      send({ t: 'event', id: tg.id, event: 'Validate', args: [0], requestId: validation.requestId });
+    }
+    later(() => emit(tg.id, 'LostFocus'));
   });
 
   // --- text, lists, scroll bars ---
@@ -410,6 +536,30 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
       if (usable(n) && (viewOf(n)?.inputEl?.tabIndex ?? -1) >= 0) { viewOf(n)!.inputEl!.focus(); return; }
     }
   }
+  /** The control shown and enabled, and so are the containers around it. */
+  function reachable(id: string): boolean {
+    for (let d = defs.get(id), n = 0; d && n < 50; d = d.parentId !== null ? defs.get(d.parentId) : undefined, n++) if (!usable(d.id)) return false;
+    return true;
+  }
+  /** Alt+letter: the letter of a Caption's & (the letter the key types; its code's when Option typed another character). The control is pressed
+   *  or, for a Label or Frame, the focus goes to the next control in tab order; with several matches the next one after the focused one. */
+  function accelerate(e: KeyboardEvent): boolean {
+    const letter = keyLetter(e);
+    if (!letter) return false;
+    const hits = [...tabRank].sort((a, b) => a[1] - b[1]).map(([id]) => id).filter(id => {
+      const t = defs.get(id)?.type;
+      if (!t || !(ACCEL_CLICK.has(t) || ACCEL_FOCUS.has(t)) || !reachable(id)) return false;
+      const { text, index } = parseMnemonic(String(propsOf(id).Caption ?? ''));
+      return index >= 0 && text[index].toLowerCase() === letter;
+    });
+    if (!hits.length) return false;
+    const here = targetOf(root.ownerDocument.activeElement)?.id ?? '';
+    const id = hits[(hits.indexOf(here) + 1) % hits.length];
+    const v = viewOf(id);
+    if (ACCEL_FOCUS.has(defs.get(id)!.type)) focusNext(id);
+    else { v?.inputEl?.focus(); (v?.inputEl ?? v?.el)?.click(); }
+    return true;
+  }
   /** A MaskedEdit with a Mask puts typed characters in itself (see calendar.ts). */
   const isMasked = (el: EventTarget | null): el is HTMLInputElement => el instanceof HTMLInputElement && el.dataset.mask === '1';
   function insertKey(el: EventTarget | null, ascii: number): void {
@@ -442,8 +592,13 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   const chainOf = (id: string): string[] => (id !== 'form' && formState.KeyPreview === true ? ['form', id] : [id]);
 
   on<KeyboardEvent>('keydown', e => {
+    if (inChild(e.target)) return;   // an MDI child's own
     const tg = targetOf(e.target) ?? { id: 'form', def: null };
     if (blocked) { e.preventDefault(); return; }
+    // VB6: the menu bar's own keys first (Alt, F10, Alt+letter of a menu, a menu's Shortcut; an MDI child's: the MDI form's bar, see
+    // mdiWorkspace.ts), then the Alt+letter of a control's Caption
+    if (!opts.mdiChild && surface.menuBar.keyDown(e)) return;
+    if (e.altKey && !e.ctrlKey && !e.metaKey && accelerate(e)) { e.preventDefault(); return; }   // Option+O would type a special character
     const prevented = e.defaultPrevented;   // e.g. an open combo list closing on Escape
     const chain = chainOf(tg.id);
     const code = vbKeyCode(e), shift = shiftBits(e);
@@ -457,14 +612,27 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
     else if (e.key === 'Escape' && !prevented) clickButton('Cancel');
   });
   on<KeyboardEvent>('keyup', e => {
+    if (inChild(e.target)) return;
     const tg = targetOf(e.target) ?? { id: 'form', def: null };
     if (blocked) return;
+    if (!opts.mdiChild && surface.menuBar.keyUp(e)) return;
     for (const id of chainOf(tg.id)) emit(id, 'KeyUp', [vbKeyCode(e), shiftBits(e)]);
   });
+
+  // --- Screen.MousePointer: over this form and everything in it, whatever the controls ask for ---
+  let screenStyle: HTMLStyleElement | null = null;
+  function setScreenCursor(css: string): void {
+    surface.el.toggleAttribute('data-vb-screen', css !== '');
+    if (!css) { screenStyle?.remove(); screenStyle = null; return; }
+    if (!screenStyle) { screenStyle = root.ownerDocument.createElement('style'); root.ownerDocument.head.appendChild(screenStyle); }
+    screenStyle.textContent = `[data-vb-screen], [data-vb-screen] * { cursor: ${css} !important; }`;
+  }
+  if (s.cursor) setScreenCursor(s.cursor);
 
   // --- blocked overlay ---
   function setBlocked(b: boolean): void {
     blocked = b;
+    if (b) surface.menuBar.close();
     if (b && !overlay) {
       overlay = document.createElement('div');
       overlay.className = 'vb-blocked';
@@ -495,11 +663,38 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
       .find(id => usable(id) && (viewOf(id)?.inputEl?.tabIndex ?? -1) >= 0);
     (first ? viewOf(first)!.inputEl! : surface.el).focus();
   }
+  // --- MDI form: the workspace with the children ---
+  const ownMenus = (): ControlDef[] => [...defs.values()].filter(isMenu).map(d => ({ ...d, props: { ...state.get(d.id) } }));
+  if (s.form.mdi && !opts.mdiChild) {
+    mdi = createMdiWorkspace({
+      surface, ownMenus, ownMenuHost: menu, formProps: () => formState,
+      mount: (r, cs, p) => mountFormWindow(r, cs, p, { mdiChild: true }),
+      post: (key, m) => send({ t: 'mdiFrom', key, m }),
+      setBar: (list, host) => {
+        if (!list && !barHost) return;
+        barHost = host;
+        surface.menuBar.set(list ?? ownMenus());
+      },
+      setCaptionSuffix: suffix => {
+        if (suffix === captionSuffix) return;
+        captionSuffix = suffix;
+        surface.update('form', { Caption: String(formState.Caption ?? '') + (suffix ?? '') });
+      },
+    });
+  }
+  function inChild(t: EventTarget | null): boolean { return !!mdi && t instanceof Node && mdi.el.contains(t); }
+
   // the session sends focusInitial once Form_Activate has run (VB6: Load, Resize, Activate, then the first control's GotFocus)
   queueMicrotask(() => { if (!disposed) send({ t: 'ready' }); });
 
   return {
+    surface, menuHost: menu,
+    resize(width, height, report) {
+      apply('form', { Width: width, Height: height });
+      if (report) send({ t: 'resized', width, height });
+    },
     receive(m) {
+      if (mdi?.receive(m)) return;
       switch (m.t) {
         case 'patch': if (m.id === 'form' || defs.has(m.id)) apply(m.id, m.props); break;
         case 'patches': for (const p of m.items) if (p.id === 'form' || defs.has(p.id)) apply(p.id, p.props); break;
@@ -515,6 +710,8 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
           break;
         case 'removeControl':
           if (!defs.has(m.id)) break;
+          layers.get(m.id)?.dispose();
+          layers.delete(m.id);
           surface.removeControl(m.id);
           defs.delete(m.id);
           state.delete(m.id);
@@ -526,6 +723,27 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
           break;
         case 'hide': surface.el.style.display = 'none'; break;
         case 'blocked': setBlocked(m.blocked); break;
+        case 'validated': {
+          const v = validation;
+          if (!v || v.requestId !== m.requestId) break;
+          validation = null;
+          if (m.cancel) {   // the focus stays where it was: no LostFocus, GotFocus or click
+            silent = true;
+            try { viewOf(v.from)?.inputEl?.focus(); } finally { silent = false; }
+          } else for (const f of v.held) f();
+          break;
+        }
+        case 'cursor': setScreenCursor(m.css); break;
+        case 'drag': case 'oleDrag': case 'oleEffect': dnd.receive(m); break;
+        case 'eventDone': { const w = menuWaits.get(m.requestId); menuWaits.delete(m.requestId); w?.(); break; }
+        case 'popup': {
+          // X and Y are client twips; without them the menu shows at the mouse (or the client area's corner)
+          const c = surface.clientEl.getBoundingClientRect();
+          const x = m.x !== null ? c.left + m.x / 15 : lastMouse?.x ?? c.left, y = m.y !== null ? c.top + m.y / 15 : lastMouse?.y ?? c.top;
+          const requestId = m.requestId;
+          void surface.menuBar.popup(m.id, x, y, { flags: m.flags, bold: m.bold }).then(id => { if (!disposed) send({ t: 'popupDone', requestId, id }); });
+          break;
+        }
         case 'keyResult': {
           const p = pending.get(m.requestId);
           pending.delete(m.requestId);
@@ -540,9 +758,13 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
       disposed = true;
       if (selTimer) clearTimeout(selTimer);
       ac.abort();
+      dnd.dispose();
       observer?.disconnect();
+      mdi?.dispose();
       // an open combo list holds a document listener until it is closed
       for (const v of surface.views.values()) v.inputEl?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      for (const l of layers.values()) l.dispose();
+      screenStyle?.remove();
       surface.dispose();   // media Blob URLs
       surface.el.remove();
     },

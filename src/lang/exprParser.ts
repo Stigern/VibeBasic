@@ -1,7 +1,7 @@
 import { VBSyntaxError } from './errors';
 import { tokenize } from './lexer';
 import type { Token } from './tokens';
-import type { BinaryOp, Expr, MissingArg, TypeSuffix } from './ast';
+import type { ArgList, BinaryExpr, BinaryOp, Expr, MissingArg, TypeSuffix } from './ast';
 
 /*
  * Expression parser (precedence climbing over a token array).
@@ -38,12 +38,16 @@ const NOT_LEVEL = LEVELS.indexOf('not');
 const COMPARE_LEVEL = NOT_LEVEL + 1;
 
 const WORD_OPS = new Set(['mod', 'like', 'is', 'and', 'or', 'xor', 'eqv', 'imp']);
+/** The operators `Option Compare Text` makes case-insensitive. */
+const TEXT_OPS = new Set(['=', '<>', '<', '>', '<=', '>=', 'like']);
 /** Keywords that are also built-in functions/values and so may start an expression as a name. */
 const KEYWORD_NAMES = new Set(['date', 'string', 'error', 'load', 'me', 'empty', 'null']);
 
 export class Parser {
   /** Index of the next unconsumed token. */
   pos = 0;
+  /** `Option Compare Text` is in effect: comparisons and Like made from now on are marked `text`. */
+  textCompare = false;
 
   constructor(readonly tokens: Token[]) {
     if (tokens.length === 0 || tokens[tokens.length - 1].kind !== 'eof') {
@@ -90,7 +94,7 @@ export class Parser {
 
   /**
    * Parses a parenthesised argument list; the cursor is on `(`. Omitted
-   * arguments become MissingArg. Named arguments (`x:=1`) are rejected.
+   * arguments become MissingArg; named arguments (`x:=1`) are kept as `names` (see ArgList).
    */
   parseParenArgs(): (Expr | MissingArg)[] {
     this.expectOp('(');
@@ -112,15 +116,23 @@ export class Parser {
    * the statement, for paren-less calls (`MsgBox "x", , "t"`).
    */
   parseArgList(parenthesised: boolean): (Expr | MissingArg)[] {
-    const args: (Expr | MissingArg)[] = [];
+    const args: ArgList = [];
     if (this.atArgListEnd(parenthesised)) return args;
     for (;;) {
-      if (this.isOp(',') || this.atArgListEnd(parenthesised)) {
+      const t = this.peek();
+      if ((t.kind === 'ident' || t.kind === 'keyword') && !t.suffix && this.isOp(':=', 1)) {
+        // `Title:="x"`: a named argument
+        this.advance(); this.advance();
+        (args.names ??= [])[args.length] = t.text;
+        args.push(this.parseExpression());
+      } else if (args.names) {
+        this.fail('Expected: named parameter');
+      } else if (this.isOp(',') || this.atArgListEnd(parenthesised)) {
         args.push({ kind: 'missing', line: this.peek().line });
       } else {
         if (this.isOp('#')) this.advance();   // a file number: Input(5, #1), EOF(#1)
         args.push(this.parseExpression());
-        if (this.isOp(':=')) this.fail('Named arguments are not supported');
+        if (this.isOp(':=')) this.fail('Expected: named parameter');
       }
       if (this.isOp(',')) { this.advance(); continue; }
       return args;
@@ -152,7 +164,9 @@ export class Parser {
       if (op === undefined || !level.ops.has(op)) return left;
       this.advance();
       const right = this.parseLevel(i + 1);
-      left = { kind: 'binary', op: op as BinaryOp, left, right, line: left.line, st: undefined, chk: 2, lo: -Infinity, hi: Infinity };
+      const node: BinaryExpr = { kind: 'binary', op: op as BinaryOp, left, right, line: left.line, st: undefined, chk: 2, lo: -Infinity, hi: Infinity };
+      if (this.textCompare && TEXT_OPS.has(op)) node.text = true;
+      left = node;
     }
   }
 
@@ -281,6 +295,19 @@ export class Parser {
           // `New ADODB.Recordset`: a library-qualified class name
           while (this.isOp('.') && this.peek(1).kind === 'ident') { this.advance(); typeName += '.' + this.advance().text; }
           return { kind: 'new', typeName, line: t.line };
+        }
+        if (w === 'typeof') {
+          // `TypeOf x Is TextBox`
+          this.advance();
+          const object = this.parsePostfix();
+          if (!this.isKeyword('is')) this.fail('Expected: Is');
+          this.advance();
+          const n = this.peek();
+          if (n.kind !== 'ident' && !(n.kind === 'keyword' && n.text.toLowerCase() === 'object')) this.fail('Expected: identifier');
+          this.advance();
+          let typeName = n.text;
+          while (this.isOp('.') && this.peek(1).kind === 'ident') { this.advance(); typeName += '.' + this.advance().text; }
+          return { kind: 'typeOf', object, typeName, line: t.line };
         }
         if (KEYWORD_NAMES.has(w)) {
           this.advance();

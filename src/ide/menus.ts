@@ -12,13 +12,14 @@ export const ACTION_NAMES = [
   'newProject', 'openProject', 'saveProject', 'saveProjectAs', 'makeApp', 'exit',
   'undo', 'redo', 'cut', 'copy', 'paste', 'delete', 'selectAll', 'find',
   'toggleOutlining', 'toggleAllOutlining', 'collapseToDefinitions',
-  'viewCode', 'viewObject', 'viewImmediate', 'viewProjectExplorer', 'viewProperties', 'viewToolbox',
-  'addForm', 'addModule', 'removeItem', 'components', 'projectProperties',
+  'viewCode', 'viewObject', 'viewImmediate', 'viewLocals', 'viewWatch', 'viewCallStack', 'viewProjectExplorer', 'viewProperties', 'viewToolbox',
+  'addForm', 'addMdiForm', 'addModule', 'addClassModule', 'addFile', 'removeItem', 'components', 'projectProperties',
   'alignLefts', 'alignCenters', 'alignRights', 'alignTops', 'alignMiddles', 'alignBottoms',
   'sameWidth', 'sameHeight', 'sameBoth', 'bringToFront', 'sendToBack', 'lockControls',
   'stepInto', 'stepOver', 'stepOut', 'runToCursor', 'toggleBreakpoint', 'clearAllBreakpoints',
+  'addWatch', 'editWatch', 'quickWatch', 'setNextStatement', 'showNextStatement',
   'start', 'startFullCompile', 'break', 'end', 'restart',
-  'askAi', 'askAiAboutError', 'aiLog', 'options', 'about',
+  'askAi', 'askAiAboutError', 'aiLog', 'menuEditor', 'options', 'about',
 ] as const;
 export type IdeActionName = (typeof ACTION_NAMES)[number];
 
@@ -82,6 +83,7 @@ export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?
   };
   // stepping starts the program in design mode and goes on in break mode; never while it runs
   const canStep = () => idle() && (state?.mode ?? 'design') !== 'run';
+  const inBreak = () => !state || state.mode === 'break';
 
   return [
     { label: 'File', items: [
@@ -120,13 +122,19 @@ export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?
       mk('Object', 'viewObject', 'Shift+F7'),
       sep(),
       mk('Immediate Window', 'viewImmediate', 'Ctrl+G'),
+      mk('Locals Window', 'viewLocals'),
+      mk('Watch Window', 'viewWatch'),
+      mk('Call Stack...', 'viewCallStack', 'Ctrl+L', inBreak),
       mk('Project Explorer', 'viewProjectExplorer', 'Ctrl+R'),
       mk('Properties Window', 'viewProperties', 'F4'),
       mk('Toolbox', 'viewToolbox'),
     ] },
     { label: 'Project', items: [
       mk('Add Form', 'addForm', undefined, design),
+      mk('Add MDI Form', 'addMdiForm', undefined, () => design() && !state?.project.forms.some(f => f.mdi)),   // one per project (VB6)
       mk('Add Module', 'addModule', undefined, design),
+      mk('Add Class Module', 'addClassModule', undefined, design),
+      mk('Add File...', 'addFile', 'Ctrl+D', design),
       sep(),
       mk(() => `Remove ${activeItemName()}`, 'removeItem', undefined, design),
       sep(),
@@ -153,8 +161,15 @@ export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?
       mk('Step Out', 'stepOut', 'Ctrl+Shift+F8', () => state?.mode === 'break'),
       mk('Run To Cursor', 'runToCursor', 'Ctrl+F8', () => canStep() && inCode()),
       sep(),
+      mk('Add Watch...', 'addWatch'),
+      mk('Edit Watch...', 'editWatch', 'Ctrl+W', () => !state || (state.project.watches?.length ?? 0) > 0),
+      mk('Quick Watch...', 'quickWatch', 'Shift+F9', () => inBreak() && inCode()),
+      sep(),
       mk('Toggle Breakpoint', 'toggleBreakpoint', 'F9', inCode),
       mk('Clear All Breakpoints', 'clearAllBreakpoints', 'Ctrl+Shift+F9', () => state?.hasBreakpoints ?? true),
+      sep(),
+      mk('Set Next Statement', 'setNextStatement', 'Ctrl+F9', () => inBreak() && inCode()),
+      mk('Show Next Statement', 'showNextStatement', undefined, inBreak),
     ] },
     { label: 'Run', items: [
       mk(() => (state?.mode === 'break' ? 'Continue' : 'Start'), 'start', 'F5', () => idle() && (state?.mode ?? 'design') !== 'run'),
@@ -167,6 +182,8 @@ export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?
       mk('Ask AI...', 'askAi', 'Ctrl+I', design),
       mk('Ask AI about this error', 'askAiAboutError', undefined, () => state?.mode === 'break' && !!o.breakOnError?.()),
       mk('AI Log...', 'aiLog'),
+      sep(),
+      mk('Menu Editor...', 'menuEditor', 'Ctrl+E', inDesigner),
       sep(),
       mk('Options...', 'options'),
     ] },

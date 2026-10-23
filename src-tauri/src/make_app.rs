@@ -73,6 +73,62 @@ pub struct BuildSpec {
   pub app_name: String,
   pub project_json: String,
   pub icon_png: Option<Vec<u8>>,
+  /// Project Properties > Make: the version number and copyright. None keeps the source bundle's version.
+  pub version: Option<AppVersion>,
+  /// File extensions the app opens (CFBundleDocumentTypes); the opened file's path is Command$.
+  pub file_types: Vec<String>,
+}
+
+/// VB6's version number (Major.Minor.Revision) and the Legal Copyright of the version information.
+#[derive(serde::Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AppVersion {
+  pub major: u32,
+  pub minor: u32,
+  pub revision: u32,
+  #[serde(default)]
+  pub copyright: String,
+}
+
+/// An extension as a document type lists it: no leading `*.` or `.`, lower case; None when it has other characters than
+/// letters, digits, `-` and `_`.
+pub fn clean_extension(ext: &str) -> Option<String> {
+  let e = ext.trim().trim_start_matches('*').trim_start_matches('.').to_lowercase();
+  (!e.is_empty() && e.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')).then_some(e)
+}
+
+/// The made app's version and document types in its Info.plist. The source's own document types (VibeBasic's) never stay.
+pub fn apply_app_info(dict: &mut plist::Dictionary, spec: &BuildSpec) {
+  if let Some(v) = &spec.version {
+    dict.insert("CFBundleShortVersionString".into(), format!("{}.{}.{}", v.major, v.minor, v.revision).into());
+    dict.insert("CFBundleVersion".into(), v.revision.to_string().into());
+    if v.copyright.trim().is_empty() {
+      dict.remove("NSHumanReadableCopyright");
+    } else {
+      dict.insert("NSHumanReadableCopyright".into(), v.copyright.clone().into());
+    }
+  }
+  dict.remove("CFBundleDocumentTypes");
+  let mut exts: Vec<String> = vec![];
+  for e in spec.file_types.iter().filter_map(|e| clean_extension(e)) {
+    if !exts.contains(&e) {
+      exts.push(e);
+    }
+  }
+  if exts.is_empty() {
+    return;
+  }
+  let types: Vec<plist::Value> = exts
+    .into_iter()
+    .map(|e| {
+      let mut d = plist::Dictionary::new();
+      d.insert("CFBundleTypeName".into(), format!("{} {} document", spec.app_name, e.to_uppercase()).into());
+      d.insert("CFBundleTypeExtensions".into(), plist::Value::Array(vec![e.into()]));
+      d.insert("CFBundleTypeRole".into(), "Editor".into());
+      plist::Value::Dictionary(d)
+    })
+    .collect();
+  dict.insert("CFBundleDocumentTypes".into(), plist::Value::Array(types));
 }
 
 #[derive(Debug, PartialEq)]
@@ -291,6 +347,7 @@ fn build_inner(
   dict.insert("CFBundleName".into(), spec.app_name.clone().into());
   dict.insert("CFBundleDisplayName".into(), spec.app_name.clone().into());
   dict.insert("CFBundleIdentifier".into(), bundle_id_for(&spec.app_name).into());
+  apply_app_info(&mut dict, spec);
   if let Some(png) = &spec.icon_png {
     icons.png_to_icns(png, &resources.join("icon.icns")).map_err(MakeError::Tool)?;
     dict.insert("CFBundleIconFile".into(), "icon.icns".into());
@@ -329,6 +386,8 @@ pub async fn make_app(
   project_json: String,
   icon_png_base64: Option<String>,
   overwrite: bool,
+  version: Option<AppVersion>,
+  file_types: Option<Vec<String>>,
 ) -> Result<(), String> {
   tauri::async_runtime::spawn_blocking(move || {
     use base64::Engine;
@@ -342,7 +401,7 @@ pub async fn make_app(
     };
     let source = current_bundle()?;
     let target = normalize_target(&target_path)?;
-    let spec = BuildSpec { app_name, project_json, icon_png };
+    let spec = BuildSpec { app_name, project_json, icon_png, version, file_types: file_types.unwrap_or_default() };
     build_app_from(&source, &target, &spec, overwrite, &CodesignSigner, &SipsIconConverter)
   })
   .await
@@ -406,6 +465,8 @@ mod tests {
       app_name: "Mitt Program".into(),
       project_json: "{\"a\":1}".into(),
       icon_png: if icon { Some(vec![1, 2, 3]) } else { None },
+      version: None,
+      file_types: vec![],
     }
   }
 
@@ -475,6 +536,44 @@ mod tests {
     assert_eq!(*icons.0.borrow(), 1);
     assert_eq!(plist_of(&target)["CFBundleIconFile"].as_string(), Some("icon.icns"));
     assert!(target.join("Contents/Resources/icon.icns").exists());
+  }
+
+  #[test]
+  fn plist_gets_version_copyright_and_document_types() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = fake_source(tmp.path());
+    // VibeBasic's own version, copyright and document types must not reach the made app
+    let mut d = plist_of(&src);
+    d.insert("CFBundleShortVersionString".into(), "0.9.0".into());
+    d.insert("NSHumanReadableCopyright".into(), "VibeBasic".into());
+    d.insert("CFBundleDocumentTypes".into(), plist::Value::Array(vec![]));
+    plist::Value::Dictionary(d).to_file_xml(src.join("Contents/Info.plist")).unwrap();
+    let target = tmp.path().join("T.app");
+    let mut s = spec(false);
+    s.version = Some(AppVersion { major: 2, minor: 1, revision: 17, copyright: "(c) 2026 Stig".into() });
+    s.file_types = vec!["*.kalk".into(), ".TXT".into(), "bad/ext".into()];
+    build_app_from(&src, &target, &s, false, &FakeSigner(RefCell::new(vec![])), &FakeIcons(RefCell::new(0))).unwrap();
+    let p = plist_of(&target);
+    assert_eq!(p["CFBundleShortVersionString"].as_string(), Some("2.1.17"));
+    assert_eq!(p["CFBundleVersion"].as_string(), Some("17"));
+    assert_eq!(p["NSHumanReadableCopyright"].as_string(), Some("(c) 2026 Stig"));
+    let types = p["CFBundleDocumentTypes"].as_array().unwrap();
+    let exts: Vec<_> = types
+      .iter()
+      .map(|t| t.as_dictionary().unwrap()["CFBundleTypeExtensions"].as_array().unwrap()[0].as_string().unwrap().to_string())
+      .collect();
+    assert_eq!(exts, ["kalk", "txt"]);
+    assert_eq!(types[0].as_dictionary().unwrap()["CFBundleTypeRole"].as_string(), Some("Editor"));
+
+    // no file types and no copyright: neither key is left
+    let target2 = tmp.path().join("U.app");
+    let mut s2 = spec(false);
+    s2.version = Some(AppVersion { major: 1, minor: 0, revision: 0, copyright: String::new() });
+    build_app_from(&src, &target2, &s2, false, &FakeSigner(RefCell::new(vec![])), &FakeIcons(RefCell::new(0))).unwrap();
+    let p2 = plist_of(&target2);
+    assert!(p2.get("CFBundleDocumentTypes").is_none());
+    assert!(p2.get("NSHumanReadableCopyright").is_none());
+    assert_eq!(p2["CFBundleShortVersionString"].as_string(), Some("1.0.0"));
   }
 
   #[test]

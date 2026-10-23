@@ -77,7 +77,7 @@ export function writeItemText(v: VBValue): string {
 /** A field of Input #: `value` as VB6 reads it into a Variant, `text` as it reads it into a String. */
 export interface InputField { value: VBValue; text: string }
 
-const NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+const NUMBER = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
 
 /** Text read sequentially from an Input file, with a position. */
 export class TextReader {

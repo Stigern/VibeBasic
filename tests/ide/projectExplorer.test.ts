@@ -100,6 +100,39 @@ test('project properties: invalid name rejected, valid change is one undo step',
   expect(ide.project).toMatchObject({ name: 'Project1', title: '' });
 });
 
+test('project properties: Startup Object Sub Main and the Make tab fields, one undo step', async () => {
+  const p = showProjectProperties(ide);
+  const row = (label: string) => [...document.querySelectorAll<HTMLElement>('.dlg98 .dlgform98-row')].find(r => r.firstElementChild?.textContent === label)!;
+  const set = (label: string, v: string, i = 0) => { const el = row(label).querySelectorAll('input')[i]; el.value = v; el.dispatchEvent(new Event('change')); };
+  set('Startup Object:', 'Sub Main');
+  [...document.querySelectorAll<HTMLElement>('.dlg98 .tabs98-tab')].find(t => t.textContent === 'Make')!.click();
+  set('Version Number:', '2', 0);
+  set('Version Number:', '5', 2);
+  set('Version Information:', 'Company Name');
+  const value = row('Value:').querySelector('input')!;
+  value.value = 'Acme'; value.dispatchEvent(new Event('input'));
+  set('File Types:', '*.kalk, TXT');
+  set('Command Line Arguments:', '/x a.txt');
+  set('Conditional Compilation Arguments:', 'BETA = 1');
+  press('OK');
+  await p;
+  expect(ide.project).toMatchObject({
+    subMain: true, startupForm: 'Form1', fileTypes: ['kalk', 'txt'], commandLine: '/x a.txt', condComp: 'BETA = 1',
+    versionInfo: { major: 2, minor: 0, revision: 5, companyName: 'Acme' },
+  });
+  ide.stack.undo();
+  expect(ide.project.subMain ?? ide.project.versionInfo ?? ide.project.commandLine ?? ide.project.fileTypes).toBeUndefined();
+});
+
+test('project properties: OK with nothing changed adds no undo step, whatever the key order of versionInfo', async () => {
+  ide.project.versionInfo = { companyName: 'Acme', revision: 3, minor: 2, major: 1, autoIncrement: false };
+  const p = showProjectProperties(ide);
+  press('OK');
+  await p;
+  expect(ide.stack.canUndo).toBe(false);
+  expect(ide.stack.isDirty).toBe(false);
+});
+
 test('options: OK updates ide.options, emits and saves; Cancel changes nothing', async () => {
   const be = new BrowserBackend();
   const onOpt = vi.fn();
@@ -167,4 +200,17 @@ test('a module selected in the Project Explorer shows its (Name) in the Properti
   expect(m.name).toBe('Module1');
   ide.setSelection({ formId: ide.project.forms[0].id, ids: [] });   // a form selection shows the form again
   expect(props.querySelector('.cb98-input')).toHaveProperty('value', 'Form1 Form');
+});
+
+test('Add Class Module makes Class1 (Instancing 1) in a Class Modules folder; the Properties window shows Instancing', () => {
+  createProjectExplorer(host, ide);
+  addModule(ide, undefined, 'class');
+  expect(ide.project.modules[0]).toMatchObject({ name: 'Class1', kind: 'class', instancing: 1 });
+  expect(labels().slice(-2)).toEqual(['Class Modules', 'Class1 (Class1)']);
+  const props = document.createElement('div');
+  document.body.appendChild(props);
+  createPropertiesWindow(props, ide);
+  ide.explorerItemId = ide.project.modules[0].id;
+  ide.setSelection(null);
+  expect([...props.querySelectorAll('.pw98-row')].map(r => r.textContent)).toEqual(['(Name)Class1', 'Instancing1 - Private']);
 });

@@ -3,8 +3,9 @@
 // the body-level popup layer (ui98/floating.ts), so the window's scrolling panes never clip them.
 import { getBackend, type Backend } from '../backend/backend';
 import { assetOf, assetUsedElsewhere } from '../model/assetRefs';
-import { addAssetCmd, compositeCmd, removeAssetCmd, renameCmd, renameModuleCmd, setPropertyCmd, tabIndexCmd, type Command } from '../model/commands';
+import { addAssetCmd, compositeCmd, removeAssetCmd, renameCmd, renameModuleCmd, setInstancingCmd, setPropertyCmd, tabIndexCmd, type Command } from '../model/commands';
 import { CONTROL_TYPES, getPropDef, newId, validateName, type PropDef } from '../model/controls';
+import { formHasProp, formObjectName } from '../model/mdi';
 import type { ControlDef, ControlType, FontValue, FormDef, ModuleDef, PropValue } from '../model/types';
 import { messageBox98, vbYes } from '../ui98/dialogs';
 import { createCombo } from '../ui98/combo';
@@ -20,6 +21,13 @@ import { CATEGORIES, categoryOf, describeProperty, type Category } from './prope
 const VB_OK_EXCL = 48, VB_YESNO_QUESTION = 4 | 32;
 const NAME_DEF: PropDef = { name: '(Name)', kind: 'string', default: '', designTime: true, runtime: 'rw' };
 // Index is listed for every single control (VB6): blank = not in a control array, a number makes or joins one
+/** A class module's Instancing property and its VB6 values (stored only: every class is private to the project). */
+const INSTANCING = 'Instancing';
+const INSTANCING_VALUES = [
+  { value: 1, label: '1 - Private' }, { value: 2, label: '2 - PublicNotCreatable' },
+  { value: 5, label: '5 - MultiUse' }, { value: 6, label: '6 - GlobalMultiUse' },
+];
+const USER_SCALE = new Set(['ScaleLeft', 'ScaleTop', 'ScaleWidth', 'ScaleHeight']);
 const INDEX_DEF: PropDef = { name: 'Index', kind: 'int', default: null, designTime: true, runtime: 'rw', min: 0, max: 32767 };
 const DEFAULT_FONT: FontValue = { name: 'MS Sans Serif', size: 8, bold: false, italic: false, underline: false };
 
@@ -359,16 +367,17 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     const multi = ts.length > 1;
 
     // Object box: the form and all its controls
-    objectEntries = [{ label: labelOf(form.name, null, 'Form'), id: 'form' },
+    objectEntries = [{ label: labelOf(form.name, null, formObjectName(form)), id: 'form' },
       ...form.controls.map((c: ControlDef) => ({ label: labelOf(c.name, c.index, c.type), id: c.id }))];
     const first = ts[0];
     objectCombo.setItems(objectEntries.map(e => e.label));
-    objectCombo.setValue(multi ? '' : labelOf(first.name, first.index, first.type));
+    objectCombo.setValue(multi ? '' : labelOf(first.name, first.index, first.id === 'form' ? formObjectName(form) : first.type));
 
     // Rows: properties common to all selected types
-    const defs = CONTROL_TYPES[first.type].props.filter(d => d.designTime).filter(d => ts.every(t => {
+    const defs = CONTROL_TYPES[first.type].props.filter(d => d.designTime && (first.id !== 'form' || formHasProp(form, d.name))).filter(d => ts.every(t => {
       const o = getPropDef(t.type, d.name);
-      return o && o.designTime && o.kind === d.kind && (d.kind !== 'enum' || JSON.stringify(o.enumValues) === JSON.stringify(d.enumValues));
+      return o && o.designTime && o.kind === d.kind && (d.kind !== 'enum' || JSON.stringify(o.enumValues) === JSON.stringify(d.enumValues))
+        && (!USER_SCALE.has(d.name) || t.props.ScaleMode === 0);   // ScaleLeft ... ScaleHeight only for the user scale (ScaleMode 0)
     }));
     const rows: PropDef[] = [...(multi ? [] : [NAME_DEF]), ...defs];
     if (!multi && first.id !== 'form') rows.push(INDEX_DEF);
@@ -434,38 +443,56 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     }
   }
 
-  /** A standard module: the object box and a single (Name) row. */
+  /** A standard module: the object box and a single (Name) row; a class module also has Instancing. */
   function renderModule(m: ModuleDef, hadFocus: boolean): void {
     root.classList.remove('pw98-empty');
     objectEntries = [];
-    const label = `${m.name} Module`;
+    const isClass = m.kind === 'class';
+    const label = `${m.name} ${isClass ? 'Class Module' : 'Module'}`;
     objectCombo.setItems([label]);
     objectCombo.setValue(label);
-    if (active !== NAME_DEF.name) active = null;
+    const names = isClass ? [NAME_DEF.name, INSTANCING] : [NAME_DEF.name];
+    if (active && !names.includes(active)) active = null;
     const myEpoch = epoch;
     let done = false;
     const live = () => !done && myEpoch === epoch && ide.mode === 'design';
-    const cell = h('div', { class: 'pw98-value' });
-    const row = h('div', { class: `pw98-row${active ? ' selected' : ''}`, 'data-prop': NAME_DEF.name, tabindex: '-1' },
-      h('div', { class: 'pw98-name' }, NAME_DEF.name), cell);
-    let focusEl: HTMLElement = row;
-    if (active) {
-      focusEl = inlineEditor(NAME_DEF, m.name, live, t => { if (!live()) return; done = true; void setModuleName(m, t); });
-      cell.replaceChildren(focusEl);
-    } else cell.textContent = m.name;
-    const activate = (e: Event) => {
-      if (ide.mode !== 'design' || active === NAME_DEF.name) return;
-      if (e.type === 'mousedown') e.preventDefault();
-      select(NAME_DEF.name);
-    };
-    row.addEventListener('mousedown', activate);
-    row.addEventListener('click', activate);
-    rowOrder = [NAME_DEF.name];
+    let focusEl: HTMLElement | null = null;
+    const instancing = INSTANCING_VALUES.find(v => v.value === (m.instancing ?? 1)) ?? INSTANCING_VALUES[0];
+    const rowEls = names.map(name => {
+      const cell = h('div', { class: 'pw98-value' });
+      const row = h('div', { class: `pw98-row${active === name ? ' selected' : ''}`, 'data-prop': name, tabindex: '-1' },
+        h('div', { class: 'pw98-name' }, name), cell);
+      if (active === name && name === NAME_DEF.name) {
+        focusEl = inlineEditor(NAME_DEF, m.name, live, t => { if (!live()) return; done = true; void setModuleName(m, t); });
+        cell.replaceChildren(focusEl);
+      } else if (active === name) {
+        const combo = createCombo({ items: INSTANCING_VALUES.map(v => v.label), value: instancing.label, openOnClick: false, onChange: t => {
+          const v = INSTANCING_VALUES.find(x => x.label === t);
+          if (!live() || !v || v.value === (m.instancing ?? 1)) return;
+          wantFocus = true;
+          ide.stack.execute(setInstancingCmd(m.id, v.value));
+        } });
+        cell.replaceChildren(combo.el);
+        focusEl = combo.el.querySelector('input') ?? row;
+      } else cell.textContent = name === NAME_DEF.name ? m.name : instancing.label;
+      if (active === name && !focusEl) focusEl = row;
+      const activate = (e: Event) => {
+        if (ide.mode !== 'design' || active === name) return;
+        if (e.type === 'mousedown') e.preventDefault();
+        select(name);
+      };
+      row.addEventListener('mousedown', activate);
+      row.addEventListener('click', activate);
+      return row;
+    });
+    if (!focusEl) focusEl = rowEls[0];
+    rowOrder = names;
     lists[1 - tabs.selected].replaceChildren();
-    lists[tabs.selected].replaceChildren(row);
+    lists[tabs.selected].replaceChildren(...rowEls);
     desc.replaceChildren(...(active ? [h('b', {}, active), h('div', {}, describeProperty(active))] : []));
     lockIfRunning();
-    if (hadFocus) { focusEl.focus(); if (focusEl instanceof HTMLInputElement) focusEl.select(); }
+    const fe = focusEl as HTMLElement | null;
+    if (hadFocus && fe) { fe.focus(); if (fe instanceof HTMLInputElement && !fe.readOnly) fe.select(); }
   }
 
   /** Read-only while a program runs or is in break mode (edit-and-continue comes in phase 6). */

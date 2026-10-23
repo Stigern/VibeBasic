@@ -9,10 +9,13 @@
 //   to the record that was current before AddNew (LastModified is the new one).
 // - An owner (Data control, Adodc) is asked before every change of record (Validate / WillMove, and the saving of the bound
 //   controls) and told afterwards (Reposition / MoveComplete, the bound controls show the record).
+// - ADO from code: `New ADODB.Recordset` is closed until Open (LockType adLockReadOnly unless given, as in ADO). Filter (criteria
+//   or adFilterNone) and Sort ("Field [ASC|DESC], ...") make a view of the records; Clone shares the records. Fields.Append
+//   before Open makes a disconnected recordset held only in memory.
 
 import type { OutSlot, VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
-import { Empty, Nothing, Null, VBArray, coerce, toNumber, toStr, type VBValue } from '../../lang/values';
+import { Empty, EmptyT, Nothing, NothingT, Null, NullT, VBArray, coerce, compare, isObject, toNumber, toStr, type VBValue } from '../../lang/values';
 import type { DbValue } from '../../backend/backend';
 import type { DbConnection } from './dbSession';
 import { compileCriteria } from './criteria';
@@ -38,6 +41,25 @@ interface Row { rowid: number | null; bm: number; values: DbValue[] }
 
 const ROWID = '__vbrowid';
 let bookmarkSeq = 0;
+
+const given = (v: VBValue | undefined): v is VBValue => v !== undefined && !(v instanceof EmptyT);
+const badArgs = (): VBRuntimeError =>
+  new VBRuntimeError(3001, 'Arguments are of the wrong type, are out of acceptable range, or are in conflict with one another.');
+const compileCriteriaOrBad = (c: string): void => { try { compileCriteria(c); } catch { throw badArgs(); } };
+const notFound = (): VBRuntimeError => new VBRuntimeError(3265, 'Item cannot be found in the collection corresponding to the requested name or ordinal.');
+
+/** The kind of an ADO DataTypeEnum (Fields.Append, Parameter.Type). */
+export function adoKind(t: number): FieldKind {
+  if ([2, 3, 16, 17, 18, 19, 20, 21].includes(t)) return 'long';
+  if ([4, 5, 14, 131, 139].includes(t)) return 'double';
+  if (t === 6) return 'currency';
+  if (t === 11) return 'bool';
+  if ([7, 133, 134, 135].includes(t)) return 'date';
+  if ([8, 129, 130, 200, 202].includes(t)) return 'text';
+  if (t === 201 || t === 203) return 'memo';
+  if ([128, 204, 205].includes(t)) return 'binary';
+  return 'variant';
+}
 
 const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`;
 /** `[Order Details]`, `"x"` or `` `x` `` without the quotes. */
@@ -126,7 +148,13 @@ export class FieldsObject implements VBObject {
     throw new VBRuntimeError(this.hasMember(name) ? 383 : 438);
   }
   callMethod(name: string, args: VBValue[]): VBValue {
-    if (name.toLowerCase() === 'refresh') return Empty;
+    const l = name.toLowerCase();
+    if (l === 'refresh') return Empty;
+    if (l === 'append') {   // Append Name, Type, [DefinedSize], [Attrib]: a field of a disconnected recordset
+      if (args.length < 2 || args.length > 5) throw new VBRuntimeError(450);
+      this.rs.appendField(toStr(args[0]), toNumber(args[1]), given(args[2]) ? toNumber(args[2]) : 0);
+      return Empty;
+    }
     return this.getMember(name, args);
   }
   items(): VBObject[] { return this.rs.columns.map((_, i) => new FieldObject(this.rs, i)); }
@@ -137,11 +165,14 @@ export class FieldsObject implements VBObject {
 const DAO_PROPS = ['bof', 'eof', 'recordcount', 'absoluteposition', 'bookmark', 'lastmodified', 'editmode', 'nomatch', 'fields', 'name',
   'updatable', 'type', 'percentposition'];
 const ADO_PROPS = ['bof', 'eof', 'recordcount', 'absoluteposition', 'bookmark', 'editmode', 'fields', 'source', 'state', 'activeconnection',
-  'cursortype', 'locktype', 'cursorlocation', 'maxrecords'];
+  'cursortype', 'locktype', 'cursorlocation', 'maxrecords', 'filter', 'sort'];
 const DAO_METHODS = ['movefirst', 'movelast', 'movenext', 'moveprevious', 'move', 'addnew', 'edit', 'update', 'cancelupdate', 'delete',
   'requery', 'close', 'findfirst', 'findlast', 'findnext', 'findprevious', 'getrows'];
 const ADO_METHODS = ['movefirst', 'movelast', 'movenext', 'moveprevious', 'move', 'addnew', 'update', 'cancelupdate', 'delete',
-  'requery', 'close', 'find', 'getrows'];
+  'requery', 'close', 'find', 'getrows', 'open', 'clone', 'supports'];
+/** Supports: what every recordset can do, and what an updatable one can do too. */
+const SUPPORTS_READ = 0x100 | 0x200 | 0x2000 | 0x4000 | 0x80000;   // adHoldRecords adMovePrevious adBookmark adApproxPosition adFind
+const SUPPORTS_WRITE = 0x1000400 | 0x1000800 | 0x1008000;          // adAddNew adDelete adUpdate
 const WRITABLE = new Set(['absoluteposition', 'bookmark']);
 
 export interface RecordsetOptions {
@@ -153,6 +184,10 @@ export interface RecordsetOptions {
   owner?: RecordsetOwner;
   /** ADO: the Connection object Recordset.ActiveConnection returns. */
   connection?: () => VBObject;
+  /** Values for the SQL's `?` (ADODB.Command). */
+  params?: DbValue[];
+  /** ADO from code: the connection of Open's ActiveConnection (a Connection object or a connection string). */
+  openConnection?: (v: VBValue) => Promise<{ conn: DbConnection; obj: VBObject }>;
 }
 
 export class RecordsetObject implements VBObject {
@@ -160,7 +195,21 @@ export class RecordsetObject implements VBObject {
   readonly defaultMember = 'Fields';
   readonly flavor: Flavor;
   columns: Column[] = [];
+  /** Every record, in query order (shared with clones). */
+  private base: Row[] = [];
+  /** The records seen: `base` through Filter and Sort. */
   private rows: Row[] = [];
+  /** ADO Filter (a criteria string, or adFilterNone 0) and Sort. */
+  private filter: VBValue = 0;
+  private sortSpec = '';
+  /** Fields.Append: a disconnected recordset; its records exist only in memory. */
+  private memory = false;
+  /** ADO from code: the properties Open uses (and reports), and the ActiveConnection given before Open. */
+  private cursorType = 3;
+  private lockType: number | null = null;
+  private cursorLocation = 3;
+  private maxRecords = 0;
+  private activeValue: VBValue = Nothing;
   /** -1 BOF, rows.length EOF. After Delete it is where the deleted record was (`deleted`). */
   private pos = -1;
   private deleted = false;
@@ -176,10 +225,25 @@ export class RecordsetObject implements VBObject {
   private readonly fields = new FieldsObject(this);
   owner: RecordsetOwner | undefined;
 
-  private constructor(readonly conn: DbConnection, readonly source: string, private readonly opts: RecordsetOptions) {
+  private constructor(private db: DbConnection | null, private src: string, private opts: RecordsetOptions) {
     this.flavor = opts.flavor;
     this.readOnly = opts.readOnly === true;
     this.owner = opts.owner;
+  }
+
+  get conn(): DbConnection {
+    if (!this.db) throw new VBRuntimeError(3709);
+    return this.db;
+  }
+  get source(): string { return this.src; }
+
+  /** `New ADODB.Recordset`: closed until Open. */
+  static unopened(opts: RecordsetOptions): RecordsetObject {
+    const rs = new RecordsetObject(null, '', opts);
+    rs.closed = true;
+    rs.cursorType = 0;   // adOpenForwardOnly, adUseServer: ADO's defaults
+    rs.cursorLocation = 2;
+    return rs;
   }
 
   /** Runs the query of `source` (a table name or SQL). Errors are the database's (3078 table not found ...). */
@@ -190,7 +254,7 @@ export class RecordsetObject implements VBObject {
   }
 
   /** A closed recordset (Connection.Execute of a statement that returns no rows). */
-  static closedOne(conn: DbConnection, opts: RecordsetOptions): RecordsetObject {
+  static closedOne(conn: DbConnection | null, opts: RecordsetOptions): RecordsetObject {
     const rs = new RecordsetObject(conn, '', opts);
     rs.closed = true;
     return rs;
@@ -198,12 +262,13 @@ export class RecordsetObject implements VBObject {
 
   private async load(): Promise<void> {
     const p = plan(this.source, this.opts.commandType);
+    const params = this.opts.params ?? [];
     let res = null;
     if (p.withRowid) {
-      try { res = await this.conn.query(p.withRowid); } catch { res = null; }
+      try { res = await this.conn.query(p.withRowid, params); } catch { res = null; }
     }
     let writable = res !== null;
-    if (!res) res = await this.conn.query(p.sql);
+    if (!res) res = await this.conn.query(p.sql, params);
     this.sql = writable ? p.withRowid! : p.sql;
     this.table = writable ? p.table : null;
     if (!writable) this.readOnly = true;
@@ -220,11 +285,133 @@ export class RecordsetObject implements VBObject {
       const decl = res!.types[i + skip] ?? '';
       return { name, decl, kind: fieldKind(decl), target: targets.get(name.toLowerCase()) ?? null };
     });
-    this.rows = res.rows.map(r => ({ rowid: skip ? Number(r[0]) : null, bm: ++bookmarkSeq, values: r.slice(skip) }));
-    this.pos = this.rows.length ? 0 : -1;
-    this.deleted = false;
+    const all = this.maxRecords > 0 ? res.rows.slice(0, this.maxRecords) : res.rows;
+    this.base = all.map(r => ({ rowid: skip ? Number(r[0]) : null, bm: ++bookmarkSeq, values: r.slice(skip) }));
     this.editMode = 0;
     this.buffer.clear();
+    this.applyView(false);
+  }
+
+  // -- Filter, Sort, Clone --------------------------------------------------------------------------------------------
+
+  /** A record's field values by name, for criteria; an unknown name is `unknown()`. */
+  private fieldsOf(row: Row, unknown: (name: string) => VBRuntimeError): (name: string) => VBValue {
+    return name => {
+      const k = this.columns.findIndex(c => c.name.toLowerCase() === name.toLowerCase());
+      if (k < 0) throw unknown(name);
+      return toVB(row.values[k], this.kindOf(k));
+    };
+  }
+
+  /** The records seen again from Filter and Sort; the current record stays when `keep` and it is still seen, else the first. */
+  private applyView(keep: boolean): void {
+    const cur = keep && this.hasCurrent ? this.rows[this.pos] : null;
+    let rows = this.base;
+    if (typeof this.filter === 'string' && this.filter.trim() !== '') {
+      let test: ReturnType<typeof compileCriteria>;
+      try { test = compileCriteria(this.filter); } catch { throw badArgs(); }
+      rows = rows.filter(r => test(this.fieldsOf(r, notFound)));
+    }
+    rows = rows === this.base ? [...rows] : rows;
+    if (this.sortSpec.trim() !== '') {
+      const keys = this.sortSpec.split(',').map(part => {
+        const m = /^\s*(\[[^\]]+\]|.+?)(?:\s+(asc|desc))?\s*$/i.exec(part);
+        if (!m) throw badArgs();
+        const name = unquote(m[1].trim()).toLowerCase();
+        const i = this.columns.findIndex(c => c.name.toLowerCase() === name);
+        if (i < 0) throw notFound();
+        return { i, dir: m[2]?.toLowerCase() === 'desc' ? -1 : 1, kind: this.kindOf(i) };
+      });
+      const cmp = (a: VBValue, b: VBValue): number => {
+        if (a instanceof NullT || b instanceof NullT) return (a instanceof NullT ? -1 : 0) + (b instanceof NullT ? 1 : 0);
+        try { return compare(a, b, true); } catch { return toStr(a) < toStr(b) ? -1 : toStr(a) > toStr(b) ? 1 : 0; }
+      };
+      rows.sort((x, y) => {
+        for (const k of keys) {
+          const c = cmp(toVB(x.values[k.i], k.kind), toVB(y.values[k.i], k.kind));
+          if (c) return c * k.dir;
+        }
+        return 0;
+      });
+    }
+    this.rows = rows;
+    const at = cur ? rows.indexOf(cur) : -1;
+    this.pos = at >= 0 ? at : rows.length ? 0 : -1;
+    this.deleted = false;
+  }
+
+  /** Filter = criteria | adFilterNone (0); Sort = "Field [ASC|DESC], ...". A pending edit is saved first; the first record is current. */
+  private async setView(kind: 'filter' | 'sort', value: VBValue): Promise<void> {
+    this.checkOpen();
+    if (kind === 'filter') {
+      if (typeof value !== 'string') {
+        const n = toNumber(value);
+        if (n !== 0 && n !== 3) throw badArgs();   // adFilterNone, adFilterFetchedRecords: every record
+      }
+      if (typeof value === 'string' && value.trim() !== '') compileCriteriaOrBad(value);
+    }
+    await this.settle();
+    const old = [this.filter, this.sortSpec] as const;
+    if (kind === 'filter') this.filter = typeof value === 'string' && value.trim() !== '' ? value : 0;
+    else this.sortSpec = toStr(value);
+    try { this.applyView(false); } catch (e) { [this.filter, this.sortSpec] = old; this.applyView(true); throw e; }
+    this.owner?.rowsChanged(this);
+    await this.owner?.after(this, ACT.bookmark, true);
+  }
+
+  /** Clone [LockType]: another current record over the same records (not filtered or sorted). */
+  private cloneOf(args: VBValue[]): RecordsetObject {
+    this.checkOpen();
+    if (args.length > 1) throw new VBRuntimeError(450);
+    const c = new RecordsetObject(this.db, this.src, { ...this.opts, owner: undefined });
+    Object.assign(c, { columns: this.columns, base: this.base, table: this.table, sql: this.sql, memory: this.memory, cursorType: this.cursorType,
+      lockType: this.lockType, cursorLocation: this.cursorLocation });
+    c.readOnly = this.readOnly || (given(args[0]) && toNumber(args[0]) === 1);
+    c.applyView(false);
+    return c;
+  }
+
+  /** Fields.Append before Open: a field of a disconnected recordset. */
+  appendField(name: string, type: number, size: number): void {
+    if (!this.closed || this.db) throw new VBRuntimeError(3219, 'Operation is not allowed in this context.');
+    if (this.columns.some(c => c.name.toLowerCase() === name.toLowerCase())) throw new VBRuntimeError(3367, 'Cannot append. An object with that name is already in the collection.');
+    this.columns.push({ name, decl: size > 0 ? `VARCHAR(${size})` : '', kind: adoKind(type), target: name });
+    this.memory = true;
+  }
+
+  /** ADO Open [Source], [ActiveConnection], [CursorType], [LockType], [Options]. */
+  private async adoOpen(args: VBValue[]): Promise<void> {
+    if (args.length > 5) throw new VBRuntimeError(450);
+    if (!this.closed) throw new VBRuntimeError(3705);
+    let source = args[0];
+    if (isObject(source) && source.vbTypeName === 'Command') {   // Open cmd: its text and connection
+      if (!given(args[1])) args[1] = source.getMember('ActiveConnection', []);
+      source = source.getMember('CommandText', []);
+    }
+    if (given(source)) this.src = toStr(source);
+    if (given(args[1])) this.activeValue = args[1];
+    if (given(args[2])) this.cursorType = toNumber(args[2]);
+    if (given(args[3])) this.lockType = toNumber(args[3]);
+    const opt = given(args[4]) ? toNumber(args[4]) & 0x2ff : 8;
+    this.opts.commandType = opt === 512 ? 2 : opt;
+    this.readOnly = this.lockType === null || this.lockType === 1 || this.lockType === -1;
+    this.filter = 0;
+    if (this.memory && this.src === '' && this.activeValue instanceof NothingT) {
+      this.base = [];
+      this.applyView(false);
+      this.closed = false;
+      return;
+    }
+    if (this.activeValue instanceof NothingT || !this.opts.openConnection) throw new VBRuntimeError(3709);
+    const { conn, obj } = await this.opts.openConnection(this.activeValue);
+    this.db = conn;
+    this.activeValue = obj;
+    this.opts.connection = () => obj;
+    this.memory = false;
+    const keepRO = this.readOnly;
+    await this.load();
+    if (keepRO) this.readOnly = true;
+    this.closed = false;
   }
 
   // -- state --------------------------------------------------------------------------------------------------------
@@ -295,13 +482,14 @@ export class RecordsetObject implements VBObject {
 
   private checkWritable(i?: number): void {
     this.checkOpen();
-    if (this.readOnly || !this.table) throw new VBRuntimeError(3027);
+    if (this.readOnly || (!this.table && !this.memory)) throw new VBRuntimeError(this.flavor === 'ado' && this.opts.openConnection ? 3251 : 3027,
+      this.flavor === 'ado' && this.opts.openConnection ? 'Current Recordset does not support updating. This may be a limitation of the provider, or of the selected locktype.' : undefined);
     if (i !== undefined && this.columns[i].target === null) throw new VBRuntimeError(3164);
   }
 
   /** The fields (by name) can be written: the recordset is updatable and each one is a column of its table. */
   canWrite(names: string[]): boolean {
-    if (this.closed || this.readOnly || !this.table) return false;
+    if (this.closed || this.readOnly || (!this.table && !this.memory)) return false;
     return names.every(n => {   // an unknown name is left to setValues (3265)
       const c = this.columns.find(col => col.name.toLowerCase() === n.toLowerCase());
       return c === undefined || c.target !== null;
@@ -354,18 +542,44 @@ export class RecordsetObject implements VBObject {
 
   /** Writes the edit buffer: INSERT for AddNew, UPDATE of the changed fields for Edit. The edit stays when it fails. */
   private async commit(): Promise<void> {
-    const t = quoteIdent(this.table!);
     const entries = [...this.buffer.entries()];
+    if (this.memory) this.commitMemory(entries);
+    else await this.commitSql(entries);
+    this.editMode = 0;
+    this.buffer.clear();
+    this.owner?.rowsChanged(this);
+  }
+
+  /** A disconnected recordset: the record changes only in memory. */
+  private commitMemory(entries: [number, DbValue][]): void {
+    if (this.editMode === 2) {
+      const values: DbValue[] = this.columns.map(() => null);
+      for (const [i, v] of entries) values[i] = v;
+      this.addRow({ rowid: null, bm: ++bookmarkSeq, values });
+    } else if (this.editMode === 1) {
+      const row = this.current();
+      row.values = [...row.values];
+      for (const [i, v] of entries) row.values[i] = v;
+      this.lastModified = row.bm;
+    }
+  }
+
+  /** A new record: in the records and the view; ADO makes it current (DAO keeps the current one unless at EOF / empty). */
+  private addRow(row: Row): void {
+    this.base.push(row);
+    this.rows.push(row);
+    this.lastModified = row.bm;
+    if (this.flavor === 'ado' || this.pos < 0 || this.pos === this.rows.length - 1) { this.pos = this.rows.length - 1; this.deleted = false; }
+  }
+
+  private async commitSql(entries: [number, DbValue][]): Promise<void> {
+    const t = quoteIdent(this.table!);
     if (this.editMode === 2) {
       const sql = entries.length
         ? `INSERT INTO ${t} (${entries.map(([i]) => quoteIdent(this.columns[i].target!)).join(', ')}) VALUES (${entries.map(() => '?').join(', ')})`
         : `INSERT INTO ${t} DEFAULT VALUES`;
       const r = await this.conn.execute(sql, entries.map(([, v]) => v));
-      const row: Row = { rowid: r.lastInsertRowid, bm: ++bookmarkSeq, values: await this.refetch(r.lastInsertRowid, null) };
-      this.rows.push(row);
-      this.lastModified = row.bm;
-      // ADO: the new record is current. DAO: the record current before AddNew stays (from EOF or an empty recordset, the new one)
-      if (this.flavor === 'ado' || this.pos < 0 || this.pos === this.rows.length - 1) { this.pos = this.rows.length - 1; this.deleted = false; }
+      this.addRow({ rowid: r.lastInsertRowid, bm: ++bookmarkSeq, values: await this.refetch(r.lastInsertRowid, null) });
     } else if (this.editMode === 1) {
       const row = this.current();
       const changed = entries.filter(([i, v]) => !sameDb(row.values[i], v));
@@ -376,9 +590,6 @@ export class RecordsetObject implements VBObject {
       }
       this.lastModified = row.bm;
     }
-    this.editMode = 0;
-    this.buffer.clear();
-    this.owner?.rowsChanged(this);
   }
 
   /** Before a move: ADO saves an edit in progress, DAO drops it. A new record nothing was put in is dropped (no blank row). */
@@ -453,12 +664,8 @@ export class RecordsetObject implements VBObject {
   private search(criteria: string, from: number, step: 1 | -1): number {
     const test = compileCriteria(criteria);
     for (let i = from; i >= 0 && i < this.rows.length; i += step) {
-      const row = this.rows[i];
-      const field = (name: string): VBValue => {
-        const k = this.columns.findIndex(c => c.name.toLowerCase() === name.toLowerCase());
-        if (k < 0) throw new VBRuntimeError(3070, `The database engine does not recognize '${name}' as a valid field name or expression.`);
-        return toVB(row.values[k], this.kindOf(k));
-      };
+      const field = this.fieldsOf(this.rows[i], name =>
+        new VBRuntimeError(3070, `The database engine does not recognize '${name}' as a valid field name or expression.`));
       if (test(field)) return i;
     }
     return -1;
@@ -508,13 +715,22 @@ export class RecordsetObject implements VBObject {
     if (this.isMethod(l)) return this.callMethod(name, args) as VBValue;
     if (!this.hasMember(l)) throw new VBRuntimeError(438);
     if (l === 'fields') {
+      if (!args.length) return this.fields;   // also closed (Fields.Append, Count 0)
       this.checkOpen();
-      return args.length ? (args.length === 1 ? this.field(args[0]) : (() => { throw new VBRuntimeError(450); })()) : this.fields;
+      return args.length === 1 ? this.field(args[0]) : (() => { throw new VBRuntimeError(450); })();
     }
     if (args.length) throw new VBRuntimeError(450);
-    if (l === 'state') return this.closed ? 0 : 1;
-    if (l === 'activeconnection') return this.opts.connection?.() ?? Nothing;
-    if (l === 'source' || l === 'name') return this.source;
+    switch (l) {
+      case 'state': return this.closed ? 0 : 1;
+      case 'activeconnection': return this.opts.connection?.() ?? this.activeValue;
+      case 'source': case 'name': return this.source;
+      case 'filter': return this.filter;
+      case 'sort': return this.sortSpec;
+      case 'cursortype': return this.cursorType;
+      case 'locktype': return this.lockType ?? (this.readOnly ? 1 : 3);   // adLockReadOnly / adLockOptimistic
+      case 'cursorlocation': return this.cursorLocation;
+      case 'maxrecords': return this.maxRecords;
+    }
     this.checkOpen();
     const ado = this.flavor === 'ado';
     switch (l) {
@@ -533,10 +749,6 @@ export class RecordsetObject implements VBObject {
       case 'nomatch': return this.noMatch;
       case 'updatable': return !this.readOnly && this.table !== null;
       case 'type': return this.readOnly ? 4 : 2;   // dbOpenSnapshot / dbOpenDynaset
-      case 'cursortype': return 3;                 // adOpenStatic
-      case 'locktype': return this.readOnly ? 1 : 3;   // adLockReadOnly / adLockOptimistic
-      case 'cursorlocation': return 3;             // adUseClient
-      case 'maxrecords': return 0;
     }
     throw new VBRuntimeError(438);
   }
@@ -545,8 +757,23 @@ export class RecordsetObject implements VBObject {
     const l = name.toLowerCase();
     if (l === 'fields' && args.length === 1) { this.setField(this.fieldIndex(args[0]), value); return; }
     if (!this.hasMember(l)) throw new VBRuntimeError(438);
-    if (!WRITABLE.has(l)) throw new VBRuntimeError(383);
     if (args.length) throw new VBRuntimeError(450);
+    switch (l) {
+      case 'filter': case 'sort': return this.setView(l, value);
+      case 'activeconnection':
+        if (!this.closed) throw new VBRuntimeError(3705);
+        this.activeValue = value;
+        return;
+      case 'source': case 'cursortype': case 'locktype': case 'cursorlocation':
+        if (!this.closed) throw new VBRuntimeError(3705);
+        if (l === 'source') this.src = toStr(value);
+        else if (l === 'cursortype') this.cursorType = toNumber(value);
+        else if (l === 'locktype') this.lockType = toNumber(value);
+        else this.cursorLocation = toNumber(value);
+        return;
+      case 'maxrecords': this.maxRecords = toNumber(value); return;
+    }
+    if (!WRITABLE.has(l)) throw new VBRuntimeError(383);
     this.checkOpen();
     if (l === 'bookmark') { const i = this.indexOfBookmark(value); return this.moveTo(ACT.bookmark, () => i); }
     const n = toNumber(value) - (this.flavor === 'ado' ? 1 : 0);
@@ -571,7 +798,12 @@ export class RecordsetObject implements VBObject {
         const n = toNumber(coerce(args[0], 'Long'));
         return done(this.moveTo(ACT.bookmark, () => this.movePos(n, args[1])));
       }
-      case 'addnew': return done(this.addNew());
+      case 'addnew': {   // AddNew [FieldList, Values]: with values the new record is posted at once
+        if (args.length > 2) throw new VBRuntimeError(450);
+        if (args[0] === undefined) return done(this.addNew());
+        const fields = this.fieldList(args);
+        return done(this.addNew().then(() => { this.assign(fields); return this.update(); }));
+      }
       case 'edit': {
         this.checkWritable();
         this.current();
@@ -579,7 +811,11 @@ export class RecordsetObject implements VBObject {
         this.buffer.clear();
         return Empty;
       }
-      case 'update': return done(this.update());
+      case 'update': {   // Update [Fields, Values]
+        if (args.length > 2) throw new VBRuntimeError(450);
+        if (args[0] !== undefined) this.assign(this.fieldList(args));
+        return done(this.update());
+      }
       case 'cancelupdate': return done(this.cancelUpdate());
       case 'delete': return done(this.deleteCurrent());
       case 'requery': return done(this.requery());
@@ -591,6 +827,14 @@ export class RecordsetObject implements VBObject {
         if (args.length < 1 || args.length > 4) throw new VBRuntimeError(450);
         return done(this.adoFind(args));
       case 'getrows': return this.getRows(args);
+      case 'open': return done(this.adoOpen(args));
+      case 'clone': return this.cloneOf(args);
+      case 'supports': {
+        if (args.length !== 1) throw new VBRuntimeError(450);
+        this.checkOpen();
+        const n = toNumber(args[0]), can = SUPPORTS_READ | (this.canWrite([]) ? SUPPORTS_WRITE : 0);
+        return n !== 0 && (n & ~can) === 0;
+      }
     }
     throw new VBRuntimeError(438);
   }
@@ -610,6 +854,23 @@ export class RecordsetObject implements VBObject {
     }
     await this.moveTo(ACT.bookmark, () => from + n);
     return out;
+  }
+
+  /** AddNew / Update's FieldList and Values: one name (or index) and value, or two arrays of the same length (else 3001). */
+  private fieldList(args: VBValue[]): [VBValue, VBValue][] {
+    const [names, values] = args;
+    if (values === undefined) throw new VBRuntimeError(450);
+    if (!(names instanceof VBArray)) return [[names, values]];
+    const items = (a: VBArray): VBValue[] => (a.bounds.length === 1 ? a.values() : []);
+    const n = items(names);
+    const v = values instanceof VBArray ? items(values) : [];
+    if (!(values instanceof VBArray) || n.length !== v.length || names.bounds.length !== 1)
+      throw new VBRuntimeError(3001, 'Arguments are of the wrong type, are out of acceptable range, or are in conflict with one another.');
+    return n.map((x, i) => [x, v[i]]);
+  }
+
+  private assign(fields: [VBValue, VBValue][]): void {
+    for (const [name, value] of fields) this.setField(this.fieldIndex(name), value);
   }
 
   private async addNew(): Promise<void> {
@@ -651,7 +912,9 @@ export class RecordsetObject implements VBObject {
     if (this.owner && !(await this.owner.before(this, ACT.delete))) return;
     this.editMode = 0;
     this.buffer.clear();
-    await this.conn.execute(`DELETE FROM ${quoteIdent(this.table!)} WHERE rowid = ?`, [row.rowid]);
+    if (!this.memory) await this.conn.execute(`DELETE FROM ${quoteIdent(this.table!)} WHERE rowid = ?`, [row.rowid]);
+    const b = this.base.indexOf(row);
+    if (b >= 0) this.base.splice(b, 1);
     const i = this.rows.indexOf(row);
     if (i >= 0) { this.rows.splice(i, 1); this.pos = i; }
     this.deleted = true;
@@ -662,6 +925,7 @@ export class RecordsetObject implements VBObject {
   /** The query again: the first record is current. */
   async requery(): Promise<void> {
     this.checkOpen();
+    if (this.memory) return;
     await this.load();
     this.owner?.rowsChanged(this);
     await this.owner?.after(this, ACT.cancel, true);
@@ -674,6 +938,7 @@ export class RecordsetObject implements VBObject {
     this.editMode = 0;
     this.buffer.clear();
     this.rows = [];
+    this.base = [];
     this.owner?.rowsChanged(this);
   }
 
