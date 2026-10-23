@@ -219,10 +219,21 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
       const ta = h('textarea', { class: 'pw98-multiedit', rows: '8', spellcheck: false });
       ta.value = initial;
       let discard = false;
+      // A re-render (a click in the designer selects on pointerdown, before the popup sees the outside mousedown), Save, Run
+      // and Make commit the text through flushEdit, as they do for an inline row. Only Escape throws it away.
+      const flush = () => {
+        if (flushEdit === flush) flushEdit = null;
+        if (!live() || ta.value === initial) return true;
+        const ok = parsePropertyInput(def, ta.value).ok;
+        commitText(ta.value);
+        return ok;
+      };
+      flushEdit = flush;
       const fl = showFloating(cell, h('div', { class: 'pw98-popup' }, ta), {
         align: 'right', minWidth: 170,
         onClose: reason => {
           if (discard) return;
+          if (flushEdit === flush) flushEdit = null;
           if (reason === 'escape') { wantFocus = true; refresh(); return; }
           if (reason !== 'outside') wantFocus = true;
           if (ta.value !== initial) commitText(ta.value); else if (wantFocus) refresh();
@@ -231,7 +242,7 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
       ta.addEventListener('keydown', e => {
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); fl.close('api'); }
       });
-      closers.push(() => { discard = true; fl.close(); });
+      closers.push(() => { discard = true; fl.close(); });   // refresh() has already run flushEdit
       ta.focus();
       ta.setSelectionRange(ta.value.length, ta.value.length);
     };

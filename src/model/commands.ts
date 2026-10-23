@@ -371,22 +371,28 @@ export function compositeCmd(label: string, cmdList: Command[]): Command {
 // ---------------------------------------------------------------------------------------------------------------
 // Project items
 
-export function addFormCmd(form: FormDef): Command {
-  const pristine = structuredClone(form);
+/** Adds a form or module. Undo keeps the live object that it takes out (with the code typed into it since, which never goes
+ *  through the stack), and redo puts that same object back; only the first `do` uses the pristine copy. */
+function addItemCmd<T extends { id: string; name: string }>(item: T, list: (p: Project) => T[], set: (p: Project, items: T[]) => void): Command {
+  const pristine = structuredClone(item);
+  let removed: T | null = null;
   return {
     label: `Add ${pristine.name}`,
-    do(p) { p.forms.push(structuredClone(pristine)); },
-    undo(p) { p.forms = p.forms.filter(f => f.id !== pristine.id); },
+    do(p) { list(p).push(removed ?? structuredClone(pristine)); removed = null; },
+    undo(p) {
+      const items = list(p);
+      removed = items.find(x => x.id === pristine.id) ?? null;
+      set(p, items.filter(x => x.id !== pristine.id));
+    },
   };
 }
 
+export function addFormCmd(form: FormDef): Command {
+  return addItemCmd(form, p => p.forms, (p, v) => { p.forms = v; });
+}
+
 export function addModuleCmd(m: ModuleDef): Command {
-  const pristine = structuredClone(m);
-  return {
-    label: `Add ${pristine.name}`,
-    do(p) { p.modules.push(structuredClone(pristine)); },
-    undo(p) { p.modules = p.modules.filter(x => x.id !== pristine.id); },
-  };
+  return addItemCmd(m, p => p.modules, (p, v) => { p.modules = v; });
 }
 
 /** Removes a form or module by id. Removing the startup form requires `newStartupForm` (a form name); the command
