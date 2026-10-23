@@ -4,6 +4,7 @@
 import { Program } from '../../src/lang/interp/program';
 import { TestHost } from './testHost';
 import { FakeObject } from './fakeObject';
+import { prettifyLine } from '../../src/lang/prettify';
 
 /** Runs `Main` of a one-module program (en-US, App.Path /app); returns the output lines. */
 async function run(src: string, setup?: (h: TestHost) => void): Promise<string[]> {
@@ -348,4 +349,31 @@ c = 1.23456: s = 2: i = 3
 Debug.Print c; c * i; c / 3; s / i; s * 0.1; -s / 3; TypeName(c * i); TypeName(s * i); TypeName(s * 0.1)`))).toEqual([
     ' 1.2346  3.7038  .411533333333333  .6666667  .2 -.6666667 CurrencySingleDouble',
   ]);
+});
+
+test('the new statement forms prettify as VB6 writes them', () => {
+  const pretty = (l: string) => prettifyLine(l, new Map());
+  expect(pretty('function Nums() as integer()')).toBe('Function Nums() As Integer()');
+  expect(pretty('lset f = "ab"')).toBe('LSet f = "ab"');
+  expect(pretty('  !Name = x')).toBe('  !Name = x');
+  expect(pretty('error 7')).toBe('Error 7');
+  expect(pretty('x = erl + ismissing(y)')).toBe('x = Erl + IsMissing(y)');
+});
+
+test('#1 a parenthesised array or record argument does not compile, as in VB6', async () => {
+  const src = (call: string) => `Type P
+  X As Integer
+End Type
+Sub Fill(a() As Integer)
+  a(0) = 1
+End Sub
+Sub Show(r As P)
+End Sub
+Sub Main()
+  Dim arr(1) As Integer, r As P
+  ${call}
+End Sub`;
+  expect((await run(src('Fill (arr)')))[0]).toMatch(/Compile error: Type mismatch: array or user-defined type expected/);
+  expect((await run(src('Show (r)')))[0]).toMatch(/Compile error: Type mismatch: array or user-defined type expected/);
+  expect(await run(src('Fill arr: Call Fill(arr): Show r: Debug.Print arr(0)'))).toEqual([' 1 ']);
 });

@@ -27,7 +27,7 @@ import {
   methodArgs, objectFactory, shownArgs, variableOf, withObject,
 } from './eval';
 import { compareResult, plain, truthy } from './operators';
-import type { StaticType } from './staticTypes';
+import { shown, type StaticType } from './staticTypes';
 import { BuiltinRef, EnumRef, MemberRef, ModuleRef } from './scope';
 import type { VBObject } from '../host';
 
@@ -462,7 +462,6 @@ function bindParams(f: Frame, args: BoundArg[]): void {
   }
 }
 
-
 /** Runs a Sub/Function body in a new frame (run by the driver as a SubCall). */
 export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBValue> {
   const rt = run.rt;
@@ -780,7 +779,7 @@ function* execStringStmt(f: Frame, s: ErrorStmt | MidStmt | AlignStmt): Gen<Comp
       const cur = toStr(plain(yield* evalExpr(f, s.target)));
       const start = bankers(toNumber(yield* evalExpr(f, s.start)));
       let n = s.length ? bankers(toNumber(yield* evalExpr(f, s.length))) : Infinity;
-      const value = toStr(plain(yield* evalExpr(f, s.value)));
+      const value = toStr(plain(shown(f, s.value, yield* evalExpr(f, s.value))));
       if (start < 1 || start > cur.length || n < 0) throw new VBRuntimeError(5);
       n = Math.min(n, value.length, cur.length - start + 1);
       yield* assign(f, s.target, cur.slice(0, start - 1) + value.slice(0, n) + cur.slice(start - 1 + n), false);
@@ -790,7 +789,7 @@ function* execStringStmt(f: Frame, s: ErrorStmt | MidStmt | AlignStmt): Gen<Comp
       const cur = yield* evalExpr(f, s.target);
       if (cur instanceof VBRecord) throw compileError(`Not supported in VibeBasic: ${s.kind === 'lset' ? 'LSet' : 'RSet'} of a user-defined type`);
       const n = toStr(plain(cur)).length;
-      const v = toStr(plain(yield* evalExpr(f, s.value)));
+      const v = toStr(plain(shown(f, s.value, yield* evalExpr(f, s.value))));
       const out = v.length >= n ? v.slice(0, n) : s.kind === 'lset' ? v.padEnd(n, ' ') : v.padStart(n, ' ');
       yield* assign(f, s.target, out, false);
       return;

@@ -215,7 +215,8 @@ function prettifyPhysicalLine(line: string, known: Map<string, string>): string 
           sep = prev.kind === 'op' && prev.text !== ')' ? ' ' : orig === '' ? '' : ' ';
           break;
         case '(':
-          if (prev.kind === 'keyword') sep = CALL_KEYWORDS.has(prev.text.toLowerCase()) ? '' : ' ';
+          // `As Integer()` (a Function returning an array) has no space, like a call
+          if (prev.kind === 'keyword') sep = CALL_KEYWORDS.has(prev.text.toLowerCase()) || kw(tokens[i - 2], 'as') ? '' : ' ';
           else if (prev.kind === 'ident') sep = prevHead && !assignsElement(tokens, i) ? (orig === '' ? '' : ' ') : '';
           else if (isOp(prev, ')')) sep = orig === '' ? '' : ' ';
           break;

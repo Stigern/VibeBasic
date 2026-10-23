@@ -4,12 +4,14 @@
 // typed function, a conversion function (CInt, CSng ...) and the operators' result types. Used for
 //  - Integer/Long/Byte overflow of `+ - * \ Mod` and unary minus (`a * b` with two Integers is error 6 above 32767,
 //    as in VB6; Variant arithmetic widens instead, so an expression with a Variant operand is not checked),
-//  - Single and Currency results (`CSng(2) / 3` is a Single: 7 digits),
+//  - Single and Currency results (`CSng(2) / 3` is a Single), and where a Single leaves Single-typed code for text or a
+//    Variant (`shown`: Print, `&`, CStr, a Label show .3333333; inside numeric code the value stays an exact IEEE single),
 //  - TypeName / VarType of typed variables and expressions (`TypeName(d)` of a Double holding 5 is "Double"), and of a
 //    Variant variable assigned a typed expression (`v = CDbl(5)`).
 // 'Variant' means "not known" (a Variant, a String, an object, a host property ...).
 //
-// The type of an operator node depends only on the code, so it is computed once and kept on the node (`st`).
+// The type of an operator node depends only on the code, so it is computed once and kept on the node (`st`, and the
+// check its results need, `chk`: see eval.ts `binaryResult`).
 
 import type { BinaryExpr, BinaryOp, Expr, MissingArg, UnaryExpr, VBTypeName } from '../ast';
 import { VBArray, maybeSingle, single7, type VBValue } from '../values';

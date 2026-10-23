@@ -650,6 +650,10 @@ function* bindArgs(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[]): Gen<Bou
       out.push(MISSING);
       continue;
     }
+    if ((a as { paren?: boolean }).paren && (p.isArray || isRecordType(f.rt.resolveType(p.type, ref.module)))) {
+      // `Foo (arr)`: VB6 passes arrays and records only by reference, so a parenthesised one does not compile
+      throw compileError('Type mismatch: array or user-defined type expected');
+    }
     if (p.byRef) {
       const r = yield* refOf(f, a);
       if (r) { out.push(r); continue; }
@@ -658,6 +662,8 @@ function* bindArgs(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[]): Gen<Bou
   }
   return out;
 }
+
+const isRecordType = (t: VBTypeName): boolean => typeof t === 'object' && 'userType' in t;
 
 /** A value argument; a number for a Variant parameter keeps the type the code gives it (TypeName), a Single its 7 digits. */
 function valueArg(f: Frame, p: Param, a: Expr, value: VBValue): BoundArg {
