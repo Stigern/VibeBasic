@@ -3,7 +3,8 @@
 
 export type TypeSuffix = '%' | '&' | '!' | '#' | '$';
 
-export interface NumberLit { kind: 'number'; value: number; suffix?: TypeSuffix; line: number }
+/** `isDouble`: written with a point or an exponent (`2.0`, `1E3`), a Double like `1.5`. */
+export interface NumberLit { kind: 'number'; value: number; suffix?: TypeSuffix; isDouble?: boolean; line: number }
 export interface StringLit { kind: 'string'; value: string; line: number }
 /** `#1/2/2000#`: `text` is the raw text between the `#`s (parsed at run time). */
 export interface DateLit { kind: 'date'; text: string; line: number }
@@ -21,12 +22,17 @@ export interface CallOrIndex { kind: 'call'; target: Expr; args: (Expr | Missing
 /** An omitted argument, as in `MsgBox("x", , "t")`. */
 export interface MissingArg { kind: 'missing'; line: number }
 export type UnaryOp = 'neg' | 'not';
-export interface UnaryExpr { kind: 'unary'; op: UnaryOp; operand: Expr; line: number }
+/**
+ * On operator nodes, filled by the interpreter when first needed (interp/staticTypes.ts): `st` the static result type;
+ * `lo`/`hi` the range a numeric result may have without a check (the parser starts them empty: lo > hi).
+ */
+export interface OperatorTypeInfo { st?: VBTypeName | 'Decimal'; lo?: number; hi?: number }
+export interface UnaryExpr extends OperatorTypeInfo { kind: 'unary'; op: UnaryOp; operand: Expr; line: number }
 export type BinaryOp =
   | '^' | '*' | '/' | '\\' | 'mod' | '+' | '-' | '&'
   | '=' | '<>' | '<' | '>' | '<=' | '>=' | 'like' | 'is'
   | 'and' | 'or' | 'xor' | 'eqv' | 'imp';
-export interface BinaryExpr { kind: 'binary'; op: BinaryOp; left: Expr; right: Expr; line: number }
+export interface BinaryExpr extends OperatorTypeInfo { kind: 'binary'; op: BinaryOp; left: Expr; right: Expr; line: number }
 /** `.Text` inside a `With` block. */
 export interface WithMemberExpr { kind: 'withMember'; name: string; line: number; paren?: boolean }
 /** The object of the innermost `With` block: the `X` of `!Name` (`X("Name")`) inside it. */

@@ -5,7 +5,7 @@ import type { ConstDecl, EnumDecl, ModuleAst, ProcDecl, TypeDecl, VBTypeName } f
 import type { CodeLocation, VBObject } from '../host';
 import type { Builtin } from '../builtins';
 import { VBRuntimeError } from '../errors';
-import { Nothing, NothingT, VBArray, VBRecord, coerce, type VBValue } from '../values';
+import { Nothing, NothingT, VBArray, VBRecord, coerce, fitFixed, type VBValue } from '../values';
 import type { Runtime } from './program';
 
 const LOWER = new Map<string, string>();
@@ -51,10 +51,7 @@ export class AutoNewSlot implements Slot {
   set value(v: VBValue) { this.v = v; }
 }
 
-/** Pads or truncates to a `String * n` length. */
-export function fitFixed(s: string, n: number): string {
-  return s.length >= n ? s.slice(0, n) : s.padEnd(n, ' ');
-}
+export { fitFixed } from '../values';
 
 /** Converts `v` for storing in a slot of type `t`: records and arrays are copied (value semantics), then coerced. */
 export function storeValue(v: VBValue, t: VBTypeName, fixedLength?: number): VBValue {
@@ -76,6 +73,13 @@ export interface VarOptions {
 
 /** A named variable. `ref` may be shared with a caller (ByRef parameters). */
 export class Variable {
+  /**
+   * A Variant variable last assigned a number from a typed expression: that type (`v = CDbl(5)` is a Double for
+   * TypeName), valid while the variable still holds `subOf`.
+   */
+  sub?: VBTypeName | 'Decimal' = undefined;
+  subOf?: VBValue = undefined;
+
   constructor(
     readonly name: string,
     readonly type: VBTypeName,

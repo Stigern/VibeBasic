@@ -9,11 +9,12 @@ import { VBArray, VBRecord, bankers, isDate, toNumber, toStr, vbTypeName, type V
 import type { Gen } from './driver';
 import { assign, evalExpr, lookup } from './eval';
 import { Frame, Variable, lc } from './scope';
+import { shown } from './staticTypes';
 
 /** Evaluates print items into `line`; true when the statement ends the line (no trailing `;` or `,`). */
 export function* printItems(f: Frame, items: PrintItem[], line: PrintLine): Gen<boolean> {
   for (const it of items) {
-    if (it.expr) line.addItem(yield* evalExpr(f, it.expr));
+    if (it.expr) line.addItem(shown(f, it.expr, yield* evalExpr(f, it.expr)));
     else if (it.fn) {
       const n = it.fn.arg ? bankers(toNumber(yield* evalExpr(f, it.fn.arg))) : undefined;
       if (it.fn.kind === 'spc') line.addSpc(n ?? 0);
@@ -37,7 +38,7 @@ function* targetType(f: Frame, e: Expr): Gen<{ type: VBTypeName; fixedLength?: n
     if (b instanceof Variable) return { type: b.type, fixedLength: b.opts.fixedLength };
   } else if (e.kind === 'call' && e.target.kind === 'name') {
     const b = lookup(f, lc(e.target.name), e.target.name);
-    if (b instanceof Variable && b.value instanceof VBArray) return { type: b.value.elemType, fixedLength: b.opts.fixedLength };
+    if (b instanceof Variable && b.value instanceof VBArray) return { type: b.value.elemType, fixedLength: b.value.fixedLength };
   } else if (e.kind === 'member') {
     const base = yield* evalExpr(f, e.object);
     if (base instanceof VBRecord) {
@@ -91,7 +92,7 @@ export function* execFileStmt(f: Frame, s: Stmt): Gen<void> {
       const parts: string[] = [];
       // an omitted item (`Write #1, a, , b`) is an empty field
       for (const it of s.items) {
-        if (it.expr) parts.push(writeItemText(yield* evalExpr(f, it.expr)));
+        if (it.expr) parts.push(writeItemText(shown(f, it.expr, yield* evalExpr(f, it.expr))));
         else if (!it.fn) parts.push('');
       }
       const last = s.items[s.items.length - 1];

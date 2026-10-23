@@ -248,7 +248,8 @@ export class Runtime {
     const info = this.typeInfo(typeName);
     const fields = new Map<string, VBValue>();
     for (const [k, fi] of info.fields) {
-      if (fi.isArray) fields.set(k, fi.bounds ? this.newArray(fi.type, fi.bounds, true) : this.unallocatedArray(fi.type));
+      if (fi.isArray && fi.fixedLength !== undefined) fields.set(k, VBArray.fixedString(fi.bounds ?? null, fi.fixedLength, !!fi.bounds));
+      else if (fi.isArray) fields.set(k, fi.bounds ? this.newArray(fi.type, fi.bounds, true) : this.unallocatedArray(fi.type));
       else fields.set(k, this.defaultFor(fi.type, fi.fixedLength));
     }
     return new VBRecord(info.decl.name, fields);

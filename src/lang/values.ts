@@ -16,11 +16,22 @@ export const Empty = new EmptyT();
 export const Null = new NullT();
 export const Nothing = new NothingT();
 
+/**
+ * A Variant of subtype Error (`CVErr(n)`, VarType 10). `Missing` is the value of an omitted Optional Variant
+ * parameter without a default (`IsMissing`); VB6 makes it an Error value too (448 in the text).
+ */
+export class VBErrorValue {
+  readonly kind = 'error' as const;
+  constructor(readonly code: number) {}
+  toString() { return `Error ${this.code}`; }
+}
+export const Missing = new VBErrorValue(448);
+
 /** OLE date: `serial` is days since 1899-12-30, the fraction is the time of day. */
 export interface VBDate { kind: 'date'; serial: number }
 
 export type VBValue =
-  | number | string | boolean | VBDate | VBArray | VBRecord | VBObject | EmptyT | NullT | NothingT;
+  | number | string | boolean | VBDate | VBArray | VBRecord | VBObject | EmptyT | NullT | NothingT | VBErrorValue;
 
 /** A by-reference slot (ByRef arguments, event arguments). */
 export class VBRef {
@@ -56,6 +67,8 @@ function cloneValue(v: VBValue): VBValue {
 export class VBArray {
   bounds: [lo: number, hi: number][];
   private data: VBValue[] = [];
+  /** `Dim a(3) As String * 5`: every element is padded or cut to this length (set with `fixedString`). */
+  fixedLength?: number;
 
   constructor(
     public elemType: VBTypeName,
@@ -77,6 +90,14 @@ export class VBArray {
     }
   }
 
+  /** An array of `String * n` (n spaces per element, stores padded or cut to n). */
+  static fixedString(bounds: [number, number][] | null, n: number, fixed: boolean): VBArray {
+    const init = () => fitFixed('', n);
+    const a = bounds === null ? VBArray.unallocated('String', init) : new VBArray('String', bounds, fixed, init);
+    a.fixedLength = n;
+    return a;
+  }
+
   /** False for a dynamic array before its first `ReDim` (and after `Erase`). */
   get allocated(): boolean { return this.bounds.length > 0; }
 
@@ -90,7 +111,8 @@ export class VBArray {
 
   /** Stores `v` after coercing it to the element type. */
   set(idx: number[], v: VBValue): void {
-    this.data[this.offset(idx)] = coerce(v, this.elemType);
+    const n = this.fixedLength;
+    this.data[this.offset(idx)] = n === undefined ? coerce(v, this.elemType) : fitFixed(toStr(v), n);
   }
 
   /**
@@ -131,6 +153,7 @@ export class VBArray {
       ? VBArray.unallocated(this.elemType, this.init)
       : new VBArray(this.elemType, this.bounds.map(b => [b[0], b[1]] as [number, number]), this.fixed, this.init);
     c.data = this.data.map(cloneValue);
+    c.fixedLength = this.fixedLength;
     return c;
   }
 
@@ -142,6 +165,11 @@ export class VBArray {
   }
 
   private offset(idx: number[]): number { return offsetIn(this.bounds, idx); }
+}
+
+/** Pads or truncates to a `String * n` length. */
+export function fitFixed(s: string, n: number): string {
+  return s.length >= n ? s.slice(0, n) : s.padEnd(n, ' ');
 }
 
 /** Set while `VBArray.unallocated` runs, so the constructor accepts zero dimensions. */
@@ -191,10 +219,10 @@ export function isDate(v: VBValue): v is VBDate {
     && typeof (v as VBDate).serial === 'number';
 }
 
-/** A host object (`VBObject`): any object value that is not Empty, Null, Nothing, an array, a record or a date. */
+/** A host object (`VBObject`): any object value that is not Empty, Null, Nothing, an array, a record, a date or an Error value. */
 export function isObject(v: VBValue): v is VBObject {
   return typeof v === 'object' && !(v instanceof EmptyT) && !(v instanceof NullT) && !(v instanceof NothingT)
-    && !(v instanceof VBArray) && !(v instanceof VBRecord) && !isDate(v);
+    && !(v instanceof VBArray) && !(v instanceof VBRecord) && !isDate(v) && !(v instanceof VBErrorValue);
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +243,39 @@ export function bankers(n: number): number {
 const SINGLE_MAX = 3.402823466e38;
 const CURRENCY_MAX = 922337203685477.5807;
 
+/** A Single value: the IEEE single nearest to `n`; error 6 beyond the Single range. */
+export function toSingle(n: number): number {
+  const f = Math.fround(n);
+  if (!Number.isFinite(f) || f > SINGLE_MAX || f < -SINGLE_MAX) throw new VBRuntimeError(6);
+  return f;
+}
+
+const POW10: number[] = [];
+for (let i = -60; i <= 60; i++) POW10[i + 60] = Number(`1e${i}`);
+
+/**
+ * A Single value as VB6 shows it: its 7 significant digits, as a Double (`toSingle(1/3)` is 0.3333333432674408, shown
+ * .3333333). The interpreter uses this where a Single leaves Single-typed code for text or a Variant (Print, `&`, CStr,
+ * a String or Variant variable, a Label), so that later display gives the same digits without knowing the type.
+ */
+export function single7(f: number): number {
+  const x = f < 0 ? -f : f;
+  if (x === 0 || !Number.isFinite(x)) return f;
+  const k = 6 - Math.floor(Math.log10(x));
+  const r = k >= 0 ? Math.round(x * POW10[k + 60]) / POW10[k + 60] : Math.round(x / POW10[60 - k]) * POW10[60 - k];
+  return f < 0 ? -r : r;
+}
+
+/** True for a value that may be a Single that is not whole (an IEEE single); the code's type decides (staticTypes.ts). */
+export const maybeSingle = (v: VBValue): v is number => typeof v === 'number' && v % 1 !== 0 && Math.fround(v) === v;
+
+/** A Currency value: 4 decimals (banker's rounding); error 6 beyond the Currency range. */
+export function toCurrency(n: number): number {
+  const r = bankers(Number((n * 10000).toPrecision(15))) / 10000;
+  if (!(Math.abs(r) <= CURRENCY_MAX)) throw new VBRuntimeError(6);
+  return r;
+}
+
 /** Parse VB numeric text: spaces around, `&H`/`&O`, `.` decimal. `undefined` if not numeric. */
 function parseNumber(text: string): number | undefined {
   const s = text.trim();
@@ -232,6 +293,26 @@ function parseNumber(text: string): number | undefined {
   return Number(s);
 }
 
+/**
+ * Numeric text as VB6 reads it when it converts a string to a number (CDbl, CCur, IsNumeric, arithmetic, comparison):
+ * like `parseNumber`, and also with thousands separators in the whole part (`1,000`), a currency symbol before or after
+ * the number (`$12`, `-$5`, `$-5`), a negative number in parentheses (`(5)`) and a trailing sign (`5-`). The decimal
+ * point is `.` and the thousands separator `,` (the separators Format writes). `undefined` if not numeric.
+ */
+export function parseNumberText(text: string): number | undefined {
+  const n = parseNumber(text);
+  if (n !== undefined || !/[,$()]|[+-]\s*$/.test(text)) return n;
+  let s = text.trim();
+  let neg = false;
+  if (s.startsWith('(') && s.endsWith(')')) { neg = true; s = s.slice(1, -1).trim(); }
+  const m = /^([+-]?)\s*(\$?)\s*([+-]?)\s*(\d+(?:,\d+)*(?:\.\d*)?|\.\d+)(?:[eE]([+-]?\d+))?\s*(\$?)\s*([+-]?)$/.exec(s);
+  if (!m) return undefined;
+  const [, sign1, cur1, sign2, digits, exp, cur2, sign3] = m;
+  if ((cur1 && cur2) || [sign1, sign2, sign3].filter(Boolean).length > 1 || (neg && (sign1 || sign2 || sign3))) return undefined;
+  const v = Number(digits.replace(/,/g, '') + (exp === undefined ? '' : `e${exp}`));
+  return neg || sign1 === '-' || sign2 === '-' || sign3 === '-' ? -v : v;
+}
+
 /** Follow an object's default member to a plain value; Nothing is error 91. */
 function resolve(v: VBValue): VBValue {
   if (v instanceof NothingT) throw new VBRuntimeError(91);
@@ -247,7 +328,7 @@ export function toNumber(v: VBValue): number {
   if (typeof v === 'number') return v;
   if (typeof v === 'boolean') return v ? -1 : 0;
   if (typeof v === 'string') {
-    const n = parseNumber(v);
+    const n = parseNumberText(v);
     if (n === undefined) throw new VBRuntimeError(13);
     if (!Number.isFinite(n)) throw new VBRuntimeError(6);
     return n;
@@ -290,6 +371,7 @@ export function toStr(v: VBValue): string {
   if (v instanceof EmptyT) return '';
   if (v instanceof NullT) throw new VBRuntimeError(94);
   if (isDate(v)) return dateToText(v);
+  if (v instanceof VBErrorValue) return `Error ${v.code}`;
   throw new VBRuntimeError(13);
 }
 
@@ -444,18 +526,9 @@ export function coerce(v: VBValue, t: VBTypeName): VBValue {
     case 'Integer': return intInRange(v, -32768, 32767);
     case 'Long': return intInRange(v, -2147483648, 2147483647);
     case 'Byte': return intInRange(v, 0, 255);
-    case 'Single': {
-      const n = finite(v);
-      if (Math.abs(n) > SINGLE_MAX) throw new VBRuntimeError(6);
-      return n;
-    }
+    case 'Single': return toSingle(finite(v));
     case 'Double': return finite(v);
-    case 'Currency': {
-      const n = Number((finite(v) * 10000).toPrecision(15));
-      const r = bankers(n) / 10000;
-      if (Math.abs(r) > CURRENCY_MAX) throw new VBRuntimeError(6);
-      return r;
-    }
+    case 'Currency': return toCurrency(finite(v));
     case 'String': return toStr(v);
     case 'Boolean': return toBool(v);
     case 'Date': {
@@ -509,6 +582,7 @@ export function vbTypeName(v: VBValue): string {
   }
   if (v instanceof VBRecord) return v.typeName;
   if (isDate(v)) return 'Date';
+  if (v instanceof VBErrorValue) return 'Error';
   return v.vbTypeName;
 }
 
@@ -538,10 +612,10 @@ export function compare(a: VBValue, b: VBValue, textMode = false): -1 | 0 | 1 {
       return cmp(x, y);
     }
     if (aS) {
-      const n = parseNumber(a as string);
+      const n = parseNumberText(a as string);
       return n === undefined ? 1 : cmp(n, toNumber(b));
     }
-    const n = parseNumber(b as string);
+    const n = parseNumberText(b as string);
     return n === undefined ? -1 : cmp(toNumber(a), n);
   }
   return cmp(toNumber(a), toNumber(b));

@@ -3,11 +3,14 @@
 // Everything that can run user code is a generator (`Gen<T>`, see driver.ts):
 // a procedure call yields a SubCall, a host promise is yielded as-is.
 
-import type { CallOrIndex, Expr, MemberExpr, MissingArg, NameExpr, TypeSuffix, VBTypeName } from '../ast';
+import type { BinaryExpr, CallOrIndex, Expr, MemberExpr, MissingArg, NameExpr, TypeSuffix, UnaryExpr, VBTypeName } from '../ast';
 import { VBRuntimeError } from '../errors';
 import { BUILTINS, CONSTANTS } from '../builtins';
 import { VBCollection } from '../builtins/collection';
-import { Empty, Null, Nothing, NothingT, VBArray, VBRecord, VBRef, isObject, parseDate, toNumber, type VBValue } from '../values';
+import {
+  Empty, Missing, Null, Nothing, NothingT, VBArray, VBRecord, VBRef, isObject, maybeSingle, parseDate, single7, toCurrency, toNumber, toSingle,
+  type VBValue,
+} from '../values';
 import { localeDateParser } from '../builtins/format';
 import { EndSignal, SubCall, runSync, type Gen } from './driver';
 import {
@@ -15,6 +18,7 @@ import {
   ValueRef, Variable, getField, lc, setField, storeValue, type Binding,
 } from './scope';
 import { binaryOp, plain, unaryOp } from './operators';
+import { isNumericType, noteSubtype, operatorType, reportedType, shown, staticType, type StaticType } from './staticTypes';
 import { invokeProc, type BoundArg, MISSING } from './exec';
 import type { Runtime } from './program';
 import type { OutSlot, VBObject } from '../host';
@@ -142,7 +146,7 @@ function formName(f: Frame, key: string, name: string, call: boolean): Binding |
 export function* formMethod(f: Frame, name: string, args: (Expr | MissingArg)[]): Gen<VBValue> {
   const me = f.module.kind === 'form' && f.proc !== null ? f.rt.host.resolveName(f.module.name, 'Me') : undefined;
   if (!me) throw compileError('Sub or Function not defined');
-  const argv = yield* evalArgValues(f, args);
+  const argv = shownArgs(f, args, yield* evalArgValues(f, args));
   const notDefined = (e: unknown) => (e instanceof VBRuntimeError && e.number === 438 ? compileError('Sub or Function not defined') : e);
   let r: VBValue | Promise<VBValue>;
   try {
@@ -183,6 +187,30 @@ function bindingOf(f: Frame, e: NameExpr, call = false): Binding | undefined {
 // Expressions
 // ---------------------------------------------------------------------------
 
+/**
+ * The number `r` an operator node gave, outside the range the node lets pass unchecked (`lo`..`hi`): checked against
+ * the node's static type (staticTypes.ts), which is worked out on the first call and kept on the node with the range.
+ * An Integer, Long or Byte result out of range is error 6 (Overflow); a Single or Currency result is rounded like one
+ * (those nodes keep an empty range, so every result comes here). Variant and Double nodes let everything pass.
+ */
+function typedNumber(f: Frame, e: BinaryExpr | UnaryExpr, r: number): number {
+  let t = e.st;
+  if (t === undefined || e.lo! > e.hi!) {
+    t = e.st ??= operatorType(f, e);
+    const range = RANGES[t as string];
+    if (range) { e.lo = range[0]; e.hi = range[1]; }
+    else if (t !== 'Single' && t !== 'Currency') { e.lo = -Infinity; e.hi = Infinity; }
+  }
+  switch (t) {
+    case 'Integer': case 'Long': case 'Byte': if (r > e.hi! || r < e.lo!) throw new VBRuntimeError(6); return r;
+    case 'Single': return toSingle(r);
+    case 'Currency': return toCurrency(r);
+  }
+  return r;
+}
+
+const RANGES: Record<string, [number, number]> = { Integer: [-32768, 32767], Long: [-2147483648, 2147483647], Byte: [0, 255] };
+
 /** Marker: the expression needs the generator path. */
 const NOT_SYNC = Symbol('notSync');
 /** Expressions that once needed the generator path (performance hint only). */
@@ -216,14 +244,18 @@ function evalSync(f: Frame, e: Expr): VBValue | typeof NOT_SYNC {
     }
     case 'unary': {
       const v = evalSync(f, e.operand);
-      return v === NOT_SYNC ? v : unaryOp(e.op, v);
+      if (v === NOT_SYNC) return v;
+      const r = unaryOp(e.op, v);
+      return typeof r === 'number' && (r > e.hi! || r < e.lo!) ? typedNumber(f, e, r) : r;
     }
     case 'binary': {
       const a = evalSync(f, e.left);
       if (a === NOT_SYNC) return a;
       const b = evalSync(f, e.right);
       if (b === NOT_SYNC) return b;
-      return binaryOp(e.op, a, b);
+      const r = e.op === '&' ? binaryOp('&', shown(f, e.left, a), shown(f, e.right, b)) : binaryOp(e.op, a, b);
+      // only a result outside 0..255 or not whole can overflow its type or need Single/Currency rounding
+      return typeof r === 'number' && (r > e.hi! || r < e.lo!) ? typedNumber(f, e, r) : r;
     }
     case 'call': {
       const t = e.target;
@@ -280,11 +312,15 @@ export function* evalExpr(f: Frame, e: Expr): Gen<VBValue> {
     case 'withMember': return yield* memberGet(f, withObject(f), e.name, null);
     case 'withObject': return withObject(f);
     case 'call': return yield* evalCall(f, e);
-    case 'unary': return unaryOp(e.op, yield* evalExpr(f, e.operand));
+    case 'unary': {
+      const r = unaryOp(e.op, yield* evalExpr(f, e.operand));
+      return typeof r === 'number' && (r > e.hi! || r < e.lo!) ? typedNumber(f, e, r) : r;
+    }
     case 'binary': {
       const a = yield* evalExpr(f, e.left);
       const b = yield* evalExpr(f, e.right);
-      return binaryOp(e.op, a, b);
+      const r = e.op === '&' ? binaryOp('&', shown(f, e.left, a), shown(f, e.right, b)) : binaryOp(e.op, a, b);
+      return typeof r === 'number' && (r > e.hi! || r < e.lo!) ? typedNumber(f, e, r) : r;
     }
     case 'new': return objectFactory(f.rt, { objectType: e.typeName }, f.module)();
   }
@@ -361,6 +397,12 @@ export function* awaitHost(f: Frame, p: Promise<VBValue>): Gen<VBValue> {
   return v;
 }
 
+/** Host method arguments: a Single as its 7 digits (`List1.AddItem s`, `Coll.Add s`), see `shown`. */
+export function shownArgs(f: Frame, args: (Expr | MissingArg)[], argv: VBValue[]): VBValue[] {
+  for (let i = 0; i < argv.length; i++) if (maybeSingle(argv[i])) argv[i] = shown(f, args[i], argv[i]);
+  return argv;
+}
+
 /**
  * Arguments for `callMethod`: an object with a default member is passed as
  * that value (`List1.AddItem Text1` adds Text1.Text); objects without one (a
@@ -370,7 +412,8 @@ export function methodArgs(argv: VBValue[], obj?: VBObject): VBValue[] {
   if (obj?.rawArgs) return argv;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a !== undefined && isObject(a) && a.defaultMember !== undefined) argv[i] = plain(a);
+    if (a === Missing) argv[i] = undefined as unknown as VBValue;   // a missing Optional argument passed on: omitted
+    else if (a !== undefined && isObject(a) && a.defaultMember !== undefined) argv[i] = plain(a);
   }
   return argv;
 }
@@ -389,14 +432,14 @@ export function* hostRefs(f: Frame, obj: VBObject, name: string, args: (Expr | M
     if (a === undefined || a.kind === 'missing') continue;
     const r = yield* refOf(f, a);
     if (!r || r === MISSING || !('slot' in r)) continue;
-    const { slot, type, isArray } = r;
+    const { slot, type, isArray, fixedLength } = r;
     out[i] = {
       get value() { return slot.value; },
       set value(v: VBValue) {
         if (isArray) {   // a dynamic array variable takes a whole array (GetData into a Byte array)
           if (!(v instanceof VBArray)) throw new VBRuntimeError(13);
           slot.value = v;
-        } else slot.value = type === undefined ? v : storeValue(v, type);
+        } else slot.value = type === undefined ? v : storeValue(v, type, fixedLength);
       },
     };
   }
@@ -446,7 +489,8 @@ export function* memberGet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: 
     if (args === null) r = base.getMember(name, []);
     else {
       const argv = yield* evalArgValues(f, args);
-      r = base.hasMember(name) ? base.getMember(name, argv) : base.callMethod(name, methodArgs(argv, base), yield* hostRefs(f, base, name, args));
+      r = base.hasMember(name) ? base.getMember(name, argv)
+        : base.callMethod(name, methodArgs(shownArgs(f, args, argv), base), yield* hostRefs(f, base, name, args));
     }
     if (r instanceof Promise) return yield* awaitHost(f, r);
     yield* afterHostCall(f);
@@ -535,9 +579,19 @@ export function* evalArgValues(f: Frame, args: (Expr | MissingArg)[]): Gen<VBVal
 
 export function* callBuiltin(f: Frame, b: BuiltinRef, args: (Expr | MissingArg)[]): Gen<VBValue> {
   const argv = yield* evalArgValues(f, args);
-  const { minArgs, maxArgs, fn } = b.builtin;
+  const { minArgs, maxArgs, fn, raw, types, num } = b.builtin;
   if (argv.length < minArgs || argv.length > maxArgs) throw new VBRuntimeError(450);
-  const r = fn(argv, f.rt.builtinCtx);
+  for (let i = 0; i < argv.length; i++) {
+    const v = argv[i];
+    // a missing Optional argument passed on (`MsgBox s, , title` with title missing) counts as omitted
+    if (v === Missing && !raw) {
+      if (i < minArgs) throw new VBRuntimeError(448);
+      argv[i] = undefined as unknown as VBValue;
+    } else if (!num && maybeSingle(v)) argv[i] = shown(f, args[i], v);   // CStr(s), Left(s, 3), MsgBox s: 7 digits
+  }
+  const r = types
+    ? fn(argv, f.rt.builtinCtx, args.map(a => (a.kind === 'missing' ? undefined : reportedType(f, a))))
+    : fn(argv, f.rt.builtinCtx);
   return r instanceof Promise ? yield* awaitHost(f, r) : r;
 }
 
@@ -563,7 +617,11 @@ function* bindArgs(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[]): Gen<Bou
       const r = yield* refOf(f, a);
       if (r) { out.push(r); continue; }
     }
-    out.push({ value: yield* evalExpr(f, a) });
+    let value = yield* evalExpr(f, a);
+    // a number for a Variant parameter keeps the type the code gives it (TypeName in the callee); a Single its 7 digits
+    const sub = typeof value === 'number' && p.type === undefined && !p.isArray ? reportedType(f, a) : undefined;
+    if (sub === 'Single') value = shown(f, a, value);
+    out.push(sub === undefined ? { value } : { value, sub: sub as StaticType });
   }
   return out;
 }
@@ -574,7 +632,7 @@ function* refOf(f: Frame, e: Expr): Gen<BoundArg | null> {
   if (e.kind === 'name') {
     let b = bindingOf(f, e);
     if (b === undefined) b = implicitVariable(f, e);
-    if (b instanceof Variable && !b.opts.isConst) return { slot: b.ref, type: b.type, isArray: b.opts.isArray };
+    if (b instanceof Variable && !b.opts.isConst) return { slot: b.ref, type: b.type, isArray: b.opts.isArray, fixedLength: b.opts.fixedLength };
     return null;
   }
   if (e.kind === 'call' && e.target.kind === 'name') {
@@ -648,24 +706,32 @@ function assignVariable(v: Variable, value: VBValue, isSet: boolean): void {
  * default member of `item(2)` (or the default member with arguments when the
  * object has no `item`).
  */
-export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean): Gen<void> {
+export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean, src?: Expr): Gen<void> {
   if (isSet && !isObjectValue(value)) throw new VBRuntimeError(424);
+  // a Single stored anywhere but in a numeric slot (a String or Variant, a property) becomes its 7 shown digits
+  const single = src !== undefined && maybeSingle(value) && staticType(f, src) === 'Single';
+  const into = (t: VBTypeName | undefined): VBValue => (single && (t === undefined || !isNumericType(t)) ? single7(value as number) : value);
   switch (target.kind) {
     case 'name': {
       let b = bindingOf(f, target);
       if (b === undefined) b = implicitVariable(f, target);
       if (b instanceof Variable && !b.opts.isConst) {
-        assignVariable(b, value, isSet);
+        assignVariable(b, into(b.type), isSet);
+        // `v = CDbl(5)`: the Variant remembers the number's type for TypeName/VarType
+        // (an operator node of Variant type tells nothing: skipped; a stale `sub` no longer matches the value)
+        if (src !== undefined && b.type === 'Variant' && typeof value === 'number' && !((src.kind === 'binary' || src.kind === 'unary') && src.st === 'Variant')) {
+          noteSubtype(f, b, src);
+        }
         if (!isSet && b.type !== 'Variant' && holdsObjects(b.type)) yield* afterHostCall(f);
         return;
       }
       if (b instanceof ObjectRef && !isSet) {
-        setDefault(b.obj, [], plain(value));
+        setDefault(b.obj, [], plain(into(undefined)));
         yield* afterHostCall(f);
         return;
       }
       if (b instanceof MemberRef) {
-        yield* memberSet(f, b.obj, b.name, [], value, isSet);
+        yield* memberSet(f, b.obj, b.name, [], into(undefined), isSet);
         return;
       }
       if (b instanceof ProcRef) throw compileError('Function call on left-hand side of assignment must return Variant or Object');
@@ -678,7 +744,7 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean):
         const b = bindingOf(f, t, true);
         if (b instanceof MemberRef) {
           // `List(2) = "x"` in the form's code
-          yield* memberSet(f, b.obj, b.name, yield* evalArgValues(f, target.args), value, isSet);
+          yield* memberSet(f, b.obj, b.name, yield* evalArgValues(f, target.args), into(undefined), isSet);
           return;
         }
         if (b instanceof Variable) container = b.value;
@@ -689,7 +755,7 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean):
         const base = t.kind === 'member' ? yield* memberBase(f, t.object) : withObject(f);
         if (!(base instanceof ModuleRef) && !(base instanceof EnumRef) && isObject(base)) {
           // `List1.List(2) = "x"`
-          yield* memberSet(f, base, t.name, yield* evalArgValues(f, target.args), value, isSet);
+          yield* memberSet(f, base, t.name, yield* evalArgValues(f, target.args), into(undefined), isSet);
           return;
         }
         container = yield* memberGet(f, base, t.name, null);
@@ -698,16 +764,18 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean):
       }
       if (container instanceof VBArray) {
         const idx = yield* evalIndices(f, target.args);
-        if (!isSet) value = plain(value);
-        container.set(idx, value instanceof VBRecord || value instanceof VBArray ? value.clone() : value);
+        let v = into(container.elemType);
+        if (!isSet) v = plain(v);
+        container.set(idx, v instanceof VBRecord || v instanceof VBArray ? v.clone() : v);
         return;
       }
       if (container instanceof NothingT) throw new VBRuntimeError(91);
       if (isObject(container)) {
         if (isSet) throw compileError('Invalid use of property');
         const argv = yield* evalArgValues(f, target.args);
-        if (container.item && argv.length === 1) setDefault(container.item(toNumber(argv[0])), [], plain(value));
-        else setDefault(container, argv, plain(value));
+        const v = plain(into(undefined));
+        if (container.item && argv.length === 1) setDefault(container.item(toNumber(argv[0])), [], v);
+        else setDefault(container, argv, v);
         yield* afterHostCall(f);
         return;
       }
@@ -715,7 +783,12 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean):
     }
     case 'member': case 'withMember': {
       const base = target.kind === 'member' ? yield* memberBase(f, target.object) : withObject(f);
-      yield* memberSet(f, base, target.name, [], value, isSet);
+      let t: VBTypeName | undefined;
+      if (single) {
+        if (base instanceof VBRecord) t = f.rt.typeInfo(base.typeName).fields.get(lc(target.name))?.type;
+        else if (base instanceof ModuleRef) t = base.module.vars.get(lc(target.name))?.type;
+      }
+      yield* memberSet(f, base, target.name, [], into(t), isSet);
       return;
     }
   }

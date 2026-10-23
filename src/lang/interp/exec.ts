@@ -11,19 +11,23 @@
 // Exit For/Do/Sub and GoTo travel as completion values, not exceptions.
 
 import type {
-  ArrayBound, CaseTest, ConstDecl, Expr, ForEachStmt, ForStmt, LabelStmt, MissingArg, ProcDecl, SelectStmt, Stmt, VarDecl, VBTypeName,
+  AlignStmt, ArrayBound, CaseTest, ConstDecl, ErrorStmt, Expr, ForEachStmt, ForStmt, LabelStmt, MidStmt, MissingArg, ProcDecl, SelectStmt, Stmt,
+  VarDecl, VBTypeName,
 } from '../ast';
 import { VBRuntimeError, internalError } from '../errors';
 import { PrintLine } from '../printFormat';
-import { Empty, NothingT, NullT, VBArray, VBRecord, VBRef, bankers, compare, isObject, toNumber, toStr, type VBValue } from '../values';
+import {
+  Empty, Missing, NothingT, NullT, VBArray, VBRecord, VBRef, bankers, compare, isObject, maybeSingle, single7, toNumber, toStr, type VBValue,
+} from '../values';
 import { EndSignal, nextTick, type Gen } from './driver';
 import { execFileStmt, printItems } from './fileStmts';
 import { AutoNewSlot, Frame, ProcRef, Run, Variable, lc, storeValue, type Slot } from './scope';
 import {
   afterHostCall, assign, awaitHost, callBuiltin, callProc, constExpr, evalArgValues, evalExpr, formMethod, hostRefs, lookup, memberGet,
-  methodArgs, objectFactory, variableOf, withObject,
+  methodArgs, objectFactory, shownArgs, variableOf, withObject,
 } from './eval';
 import { compareResult, plain, truthy } from './operators';
+import type { StaticType } from './staticTypes';
 import { BuiltinRef, EnumRef, MemberRef, ModuleRef } from './scope';
 import type { VBObject } from '../host';
 
@@ -90,6 +94,16 @@ function labelsOf(body: Stmt[]): Map<string, number> {
 /** A label that is a line number (`20`), which `Erl` reports. */
 const isLineNumber = (name: string): boolean => name.charCodeAt(0) <= 57;
 
+/** Index of a GoTo's label in `body` (undefined: not in this block); passing a line number label counts for Erl. */
+function jumpTo(f: Frame, body: Stmt[], label: string): number | undefined {
+  const target = labelsOf(body).get(label);
+  if (target !== undefined) {
+    const name = (body[target] as LabelStmt).name;
+    if (isLineNumber(name)) f.lastLine = +name;
+  }
+  return target;
+}
+
 const procLabelCache = new WeakMap<ProcDecl, Set<string>>();
 
 /** All label names anywhere in a procedure. */
@@ -119,13 +133,8 @@ export function* execBlock(f: Frame, body: Stmt[], start = 0): Gen<Completion> {
     const c = yield* execStmt(f, body[i]);
     if (c === undefined) { i++; continue; }
     if (c instanceof GotoJump) {
-      const target = labelsOf(body).get(c.label);
-      if (target !== undefined) {
-        const name = (body[target] as LabelStmt).name;
-        if (isLineNumber(name)) f.lastLine = +name;
-        i = target + 1;
-        continue;
-      }
+      const target = jumpTo(f, body, c.label);
+      if (target !== undefined) { i = target + 1; continue; }
     }
     return c;
   }
@@ -384,8 +393,8 @@ function* pauseHere(f: Frame): Gen<void> {
 
 /** An argument bound by the caller: a by-reference slot (with the slot's declared type, if any), a value, or omitted. */
 export type BoundArg =
-  | { slot: Slot; type?: VBTypeName; isArray?: boolean }
-  | { value: VBValue }
+  | { slot: Slot; type?: VBTypeName; isArray?: boolean; fixedLength?: number }
+  | { value: VBValue; sub?: StaticType }
   | typeof MISSING;
 export const MISSING = Symbol('missing');
 
@@ -395,6 +404,9 @@ function sameType(a: VBTypeName, b: VBTypeName): boolean {
   if ('objectType' in a && 'objectType' in b) return lc(a.objectType) === lc(b.objectType);
   return false;
 }
+
+/** An object type (`As Object`, `As TextBox`): passing one object variable for another copies the reference. */
+const isObjectType = (t: VBTypeName): boolean => t === 'Object' || (typeof t === 'object' && 'objectType' in t);
 
 /** Runs a Sub/Function body in a new frame (run by the driver as a SubCall). */
 export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBValue> {
@@ -413,7 +425,8 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBVal
     if (a === undefined || a === MISSING) {
       if (p.isArray) v = new Variable(p.name, type, new VBRef(rt.unallocatedArray(type)), { isArray: true });
       else {
-        const dv = p.defaultValue ? constExpr(rt.moduleFrame(module), p.defaultValue) : rt.defaultFor(type);
+        // an omitted Optional Variant without a default is Missing (IsMissing); a typed one gets its type's default
+        const dv = p.defaultValue ? constExpr(rt.moduleFrame(module), p.defaultValue) : type === 'Variant' ? Missing : rt.defaultFor(type);
         v = new Variable(p.name, type, new VBRef(storeValue(dv, type)));
       }
     } else if ('slot' in a) {
@@ -425,16 +438,20 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBVal
         a.slot.value = storeValue(a.slot.value, type);
         v = new Variable(p.name, type, a.slot);
       } else if (sameType(a.type, type) || type === 'Variant') {
-        // shared: assignments convert to the caller's declared type (an array stays an array)
-        v = new Variable(p.name, a.type, a.slot, { isArray: a.isArray });
-      } else {
+        // shared: assignments convert to the caller's declared type (an array stays an array, a String * n keeps n)
+        v = new Variable(p.name, a.type, a.slot, { isArray: a.isArray, fixedLength: a.fixedLength });
+      } else if (isObjectType(a.type) && isObjectType(type)) {
         v = new Variable(p.name, type, new VBRef(storeValue(a.slot.value, type)));
+      } else {
+        // VB6 does not compile a variable of another type passed to a typed ByRef parameter (`Foo (x)` passes a copy)
+        throw compileError('ByRef argument type mismatch');
       }
     } else if (p.isArray) {
       if (!(a.value instanceof VBArray)) throw new VBRuntimeError(13);
       v = new Variable(p.name, type, new VBRef(a.value.clone()), { isArray: true });
     } else {
       v = new Variable(p.name, type, new VBRef(storeValue(a.value, type)));
+      if (a.sub !== undefined) { v.sub = a.sub; v.subOf = v.value; }
     }
     f.locals.set(lc(p.name), v);
   }
@@ -483,11 +500,14 @@ export function* declareVariable(f: Frame, d: VarDecl): Gen<Variable> {
   // `As New T`: each element / the variable makes its object when it is first used
   const create = d.isNew ? objectFactory(rt, d.type ?? 'Variant', f.module) : undefined;
   if (d.isArray) {
+    const n = d.fixedLength;
     if (d.bounds) {
-      const arr = rt.newArray(type, yield* evalBounds(f, d.bounds), true, create);
+      const bounds = yield* evalBounds(f, d.bounds);
+      const arr = n === undefined ? rt.newArray(type, bounds, true, create) : VBArray.fixedString(bounds, n, true);
       return new Variable(d.name, type, new VBRef(arr), { isArray: true, fixedArray: true });
     }
-    return new Variable(d.name, type, new VBRef(rt.unallocatedArray(type, create)), { isArray: true });
+    const arr = n === undefined ? rt.unallocatedArray(type, create) : VBArray.fixedString(null, n, false);
+    return new Variable(d.name, type, new VBRef(arr), { isArray: true });
   }
   if (create) return new Variable(d.name, type, new AutoNewSlot(create));
   return new Variable(d.name, type, new VBRef(rt.defaultFor(type, d.fixedLength)), { fixedLength: d.fixedLength });
@@ -577,7 +597,7 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
   switch (s.kind) {
     case 'assign': {
       const value = yield* evalExpr(f, s.value);
-      yield* assign(f, s.target, value, s.isSet);
+      yield* assign(f, s.target, value, s.isSet, s.value);
       return;
     }
     case 'call': return yield* execCall(f, s.target, s.args);
@@ -652,9 +672,10 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
         const v = variableOf(f, t);
         const cur = v.value;
         if (!(cur instanceof VBArray)) throw new VBRuntimeError(13);
+        const n = cur.fixedLength;
         if (!v.opts.isArray) v.ref.value = Empty;
-        else if (cur.fixed) v.ref.value = rt.newArray(cur.elemType, cur.bounds, true);
-        else v.ref.value = rt.unallocatedArray(cur.elemType);
+        else if (cur.fixed) v.ref.value = n === undefined ? rt.newArray(cur.elemType, cur.bounds, true) : VBArray.fixedString(cur.bounds, n, true);
+        else v.ref.value = n === undefined ? rt.unallocatedArray(cur.elemType) : VBArray.fixedString(null, n, false);
       }
       return;
     }
@@ -671,31 +692,7 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
     case 'label':
       if (isLineNumber(s.name)) f.lastLine = +s.name;
       return;
-    case 'error': {
-      // `Error n`: like Err.Raise n (VB's description for n)
-      const n = bankers(toNumber(yield* evalExpr(f, s.number)));
-      if (!(n >= 1 && n <= 65535)) throw new VBRuntimeError(5);
-      throw new VBRuntimeError(n);
-    }
-    case 'mid': {
-      const cur = toStr(plain(yield* evalExpr(f, s.target)));
-      const start = bankers(toNumber(yield* evalExpr(f, s.start)));
-      let n = s.length ? bankers(toNumber(yield* evalExpr(f, s.length))) : Infinity;
-      const value = toStr(plain(yield* evalExpr(f, s.value)));
-      if (start < 1 || start > cur.length || n < 0) throw new VBRuntimeError(5);
-      n = Math.min(n, value.length, cur.length - start + 1);
-      yield* assign(f, s.target, cur.slice(0, start - 1) + value.slice(0, n) + cur.slice(start - 1 + n), false);
-      return;
-    }
-    case 'lset': case 'rset': {
-      const cur = yield* evalExpr(f, s.target);
-      if (cur instanceof VBRecord) throw compileError(`Not supported in VibeBasic: ${s.kind === 'lset' ? 'LSet' : 'RSet'} of a user-defined type`);
-      const n = toStr(plain(cur)).length;
-      const v = toStr(plain(yield* evalExpr(f, s.value)));
-      const out = v.length >= n ? v.slice(0, n) : s.kind === 'lset' ? v.padEnd(n, ' ') : v.padStart(n, ' ');
-      yield* assign(f, s.target, out, false);
-      return;
-    }
+    case 'error': case 'mid': case 'lset': case 'rset': return yield* execStringStmt(f, s);
     case 'goto': {
       const label = lc(s.label);
       if (!f.proc || !procLabels(f.proc).has(label)) throw compileError('Label not defined');
@@ -757,6 +754,37 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
   }
 }
 
+/** `Error n`, the Mid statement, LSet and RSet (kept out of execInner, which stays small for the hot statements). */
+function* execStringStmt(f: Frame, s: ErrorStmt | MidStmt | AlignStmt): Gen<Completion> {
+  switch (s.kind) {
+    case 'error': {
+      // `Error n`: like Err.Raise n (VB's description for n)
+      const n = bankers(toNumber(yield* evalExpr(f, s.number)));
+      if (!(n >= 1 && n <= 65535)) throw new VBRuntimeError(5);
+      throw new VBRuntimeError(n);
+    }
+    case 'mid': {
+      const cur = toStr(plain(yield* evalExpr(f, s.target)));
+      const start = bankers(toNumber(yield* evalExpr(f, s.start)));
+      let n = s.length ? bankers(toNumber(yield* evalExpr(f, s.length))) : Infinity;
+      const value = toStr(plain(yield* evalExpr(f, s.value)));
+      if (start < 1 || start > cur.length || n < 0) throw new VBRuntimeError(5);
+      n = Math.min(n, value.length, cur.length - start + 1);
+      yield* assign(f, s.target, cur.slice(0, start - 1) + value.slice(0, n) + cur.slice(start - 1 + n), false);
+      return;
+    }
+    case 'lset': case 'rset': {
+      const cur = yield* evalExpr(f, s.target);
+      if (cur instanceof VBRecord) throw compileError(`Not supported in VibeBasic: ${s.kind === 'lset' ? 'LSet' : 'RSet'} of a user-defined type`);
+      const n = toStr(plain(cur)).length;
+      const v = toStr(plain(yield* evalExpr(f, s.value)));
+      const out = v.length >= n ? v.slice(0, n) : s.kind === 'lset' ? v.padEnd(n, ' ') : v.padStart(n, ' ');
+      yield* assign(f, s.target, out, false);
+      return;
+    }
+  }
+}
+
 /** A call statement: `Foo 1, 2`, `Call Foo(1)`, `obj.Method x`. */
 function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Completion> {
   if (target.kind === 'name') {
@@ -800,7 +828,7 @@ function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Com
 
 /** `obj.name args` as a statement: `callMethod` (a Promise result is awaited). */
 function* callObjectMethod(f: Frame, obj: VBObject, name: string, args: (Expr | MissingArg)[]): Gen<void> {
-  const argv = yield* evalArgValues(f, args);
+  const argv = shownArgs(f, args, yield* evalArgValues(f, args));
   const r = obj.callMethod(name, methodArgs(argv, obj), yield* hostRefs(f, obj, name, args));
   if (r instanceof Promise) yield* awaitHost(f, r);
   else yield* afterHostCall(f);
@@ -885,7 +913,10 @@ function* execFor(f: Frame, s: ForStmt): Gen<Completion> {
 
 function* execForEach(f: Frame, s: ForEachStmt): Gen<Completion> {
   const v = variableOf(f, s.variable);
-  const coll = plainCollection(yield* evalExpr(f, s.collection));
+  const source = yield* evalExpr(f, s.collection);
+  let coll = plainCollection(source);
+  // the elements of a Single array in a Variant: their 7 shown digits (see staticTypes.ts `shown`)
+  if (source instanceof VBArray && source.elemType === 'Single' && v.type !== 'Single') coll = coll.map(x => (maybeSingle(x) ? single7(x) : x));
   for (const item of coll) {
     // the element assignment belongs to the For Each statement; a failure is retried on its own
     for (;;) {
