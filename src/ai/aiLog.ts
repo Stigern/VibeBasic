@@ -7,7 +7,7 @@ import { THINKING_COLOR } from './streamLog';
 import { type ChatMessage, contentText } from './types';
 
 export type AiLogMode = 'code' | 'form' | 'fix' | 'change' | 'retry' | 'test';
-export type AiLogStatus = 'ok' | 'cancelled' | 'error' | 'not understood';
+export type AiLogStatus = 'ok' | 'cancelled' | 'error' | 'not understood' | 'loop';
 
 export interface AiLogEntry {
   time: Date; mode: AiLogMode; model: string;

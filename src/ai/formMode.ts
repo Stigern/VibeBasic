@@ -40,6 +40,9 @@ const PLACE = {
   additionalProperties: false,
 };
 
+/** The most ops one answer may have (the schema's maxItems). */
+export const MAX_OPS = 300;
+
 /**
  * The JSON schema of a form-mode answer, `{ops:[...], code?}`, sent as `response_format` (json_schema "form_ops").
  * It matches what parseFormOps reads; the parser stays tolerant for servers that ignore it. Extend the op list here.
@@ -49,6 +52,8 @@ export const FORM_OPS_SCHEMA = {
   properties: {
     ops: {
       type: 'array',
+      // a loop inside the grammar (the same op over and over) cannot go on forever
+      maxItems: MAX_OPS,
       items: {
         anyOf: [
           opSchema('add', { type: { type: 'string' }, name: NAME, index: INDEX, container: { anyOf: [{ type: 'string' }, { type: 'null' }] }, tab: INDEX, props: PROPS, place: PLACE }, ['type', 'name']),
@@ -218,8 +223,14 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
     return work.controls.filter(c => c.name.toLowerCase() === to.toLowerCase());
   };
 
+  // an answer that repeated itself: exact duplicates of an op are dropped, the first one counts
+  const seen = new Set<string>();
+  let repeated = 0;
   for (const raw of rawOps) {
     if (!isObj(raw) || typeof raw.op !== 'string') continue;
+    const key = JSON.stringify(raw);
+    if (seen.has(key)) { repeated++; continue; }
+    seen.add(key);
     const low = raw.op.trim().toLowerCase();
     const kind = OP_ALIASES[low] ?? low;
     if (kind === 'form') {
@@ -316,6 +327,8 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
       else for (const [c, geo] of arrange(ctrls, raw, warnings)) setGeometry(c, geo);
     } else warnings.push(`Ignored unknown operation ${raw.op}.`);
   }
+
+  if (repeated) warnings.push(`Ignored ${repeated} repeated ${repeated === 1 ? 'operation' : 'operations'} (exact copies of an earlier one).`);
 
   let code: string | null = null;
   let codeChanges: CodeApplyResult['changes'] | undefined;

@@ -14,6 +14,7 @@ import { buildCodeRequest, buildFixRequest, buildFormRequest, type FixError } fr
 import { detectServer, isVisionError, withDetected } from './detect';
 import { renderFormImage } from './formImage';
 import { layoutProblems } from './layoutCheck';
+import { LoopWatch } from './loopDetect';
 import { addAiLogEntry, describeRequest, finishAiLogEntry, type AiLogEntry, type AiLogMode } from './aiLog';
 import { isProse, isQuestion, showAnswer } from './answerDialog';
 import { FORM_RESPONSE_FORMAT, FORM_STRUCTURED_OUTPUTS, NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
@@ -298,6 +299,25 @@ const pause = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, 
   signal?.addEventListener('abort', onAbort, { once: true });
 });
 
+/** Internal error of a request stopped because its answer (or thinking) repeated itself. */
+const AI_LOOPED = 'The AI repeated itself.';
+const isLoop = (e: unknown): boolean => e instanceof Error && e.message === AI_LOOPED;
+/** The label of the waiting dialog during the retry after a loop, and the line in the streamed text before it. */
+export const LOOP_RETRY_LABEL = 'The AI repeated itself; trying again...';
+const LOOP_SEPARATOR = '--- The AI repeated itself; trying again ---';
+/** Appended to the request (as a new user message, so the cached prefix stays the same) for the retry after a loop. */
+export const LOOP_NUDGE = 'Your previous answer got stuck repeating the same item. Answer again; never repeat an op.';
+/** The message when the retry looped too. */
+export const AI_STUCK = 'The AI got stuck repeating itself. Try again, rephrase the request, or ask for less at a time.';
+/**
+ * presence_penalty and frequency_penalty of the retry after a loop (vLLM or OpenAI-style servers only). Mild on purpose:
+ * 1.5 (Qwen's advice) emptied the answer in the measurement.
+ */
+export const LOOP_PENALTY = 0.3;
+/** "baseUrl|model" of servers that rejected the penalties in this session. */
+const noPenalties = new Set<string>();
+const rejectsPenalties = (message: string): boolean => /\b(400|422)\b/.test(message) && /presence_penalty|frequency_penalty|penalt/i.test(message);
+
 /** A structured output schema, sent as `structured_outputs` to vLLM and as `response_format` to other (and unknown) servers. */
 export interface StructuredOutput { responseFormat: unknown; structuredOutputs: unknown }
 
@@ -340,41 +360,67 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
       sent: describeRequest(settings.baseUrl, settings.model, messages, {
         reasoning_effort: level, max_tokens: x.maxTokens,
         ...(x.structuredOutputs !== undefined ? { structured_outputs: 'json schema' } : {}), ...(x.responseFormat !== undefined ? { response_format: 'json_schema' } : {}),
+        presence_penalty: x.presencePenalty, frequency_penalty: x.frequencyPenalty,
       }),
     }, secret);
     lastEntry = entry;
     const t0 = Date.now();
     let reasoning = '', usage: AiUsage | undefined;
     partial.content = '';
+    // an answer or thinking that repeats itself is stopped at once, like Cancel
+    const watch = new LoopWatch();
+    const inner = new AbortController();
+    const relay = () => inner.abort();
+    if (x.signal?.aborted) inner.abort(); else x.signal?.addEventListener('abort', relay, { once: true });
     try {
       const text = await backend.aiChat(settings.baseUrl, settings.apiKey, settings.model, messages, level, {
         ...x,
-        onDelta: (k, t) => { if (k === 'content') partial.content += t; else reasoning += t; x.onDelta?.(k, t); },
+        signal: inner.signal,
+        onDelta: (k, t) => {
+          if (k === 'content') partial.content += t; else reasoning += t;
+          x.onDelta?.(k, t);
+          if (!watch.looped && watch.add(k, t)) inner.abort();
+        },
         onUsage: u => { usage = u; x.onUsage?.(u); },
       });
+      if (watch.looped) throw new Error(AI_LOOPED);
       finishAiLogEntry(entry, { status: 'ok', reply: text, reasoning, usage, ms: Date.now() - t0 }, secret);
       return text;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      const cancelled = x.signal?.aborted || message === 'cancelled';
-      finishAiLogEntry(entry, { status: cancelled ? 'cancelled' : 'error', reply: partial.content, reasoning, usage, error: cancelled ? undefined : message, ms: Date.now() - t0 }, secret);
-      throw e;
-    }
+      const looped = watch.looped !== null && !x.signal?.aborted;
+      const cancelled = !looped && (x.signal?.aborted || message === 'cancelled');
+      finishAiLogEntry(entry, {
+        status: looped ? 'loop' : cancelled ? 'cancelled' : 'error', reply: partial.content, reasoning, usage, ms: Date.now() - t0,
+        error: looped ? `The ${watch.looped === 'reasoning' ? 'thinking' : 'answer'} kept repeating the same text; stopped.` : cancelled ? undefined : message,
+      }, secret);
+      throw looped ? new Error(AI_LOOPED) : e;
+    } finally { x.signal?.removeEventListener('abort', relay); }
   };
 
   /** Follow-up rounds (the check-and-fix retry, Change...) think 'low' with "Fast follow-up rounds"; Server default stays unsent. */
   const send = (all: ChatMessage[], followUp: boolean, mode: AiLogMode): Start => async (o, ui) => {
     const level = effort && followUp && settings.fastFollowUp !== false ? 'low' : effort;
     const partial = { content: '' };
-    const prepared = () => limitPictures(all, picturesOn(settings) ? pictureLimit.get(server) ?? MAX_PICTURES : 0);
-    /** One request with the max_tokens cap; a server that rejects the cap gets it again at once without, and no cap for the rest of the session. */
+    /** The request; after a loop, with the nudge appended. */
+    let current = all;
+    /** The penalties of the retry after a loop (none otherwise). */
+    let penalties: Pick<AiChatOptions, 'presencePenalty' | 'frequencyPenalty'> = {};
+    const prepared = () => limitPictures(current, picturesOn(settings) ? pictureLimit.get(server) ?? MAX_PICTURES : 0);
+    /**
+     * One request with the max_tokens cap; a server that rejects the cap gets it again at once without, and no cap for the rest
+     * of the session. The same for the penalties.
+     */
     const capped = async (messages: ChatMessage[], x: AiChatOptions, m: AiLogMode): Promise<string> => {
       const maxTokens = noMaxTokens.has(server) ? undefined : maxTokensFor(level ?? 'server', settings.contextTokens, messages.reduce((n, y) => n + contentChars(y.content), 0));
-      try { return await attempt(messages, level, { ...x, maxTokens }, m, partial); }
+      try { return await attempt(messages, level, { ...x, ...penalties, maxTokens }, m, partial); }
       catch (e) {
-        if (o.signal?.aborted || maxTokens === undefined || !rejectsMaxTokens(e instanceof Error ? e.message : String(e))) throw e;
+        const message = e instanceof Error ? e.message : String(e);
+        if (o.signal?.aborted) throw e;
+        if (penalties.presencePenalty !== undefined && rejectsPenalties(message)) { noPenalties.add(server); penalties = {}; return capped(messages, x, 'retry'); }
+        if (maxTokens === undefined || !rejectsMaxTokens(message)) throw e;
         noMaxTokens.add(server);
-        return attempt(messages, level, { ...x, maxTokens: undefined }, 'retry', partial);
+        return attempt(messages, level, { ...x, ...penalties, maxTokens: undefined }, 'retry', partial);
       }
     };
     const plain = async (messages: ChatMessage[], m: AiLogMode): Promise<string> => {
@@ -413,12 +459,25 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
         return plain(prepared(), 'retry');
       }
     };
-    try { return await once(mode); }
+    const retried = async (m: AiLogMode): Promise<string> => {
+      try { return await once(m); }
+      catch (e) {
+        if (o.signal?.aborted || !isTransientError(e instanceof Error ? e.message : String(e))) throw e;
+        ui.setLabel('Retrying...');
+        await pause(aiRetry.delayMs, o.signal);
+        return once('retry');
+      }
+    };
+    try { return await retried(mode); }
     catch (e) {
-      if (o.signal?.aborted || !isTransientError(e instanceof Error ? e.message : String(e))) throw e;
-      ui.setLabel('Retrying...');
-      await pause(aiRetry.delayMs, o.signal);
-      return once('retry');
+      // A loop: once more with a nudge and mild penalties; a second loop gives up.
+      if (o.signal?.aborted || !isLoop(e)) throw e;
+      log.separator(LOOP_SEPARATOR);
+      ui.setLabel(LOOP_RETRY_LABEL);
+      current = [...all, { role: 'user', content: LOOP_NUDGE }];
+      if (settings.serverKind && !noPenalties.has(server)) penalties = { presencePenalty: LOOP_PENALTY, frequencyPenalty: LOOP_PENALTY };
+      try { return await retried('retry'); }
+      catch (e2) { throw !o.signal?.aborted && isLoop(e2) ? new Error(AI_STUCK) : e2; }
     }
   };
 

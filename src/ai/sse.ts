@@ -18,6 +18,9 @@ export interface AiChatOptions {
   structuredOutputs?: unknown;
   /** Sent as `max_tokens` (on vLLM the thinking counts too). */
   maxTokens?: number;
+  /** Sent as `presence_penalty` and `frequency_penalty` (only on the retry after a loop). */
+  presencePenalty?: number;
+  frequencyPenalty?: number;
 }
 
 /** The error text when the server stopped at max_tokens (finish_reason "length"); same text as src-tauri/src/ai.rs. */
