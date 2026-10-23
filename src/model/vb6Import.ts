@@ -100,7 +100,7 @@ export function parseValue(src: string): RawValue {
   if (q >= 0) t = t.slice(0, q).trim();
   const hex = /^&H([0-9A-Fa-f]+)&?$/i.exec(t);
   if (hex) return { kind: 'num', n: parseInt(hex[1], 16) | 0 };
-  if (/^[-+]?(\d+\.?\d*|\.\d+)(E[-+]?\d+)?$/i.test(t)) return { kind: 'num', n: Number(t) };
+  if (/^[-+]?(\d+(\.\d*)?|\.\d+)(E[-+]?\d+)?$/i.test(t)) return { kind: 'num', n: Number(t) };
   if (/^true$/i.test(t)) return { kind: 'num', n: -1 };
   if (/^false$/i.test(t)) return { kind: 'num', n: 0 };
   return { kind: 'raw', s: t };

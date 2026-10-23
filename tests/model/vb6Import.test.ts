@@ -2,7 +2,7 @@
 import { expect, test } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { decodeBmp } from '../../src/model/vb6Image';
-import { importVb6File, importVbp } from '../../src/model/vb6Import';
+import { importVb6File, importVbp, parseValue } from '../../src/model/vb6Import';
 import type { ControlDef, FormDef } from '../../src/model/types';
 
 const DIR = 'tests/fixtures/vb6';
@@ -80,6 +80,13 @@ test('a crafted BMP header neither hangs nor allocates: palette, data length and
   expect(() => decodeBmp(bmp(8193, 1, 24, 0, 8193 * 3 + 3))).toThrow('the picture is too big');
   expect(performance.now() - t0).toBeLessThan(200);
   expect(decodeBmp(bmp(1, 1, 1, 5, 2 * 4 + 4)).width).toBe(1);   // biClrUsed 5 on a 1-bit bitmap: 2 entries are read
+});
+
+test('a .frm value with a long run of digits is parsed in linear time', () => {
+  const t0 = performance.now();
+  expect(parseValue(`${'1'.repeat(200_000)}x`).kind).toBe('raw');
+  expect(performance.now() - t0).toBeLessThan(200);
+  expect(['1.5', '.5', '12.', '-3E2'].map(v => parseValue(v))).toEqual([1.5, 0.5, 12, -300].map(n => ({ kind: 'num', n })));
 });
 
 test('a .cls becomes a class module with its Instancing', async () => {
