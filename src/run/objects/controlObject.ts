@@ -37,6 +37,9 @@ import type { DbSession } from '../data/dbSession';
 import { DataGridControl } from '../data/dataGrid';
 import { DataListControl } from '../data/dataList';
 import { MSCommControl, SysInfoControl } from './commControl';
+import { AnimationControl } from './animationControl';
+import { CoolBarControl, ImageComboControl } from './comboBands';
+import { CalendarControl } from './calendarControl';
 import type { CommSession } from '../comm';
 import type { SystemApi } from '../../backend/backend';
 
@@ -193,6 +196,10 @@ export class ControlObject implements VBObject, DataConsumer {
     if (def.type === 'MMControl') this.rich = new MciControl(this.richHost());
     else if (def.type === 'MediaPlayer') this.rich = new MediaPlayerControl(this.richHost());
     else if (def.type === 'Agent') this.rich = new AgentControl(this.richHost());
+    else if (def.type === 'Animation') this.rich = new AnimationControl(this.richHost());
+    else if (def.type === 'ImageCombo') this.rich = new ImageComboControl(this.richHost());
+    else if (def.type === 'CoolBar') this.rich = new CoolBarControl(this.richHost());
+    else if (def.type === 'Calendar') this.rich = new CalendarControl(this.richHost());
     else if (def.type === 'MSComm') {
       this.rich = new MSCommControl({
         props: this.props, name: this.def.name,
@@ -278,6 +285,7 @@ export class ControlObject implements VBObject, DataConsumer {
         const o = this.ctx.openMedia;
         return o ? o(path, mime) : Promise.reject(new VBRuntimeError(53));
       },
+      controlByName: n => this.ctx.controlByName?.(n),
     };
   }
 
@@ -776,7 +784,8 @@ export class ControlObject implements VBObject, DataConsumer {
     if (pd.runtime === 'ro' || name.toLowerCase() === 'name' || name.toLowerCase() === 'index') throw new VBRuntimeError(383);
     if (this.rich?.set) {
       if (args.length) throw new VBRuntimeError(450);
-      const r = this.rich.set(pd.name, this.plain(value));
+      // the object itself, not its default member: the ImageList a control names, the ComboItem SelectedItem becomes
+      const r = this.rich.set(pd.name, IMAGE_REFS.has(pd.name) || pd.name === 'SelectedItem' ? value : this.plain(value));
       if (r !== false) return r === true ? undefined : r;
     }
     if (this.chart && this.chartSet(pd, args, value)) return;
@@ -1010,6 +1019,10 @@ export class ControlObject implements VBObject, DataConsumer {
         const n = num(v);
         if (pd.min !== undefined && n < pd.min) throw new VBRuntimeError(380);
         if (pd.max !== undefined && n > pd.max) throw new VBRuntimeError(380);
+        if (this.def.type === 'FlatScrollBar' && pd.name === 'Value') {   // the FlatScrollBar clamps a Value outside Min .. Max
+          const lo = Math.min(Number(this.props.Min), Number(this.props.Max)), hi = Math.max(Number(this.props.Min), Number(this.props.Max));
+          return Math.min(hi, Math.max(lo, n));
+        }
         if (pd.name === 'Value' && 'Min' in this.props && 'Max' in this.props
           && (n < Number(this.props.Min) || n > Number(this.props.Max))) throw new VBRuntimeError(380);
         if (pd.name === 'ListIndex' && (n < -1 || n > this.list().length - 1)) throw new VBRuntimeError(380);

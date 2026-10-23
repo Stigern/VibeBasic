@@ -11,7 +11,7 @@ A Visual Basic 6 clone for macOS, with the authentic Windows 98 look and a built
 - **Run and debug:** F5 runs the program in real windows. Breakpoints (F9), stepping (F8) and the Immediate window work as in VB6.
 - **Make app:** builds a standalone Mac `.app` from your project.
 - **Controls:** the classic intrinsic controls, plus ActiveX-style components picked under Project > Components (Ctrl+T):
-  - Common Controls: TreeView, ListView, Toolbar, StatusBar, ImageList, DTPicker and others.
+  - Common Controls: TreeView, ListView, Toolbar, StatusBar, ImageList, ImageCombo, CoolBar (bands host other controls), DTPicker, FlatScrollBar, Animation (GIF, APNG, WebP and MP4 instead of AVI) and others, plus the Access-style Calendar (MSCAL).
   - Media and data: MSFlexGrid, MSChart, RichTextBox, MaskedEdit, MMControl and MediaPlayer.
   - Networking: WebBrowser, Inet and Winsock.
   - Serial ports and system information: MSComm (for an Arduino or a 3D printer over USB) and SysInfo. `CommPort` n opens the n-th `/dev/cu.*` device in name order; the extra property `PortName` takes the device path itself, e.g. `MSComm1.PortName = "/dev/cu.usbmodem1101"`.

@@ -25,7 +25,7 @@ test('the Toolbox follows Project > Components; unchecking a component in use is
 
   const done = showComponents(ide, document);
   const box = (file: string) => document.querySelector<HTMLInputElement>(`.cmp98-list input[data-file="${file}"]`)!;
-  expect(document.querySelector('.cmp98-info')!.textContent).toContain('Location: C:\\WINDOWS\\SYSTEM\\MSADODC.OCX');   // the first one, by name
+  expect(document.querySelector('.cmp98-info')!.textContent).toContain('Location: C:\\PROGRAM FILES\\MICROSOFT OFFICE\\OFFICE\\MSCAL.OCX');   // the first one, by name
   box('TABCTL32.OCX').click();
   press('Apply');                                   // applies at once, the dialog stays open
   await vi.waitFor(() => expect(overlays()).toHaveLength(1));

@@ -7,6 +7,7 @@ import type { VBRef, VBValue } from '../../lang/values';
 import type { PropValue } from '../../model/types';
 import type { OpenedMedia } from '../mediaSource';
 import type { DataControl } from '../data/dataControl';
+import type { ControlArrayObject, ControlObject } from './controlObject';
 
 export interface RichHost {
   readonly props: Record<string, PropValue>;
@@ -17,6 +18,8 @@ export interface RichHost {
   /** Opens a file of the program (relative to App.Path) for the window to play: never the bytes in a patch (see mediaSource.ts).
    *  Rejects with error 53 when it is missing, or an Error when it cannot be played (too big). */
   openMedia(path: string, mime: string): Promise<OpenedMedia>;
+  /** A control of the form by name (CoolBar bands host them); undefined before the form's controls are all made. */
+  controlByName?(name: string): ControlObject | ControlArrayObject | undefined;
 }
 
 export interface RichControl {

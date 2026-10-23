@@ -114,6 +114,12 @@ group({
   mvwSunday: 1, mvwMonday: 2, mvwTuesday: 3, mvwWednesday: 4, mvwThursday: 5, mvwFriday: 6, mvwSaturday: 7,
 });
 
+// MSCOMCT2.OCX: FlatScrollBar (Orientation, Appearance, Arrows), Animation (BackStyle); COMCT332.OCX: CoolBar bands
+group({
+  cc2OrientationVertical: 0, cc2OrientationHorizontal: 1, fsb3D: 0, fsbFlat: 1, fsbTrack3D: 2, fsbBoth: 0, fsbLeftUp: 1, fsbRightDown: 2,
+  cc2BackstyleTransparent: 0, cc2BackstyleOpaque: 1, cbrDefault: 0, cbrFixedSize: 1,
+});
+
 // Inet (MSINET.OCX): StateChanged states, protocols, access types, data types
 group({
   icNone: 0, icHostResolvingHost: 1, icHostResolved: 2, icConnecting: 3, icConnected: 4, icRequesting: 5, icRequestSent: 6,

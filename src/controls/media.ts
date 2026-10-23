@@ -251,3 +251,103 @@ export function mediaPlayer(c: Ctx): Renderer {
     bg: () => null,
   };
 }
+
+// -- Animation ---------------------------------------------------------------------------------------------------
+
+const has = (k: ReadonlySet<string> | null, ...names: string[]): boolean => k === null || names.some(n => k.has(n));
+
+const FILM_ICON = '<svg viewBox="0 0 32 32" width="32" height="32" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges">'
+  + '<rect x="3.500" y="4.500" width="25" height="23" fill="#c0c0c0" stroke="#000"/><path d="M6 7h3v3H6zM6 14h3v3H6zM6 21h3v3H6zM23 7h3v3h-3zM23 14h3v3h-3zM23 21h3v3h-3z" fill="#000"/>'
+  + '<path d="M12 9v14l9-7z" fill="#008000" stroke="#000"/></svg>';
+
+/** A canvas context, except in jsdom (it has no canvas). */
+function canvas2d(cv: HTMLCanvasElement): CanvasRenderingContext2D | null {
+  if (typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent)) return null;
+  try { return cv.getContext('2d'); } catch { return null; }
+}
+
+/**
+ * Animation (MSCOMCT2.OCX). A picture file (GIF, APNG, WebP) is an <img> that plays while the run session says `playing` (it restarts with every
+ * Play) and stands as a snapshot of its frame otherwise; MP4 and WebM go through the media follower of MMControl. The file is read by its token
+ * like every media file (MediaSrc), the state arrives as MediaCmd.
+ */
+export function animation(c: Ctx): Renderer {
+  let root: HTMLElement, stage: HTMLElement;
+  let img: HTMLImageElement | null = null, snap: HTMLCanvasElement | null = null, vid: HTMLVideoElement | null = null;
+  let follow: ReturnType<typeof mediaFollower> | null = null;
+  let src = '', url: string | null = null, own = false, gen = 0, seq = -1, video = false;
+
+  const showSnap = (on: boolean): void => { if (img && snap) { snap.style.display = on ? '' : 'none'; img.style.display = on ? 'none' : ''; } };
+  function freeze(): void {
+    if (!img || !snap || !url) return;
+    const ctx = img.naturalWidth > 0 ? canvas2d(snap) : null;
+    if (!ctx) { return; }
+    snap.width = img.naturalWidth; snap.height = img.naturalHeight;
+    ctx.clearRect(0, 0, snap.width, snap.height);
+    ctx.drawImage(img, 0, 0);
+    showSnap(true);
+  }
+  function release(): void { if (own && url) URL.revokeObjectURL(url); url = null; own = false; }
+  function load(data: string): void {
+    src = data;
+    seq = -1;
+    const g = ++gen;
+    release();
+    if (!video) follow?.src('');
+    if (img) { img.removeAttribute('src'); showSnap(false); img.style.display = 'none'; }
+    if (!data || video) { follow?.src(video ? data : ''); return; }
+    void mediaElementUrl(data).then(r => {
+      if (g !== gen) { if (r?.own) URL.revokeObjectURL(r.url); return; }
+      if (!r || !img) return;
+      url = r.url; own = r.own;
+      img.style.display = '';
+      img.onload = () => { if (g === gen && seq < 0) freeze(); };   // before the first Play: the first frame
+      img.src = r.url;
+    });
+  }
+  function command(m: MediaCommand): void {
+    if (video) { follow?.cmd(m); return; }
+    if (m.seq === seq) return;
+    seq = m.seq;
+    if (!img || !url) return;
+    if (m.playing) { showSnap(false); img.removeAttribute('src'); img.src = url; }   // a new source restarts a GIF from its first frame
+    else freeze();
+  }
+
+  return {
+    build() {
+      root = h('div', { class: 'vb-anim' });
+      stage = h('div', { class: 'anim-stage' });
+      root.appendChild(stage);
+      c.el.replaceChildren(root);
+      follow?.destroy(); follow = null; release();
+      src = ''; seq = -1; gen++;
+      if (c.mode !== 'run') { stage.innerHTML = FILM_ICON; stage.classList.add('anim-icon'); return; }
+      c.setInput(root);
+      img = h('img', { class: 'anim-pic', draggable: 'false', alt: '' }) as HTMLImageElement;
+      snap = h('canvas', { class: 'anim-pic', style: { display: 'none' } }) as HTMLCanvasElement;
+      vid = h('video', { class: 'anim-pic', playsinline: true, muted: true, style: { display: 'none' } }) as HTMLVideoElement;
+      vid.muted = true;
+      img.style.display = 'none';
+      stage.append(img, snap, vid);
+      follow = mediaFollower(vid, d => c.fire('vbmediastate', d));
+    },
+    patch(k) {
+      if (has(k, 'Center')) stage.classList.toggle('center', c.bool('Center'));
+      if (c.mode !== 'run') return;
+      const cmd = decodeMediaCmd(c.str('MediaCmd'));
+      if (has(k, 'MediaSrc', 'MediaCmd')) {
+        const data = c.str('MediaSrc');
+        if (data !== src || (cmd && cmd.video !== video)) {
+          video = !!cmd?.video;
+          if (vid) vid.style.display = video && data ? '' : 'none';
+          if (img && video) img.style.display = 'none';
+          load(data);
+        }
+        if (cmd) command(cmd);
+      }
+    },
+    destroy() { follow?.destroy(); follow = null; release(); gen++; },
+    bg: () => (c.num('BackStyle') === 0 ? 'transparent' : c.color('BackColor')),
+  };
+}

@@ -18,7 +18,7 @@ const ALL = Object.keys(CONTROL_TYPES) as ControlType[];
 const NON_FORM = ALL.filter(t => t !== 'Form') as Exclude<ControlType, 'Form'>[];
 
 test('registry has every ControlType keyed by its own type', () => {
-  expect(ALL.sort()).toEqual(['CheckBox', 'ComboBox', 'CommandButton', 'Form', 'Frame', 'HScrollBar', 'Image', 'Label', 'ListBox', 'OptionButton', 'PictureBox', 'ProgressBar', 'TextBox', 'Timer', 'VScrollBar', 'Shape', 'Line', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'DriveListBox', 'DirListBox', 'FileListBox', 'SSTab', 'ImageList', 'Toolbar', 'DTPicker', 'MonthView', 'MaskedEdit', 'WebBrowser', 'Inet', 'Winsock', 'MSComm', 'SysInfo', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Data', 'Adodc', 'DataGrid', 'DataList', 'DataCombo', 'SSPanel', 'SSCommand', 'SSCheck', 'SSOption', 'SSFrame', 'SSRibbon'].sort());
+  expect(ALL.sort()).toEqual(['CheckBox', 'ComboBox', 'CommandButton', 'Form', 'Frame', 'HScrollBar', 'Image', 'Label', 'ListBox', 'OptionButton', 'PictureBox', 'ProgressBar', 'TextBox', 'Timer', 'VScrollBar', 'Shape', 'Line', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'DriveListBox', 'DirListBox', 'FileListBox', 'SSTab', 'ImageList', 'Toolbar', 'DTPicker', 'MonthView', 'MaskedEdit', 'WebBrowser', 'Inet', 'Winsock', 'MSComm', 'SysInfo', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Data', 'Adodc', 'DataGrid', 'DataList', 'DataCombo', 'SSPanel', 'SSCommand', 'SSCheck', 'SSOption', 'SSFrame', 'SSRibbon', 'Animation', 'ImageCombo', 'CoolBar', 'FlatScrollBar', 'Calendar'].sort());
   for (const [k, d] of Object.entries(CONTROL_TYPES)) expect(d.type).toBe(k);
 });
 
@@ -47,7 +47,7 @@ test('event and method names are unique per type', () => {
 });
 
 test('common properties on every type except Timer; Timer has exactly its five', () => {
-  for (const t of NON_FORM.filter(x => x !== 'Timer' && x !== 'CommonDialog' && x !== 'Shape' && x !== 'Line' && x !== 'StatusBar' && x !== 'Toolbar' && x !== 'ImageList' && x !== 'Inet' && x !== 'Winsock' && x !== 'MSComm' && x !== 'SysInfo' && x !== 'Agent' && x !== 'Data' && x !== 'Adodc')) {   // StatusBar, Toolbar, Data, Adodc: no TabIndex/TabStop; ImageList: Left, Top, Tag only
+  for (const t of NON_FORM.filter(x => x !== 'Timer' && x !== 'CommonDialog' && x !== 'Shape' && x !== 'Line' && x !== 'StatusBar' && x !== 'Toolbar' && x !== 'CoolBar' && x !== 'ImageList' && x !== 'Inet' && x !== 'Winsock' && x !== 'MSComm' && x !== 'SysInfo' && x !== 'Agent' && x !== 'Data' && x !== 'Adodc')) {   // StatusBar, Toolbar, CoolBar, Data, Adodc: no TabIndex/TabStop; ImageList: Left, Top, Tag only
     for (const p of ['Left', 'Top', 'Width', 'Height', 'Visible', 'Enabled', 'TabIndex', 'TabStop', 'Tag', 'ToolTipText'])
       expect(getPropDef(t, p), `${t}.${p}`).toBeDefined();
   }
@@ -163,7 +163,7 @@ test('methods', () => {
 
 test('toolbox order follows VB6', () => {
   expect(TOOLBOX_ORDER).toEqual(['Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
-    'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'Data', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar', 'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit', 'WebBrowser', 'Inet', 'Winsock', 'MSComm', 'SysInfo', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Adodc', 'DataGrid', 'DataList', 'DataCombo', 'SSPanel', 'SSCommand', 'SSCheck', 'SSOption', 'SSFrame', 'SSRibbon']);
+    'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'Data', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar', 'TreeView', 'ListView', 'ImageList', 'ImageCombo', 'CoolBar', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'FlatScrollBar', 'Animation', 'MaskedEdit', 'Calendar', 'WebBrowser', 'Inet', 'Winsock', 'MSComm', 'SysInfo', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Adodc', 'DataGrid', 'DataList', 'DataCombo', 'SSPanel', 'SSCommand', 'SSCheck', 'SSOption', 'SSFrame', 'SSRibbon']);
 });
 
 test('getPropDef is case-insensitive and returns undefined for unknown', () => {

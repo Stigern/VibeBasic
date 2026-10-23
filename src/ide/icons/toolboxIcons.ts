@@ -85,5 +85,13 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
   Agent: svg('<rect x="1.500" y="0.500" width="9" height="6" rx="2" fill="#ffffe1" stroke="#000"/><path d="M4 6.500l-1 2.500 3-2.500" fill="#ffffe1" stroke="#000"/>'
     + box(6, 8, 9, 7, '#c0c0c0') + '<rect x="7" y="9" width="7" height="4" fill="#000080"/><rect x="8" y="10" width="1" height="1" fill="#00ffff"/><rect x="12" y="10" width="1" height="1" fill="#00ffff"/>'
     + '<rect x="10" y="6" width="1" height="2" fill="#ff0000"/>'),
+  Animation: svg(box(1, 1, 14, 14, '#000') + '<rect x="2" y="2" width="12" height="12" fill="#c0c0c0"/><rect x="3" y="3" width="2" height="2" fill="#000"/><rect x="3" y="7" width="2" height="2" fill="#000"/><rect x="3" y="11" width="2" height="2" fill="#000"/>'
+    + '<rect x="11" y="3" width="2" height="2" fill="#000"/><rect x="11" y="7" width="2" height="2" fill="#000"/><rect x="11" y="11" width="2" height="2" fill="#000"/><path d="M6 4v8l5-4z" fill="#008000" stroke="#000"/>'),
+  ImageCombo: svg(box(1, 3, 14, 10) + '<rect x="2" y="4" width="4" height="4" fill="#0000c0"/><rect x="2" y="9" width="4" height="3" fill="#008000"/><path d="M7 6h3M7 10h3" stroke="#000"/>'
+    + '<rect x="11" y="4" width="3" height="8" fill="#c0c0c0"/><path d="M11.500 7.500h2L12.500 9.500z" fill="#000"/>'),
+  CoolBar: svg(box(0, 2, 16, 12, '#c0c0c0') + '<path d="M2.500 4v4M4.500 4v4M2.500 10v3M4.500 10v3" stroke="#808080"/><path d="M3.500 4v4M5.500 4v4M3.500 10v3M5.500 10v3" stroke="#fff"/>'
+    + '<rect x="7" y="4" width="7" height="4" fill="#fff" stroke="#000"/><rect x="7" y="10" width="7" height="3" fill="#fff" stroke="#000"/>'),
+  FlatScrollBar: svg('<rect x="1" y="5" width="14" height="6" fill="#c0c0c0" stroke="#808080"/><rect x="5" y="6" width="4" height="4" fill="#c0c0c0" stroke="#808080"/><path d="M3 8l2-1.500v3zM13 8l-2-1.500v3z" fill="#000"/>'),
+  Calendar: svg(box(1, 1, 14, 14) + '<rect x="2" y="2" width="12" height="3" fill="#c0c0c0"/><path d="M2 7.500h12M2 10.500h12M5.500 5v9M8.500 5v9M11.500 5v9" stroke="#808080"/><rect x="6" y="8" width="2" height="2" fill="#000080"/>'),
   Form: svg(box(1, 2, 14, 12, '#c0c0c0') + '<rect x="2" y="3" width="12" height="3" fill="#000080"/>'),
 };

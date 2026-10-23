@@ -385,7 +385,7 @@ export class FormInstance implements VBObject {
         else if (prop === 'ListIndex' && changed) ev = 'Click';
         break;
       case 'ListBox': if (prop === 'ListIndex' && changed) ev = 'Click'; break;
-      case 'HScrollBar': case 'VScrollBar': if (prop === 'Value' && changed) ev = 'Change'; break;
+      case 'HScrollBar': case 'VScrollBar': case 'FlatScrollBar': if (prop === 'Value' && changed) ev = 'Change'; break;
       case 'RichTextBox':
         if (prop === 'Text' && changed) ev = 'Change';
         else if ((prop === 'SelStart' || prop === 'SelLength') && changed) ev = 'SelChange';

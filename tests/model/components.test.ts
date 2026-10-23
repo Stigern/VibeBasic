@@ -13,12 +13,12 @@ test('component data drives the Toolbox: intrinsic controls first, then the chec
   expect(toolboxTools([])).toEqual(INTRINSIC);
   // checked out of order: the Toolbox still follows the component table
   expect(toolboxTools(['TABCTL32.OCX', 'mscomctl.ocx']).slice(INTRINSIC.length))
-    .toEqual(['ProgressBar', 'Slider', 'StatusBar', 'TabStrip', 'Toolbar', 'TreeView', 'ListView', 'ImageList', 'SSTab']);
+    .toEqual(['ProgressBar', 'Slider', 'StatusBar', 'TabStrip', 'Toolbar', 'TreeView', 'ListView', 'ImageList', 'ImageCombo', 'SSTab']);
   // every control type is reachable: intrinsic or in exactly one listed component
   const all = toolboxTools(availableComponents().map(c => c.file));
   expect([...all].sort()).toEqual([...TOOLBOX_ORDER].sort());
   // components without any control yet are not listed
-  expect(availableComponents().map(c => c.file)).toEqual(['MSCOMCTL.OCX', 'MSCOMCT2.OCX', 'COMDLG32.OCX', 'RICHTX32.OCX', 'MSFLXGRD.OCX', 'TABCTL32.OCX', 'SHDOCVW.DLL', 'MSINET.OCX', 'MSWINSCK.OCX', 'MSCOMM32.OCX', 'SYSINFO.OCX', 'MSCHRT20.OCX', 'MSMASK32.OCX', 'MCI32.OCX', 'MSDXM.OCX', 'MSADODC.OCX', 'MSDATGRD.OCX', 'MSDATLST.OCX', 'THREED32.OCX', 'AGENTCTL.DLL']);
+  expect(availableComponents().map(c => c.file)).toEqual(['MSCOMCTL.OCX', 'MSCOMCT2.OCX', 'COMCT332.OCX', 'COMDLG32.OCX', 'RICHTX32.OCX', 'MSFLXGRD.OCX', 'TABCTL32.OCX', 'SHDOCVW.DLL', 'MSINET.OCX', 'MSWINSCK.OCX', 'MSCOMM32.OCX', 'SYSINFO.OCX', 'MSCHRT20.OCX', 'MSMASK32.OCX', 'MSCAL.OCX', 'MCI32.OCX', 'MSDXM.OCX', 'MSADODC.OCX', 'MSDATGRD.OCX', 'MSDATLST.OCX', 'THREED32.OCX', 'AGENTCTL.DLL']);
   expect(controlsOf('MSINET.OCX')).toEqual(['Inet']);
   expect(controlsOf('MCI32.OCX')).toEqual(['MMControl']);
   expect(controlsOf('AGENTCTL.DLL')).toEqual(['Agent']);
@@ -26,6 +26,9 @@ test('component data drives the Toolbox: intrinsic controls first, then the chec
   expect(controlsOf('MSDATLST.OCX')).toEqual(['DataList', 'DataCombo']);
   expect(controlsOf('MSCOMM32.OCX')).toEqual(['MSComm']);
   expect(controlsOf('SYSINFO.OCX')).toEqual(['SysInfo']);
+  expect(controlsOf('MSCOMCT2.OCX')).toEqual(['UpDown', 'DTPicker', 'MonthView', 'FlatScrollBar', 'Animation']);
+  expect(controlsOf('COMCT332.OCX')).toEqual(['CoolBar']);
+  expect(controlsOf('MSCAL.OCX')).toEqual(['Calendar']);
   expect(controlsOf('THREED32.OCX')).toEqual(['SSPanel', 'SSCommand', 'SSCheck', 'SSOption', 'SSFrame', 'SSRibbon']);
 });
 

@@ -18,7 +18,7 @@ import { dataSourceEditor } from './dataSourceEditor';
 
 const NONE = '(None)';
 const IMAGE_REF_PROPS = new Set(['ImageList', 'Icons', 'SmallIcons']);
-const IMAGE_USERS = new Set<ControlType>(['Toolbar', 'TreeView', 'ListView', 'TabStrip']);
+const IMAGE_USERS = new Set<ControlType>(['Toolbar', 'TreeView', 'ListView', 'TabStrip', 'ImageCombo', 'CoolBar']);
 const VB_OK_EXCL = 48;
 
 export interface CustomEditorEnv {

@@ -528,6 +528,37 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     events: [evClick(), evDbl(), ev('ButtonClick', 'ByVal Button As MSComctlLib.Button'), ...evMouse()],
   }),
 
+  // MSCOMCTL.OCX. A combo box whose items carry pictures of an ImageList. ComboItems are lines 'Text|Key|Image|SelImage|Indentation'
+  // (see model/imageCombo.ts); at run time they seed the collection. SelectedIndex (1-based, 0 = none) is window state.
+  ImageCombo: def({
+    type: 'ImageCombo', component: 'MSCOMCTL.OCX', namePrefix: 'ImageCombo', defaultWidth: 2415, defaultHeight: 315, toolboxTooltip: 'ImageCombo',
+    defaultEvent: 'Click', defaultMember: 'Text',
+    props: [
+      ...common(), font(), str('ImageList'), str('Text'), bool('Locked', false),
+      color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT),
+      p('ComboItems', 'list', [], { runtime: 'ro' }),
+      rt('SelectedItem', 'string', ''),
+      p('SelectedIndex', 'int', 0, { designTime: false, runtime: 'none' }),
+    ],
+    events: [evChange(), evClick(), evDbl(), ev('Dropdown'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  // COMCT332.OCX. A rebar: the bands are lines 'Caption|Key|Image|NewRow|Style|Child|MinWidth|Width|Visible' (see model/coolbar.ts); Child names a
+  // control of the form that the band hosts. Docks like a Toolbar (Align top by default); its Height follows the rows of bands at run time.
+  CoolBar: def({
+    type: 'CoolBar', component: 'COMCT332.OCX', namePrefix: 'CoolBar', defaultWidth: 4800, defaultHeight: 390, toolboxTooltip: 'CoolBar',
+    defaultEvent: 'HeightChanged', defaultMember: null,
+    props: [
+      int('Left', 0), int('Top', 0), int('Width', 0), int('Height', 0), bool('Visible', true), bool('Enabled', true),
+      str('Tag'), str('ToolTipText'),
+      en('Align', 1, ['vbAlignNone', 'vbAlignTop', 'vbAlignBottom']),
+      str('ImageList'), bool('BandBorders', true), bool('FixedOrder', false), bool('VariantHeight', true),
+      color('BackColor', BTN_FACE),
+      p('Bands', 'list', [], { runtime: 'ro' }),
+    ],
+    events: [evClick(), evDbl(), ev('HeightChanged', 'ByVal NewHeight As Single'), ...evMouse()],
+  }),
+
   // MSCOMCT2.OCX. Value and the other dates are OLE serials (Null = null; only a CheckBox DTPicker may have no Value). Day ... DayOfWeek
   // are derived from Value at run time. Format: dtpLongDate 0, dtpShortDate 1, dtpTime 2, dtpCustom 3 (CustomFormat).
   DTPicker: def({
@@ -565,6 +596,38 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       ev('DateClick', 'ByVal DateClicked As Date'), ev('DateDblClick', 'ByVal DateDblClicked As Date'),
       ev('SelChange', 'StartDate As Date, EndDate As Date'), ...evFocus(), ...evKeys(), ...evMouse(),
     ],
+  }),
+
+  // MSCOMCT2.OCX. Like HScrollBar / VScrollBar (Orientation chooses), flat or 3-D. A Value outside Min .. Max is clamped.
+  FlatScrollBar: def({
+    type: 'FlatScrollBar', component: 'MSCOMCT2.OCX', namePrefix: 'FlatScrollBar', defaultWidth: 2415, defaultHeight: 255, toolboxTooltip: 'FlatScrollBar',
+    defaultEvent: 'Change', defaultMember: 'Value',
+    props: [
+      ...common(),
+      int('Min', 0, { min: -2147483647, max: 2147483647 }), int('Max', 32767, { min: -2147483647, max: 2147483647 }),
+      int('Value', 0, { min: -2147483647, max: 2147483647 }),
+      int('SmallChange', 1, { min: 1, max: 2147483647 }), int('LargeChange', 1, { min: 1, max: 2147483647 }),
+      en('Orientation', 1, ['cc2OrientationVertical', 'cc2OrientationHorizontal']),
+      en('Appearance', 0, ['fsb3D', 'fsbFlat', 'fsbTrack3D']),
+      en('Arrows', 0, ['fsbBoth', 'fsbLeftUp', 'fsbRightDown']),
+    ],
+    events: [evChange(), ev('Scroll'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  // MSCOMCT2.OCX. Plays an animated GIF, APNG, WebP or a short MP4 / WebM (no sound); AVI files give error 35752. Open reads the file through the
+  // media path of MMControl (see run/objects/animationControl.ts); MediaSrc and MediaCmd are what the window gets. Frames are numbered from 0.
+  Animation: def({
+    type: 'Animation', component: 'MSCOMCT2.OCX', namePrefix: 'Animation', defaultWidth: 1935, defaultHeight: 1455, toolboxTooltip: 'Animation',
+    defaultEvent: 'Click', defaultMember: null,
+    props: [
+      ...common(),
+      bool('AutoPlay', false), bool('Center', false),
+      en('BackStyle', 1, ['cc2BackstyleTransparent', 'cc2BackstyleOpaque']), color('BackColor', BTN_FACE),
+      p('MediaSrc', 'string', '', { designTime: false, runtime: 'none' }), p('MediaCmd', 'string', '', { designTime: false, runtime: 'none' }),
+    ],
+    events: [evClick(), evDbl(), ev('Start'), ev('Stop'), ...evMouse()],
+    methods: [...baseMethods(), { name: 'Open', params: 'bstrFilename As String' }, { name: 'Play', params: '[Repeat], [Start], [End]' },
+      { name: 'Stop', params: '' }, { name: 'Close', params: '' }],
   }),
 
   // MSMASK32.OCX. Text holds the display string of the mask (literals and a PromptChar for every empty position); the run-time
@@ -965,6 +1028,34 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       ev('BalloonShow', 'ByVal CharacterID As String'), ev('BalloonHide', 'ByVal CharacterID As String'),
     ],
   }),
+
+  // MSCAL.OCX (Calendar Control 8.0, the Access calendar): a grid of the days of one month. Value is an OLE serial; Day, Month and Year are parts of
+  // it. DayLength / MonthLength: 1 short, 2 medium, 3 long names. FirstDay 1 (Sunday) ... 7 (the default is the system's). GridCellEffect: 0 flat,
+  // 1 raised, 2 sunken. BeforeUpdate(Cancel) comes before every change of Value (user or code), then AfterUpdate; NewMonth / NewYear when the
+  // month / year of Value changed.
+  Calendar: def({
+    type: 'Calendar', component: 'MSCAL.OCX', namePrefix: 'Calendar', defaultWidth: 4800, defaultHeight: 3600, toolboxTooltip: 'Calendar',
+    defaultEvent: 'Click', defaultMember: 'Value',
+    props: [
+      ...common(),
+      p('Value', 'date', nowSerial(true)),
+      p('DayLength', 'enum', 2, { enumValues: ['Short', 'Medium', 'Long'].map((l, i) => ({ value: i + 1, label: `${i + 1} - ${l}` })) }),
+      p('MonthLength', 'enum', 3, { enumValues: ['Short', 'Medium', 'Long'].map((l, i) => ({ value: i + 1, label: `${i + 1} - ${l}` })) }),
+      p('FirstDay', 'enum', systemStartOfWeek(Intl.DateTimeFormat().resolvedOptions().locale), {
+        enumValues: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((l, i) => ({ value: i + 1, label: `${i + 1} - ${l}` })) }),
+      en('GridCellEffect', 1, ['Flat', 'Raised', 'Sunken']),
+      bool('ShowDateSelectors', true), bool('ShowDays', true), bool('ShowHorizontalGrid', true), bool('ShowTitle', true), bool('ShowVerticalGrid', true),
+      color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), color('GridLinesColor', sys(0x80000010)),
+      color('DayFontColor', WIN_TEXT), color('TitleFontColor', WIN_TEXT),
+      p('TitleFont', 'font', { ...DEFAULT_FONT, bold: true }), p('DayFont', 'font', DEFAULT_FONT), p('GridFont', 'font', DEFAULT_FONT),
+      rt('Day', 'int', 0), rt('Month', 'int', 0), rt('Year', 'int', 0),
+    ],
+    events: [
+      evClick(), evDbl(), ev('AfterUpdate'), ev('BeforeUpdate', 'Cancel As Integer'), ev('NewMonth'), ev('NewYear'), ...evFocus(), ...evKeys(),
+    ],
+    methods: [...baseMethods(), ...['Next', 'Previous'].flatMap(d => ['Day', 'Week', 'Month', 'Year'].map(u => ({ name: `${d}${u}`, params: '' }))),
+      { name: 'Today', params: '' }],
+  }),
 };
 
 /** VB6 toolbox order: every control type. The Toolbox shows the intrinsic ones, then the checked components' ones
@@ -972,7 +1063,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
 export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
   'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'Data', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar',
-  'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit',
+  'TreeView', 'ListView', 'ImageList', 'ImageCombo', 'CoolBar', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'FlatScrollBar', 'Animation', 'MaskedEdit', 'Calendar',
   'WebBrowser', 'Inet', 'Winsock', 'MSComm', 'SysInfo', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Adodc', 'DataGrid', 'DataList', 'DataCombo',
   'SSPanel', 'SSCommand', 'SSCheck', 'SSOption', 'SSFrame', 'SSRibbon',
 ];
@@ -1030,7 +1121,7 @@ export function newControl(form: FormDef, type: Exclude<ControlType, 'Form'>,
     props.Height = rect.height ?? td.defaultHeight;
   }
   if ('Caption' in props && type !== 'SSTab') props.Caption = name;   // an SSTab's Caption is its first tab's
-  if (type === 'TextBox' || type === 'ComboBox' || type === 'DataCombo') props.Text = name;
+  if (type === 'TextBox' || type === 'ComboBox' || type === 'DataCombo' || type === 'ImageCombo') props.Text = name;
   if ('TabIndex' in props) props.TabIndex = form.controls.filter(c => 'TabIndex' in c.props).length;
   return { id: newId(), type, name, index: null, parentId, props };
 }

@@ -24,7 +24,7 @@ export function setControlPos(c: ControlDef, left: number, top: number): void {
 export function dockEdge(c: Pick<ControlDef, 'type' | 'parentId' | 'props'>): 'top' | 'bottom' | null {
   if (c.parentId !== null) return null;
   if (c.type === 'StatusBar') return 'bottom';
-  if (c.type !== 'Toolbar') return null;
+  if (c.type !== 'Toolbar' && c.type !== 'CoolBar') return null;
   const a = typeof c.props?.Align === 'number' ? c.props.Align : 1;
   return a === 1 ? 'top' : a === 2 ? 'bottom' : null;
 }

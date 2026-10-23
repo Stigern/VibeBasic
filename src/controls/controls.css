@@ -94,7 +94,7 @@
 .vb-listbox option:checked { background: #000080 linear-gradient(#000080, #000080); color: #fff; }
 
 /* ---------- ComboBox ---------- */
-.vb-ComboBox, .vb-DriveListBox { overflow: visible; }
+.vb-ComboBox, .vb-DriveListBox, .vb-ImageCombo { overflow: visible; }
 .vb-combo-field {
   position: absolute; left: 0; top: 0; right: 0; bottom: 0; display: flex; align-items: stretch; padding: 2px;
   background-color: #fff; box-shadow: var(--w98-sunken); box-sizing: border-box;
@@ -106,7 +106,7 @@
 }
 .vb-combo-btn:active { box-shadow: var(--w98-pressed); }
 .vb-glyph { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 4px solid #000; }
-.vb-ComboBox.vb-disabled .vb-glyph, .vb-DriveListBox.vb-disabled .vb-glyph { border-top-color: #808080; }
+.vb-ComboBox.vb-disabled .vb-glyph, .vb-DriveListBox.vb-disabled .vb-glyph, .vb-ImageCombo.vb-disabled .vb-glyph { border-top-color: #808080; }
 .vb-combo-list {
   position: absolute; left: 0; right: 0; top: 21px; z-index: 9999; box-sizing: border-box; display: none;
   max-height: 134px; overflow-x: hidden; overflow-y: auto; background-color: #fff; border: 1px solid #000;
@@ -572,3 +572,51 @@
 .ssc-cap { position: relative; white-space: pre; }
 .ssc.ssc-fit .ssc-pic { position: absolute; left: 3px; top: 3px; width: calc(100% - 6px); height: calc(100% - 6px); }
 .vb-ctl.vb-ctl .vb-btn.ssr.down { background-image: repeating-conic-gradient(#c0c0c0 0% 25%, #dfdfdf 0% 50%); background-size: 2px 2px; }
+
+/* ---------- ImageCombo (MSCOMCTL.OCX) ---------- */
+.icb-pic { flex: none; display: flex; align-items: center; padding: 0 2px 0 1px; }
+.icb-img { flex: none; image-rendering: pixelated; vertical-align: middle; }
+.icb-row { display: flex; align-items: center; gap: 3px; min-height: 16px; }
+.icb-text { white-space: pre; }
+
+/* ---------- CoolBar (COMCT332.OCX) ---------- */
+.vb-CoolBar { background: #c0c0c0; }
+.vb-cbr { position: absolute; left: 0; top: 0; right: 0; bottom: 0; overflow: hidden; outline: none; }
+.cbr-row { position: absolute; left: 0; right: 0; }
+.cbr-row.cbr-borders { box-shadow: inset 0 1px #fff, inset 0 -1px #808080; }
+.cbr-band { position: absolute; top: 0; box-sizing: border-box; display: flex; align-items: center; gap: 3px; overflow: hidden; }
+.cbr-grip { flex: none; align-self: stretch; margin: 3px 0; background: linear-gradient(90deg, transparent 0 2px, #fff 2px 3px, #808080 3px 4px, transparent 4px 6px, #fff 6px 7px, #808080 7px 8px, transparent 8px); }
+.cbr-img { flex: none; image-rendering: pixelated; }
+.cbr-cap { flex: none; white-space: pre; }
+.cbr-body { position: absolute; top: 2px; bottom: 2px; }
+
+/* ---------- FlatScrollBar (MSCOMCT2.OCX) ---------- */
+.vb-FlatScrollBar .vb-sb { background: #c0c0c0; }
+.vb-FlatScrollBar.fsb-flat .vb-sb-btn, .vb-FlatScrollBar.fsb-flat .vb-sb-thumb { box-shadow: inset 0 0 0 1px #808080; background: #c0c0c0; }
+.vb-FlatScrollBar.fsb-flat .vb-sb-track { background: #c0c0c0; box-shadow: inset 0 0 0 1px #808080; }
+.vb-FlatScrollBar.fsb-track3d .vb-sb-btn, .vb-FlatScrollBar.fsb-track3d .vb-sb-thumb { box-shadow: inset 0 0 0 1px #808080; }
+.vb-FlatScrollBar.fsb-track3d .vb-sb-track { background: #c0c0c0; box-shadow: var(--w98-sunken); }
+.vb-FlatScrollBar.fsb-no-dec .vb-sb-btn.dec, .vb-FlatScrollBar.fsb-no-inc .vb-sb-btn.inc { opacity: .4; }
+
+/* ---------- Animation (MSCOMCT2.OCX) ---------- */
+.vb-Animation { overflow: hidden; }
+.vb-anim { position: absolute; left: 0; top: 0; right: 0; bottom: 0; overflow: hidden; outline: none; }
+.anim-stage { position: absolute; left: 0; top: 0; }
+.anim-stage.center { left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.anim-stage.anim-icon { left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.anim-stage .anim-pic { display: block; max-width: none; image-rendering: auto; }
+
+/* ---------- Calendar (MSCAL.OCX) ---------- */
+.vb-Calendar { overflow: hidden; }
+.vb-mscal { position: absolute; left: 0; top: 0; right: 0; bottom: 0; display: flex; flex-direction: column; outline: none; box-sizing: border-box; user-select: none; -webkit-user-select: none; cursor: default; }
+.mc-sel { flex: none; display: flex; justify-content: space-between; gap: 4px; padding: 2px; }
+.mc-sel select { font: inherit; min-width: 0; }
+.mc-title { flex: none; text-align: center; padding: 2px 0; }
+.mc-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(7, 1fr); }
+.mc-dow { text-align: center; padding: 2px 0; overflow: hidden; white-space: nowrap; }
+.mc-d { box-sizing: border-box; padding: 2px 3px; text-align: right; overflow: hidden; }
+.mc-d.out { color: #808080; }
+.mc-d.sel { background: #000080; color: #fff; }
+.mc-eff1 .mc-d { box-shadow: inset 1px 1px #fff, inset -1px -1px #808080; }
+.mc-eff2 .mc-d { box-shadow: inset 1px 1px #808080, inset -1px -1px #fff; }
+.vb-Calendar:focus-within .mc-d.sel { outline: 1px dotted #ff0; outline-offset: -2px; }
