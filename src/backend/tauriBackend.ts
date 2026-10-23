@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import type { Backend, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
+import type { Backend, DbExecResult, DbQueryResult, DbValue, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import { dialogFilters } from './dialogFilters';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
@@ -144,6 +144,12 @@ export class TauriBackend implements Backend {
   async settingSave(appName: string, section: string, key: string, value: string): Promise<void> { await call<void>('setting_save', { appName, section, key, value }); }
   async settingDelete(appName: string, section: string, key: string | null): Promise<void> { await call<void>('setting_delete', { appName, section, key }); }
   settingAll(appName: string, section: string): Promise<[string, string][]> { return call('setting_all', { appName, section }); }
+
+  dbOpen(path: string): Promise<number> { return call('db_open', { path }); }
+  dbQuery(id: number, sql: string, params: DbValue[]): Promise<DbQueryResult> { return call('db_query', { id, sql, params }); }
+  dbExecute(id: number, sql: string, params: DbValue[]): Promise<DbExecResult> { return call('db_execute', { id, sql, params }); }
+  async dbClose(id: number): Promise<void> { await call<void>('db_close', { id }); }
+  async dbReset(): Promise<void> { await call<void>('db_reset', {}); }
 
   mediaOpen(path: string): Promise<string> { return call<string>('media_open', { path }); }
   async mediaRead(token: string): Promise<Uint8Array> {

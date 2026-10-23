@@ -9,6 +9,7 @@ import { Nothing, type VBRef, type VBValue } from '../lang/values';
 import type { PictureRef, Project } from '../model/types';
 import type { FormHost } from './formHost';
 import { NetSession } from './net';
+import { DbSession } from './data/dbSession';
 import { PatchQueue } from './patchQueue';
 import { AppObject, PictureObject, ScreenObject } from './objects/appObjects';
 import { ClipboardObject, ObjectList } from './objects/globalObjects';
@@ -78,6 +79,7 @@ export class RunSession implements Host, FormSession {
   private lastYield = -Infinity;   // performance.now() of the last real DoEvents yield
   private askAiOnBreak = false;    // the error dialog answered 'ai': the next onBreak (on that error) starts the AI flow
   private netSession: NetSession | null = null;
+  private dbSession: DbSession | null = null;
 
   constructor(private project: Project, readonly formHost: FormHost, private cb: SessionCallbacks, readonly mode: 'ide' | 'app') {
     for (const [k, a] of Object.entries(project.assets)) this.assets[k] = `data:${a.mime};base64,${a.dataBase64}`;
@@ -140,6 +142,14 @@ export class RunSession implements Host, FormSession {
     const api = this.formHost.net?.();
     if (!api) throw new VBRuntimeError(429, 'ActiveX component can\'t create object');
     return this.netSession = new NetSession(api);
+  }
+
+  /** Data control, Adodc: made when the first database opens; every connection is closed at the end of the program. */
+  db(): DbSession {
+    if (this.dbSession) return this.dbSession;
+    const api = this.formHost.database?.();
+    if (!api) throw new VBRuntimeError(429, 'ActiveX component can\'t create object');
+    return this.dbSession = new DbSession(api);
   }
 
   resolveAsset(ref: PictureRef): string | null {
@@ -297,6 +307,7 @@ export class RunSession implements Host, FormSession {
     this.modalStack = [];
     for (const f of this.forms.values()) if (f.loaded || f.hasWindow()) f.teardown();
     this.netSession?.shutdown();   // every socket closed, every Inet request aborted
+    this.dbSession?.shutdown();    // every database connection closed
     this.cb.onEnded();
   }
 }

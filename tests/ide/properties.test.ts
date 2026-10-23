@@ -204,6 +204,7 @@ test('a property dropdown list renders in the body layer, not inside the value c
 });
 
 const IMAGE_REFS = ['ImageList', 'Icons', 'SmallIcons'];
+const DATA_REFS = ['DataSource', 'RowSource'];
 
 /** Sets a new value through the row's editor, as a user would; returns the expected stored value. */
 async function setThroughEditor(d: PropDef, cur: PropValue, where: string): Promise<unknown> {
@@ -216,6 +217,12 @@ async function setThroughEditor(d: PropDef, cur: PropValue, where: string): Prom
     expect(items().map(i => i.textContent), where).toEqual(['(None)', 'ImageList1']);
     mousedown(items()[1]);
     return 'ImageList1';
+  }
+  if (DATA_REFS.includes(d.name)) {   // dataSourceEditor.ts: the form's Data controls
+    (rowEl(d.name).querySelector('.cb98-arrow') as HTMLElement).click();
+    expect(items().map(i => i.textContent), where).toEqual(['', 'Data1']);
+    mousedown(items()[1]);
+    return 'Data1';
   }
   if (d.name === 'ListImages') {
     expect(btn().textContent, where).toBe('(Custom)...');
@@ -295,6 +302,7 @@ async function setThroughEditor(d: PropDef, cur: PropValue, where: string): Prom
 test.each(Object.keys(CONTROL_TYPES) as ControlType[])('%s: every design-time property is editable, updates the model, one undo restores', async type => {
   const defs0 = CONTROL_TYPES[type].props.filter(d => d.designTime);
   if (defs0.some(d => IMAGE_REFS.includes(d.name))) add('ImageList', 3000);   // something for its ImageList dropdown
+  if (defs0.some(d => DATA_REFS.includes(d.name))) add('Data', 3000);         // and for its DataSource dropdown
   const id = type === 'Form' ? 'form' : add(type).id;
   ide.setSelection({ formId: form().id, ids: id === 'form' ? [] : [id] });
   const target = () => (id === 'form' ? form() : form().controls.find(c => c.id === id)!);

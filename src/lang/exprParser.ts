@@ -208,6 +208,11 @@ export class Parser {
       } else if (this.isOp('.')) {
         this.advance();
         e = { kind: 'member', object: e, name: this.parseMemberName(), line: e.line };
+      } else if (this.isOp('!') && (this.peek(1).kind === 'ident' || this.peek(1).kind === 'keyword')) {
+        // `rs!Name` is `rs("Name")`: the default member with the name as a string
+        const line = this.peek().line;
+        this.advance();
+        e = { kind: 'call', target: e, args: [{ kind: 'string', value: this.parseMemberName(), line }], line: e.line };
       } else {
         return e;
       }

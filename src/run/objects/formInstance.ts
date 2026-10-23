@@ -12,6 +12,7 @@ import type { FormHost, FormWindow } from '../formHost';
 import { localMedia } from '../mediaSource';
 import type { PatchQueue } from '../patchQueue';
 import type { NetSession } from '../net';
+import type { DbSession } from '../data/dbSession';
 import type { FormSnapshot, FromWindow, ToWindow } from '../protocol';
 import { ControlArrayObject, ControlObject, type ElementFactory, type RunContext } from './controlObject';
 import { ObjectList } from './globalObjects';
@@ -43,6 +44,9 @@ export interface FormSession {
   readFile(path: string): Promise<Uint8Array>;
   /** The full path of a file of the program. */
   resolvePath(path: string): string;
+  /** Data control, Adodc: the run's databases (made on first use; throws when the host has none). */
+  db(): DbSession;
+  msgBox(prompt: string, buttons: number, title: string): Promise<number>;
 }
 
 interface FormState {
@@ -107,6 +111,10 @@ export class FormInstance implements VBObject {
       },
       raise: (c, event, args) => (this.st?.byId.get(c.def.id) === c && !this.s.ended ? this.fireControl(c, event, args) : Promise.resolve()),
       focused: c => this.setActive(c.def.id),
+      db: () => this.s.db(),
+      resolveDbPath: p => this.s.program.resolvePath(p),
+      controls: () => this.controls(),
+      msgBox: (p, b, t) => this.s.msgBox(p, b, t),
     };
     // Load Name(i) / Unload Name(i). A control without a view (Winsock, Timer ...) starts from the design-time properties
     // of the lowest element; a visible one from its current properties, hidden (Visible = False) and last in the tab
@@ -185,7 +193,9 @@ export class FormInstance implements VBObject {
     for (const t of this.timers()) this.s.syncTimer(this, t);
     // Form_Load starts once Form_Initialize has finished; without an Initialize handler it starts at once,
     // so a member access that loads the form runs Load nested in the accessing statement.
-    const runLoad = (): Promise<void> => (this.loaded && !this.s.ended ? this.s.fire(this.name, 'Form_Load', []) : Promise.resolve());
+    // after Form_Load the Data controls open their recordsets (not waited for: the form shows meanwhile)
+    const dataLoad = (): void => { if (this.loaded && !this.s.ended) for (const c of this.controls()) void c.formLoaded(); };
+    const runLoad = (): Promise<void> => (this.loaded && !this.s.ended ? this.s.fire(this.name, 'Form_Load', []).then(dataLoad) : Promise.resolve());
     return this.loadDone = this.s.program.hasProcedure(this.name, 'Form_Initialize')
       ? this.s.fire(this.name, 'Form_Initialize', []).then(runLoad)
       : runLoad();
@@ -251,6 +261,7 @@ export class FormInstance implements VBObject {
       const cancel2 = new VBRef(0);
       await this.s.fire(this.name, 'Form_Unload', [cancel2]);
       if (this.s.ended || toBool(cancel2.value)) return false;
+      if (this.st) await Promise.all(this.controls().map(c => c.beforeUnload()));   // Data controls save the bound changes
     } finally {
       this.unloading = false;
     }

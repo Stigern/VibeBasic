@@ -6,6 +6,7 @@ import type { OutSlot } from '../../lang/host';
 import type { VBRef, VBValue } from '../../lang/values';
 import type { PropValue } from '../../model/types';
 import type { OpenedMedia } from '../mediaSource';
+import type { DataControl } from '../data/dataControl';
 
 export interface RichHost {
   readonly props: Record<string, PropValue>;
@@ -27,6 +28,14 @@ export interface RichControl {
   call?(name: string, args: VBValue[], refs?: (OutSlot | undefined)[]): VBValue | Promise<VBValue> | undefined;
   /** State the window reported (the user clicked a button, dragged a character ...). */
   applyState?(props: Record<string, PropValue>): void;
+  /** The form's Form_Load has finished (the Data control opens its recordset). */
+  formLoaded?(): Promise<void>;
+  /** The form is about to unload (the Data control saves the bound controls' changes). */
+  formUnloading?(): Promise<void>;
+  /** Data binding of a DataList / DataCombo (BoundText); see DataConsumer. */
+  showBound?(v: VBValue | null): void;
+  boundValue?(): VBValue;
+  dataNotify?(src: DataControl, kind: 'reposition' | 'rows'): void;
   /** The form unloads or the program ends. */
   dispose(): void;
 }

@@ -56,6 +56,10 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
   MMControl: svg(box(0, 4, 6, 8, '#c0c0c0') + box(5, 4, 6, 8, '#c0c0c0') + box(10, 4, 6, 8, '#c0c0c0')
     + '<path d="M2 6v4l2.500-2z" fill="#000"/><rect x="7" y="6" width="2" height="4" fill="#000"/><path d="M12 6h1v4h-1zM14 6l-1 2 1 2z" fill="#000"/>'),
   MediaPlayer: svg(box(1, 1, 14, 10, '#000') + '<path d="M6 3.500v5l4-2.500z" fill="#00ff00"/>' + box(1, 11, 14, 4, '#c0c0c0') + '<rect x="3" y="12.500" width="6" height="1" fill="#808080"/><rect x="5" y="12" width="2" height="2" fill="#000"/>'),
+  // a record bar with its arrows; the ADO one has a database cylinder above it
+  Data: svg(box(0, 5, 16, 7, '#c0c0c0') + '<rect x="5" y="6" width="6" height="5" fill="#fff"/><path d="M1 8.5l3-2.500v5zM15 8.5l-3-2.500v5z" fill="#000"/>'),
+  Adodc: svg('<path d="M4.500 1.500v3.500c0 .8 1.600 1.400 3.500 1.400s3.500-.6 3.500-1.400V1.500" fill="#ffff80" stroke="#000"/><ellipse cx="8" cy="1.500" rx="3.500" ry="1" fill="#ffffc0" stroke="#000"/>'
+    + box(0, 8, 16, 7, '#c0c0c0') + '<rect x="5" y="9" width="6" height="5" fill="#fff"/><path d="M1 11.500l3-2.500v5zM15 11.500l-3-2.500v5z" fill="#000"/>'),
   Agent: svg('<rect x="1.500" y="0.500" width="9" height="6" rx="2" fill="#ffffe1" stroke="#000"/><path d="M4 6.500l-1 2.500 3-2.500" fill="#ffffe1" stroke="#000"/>'
     + box(6, 8, 9, 7, '#c0c0c0') + '<rect x="7" y="9" width="7" height="4" fill="#000080"/><rect x="8" y="10" width="1" height="1" fill="#00ffff"/><rect x="12" y="10" width="1" height="1" fill="#00ffff"/>'
     + '<rect x="10" y="6" width="1" height="2" fill="#ff0000"/>'),

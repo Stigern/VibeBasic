@@ -47,7 +47,13 @@ export function describeControlTypes(): string {
     + ' An MMControl plays a file: FileName = App.Path & "\\x.wav", Command = "Open", then Command = "Play" (Mode mciModePlay 526, mciModeStop 525; Position and Length in ms;'
     + ' Notify = True before a command raises Done(NotifyCode) when it finishes). A MediaPlayer plays FileName (AutoStart) with Play, Pause, Stop; PlayStateChange(OldState, NewState), EndOfStream; CurrentPosition and Duration are seconds.'
     + ' An Agent is invisible: Agent1.Characters.Load "Robby" (or "Wizard"), then Set c = Agent1.Characters("Robby"): c.Show, c.Speak "Hi", c.Play "Wave" (Greet, Think, Explain, Congratulate, Surprised, Idle),'
-    + ' c.MoveTo x, y and c.GestureAt x, y queue one after the other (pixels in the form); each returns a Request and raises Agent1_RequestComplete(Request).');
+    + ' c.MoveTo x, y and c.GestureAt x, y queue one after the other (pixels in the form); each returns a Request and raises Agent1_RequestComplete(Request).'
+    + ' A Data control (DAO) or an Adodc (ADO) opens a SQLite database file (relative to App.Path, made when missing; no .mdb): Data1.DatabaseName = "people.db",'
+    + ' Adodc1.ConnectionString = "Provider=SQLite;Data Source=people.db"; RecordSource is a table name or a SELECT. The recordset opens after Form_Load.'
+    + ' TextBox, Label, CheckBox, ComboBox, ListBox, DTPicker and MaskedEdit bind with DataSource (the data control\'s Name) and DataField; their edits are saved when the record changes.'
+    + ' Data1.Recordset: MoveFirst/MoveNext/MovePrevious/MoveLast, BOF, EOF, RecordCount, Fields("Name") or rs!Name, AddNew/Edit/Update (ADO: no Edit)/CancelUpdate/Delete, FindFirst "Name = \'x\'" (ADO: Find), Requery;'
+    + ' events Data1_Validate(Action, Save) and Data1_Reposition, Adodc1_WillMove and Adodc1_MoveComplete. SQL from code: Data1.Database.Execute "CREATE TABLE IF NOT EXISTS ..."'
+    + ' (Data1.Database.OpenRecordset("SELECT ...")) or Adodc1.Recordset.ActiveConnection.Execute sql; there is no New ADODB.Connection.');
   return lines.join('\n');
 }
 

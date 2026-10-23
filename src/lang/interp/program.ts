@@ -202,6 +202,8 @@ export class Runtime {
     else if ('objectType' in t) {
       const key = lc(name);
       if (m.enums.has(key) || this.globals.enums.has(key) || this.moduleList.some(o => o.enums.has(key))) r = 'Long';
+      // an enum of a type library (ADODB.EventReasonEnum, MSComctlLib.ListLabelEditConstants): a Long
+      else if (/\.\w*(enum|constants)$/i.test(name)) r = 'Long';
     } else throw VBRuntimeError.compile('User-defined type not defined');
     this.resolvedTypes.set(t, r);
     return r;
@@ -538,6 +540,9 @@ export class Program {
   }
 
   get state(): ProgramState { return this.rt.state; }
+
+  /** A path of the program as a full Mac path, like Open resolves it (relative to CurDir, which starts as App.Path). */
+  resolvePath(path: string): string { return this.rt.files.resolve(path); }
 
   hasProcedure(moduleName: string, procName: string): boolean {
     return this.rt.modules.get(lc(moduleName))?.procs.has(lc(procName)) ?? false;

@@ -1,5 +1,6 @@
 mod ai;
 mod clipboard;
+mod db;
 mod embedded;
 mod files;
 mod fileio;
@@ -17,6 +18,7 @@ pub fn run() {
     .manage(winsock::Sockets::default())
     .manage(media::MediaFiles::default())
     .manage(fileio::OpenFiles::default())
+    .manage(db::Databases::default())
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       ai::ai_list_models,
@@ -42,6 +44,11 @@ pub fn run() {
       fileio::setting_save,
       fileio::setting_delete,
       fileio::setting_all,
+      db::db_open,
+      db::db_query,
+      db::db_execute,
+      db::db_close,
+      db::db_reset,
       clipboard::clipboard_get_text,
       clipboard::clipboard_set_text,
       inet::inet_request,

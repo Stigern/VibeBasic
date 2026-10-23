@@ -54,6 +54,9 @@ const list = () => p('List', 'list', []);
 const rt = (name: string, kind: PropKind, def: PropValue, runtime: 'rw' | 'ro' = 'rw'): PropDef =>
   ({ name, kind, default: def, designTime: false, runtime });
 
+/** Data binding (Data control / Adodc): DataSource names the data control, DataField the field; DataChanged is set by an edit. */
+const dataBind = (): PropDef[] => [str('DataSource'), str('DataField'), rt('DataChanged', 'bool', false)];
+
 /** Left Top Width Height Visible Enabled TabIndex TabStop Tag ToolTipText */
 const common = (): PropDef[] => [
   int('Left', 0), int('Top', 0), int('Width', 0), int('Height', 0),
@@ -157,7 +160,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       en('Alignment', 0, ['Left Justify', 'Right Justify', 'Center']),
       bool('AutoSize', false), en('BackStyle', 1, ['Transparent', 'Opaque']),
       color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT),
-      en('BorderStyle', 0, ['None', 'Fixed Single']), bool('WordWrap', false), font(),
+      en('BorderStyle', 0, ['None', 'Fixed Single']), bool('WordWrap', false), font(), ...dataBind(),
     ],
     events: [evClick(), evDbl(), evChange(), ...evMouse()],
   }),
@@ -172,7 +175,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       en('Alignment', 0, ['Left Justify', 'Right Justify', 'Center'], { runtime: 'ro' }),
       color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT),
       en('BorderStyle', 1, ['None', 'Fixed Single'], { runtime: 'ro' }), font(),
-      rt('SelStart', 'int', 0), rt('SelLength', 'int', 0), rt('SelText', 'string', ''),
+      rt('SelStart', 'int', 0), rt('SelLength', 'int', 0), rt('SelText', 'string', ''), ...dataBind(),
     ],
     events: [evChange(), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
@@ -183,7 +186,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     props: [
       ...common(), str('Caption'), en('Value', 0, ['Unchecked', 'Checked', 'Grayed']),
       en('Alignment', 0, ['Left Justify', 'Right Justify'], { runtime: 'ro' }),
-      color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(),
+      color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(), ...dataBind(),
     ],
     events: [evClick(), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
@@ -217,7 +220,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       en('MultiSelect', 0, ['None', 'Simple', 'Extended'], { runtime: 'ro' }),
       color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
       rt('ListIndex', 'int', -1), rt('ListCount', 'int', 0, 'ro'), rt('Text', 'string', '', 'ro'),
-      rt('Selected', 'bool', false), rt('NewIndex', 'int', -1, 'ro'),
+      rt('Selected', 'bool', false), rt('NewIndex', 'int', -1, 'ro'), ...dataBind(),
     ],
     events: [evClick(), evDbl(), ev('Scroll'), ...evFocus(), ...evKeys(), ...evMouse()],
     methods: [...baseMethods(), ...listMethods()],
@@ -230,7 +233,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       ...common(), txt('Text'), en('Style', 0, ['Dropdown Combo', 'Simple Combo', 'Dropdown List'], { runtime: 'ro' }),
       list(), bool('Sorted', false, { runtime: 'ro' }),
       color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
-      rt('ListIndex', 'int', -1), rt('ListCount', 'int', 0, 'ro'), rt('NewIndex', 'int', -1, 'ro'),
+      rt('ListIndex', 'int', -1), rt('ListCount', 'int', 0, 'ro'), rt('NewIndex', 'int', -1, 'ro'), ...dataBind(),
     ],
     events: [evChange(), evClick(), evDbl(), ev('DropDown'), ...evFocus(), ...evKeys()],
     methods: [...baseMethods(), ...listMethods()],
@@ -532,7 +535,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       p('MinDate', 'date', MIN_DATE), p('MaxDate', 'date', MAX_DATE),
       bool('CheckBox', false), bool('UpDown', false),
       rt('Day', 'int', 0), rt('Month', 'int', 0), rt('Year', 'int', 0), rt('Hour', 'int', 0), rt('Minute', 'int', 0), rt('Second', 'int', 0),
-      rt('DayOfWeek', 'int', 0),
+      rt('DayOfWeek', 'int', 0), ...dataBind(),
     ],
     events: [evChange(), ev('CloseUp'), ev('DropDown'), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
@@ -571,7 +574,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT),
       en('BorderStyle', 1, ['None', 'Fixed Single'], { runtime: 'ro' }),
       rt('ClipText', 'string', '', 'ro'), rt('FormattedText', 'string', '', 'ro'),
-      rt('SelStart', 'int', 0), rt('SelLength', 'int', 0), rt('SelText', 'string', ''),
+      rt('SelStart', 'int', 0), rt('SelLength', 'int', 0), rt('SelText', 'string', ''), ...dataBind(),
     ],
     events: [evChange(), ev('ValidationError', 'InvalidText As String, StartPosition As Integer'), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
     onPropSet: (props, name) => {
@@ -645,6 +648,54 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       { name: 'Connect', params: '[RemoteHost], [RemotePort]' }, { name: 'GetData', params: 'data, [type], [maxLen]' }, { name: 'Listen', params: '' },
       { name: 'PeekData', params: 'data, [type], [maxLen]' }, { name: 'SendData', params: 'data' },
     ],
+  }),
+
+  // The Data control (intrinsic, DAO): the arrow bar |< < Caption > >|. DatabaseName is a SQLite file (.db), relative to App.Path;
+  // RecordSource a table name or a SELECT. Recordset and Database are objects at run time (run/data/). The controls whose
+  // DataSource names it show the current record.
+  Data: def({
+    type: 'Data', namePrefix: 'Data', defaultWidth: 1935, defaultHeight: 345, toolboxTooltip: 'Data',
+    defaultEvent: 'Validate', defaultMember: 'Caption',
+    props: [
+      int('Left', 0), int('Top', 0), int('Width', 0), int('Height', 0), bool('Visible', true), bool('Enabled', true), str('Tag'), str('ToolTipText'),
+      str('Caption'), str('DatabaseName'), str('RecordSource'), str('Connect', 'Access'),
+      en('RecordsetType', 1, ['Table', 'Dynaset', 'Snapshot']), bool('ReadOnly', false), bool('Exclusive', false), int('Options', 0),
+      en('BOFAction', 0, ['Move First', 'BOF']), en('EOFAction', 0, ['Move Last', 'EOF', 'Add New']),
+      color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
+      rt('Recordset', 'string', '', 'ro'), rt('Database', 'string', '', 'ro'), rt('EditMode', 'int', 0, 'ro'),
+    ],
+    events: [ev('Validate', 'Action As Integer, Save As Integer'), ev('Reposition'), ev('Error', 'DataErr As Integer, Response As Integer'), ...evMouse()],
+    methods: [
+      { name: 'Move', params: MOVE }, { name: 'Refresh', params: '' }, { name: 'ZOrder', params: '[Position]' },
+      { name: 'UpdateControls', params: '' }, { name: 'UpdateRecord', params: '' },
+    ],
+  }),
+
+  // MSADODC.OCX. The same arrow bar; ConnectionString is "Provider=...;Data Source=file.db" (the Data Source is a SQLite file, relative
+  // to App.Path). Recordset is an ADO recordset (ActiveConnection.Execute runs SQL).
+  Adodc: def({
+    type: 'Adodc', component: 'MSADODC.OCX', namePrefix: 'Adodc', defaultWidth: 2400, defaultHeight: 330, toolboxTooltip: 'Adodc',
+    defaultEvent: 'WillMove', defaultMember: null,
+    props: [
+      int('Left', 0), int('Top', 0), int('Width', 0), int('Height', 0), bool('Visible', true), bool('Enabled', true), str('Tag'), str('ToolTipText'),
+      str('Caption'), str('ConnectionString'), str('RecordSource'),
+      p('CommandType', 'enum', 8, { enumValues: [[1, 'adCmdText'], [2, 'adCmdTable'], [4, 'adCmdStoredProc'], [8, 'adCmdUnknown']].map(([value, l]) => ({ value: value as number, label: `${value} - ${l}` })) }),
+      en('BOFAction', 0, ['adDoMoveFirst', 'adStayBOF']), en('EOFAction', 0, ['adDoMoveLast', 'adStayEOF', 'adDoAddNew']),
+      p('CursorLocation', 'enum', 3, { enumValues: [{ value: 2, label: '2 - adUseServer' }, { value: 3, label: '3 - adUseClient' }] }),
+      en('CursorType', 3, ['adOpenForwardOnly', 'adOpenKeyset', 'adOpenDynamic', 'adOpenStatic']),
+      p('LockType', 'enum', 3, { enumValues: [[1, 'adLockReadOnly'], [2, 'adLockPessimistic'], [3, 'adLockOptimistic'], [4, 'adLockBatchOptimistic']].map(([value, l]) => ({ value: value as number, label: `${value} - ${l}` })) }),
+      int('MaxRecords', 0, { min: 0 }), int('CommandTimeout', 30, { min: 0 }), int('ConnectionTimeout', 15, { min: 0 }),
+      str('UserName'), str('Password'),
+      color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
+      rt('Recordset', 'string', '', 'ro'),
+    ],
+    events: [
+      ev('WillMove', 'ByVal adReason As ADODB.EventReasonEnum, adStatus As ADODB.EventStatusEnum, ByVal pRecordset As ADODB.Recordset'),
+      ev('MoveComplete', 'ByVal adReason As ADODB.EventReasonEnum, ByVal pError As ADODB.Error, adStatus As ADODB.EventStatusEnum, ByVal pRecordset As ADODB.Recordset'),
+      ev('Error', 'ByVal ErrorNumber As Long, Description As String, ByVal Scode As Long, ByVal Source As String, ByVal HelpFile As String, ByVal HelpContext As Long, fCancelDisplay As Boolean'),
+      ...evMouse(),
+    ],
+    methods: [{ name: 'Move', params: MOVE }, { name: 'Refresh', params: '' }, { name: 'ZOrder', params: '[Position]' }],
   }),
 
   // MSCHRT20.OCX. A table of RowCount x ColumnCount numbers: a column is a series, a row a data point (as MSChart's default). Row and Column
@@ -738,9 +789,9 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
  *  (components.ts toolboxTools), each in this order. */
 export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
-  'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar',
+  'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'Data', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar',
   'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit',
-  'WebBrowser', 'Inet', 'Winsock', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent',
+  'WebBrowser', 'Inet', 'Winsock', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Adodc',
 ];
 
 // ---------------------------------------------------------------------------------------------------------------

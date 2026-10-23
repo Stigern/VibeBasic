@@ -58,7 +58,7 @@ export function buildLanguageReference(): string {
   return [
     'Language reference (VibeBasic dialect of VB6):',
     `Statements: ${STATEMENTS}`,
-    `Types: ${types.join(', ')} (suffixes % & ! # $). Operators: + - * / \\ Mod ^ &, = <> < > <= >=, Like, Is, Not, And, Or, Xor, Eqv, Imp.`,
+    `Types: ${types.join(', ')} (suffixes % & ! # $). Operators: + - * / \\ Mod ^ &, = <> < > <= >=, Like, Is, Not, And, Or, Xor, Eqv, Imp; rs!Name is rs("Name") (a Recordset field).`,
     `Objects: ${objects.join(', ')}.`,
     'Built-in functions by argument count (String functions also have a $ form, e.g. Left$):',
     ...functionLines(),

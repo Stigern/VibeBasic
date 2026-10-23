@@ -157,7 +157,9 @@ export function tokenize(src: string): Token[] {
       const word = src.slice(pos, p);
       const lower = word.toLowerCase();
       let suffix: Suffix | undefined;
-      if (p < n && isSuffix(src[p])) suffix = src[p++] as Suffix;
+      // `rs!Name` / `rs![Order Date]`: a `!` right before a name is the bang operator, not the Single suffix
+      const bang = src[p] === '!' && p + 1 < n && (isIdentStart(src[p + 1]) || src[p + 1] === '[');
+      if (p < n && isSuffix(src[p]) && !bang) suffix = src[p++] as Suffix;
       // `Rem` comment at statement start
       if (lower === 'rem' && !suffix && atStatementStart()) {
         let e = p;
@@ -166,7 +168,7 @@ export function tokenize(src: string): Token[] {
         pos = e;
         continue;
       }
-      const afterDot = out.length > 0 && out[out.length - 1].kind === 'op' && out[out.length - 1].text === '.'
+      const afterDot = out.length > 0 && out[out.length - 1].kind === 'op' && (out[out.length - 1].text === '.' || out[out.length - 1].text === '!')
         && out[out.length - 1].line === line && out[out.length - 1].col === colAt(pos) - 1;
       const isKeyword = !suffix && !afterDot && KEYWORDS.has(lower);
       push(isKeyword ? 'keyword' : 'ident', src.slice(pos, p), start, suffix ? { suffix } : {});
@@ -182,6 +184,14 @@ export function tokenize(src: string): Token[] {
       continue;
     }
     if (c === ':') { push('colon', ':', start); pos++; continue; }
+    if (c === '!' && src[pos + 1] === '[') {   // `rs![Order Date]`: the bracketed name is one identifier
+      const close = src.indexOf(']', pos + 2);
+      if (close < 0 || src.slice(pos + 2, close).includes('\n')) fail("Expected: ']'", pos + 1);
+      push('op', '!', start);
+      out.push({ kind: 'ident', text: src.slice(pos + 2, close), line, col: colAt(pos + 1) });
+      pos = close + 1;
+      continue;
+    }
     if ('+-*/\\^&=<>(),;.!'.includes(c)) { push('op', c, start); pos++; continue; }
 
     fail(`Invalid character '${c}'`, pos);

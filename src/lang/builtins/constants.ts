@@ -160,3 +160,33 @@ group({
 
 // Clipboard formats (GetFormat, GetText, SetText): only vbCFText is supported
 group({ vbCFText: 1, vbCFBitmap: 2, vbCFMetafile: 3, vbCFDIB: 8, vbCFPalette: 9, vbCFEMetafile: 14, vbCFFiles: 15, vbCFLink: -16640, vbCFRTF: -16639 });
+
+// Data control (DAO): Validate's Action, Error's Response, BOFAction / EOFAction, RecordsetType, EditMode, OpenRecordset, Field.Type
+group({
+  vbDataActionCancel: 0, vbDataActionMoveFirst: 1, vbDataActionMovePrevious: 2, vbDataActionMoveNext: 3, vbDataActionMoveLast: 4,
+  vbDataActionAddNew: 5, vbDataActionUpdate: 6, vbDataActionDelete: 7, vbDataActionFind: 8, vbDataActionBookmark: 9,
+  vbDataActionClose: 10, vbDataActionUnload: 11,
+  vbDataErrContinue: 0, vbDataErrDisplay: 1,
+  vbBOFActionMoveFirst: 0, vbBOFActionBOF: 1, vbEOFActionMoveLast: 0, vbEOFActionEOF: 1, vbEOFActionAddNew: 2,
+  vbRSTypeTable: 0, vbRSTypeDynaset: 1, vbRSTypeSnapShot: 2,
+  dbOpenTable: 1, dbOpenDynaset: 2, dbOpenSnapshot: 4, dbOpenForwardOnly: 8,
+  dbEditNone: 0, dbEditInProgress: 1, dbEditAdd: 2,
+  dbBoolean: 1, dbByte: 2, dbInteger: 3, dbLong: 4, dbCurrency: 5, dbSingle: 6, dbDouble: 7, dbDate: 8, dbBinary: 9, dbText: 10,
+  dbLongBinary: 11, dbMemo: 12,
+});
+
+// ADO (Adodc, Recordset, Connection): EventReasonEnum, EventStatusEnum, Find, Move, EditMode, CommandType, cursors, State, Field.Type
+group({
+  adRsnAddNew: 1, adRsnDelete: 2, adRsnUpdate: 3, adRsnUndoUpdate: 4, adRsnUndoAddNew: 5, adRsnUndoDelete: 6, adRsnRequery: 7,
+  adRsnResynch: 8, adRsnClose: 9, adRsnMove: 10, adRsnFirstChange: 11, adRsnMoveFirst: 12, adRsnMoveNext: 13, adRsnMovePrevious: 14, adRsnMoveLast: 15,
+  adStatusOK: 1, adStatusErrorsOccurred: 2, adStatusCantDeny: 3, adStatusCancel: 4, adStatusUnwantedEvent: 5,
+  adSearchForward: 1, adSearchBackward: -1, adBookmarkCurrent: 0, adBookmarkFirst: 1, adBookmarkLast: 2,
+  adEditNone: 0, adEditInProgress: 1, adEditAdd: 2, adEditDelete: 4,
+  adCmdText: 1, adCmdTable: 2, adCmdStoredProc: 4, adCmdUnknown: 8, adCmdTableDirect: 512,
+  adStateClosed: 0, adStateOpen: 1, adPosUnknown: -1, adPosBOF: -2, adPosEOF: -3,
+  adUseServer: 2, adUseClient: 3, adOpenForwardOnly: 0, adOpenKeyset: 1, adOpenDynamic: 2, adOpenStatic: 3,
+  adLockReadOnly: 1, adLockPessimistic: 2, adLockOptimistic: 3, adLockBatchOptimistic: 4,
+  adDoMoveFirst: 0, adStayBOF: 1, adDoMoveLast: 0, adStayEOF: 1, adDoAddNew: 2,
+  adSmallInt: 2, adInteger: 3, adSingle: 4, adDouble: 5, adCurrency: 6, adDate: 7, adBoolean: 11, adVariant: 12, adTinyInt: 16,
+  adBigInt: 20, adVarWChar: 202, adLongVarWChar: 203, adLongVarBinary: 205,
+});

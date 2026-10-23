@@ -1,7 +1,7 @@
 // FormHost that shows every form as an absolutely positioned Win98 "window" div inside one container
 // (browser, tests). Dialogs are the plan 02 Win98 dialogs in the same document.
 
-import { getBackend, type Backend, type DirListing, type NetApi, type Volume } from '../backend/backend';
+import { getBackend, type Backend, type DatabaseApi, type DirListing, type NetApi, type Volume } from '../backend/backend';
 import type { FileSystemApi } from '../lang/fileio/fsApi';
 import { formMetrics } from '../controls/render';
 import type { FontValue } from '../model/types';
@@ -89,6 +89,7 @@ export class InlineFormHost implements FormHost {
   listDir(path: string): Promise<DirListing> { return (this.backend ?? getBackend()).listDir(path); }
   net(): NetApi { return this.backend ?? getBackend(); }
   fileSystem(): FileSystemApi { return this.backend ?? getBackend(); }
+  database(): DatabaseApi { return this.backend ?? getBackend(); }
   clipboard(): ClipboardApi {
     const b = this.backend ?? getBackend();
     return { getText: () => b.clipboardGetText(), setText: t => b.clipboardSetText(t) };

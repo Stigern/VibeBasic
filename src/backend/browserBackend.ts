@@ -1,4 +1,4 @@
-import type { Backend, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
+import type { Backend, DbExecResult, DbQueryResult, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import { readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
 import { MemoryFs } from '../lang/fileio/memoryFs';
@@ -150,6 +150,13 @@ export class BrowserBackend implements Backend {
   settingSave(app: string, section: string, key: string, value: string): Promise<void> { return this.memFs.settingSave(app, section, key, value); }
   settingDelete(app: string, section: string, key: string | null): Promise<void> { return this.memFs.settingDelete(app, section, key); }
   settingAll(app: string, section: string): Promise<[string, string][]> { return this.memFs.settingAll(app, section); }
+
+  // Databases need the desktop app (SQLite runs on the Rust side).
+  async dbOpen(): Promise<number> { throw new Error('3024|Databases need the VibeBasic desktop app'); }
+  async dbQuery(): Promise<DbQueryResult> { throw new Error('3420|Object invalid or no longer set.'); }
+  async dbExecute(): Promise<DbExecResult> { throw new Error('3420|Object invalid or no longer set.'); }
+  async dbClose(): Promise<void> { /* nothing is open */ }
+  async dbReset(): Promise<void> { /* nothing is open */ }
 
   async showMainWindow(): Promise<void> {
     // Ingenting å gjøre i nettleseren.

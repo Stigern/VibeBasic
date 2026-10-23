@@ -21,6 +21,7 @@ import { mediaPlayer, mmControl } from './media';
 import { agentControl } from './agent';
 import { dtPicker, maskedEdit, monthView } from './calendar';
 import { inetIcon, webBrowser, winsockIcon } from './webBrowser';
+import { dataBar } from './dataControls';
 import { decodeRuns, encodeRuns, formatAt, readRuns, replaceRange, selectionOffsets, setSelectionOffsets, writeRuns, type Run, type RtfFormat, type RtfPatch } from './richText';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../model/types';
 import { h, mnemonicNodes } from '../ui98/dom';
@@ -1461,6 +1462,8 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   MMControl: mmControl,
   MediaPlayer: mediaPlayer,
   Agent: agentControl,
+  Data: dataBar,
+  Adodc: dataBar,
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1537,7 +1540,7 @@ export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetRe
     if (ie) {
       if (mode === 'design') { ie.tabIndex = -1; ie.style.pointerEvents = 'none'; }
       else {
-        ie.tabIndex = props.TabStop === false || def.type === 'StatusBar' || def.type === 'Toolbar' || def.type === 'Agent' ? -1 : 0;
+        ie.tabIndex = props.TabStop === false || def.type === 'StatusBar' || def.type === 'Toolbar' || def.type === 'Agent' || def.type === 'Data' || def.type === 'Adodc' ? -1 : 0;
         if ('disabled' in ie) (ie as HTMLButtonElement).disabled = disabled;
         else ie.setAttribute('aria-disabled', String(disabled));
       }

@@ -12,6 +12,7 @@ import { showFloating } from '../ui98/floating';
 import { createTabs } from '../ui98/tabs';
 import type { IdeState } from './ideState';
 import { customPropEditor, imageListRenameCmds } from './imageListEditor';
+import { dataSourceRenameCmds } from './dataSourceEditor';
 import { bytesToBase64, createColorPopup, formatPropertyValue, mimeFromPath, parsePropertyInput, showFontDialog } from './propertyEditors';
 import { CATEGORIES, categoryOf, describeProperty, type Category } from './propertyInfo';
 
@@ -110,7 +111,8 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
       // a member of an array that gets a new unique name leaves the array
       const rename = renameCmd(form.id, t.id, name, t.name.toLowerCase() === name.toLowerCase() ? t.index : null);
       // an ImageList takes the references of the Toolbars, TreeViews, ... that use it along (one undo step)
-      const follow = t.type === 'ImageList' ? imageListRenameCmds(form, t.name, name) : [];
+      const follow = t.type === 'ImageList' ? imageListRenameCmds(form, t.name, name)
+        : t.type === 'Data' || t.type === 'Adodc' ? dataSourceRenameCmds(form, t.name, name) : [];
       ide.stack.execute(follow.length ? compositeCmd('Rename', [rename, ...follow]) : rename);
       return;
     }

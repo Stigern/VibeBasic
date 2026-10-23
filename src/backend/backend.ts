@@ -45,8 +45,29 @@ export interface NetApi {
   onSocketEvent(handler: (e: SocketEvent) => void): Promise<() => void>;
 }
 
+/** A database value as the Rust side sends it: SQLite NULL, a number, a string, or the bytes of a BLOB. */
+export type DbValue = null | number | string | { blob: string };
+/** The rows of a query; `types` are the declared column types ('' for an expression). */
+export interface DbQueryResult { columns: string[]; types: string[]; rows: DbValue[][] }
+export interface DbExecResult { rowsAffected: number; lastInsertRowid: number }
+
+/**
+ * Data control, ADO Data Control, Recordset: SQLite databases (src-tauri/src/db.rs), used by the main window for a running
+ * program. A missing database file is created. Every call rejects with "number|description" (DAO error numbers:
+ * 3078|no such table ..., 3022 duplicate key, 3044 invalid path).
+ */
+export interface DatabaseApi {
+  dbOpen(path: string): Promise<number>;
+  dbQuery(id: number, sql: string, params: DbValue[]): Promise<DbQueryResult>;
+  /** Without params the SQL may hold several statements. */
+  dbExecute(id: number, sql: string, params: DbValue[]): Promise<DbExecResult>;
+  dbClose(id: number): Promise<void>;
+  /** Closes every connection (the end of a run). */
+  dbReset(): Promise<void>;
+}
+
 /** FileSystemApi: the files of a running program (Open, Kill, Dir ...) and SaveSetting, made by the main window. */
-export interface Backend extends NetApi, FileSystemApi {
+export interface Backend extends NetApi, FileSystemApi, DatabaseApi {
   readonly kind: 'tauri' | 'browser';
   showMainWindow(): Promise<void>;
   /** Open dialog filtered to *.vbb. Null when cancelled. */

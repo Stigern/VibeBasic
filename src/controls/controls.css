@@ -526,3 +526,11 @@
 .ag-balloon.below::after { top: auto; bottom: calc(100% - 1px); border-width: 0 4px 8px 0; border-top-color: transparent; border-bottom-color: #ffffe1; }
 .ag-balloon.think { border-style: dashed; border-radius: 14px; font-style: italic; }
 .ag-balloon.think::before, .ag-balloon.think::after { display: none; }
+
+/* Data control / ADO Data Control: |< < Caption > >| */
+.vb-data { display: flex; width: 100%; height: 100%; user-select: none; outline: none; box-sizing: border-box; }
+.vb-data-btn { flex: none; width: 15px; display: flex; align-items: center; justify-content: center; background: #c0c0c0; color: #000; box-shadow: var(--w98-raised); }
+.vb-run .vb-data-btn:active { box-shadow: var(--w98-sunken); }
+.vb-run .vb-data-btn:active svg { transform: translate(1px, 1px); }
+.vb-disabled .vb-data-btn { color: #808080; }
+.vb-data-caption { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; padding: 0 3px; overflow: hidden; white-space: nowrap; box-shadow: inset 1px 1px #808080, inset -1px -1px #fff; }

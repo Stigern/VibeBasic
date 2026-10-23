@@ -3,7 +3,7 @@
 
 import type { OutSlot, VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
-import { Empty, Nothing, Null, NullT, coerce, isObject, toBool, toStr, type VBDate, type VBRef, type VBValue } from '../../lang/values';
+import { Empty, Nothing, Null, NullT, coerce, isDate, isObject, toBool, toStr, type VBDate, type VBRef, type VBValue } from '../../lang/values';
 import { CONTROL_TYPES, getPropDef, type PropDef } from '../../model/controls';
 import { decodeRuns, encodeRuns, formatAt, formatRange, replaceRange, runsText, type RtfPatch, type Run } from '../../controls/richText';
 import type { DirListing, Volume } from '../../backend/backend';
@@ -32,6 +32,8 @@ import type { OpenedMedia } from '../mediaSource';
 import type { RichControl, RichHost } from './richControl';
 import { MciControl, MediaPlayerControl } from './mediaControls';
 import { AgentControl } from './agentControl';
+import { DataControl, type DataConsumer, type DataHost } from '../data/dataControl';
+import type { DbSession } from '../data/dbSession';
 
 export interface RunContext {
   resolveAsset(ref: PictureRef): string | null;
@@ -58,7 +60,20 @@ export interface RunContext {
   openMedia?(path: string, mime: string): Promise<OpenedMedia>;
   /** SetFocus: the control is the form's ActiveControl at once (the window confirms it later). */
   focused?(ctrl: ControlObject): void;
+  /** Data control, Adodc: the run's databases (made on first use). */
+  db?(): DbSession;
+  /** A database path of the program as a full path (relative to App.Path, like Open). */
+  resolveDbPath?(path: string): string;
+  /** Every control of the form (data binding). */
+  controls?(): ControlObject[];
+  msgBox?(prompt: string, buttons: number, title: string): Promise<number>;
 }
+
+/** The property a control shows a bound field in (DataSource / DataField). */
+const BOUND_PROP: Record<string, string> = { TextBox: 'Text', Label: 'Caption', CheckBox: 'Value', ComboBox: 'Text', ListBox: 'Text', DTPicker: 'Value', MaskedEdit: 'Text' };
+/** The properties that name a data control of the form (`Text1.DataSource`, `DataCombo1.RowSource`). */
+const DATA_REFS = new Set(['DataSource', 'RowSource']);
+const strProp = (v: PropValue | undefined): string => (typeof v === 'string' ? v : '');
 
 /** RichTextBox: the props that go to the window in order, as RtfOps (see send). */
 const RTF_OP_PROPS = new Set(['Text', 'Runs', 'SelStart', 'SelLength', 'SelBold', 'SelItalic', 'SelUnderline', 'SelColor', 'SelFontName', 'SelFontSize']);
@@ -109,7 +124,7 @@ function fromTextOrFail(mask: string, prompt: string, text: string): string {
 }
 const badIndex = (): VBRuntimeError => new VBRuntimeError(381, 'Invalid property array index');
 
-export class ControlObject implements VBObject {
+export class ControlObject implements VBObject, DataConsumer {
   readonly vbTypeName: string;
   readonly defaultMember?: string;
   readonly props: Record<string, PropValue> = {};
@@ -137,6 +152,8 @@ export class ControlObject implements VBObject {
   private rich: RichControl | null = null;
   /** MSChart: the data table (the window gets it as the prop `ChartLines`) and the Plot.Axis(id) titles. */
   private chart: ChartModel | null = null;
+  /** A bound control is being filled from its data control (no DataChanged). */
+  private filling = false;
 
   constructor(readonly def: ControlDef, private formKey: string, private queue: PatchQueue, private ctx: RunContext) {
     const td = CONTROL_TYPES[def.type];
@@ -167,6 +184,7 @@ export class ControlObject implements VBObject {
     if (def.type === 'MMControl') this.rich = new MciControl(this.richHost());
     else if (def.type === 'MediaPlayer') this.rich = new MediaPlayerControl(this.richHost());
     else if (def.type === 'Agent') this.rich = new AgentControl(this.richHost());
+    else if (def.type === 'Data' || def.type === 'Adodc') this.rich = new DataControl(this.dataHost(), def.type === 'Data' ? 'dao' : 'ado');
     if (def.type === 'MonthView') {   // the selection starts out as the Value
       const v = typeof this.props.Value === 'number' ? dayOf(this.props.Value) : dayOf(Number(CONTROL_TYPES.MonthView.props.find(p => p.name === 'Value')!.default));
       this.props.Value = v;
@@ -230,6 +248,86 @@ export class ControlObject implements VBObject {
       },
     };
   }
+
+  private dataHost(): DataHost {
+    return {
+      props: this.props, name: this.def.name,
+      raise: (event, args) => this.ctx.raise?.(this, event, args) ?? Promise.resolve(),
+      send: p => this.send(p),
+      db: () => {
+        const d = this.ctx.db?.();
+        if (!d) throw new VBRuntimeError(429, 'ActiveX component can\'t create object');
+        return d;
+      },
+      resolvePath: p => this.ctx.resolveDbPath?.(p) ?? p,
+      consumers: () => this.ctx.controls?.() ?? [],
+      msgBox: (p, b, t) => this.ctx.msgBox?.(p, b, t) ?? Promise.resolve(1),
+    };
+  }
+
+  // -- data binding -------------------------------------------------------------------------------------------------
+
+  /** A Data control / Adodc: its data side (recordset, binding); null for other controls. */
+  dataSource(): DataControl | null { return this.rich instanceof DataControl ? this.rich : null; }
+
+  /** The property whose change marks a bound control's record changed (DataChanged). */
+  private dirtyProp(): string | null {
+    if (strProp(this.props.DataSource) === '') return null;
+    return this.def.type === 'ListBox' ? 'ListIndex' : BOUND_PROP[this.def.type] ?? null;
+  }
+
+  isBound(): boolean {
+    return (this.rich?.showBound !== undefined || BOUND_PROP[this.def.type] !== undefined)
+      && strProp(this.props.DataSource) !== '' && strProp(this.props.DataField) !== '';
+  }
+
+  /** The value to save in the bound field: the text, a CheckBox's True / False (Grayed: Null), a DTPicker's date or Null. */
+  boundValue(): VBValue {
+    if (this.rich?.boundValue) return this.rich.boundValue();
+    switch (this.def.type) {
+      case 'CheckBox': { const n = Number(this.props.Value); return n === 2 ? Null : n === 1; }
+      case 'DTPicker': return typeof this.props.Value === 'number' ? dateValue(this.props.Value) : Null;
+      case 'ListBox': case 'MaskedEdit': return this.read(this.propDef('Text')) as string;
+      default: return toStr(this.props[BOUND_PROP[this.def.type]] as string);
+    }
+  }
+
+  /** Shows a field's value (null: no current record); the Change / Click events follow as for code. DataChanged becomes False. */
+  showBound(v: VBValue | null): void {
+    const none = v === null || v instanceof NullT;
+    try {
+      this.filling = true;
+      if (this.rich?.showBound) this.rich.showBound(v);
+      else switch (this.def.type) {
+        case 'CheckBox': this.setMember('Value', [], none ? 0 : toBool(v) ? 1 : 0); break;
+        case 'DTPicker':
+          if (!none) void this.setMember('Value', [], v);
+          else if (this.props.CheckBox === true) void this.setMember('Value', [], Null);
+          break;
+        case 'ListBox': {
+          const t = none ? '' : toStr(v);
+          this.write(this.propDef('ListIndex'), this.list().findIndex(x => x === t));
+          break;
+        }
+        default: {
+          const prop = BOUND_PROP[this.def.type];
+          if (prop) void this.setMember(prop, [], none || (isObject(v) && !isDate(v)) ? '' : toStr(v));
+        }
+      }
+    } catch {
+      // a value the control cannot show (a MaskedEdit mask, a date out of range) is left out
+    } finally {
+      this.filling = false;
+      this.props.DataChanged = false;
+    }
+  }
+
+  dataNotify(src: DataControl, kind: 'reposition' | 'rows'): void { this.rich?.dataNotify?.(src, kind); }
+
+  /** Form_Load has finished: a Data control opens its recordset. */
+  formLoaded(): Promise<void> { return this.rich?.formLoaded?.() ?? Promise.resolve(); }
+  /** The form is about to unload: a Data control saves the bound controls' changes. */
+  beforeUnload(): Promise<void> { return this.rich?.formUnloading?.() ?? Promise.resolve(); }
 
   /** The form unloads or the program ends: sockets close, requests are aborted, media stops. */
   dispose(): void { this.ext?.dispose(); this.rich?.dispose(); }
@@ -555,6 +653,7 @@ export class ControlObject implements VBObject {
   /** State reported by the window (user input). Updates the mirror without sending a patch back. */
   applyState(props: Record<string, PropValue>): void {
     const oldPath = this.props.Path;
+    const dirty = this.dirtyProp(), before = dirty ? this.props[dirty] : undefined;
     for (const [k, v] of Object.entries(props)) {
       if (k === 'SelectedNode' || k === 'SelectedIndex') this.selItem = this.collections.get(k === 'SelectedNode' ? 'nodes' : 'listitems')?.find(Number(v)) ?? null;
       else if (k === 'Toggled') {   // 'index|0 or 1': a node was expanded / collapsed by a click on the +/- box
@@ -568,6 +667,7 @@ export class ControlObject implements VBObject {
       this.props[getPropDef(this.def.type, k)?.name ?? k] = v;
     }
     if (isBrowserType(this.def.type) && 'Path' in props && this.props.Path !== oldPath) this.reload();   // a folder opened by a double click
+    if (dirty && dirty in props && this.props[dirty] !== before) this.props.DataChanged = true;   // the user edited a bound control
     this.ext?.applyState?.(props);
     this.rich?.applyState?.(props);
     if (this.def.type === 'RichTextBox') {   // the user typed, or moved the selection
@@ -620,7 +720,7 @@ export class ControlObject implements VBObject {
     if (pd.kind === 'list') return this.getListItem(args);
     if (pd.name === 'Selected') return this.selected(args);
     if (args.length) throw new VBRuntimeError(450);
-    if (IMAGE_REFS.has(pd.name)) {   // the ImageList control itself (its name when the form cannot be asked)
+    if (IMAGE_REFS.has(pd.name) || DATA_REFS.has(pd.name)) {   // the ImageList / data control itself (its name when the form cannot be asked)
       const name = String(this.props[pd.name] ?? '');
       return name === '' ? Nothing : (this.ctx.controlByName?.(name) as VBValue | undefined) ?? name;
     }
@@ -834,6 +934,10 @@ export class ControlObject implements VBObject {
       if (value === Nothing || value === Empty) return '';
       if (value instanceof ControlObject && value.def.type === 'ImageList') return value.def.name;
     }
+    if (DATA_REFS.has(pd.name)) {   // Set Text1.DataSource = Adodc1
+      if (value === Nothing || value === Empty) return '';
+      if (value instanceof ControlObject && value.dataSource()) return value.def.name;
+    }
     const v = this.plain(value);
     switch (pd.kind) {
       case 'date': {
@@ -915,7 +1019,22 @@ export class ControlObject implements VBObject {
     this.send(patch);
     if (this.grid && (name === 'Rows' || name === 'Cols' || name === 'FixedRows' || name === 'FixedCols')) this.gridResized();
     if (this.def.type === 'Timer' && (name === 'Enabled' || name === 'Interval')) this.ctx.timerChanged(this);
-    this.ctx.propChanged?.(this, name === 'SelText' ? 'Text' : name, old);
+    const changed = name === 'SelText' ? 'Text' : name;
+    if (!this.filling && changed === this.dirtyProp() && this.props[changed] !== old) this.props.DataChanged = true;
+    if (DATA_REFS.has(name) || (name === 'DataField' && v !== old)) this.rebind();
+    this.ctx.propChanged?.(this, changed, old);
+  }
+
+  /** DataSource / DataField set by code: show the field of the data control's current record. */
+  private rebind(): void {
+    const src = this.ctx.controlByName?.(strProp(this.props.DataSource));
+    const rs = src instanceof ControlObject ? src.dataSource()?.recordset() : null;
+    if (!rs) return;
+    if (this.rich?.dataNotify && src instanceof ControlObject) this.rich.dataNotify(src.dataSource()!, 'rows');
+    if (!this.isBound()) return;
+    let v: VBValue | null = null;
+    try { if (rs.hasCurrent || rs.mode === 2) v = rs.fieldValue(rs.fieldIndex(strProp(this.props.DataField))); } catch { v = null; }
+    this.showBound(v);
   }
 
   /** DTPicker / MonthView: a date property was set; Value, SelStart and SelEnd stay in step and inside MinDate .. MaxDate. */
