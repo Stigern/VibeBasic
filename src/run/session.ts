@@ -72,7 +72,16 @@ export class RunSession implements Host, FormSession {
   readonly queue: TimedPatchQueue;
   readonly assets: Record<string, string> = {};
   private _state: 'running' | 'break' | 'ended' = 'running';
-  private readonly forms = new Map<string, FormInstance>();   // lower-case name
+  private readonly forms = new Map<string, FormInstance>();   // the default instances, by lower-case name
+  /** `New Form1` instances by lower-case key ("form1:2"): held here only while loaded (`liveInstances`); after Unload only the program's
+   *  variables hold one, and once none does it is collected and its module (its module-level variables) goes too. */
+  private readonly instances = new Map<string, WeakRef<FormInstance>>();
+  private readonly liveInstances = new Set<FormInstance>();
+  private readonly collected = new FinalizationRegistry<string>(key => {
+    if (this.instances.get(key)?.deref() !== undefined) return;
+    this.instances.delete(key);
+    this.program.removeFormInstance(key);
+  });
   private readonly app: AppObject;
   /** The form activated last (Screen.ActiveForm); null when no form is shown. */
   private activeForm: FormInstance | null = null;
@@ -94,7 +103,7 @@ export class RunSession implements Host, FormSession {
   private screenIcon: PictureRef | null = null;
   /** Forms: the loaded forms in the order they were loaded. */
   private readonly formList = new ObjectList('Object',
-    () => [...this.forms.values()].filter(f => f.loaded).sort((a, b) => a.loadOrder - b.loadOrder), o => (o as FormInstance).name,
+    () => this.allForms().filter(f => f.loaded).sort((a, b) => a.loadOrder - b.loadOrder), o => (o as FormInstance).name,
     () => new VBRuntimeError(9));
   private readonly clipboard = new ClipboardObject(() => this.formHost.clipboard?.());
   private readonly title: string;
@@ -119,7 +128,7 @@ export class RunSession implements Host, FormSession {
 
   constructor(private project: Project, readonly formHost: FormHost, private cb: SessionCallbacks, readonly mode: 'ide' | 'app') {
     for (const [k, a] of Object.entries(project.assets)) this.assets[k] = `data:${a.mime};base64,${a.dataBase64}`;
-    this.queue = new TimedPatchQueue((key, m) => this.forms.get(key.toLowerCase())?.deliver(m));
+    this.queue = new TimedPatchQueue((key, m) => this.formByKey(key)?.deliver(m));
     for (const f of project.forms) this.forms.set(f.name.toLowerCase(), new FormInstance(f, this));
     this.title = project.title || project.name;
     // App.LogEvent writes only in a made app; VB6 does not log in the IDE
@@ -213,7 +222,7 @@ export class RunSession implements Host, FormSession {
     this.screenPointer = pointer;
     this.screenIcon = icon;
     const css = this.screenCursor();
-    for (const f of this.forms.values()) f.deliver({ t: 'cursor', css });
+    for (const f of this.allForms()) f.deliver({ t: 'cursor', css });
   }
 
   /** Resolves when the files left open at the end are written and closed. */
@@ -225,7 +234,7 @@ export class RunSession implements Host, FormSession {
    */
   async quit(): Promise<boolean> {
     if (this.ended) return true;
-    const loaded = () => [...this.forms.values()].filter(f => f.loaded).sort((a, b) => b.loadOrder - a.loadOrder);
+    const loaded = () => this.allForms().filter(f => f.loaded).sort((a, b) => b.loadOrder - a.loadOrder);
     for (const f of loaded()) if (!(await f.queryUnload(2))) return this.ended;
     for (const f of loaded()) if (!(await f.unload(2, true))) return this.ended;
     this.end();
@@ -259,7 +268,7 @@ export class RunSession implements Host, FormSession {
    */
   private maybeEnd(): void {
     if (this.ended || this.program.state === 'running' || this.program.state === 'break') return;
-    for (const f of this.forms.values()) if (f.loaded) return;
+    for (const f of this.allForms()) if (f.loaded) return;
     if (this.program.liveObjects > 0 && !this.terminating) {
       this.terminating = true;
       void this.program.terminateObjects().finally(() => { this.queue.flush(); this.maybeEnd(); });
@@ -312,7 +321,20 @@ export class RunSession implements Host, FormSession {
     }, interval));
   }
 
+  /** The default instances and the loaded `New` ones. */
+  private allForms(): FormInstance[] { return [...this.forms.values(), ...this.liveInstances]; }
+  /** A form by its key (its module's name): a default instance or a `New` one that is still there. */
+  private formByKey(key: string): FormInstance | undefined {
+    const l = key.toLowerCase();
+    return this.forms.get(l) ?? this.instances.get(l)?.deref();
+  }
+
+  formLoading(form: FormInstance): void {
+    if (this.instances.has(form.key.toLowerCase())) this.liveInstances.add(form);
+  }
+
   formUnloaded(form: FormInstance): void {
+    this.liveInstances.delete(form);
     this.formLeft(form, false);
     this.updateBlocked();
     this.maybeEnd();
@@ -326,7 +348,7 @@ export class RunSession implements Host, FormSession {
   }
   mdiActiveChild(): FormInstance | null { return this.mdiActive; }
   mdiChildren(): FormInstance[] {
-    return [...this.forms.values()].filter(f => f.isMdiChild && f.loaded).sort((a, b) => b.loadOrder - a.loadOrder);
+    return this.allForms().filter(f => f.isMdiChild && f.loaded).sort((a, b) => b.loadOrder - a.loadOrder);
   }
   /** The MDI form's window shows the active child as active. */
   private sendMdiActive(): void {
@@ -342,7 +364,8 @@ export class RunSession implements Host, FormSession {
       const key = `${def.name}:${++this.instanceSeq}`;
       this.program.addFormInstance(def.name, key);
       const f = new FormInstance(def, this, key);
-      this.forms.set(key.toLowerCase(), f);
+      this.instances.set(key.toLowerCase(), new WeakRef(f));
+      this.collected.register(f, key.toLowerCase());
       return f;
     };
   }
@@ -405,7 +428,7 @@ export class RunSession implements Host, FormSession {
   /** Windows ignore input in break mode and while another form is shown modally. */
   updateBlocked(): void {
     const top = this.modalStack[this.modalStack.length - 1];
-    for (const f of this.forms.values()) {
+    for (const f of this.allForms()) {
       if (!f.hasWindow()) continue;
       const b = this._state === 'break' || (top !== undefined && f !== top);
       if (b === f.blocked) continue;
@@ -418,7 +441,7 @@ export class RunSession implements Host, FormSession {
 
   resolveName(moduleName: string, name: string): VBObject | undefined {
     const l = name.toLowerCase();
-    const own = this.forms.get(moduleName.toLowerCase());
+    const own = this.formByKey(moduleName);
     if (own) {
       if (l === 'me') return own;
       const c = own.control(name);
@@ -596,7 +619,8 @@ export class RunSession implements Host, FormSession {
     this.timers.clear();
     this.queue.stop();
     this.modalStack = [];
-    for (const f of this.forms.values()) if (f.loaded || f.hasWindow()) f.teardown();
+    for (const f of this.allForms()) if (f.loaded || f.hasWindow()) f.teardown();
+    this.liveInstances.clear();
     this.netSession?.shutdown();   // every socket closed, every Inet request aborted
     this.dbSession?.shutdown();    // every database connection closed
     this.commSession?.shutdown();  // every serial port closed

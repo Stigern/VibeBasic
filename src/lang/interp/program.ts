@@ -585,6 +585,15 @@ export class Runtime {
     if (this.initialized) try { runSync(this.initModule(this.declRun, m), () => { throw new Error('waits'); }); } catch { /* at its first event */ }
   }
 
+  /** A `New` form instance is gone (no variable holds it any more): its module and its module-level variables go too. */
+  removeFormInstance(name: string): void {
+    const m = this.modules.get(lc(name));
+    if (!m || m.kind !== 'form' || m.key === lc(m.sourceName)) return;   // not a form's own module
+    this.modules.delete(m.key);
+    const i = this.moduleList.indexOf(m);
+    if (i >= 0) this.moduleList.splice(i, 1);
+  }
+
   *initModule(run: Run, m: ModuleScope): Gen<void> {
     const f = new Frame(run, m, null, 0);
     run.frames.push(f);
@@ -666,6 +675,10 @@ export class Program {
 
   /** Another instance of a form's module (New Form1): its own module-level variables under `name`, the same code. */
   addFormInstance(source: string, name: string): void { this.rt.addFormInstance(source, name); }
+  /** That instance is gone (nothing holds it): its module goes too. */
+  removeFormInstance(name: string): void { this.rt.removeFormInstance(name); }
+  /** Whether a module of that name is there (a form's, a `New` form instance's ...). */
+  hasModule(name: string): boolean { return this.rt.modules.has(lc(name)); }
 
   hasProcedure(moduleName: string, procName: string): boolean {
     return this.rt.modules.get(lc(moduleName))?.procs.has(lc(procName)) ?? false;
