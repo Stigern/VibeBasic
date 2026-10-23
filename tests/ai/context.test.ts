@@ -141,6 +141,9 @@ test('language reference: stable, within budget, in both system prompts', () => 
   expect(LANGUAGE_REFERENCE).toContain('Files: Open path For Input|Output|Append|Binary|Random As #n');
   expect(LANGUAGE_REFERENCE).not.toMatch(/file I\/O|Keep data in variables/i);
   expect(LANGUAGE_REFERENCE).toMatch(/Not available: .*Shell \(programs cannot be started\)/);
+  // review 08 language additions: built-ins come from the table, statements from the card's own line
+  for (const name of ['IsMissing', 'FormatNumber', 'FormatCurrency', 'FormatPercent', 'Filter', 'CDec', 'IsError', 'CVErr', 'Erl']) expect(LANGUAGE_REFERENCE).toMatch(new RegExp(`[:,] ${name}\\b`));
+  for (const text of ['Mid(s, i, n) = x', 'LSet / RSet', 'Error n', 'New Collection', 'As Long() returns an array']) expect(LANGUAGE_REFERENCE).toContain(text);
   expect(LANGUAGE_REFERENCE.length / 3.5).toBeLessThanOrEqual(1500);
   const p = project();
   expect(buildCodeRequest(p, 'm1', 1, 'x')[0].content).toContain(LANGUAGE_REFERENCE);

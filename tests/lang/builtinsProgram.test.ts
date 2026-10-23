@@ -255,3 +255,23 @@ End Sub
   await prog.runEvent('Module1', 'Main');
   expect(host.lines()).toEqual(['a 0  2 ', ' 6 ', 'b 0 -1 ', ' 0 ']);
 });
+
+test('ParamArray with a parenthesised ByRef first argument: the first is a copy, the rest are collected', async () => {
+  const src = `Sub Bump(n As Long, ParamArray more() As Variant)
+n = n + 100
+Debug.Print UBound(more); more(0)
+End Sub
+Sub Main()
+Dim x As Long, s As Single
+x = 1: s = 0.1
+Bump x, 7
+Debug.Print x
+Bump (x), s
+Debug.Print x
+End Sub
+`;
+  const host = new TestHost();
+  const prog = new Program([{ name: 'Module1', kind: 'module', source: src }], host, { locale: 'en-US' });
+  await prog.runEvent('Module1', 'Main');
+  expect(host.lines()).toEqual([' 0  7 ', ' 101 ', ' 0  .1 ', ' 101 ']);
+});

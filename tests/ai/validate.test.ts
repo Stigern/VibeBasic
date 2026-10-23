@@ -138,6 +138,39 @@ test('file I/O and the settings functions are fine under Option Explicit (0.8 fi
   expect(inForm1(sub(body))).toEqual([]);
 });
 
+test('the review 08 language additions are known names under Option Explicit', () => {
+  const code = [
+    'Option Explicit',
+    'Private Function Nums() As Integer()',
+    '    Dim a() As Integer',
+    '    ReDim a(2)',
+    '    Nums = a',
+    'End Function',
+    'Private Sub Show(Optional ByVal v As Variant)',
+    '    If IsMissing(v) Then Debug.Print "none"',
+    'End Sub',
+    'Private Sub Main()',
+    '    Dim s As String, t As String * 5, c As New Collection, d As Collection, v As Variant, x() As String',
+    '    On Error GoTo Bad',
+    '    s = "hello"',
+    '10  Mid(s, 1, 2) = "HE"',
+    '    LSet t = s',
+    '    RSet t = s',
+    '    Set d = New Collection',
+    '    c.Add 1, "a"',
+    '    Debug.Print FormatNumber(1234.5, 2), FormatCurrency(3), FormatPercent(0.5), CDec(1.5)',
+    '    x = Filter(Split("a,b", ","), "a")',
+    '    v = CVErr(5)',
+    '    If IsError(v) Then Error 5',
+    '    Show',
+    '    Exit Sub',
+    'Bad:',
+    '    Debug.Print Erl, Err.Number',
+    'End Sub',
+  ].join('\n');
+  expect(validateCode(code, { moduleName: 'Module1', form: null })).toEqual([]);
+});
+
 test('a large valid program has no problems', () => {
   const code = `Option Explicit
 Private Type Point2

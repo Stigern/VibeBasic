@@ -297,8 +297,9 @@ export class RunSession implements Host, FormSession {
     this.lastYield = performance.now();
   }
 
-  /** Beep: a short tone through Web Audio; silent when there is no audio (never throws). */
+  /** Beep: a short tone through Web Audio; silent when there is no audio (never throws). One AudioContext per session, closed at the end. */
   beep(): void {
+    if (this.ended) return;
     try {
       const Ctx = (globalThis as { AudioContext?: typeof AudioContext }).AudioContext;
       if (!Ctx) return;
@@ -376,6 +377,7 @@ export class RunSession implements Host, FormSession {
     this.netSession?.shutdown();   // every socket closed, every Inet request aborted
     this.dbSession?.shutdown();    // every database connection closed
     this.commSession?.shutdown();  // every serial port closed
+    if (this.audio) { this.audio.close().catch(() => { /* already closed */ }); this.audio = undefined; }
     this.cb.onEnded();
   }
 }
