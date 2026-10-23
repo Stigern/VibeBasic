@@ -10,6 +10,7 @@ mod inet;
 mod io_util;
 mod make_app;
 mod media;
+mod printing;
 mod sysinfo;
 mod winsock;
 mod app_commands;
@@ -85,7 +86,9 @@ pub fn run() {
       embedded::get_embedded_project,
       embedded::quit_app,
       embedded::get_app_dir,
-      embedded::get_app_name
+      embedded::get_app_name,
+      printing::printer_list,
+      printing::print_window
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

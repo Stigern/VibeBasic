@@ -63,7 +63,7 @@ export function buildLanguageReference(): string {
     `Statements: ${STATEMENTS}`,
     `Types: ${types.join(', ')} (suffixes % & ! # $). Operators: + - * / \\ Mod ^ &, = <> < > <= >=, Like, Is, Not, And, Or, Xor, Eqv, Imp; rs!Name is rs("Name") (a Recordset field).`,
     `Objects: ${objects.join(', ')}.`,
-    `Drawing on a Form or PictureBox as in VB6: ${drawing.join(', ')} (Line (x1, y1)-(x2, y2)[, c][, B[F]]), Cls, Point, PaintPicture; AutoRedraw or Paint.`,
+    `Drawing on a Form, PictureBox or Printer (NewPage, EndDoc prints, KillDoc): ${drawing.join(', ')} (Line (x1, y1)-(x2, y2)[, c][, B[F]]), Cls, Point, PaintPicture; AutoRedraw or Paint.`,
     'Built-in functions by argument count (String functions also have a $ form, e.g. Left$):',
     ...functionLines(),
     'Constant groups (prefix, count, examples):',

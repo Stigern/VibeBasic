@@ -23,6 +23,7 @@ class TestHost extends InlineFormHost {
   }
   override async colorDialog(): Promise<number | null> { return 0xff; }
   override async fontDialog(): Promise<FontValue | null> { return { name: 'Arial', size: 14, bold: true, italic: false, underline: true }; }
+  override async printerDialog() { return null; }
 }
 
 async function run(code: string, controls: [Exclude<ControlType, 'Form'>, string, Record<string, PropValue>?][], backend: FakeBackend) {
@@ -69,7 +70,7 @@ test('ShowOpen / ShowSave fill FileName and FileTitle and pass filter, title and
   expect(backend.showSaveDialog).toHaveBeenCalledWith(expect.any(Array), 'Velg', '/Users/me', 'a.txt');
 });
 
-test('Cancel: CancelError = True gives 32755, False returns and keeps FileName; ShowPrinter and ShowHelp give 438', async () => {
+test('Cancel: CancelError = True gives 32755, False returns and keeps FileName; ShowPrinter cancelled gives 32755, ShowHelp 438', async () => {
   const backend = { showOpenDialog: vi.fn(async () => null), showSaveDialog: vi.fn(async () => null) };
   const r = await run([
     'Private Sub Form_Load()',
@@ -90,7 +91,7 @@ test('Cancel: CancelError = True gives 32755, False returns and keeps FileName; 
     '  CommonDialog1.ShowHelp',
     '  Debug.Print Err.Number',
     'End Sub'].join('\n'), [['CommonDialog', 'CommonDialog1']], backend);
-  expect(r.out.join('')).toBe(' 0 keep.txt| 32755 Cancel was selected| 0 | 438 | 438 ');
+  expect(r.out.join('')).toBe(' 0 keep.txt| 32755 Cancel was selected| 0 | 32755 | 438 ');
 });
 
 test('ShowColor and ShowFont fill Color and Font*', async () => {

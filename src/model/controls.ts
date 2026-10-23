@@ -169,7 +169,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
     methods: [
       { name: 'Show', params: '[Modal], [OwnerForm]' }, { name: 'Hide', params: '' },
-      { name: 'Refresh', params: '' }, { name: 'Move', params: MOVE }, ...drawMethods(),
+      { name: 'Refresh', params: '' }, { name: 'Move', params: MOVE }, { name: 'PrintForm', params: '' }, ...drawMethods(),
     ],
   }),
 
@@ -441,8 +441,8 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
     events: [evClick(), evDbl(), ev('RowColChange'), ev('SelChange'), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
-  // Invisible at run time, like Timer (Left and Top only). ShowOpen / ShowSave / ShowColor / ShowFont are run by the run session;
-  // ShowPrinter and ShowHelp are not supported (438). FileTitle is run-time only.
+  // Invisible at run time, like Timer (Left and Top only). ShowOpen / ShowSave / ShowColor / ShowFont / ShowPrinter are run by the run
+  // session; ShowHelp is not supported (438). FileTitle is run-time only.
   CommonDialog: def({
     type: 'CommonDialog', component: 'COMDLG32.OCX', namePrefix: 'CommonDialog', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true, toolboxTooltip: 'CommonDialog',
     defaultEvent: '', defaultMember: null,
@@ -453,10 +453,13 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       color('Color', 0), str('FontName', 'MS Sans Serif'), int('FontSize', 8, { min: 1, max: 999 }),
       bool('FontBold', false), bool('FontItalic', false), bool('FontUnderline', false),
       bool('CancelError', false),
+      int('Copies', 1, { min: 1, max: 9999 }), int('Orientation', 1, { min: 1, max: 2 }), int('FromPage', 0, { min: 0 }), int('ToPage', 0, { min: 0 }),
+      int('Min', 0, { min: 0 }), int('Max', 0, { min: 0 }), bool('PrinterDefault', true),
     ],
     events: [],
     methods: [
       { name: 'ShowOpen', params: '' }, { name: 'ShowSave', params: '' }, { name: 'ShowColor', params: '' }, { name: 'ShowFont', params: '' },
+      { name: 'ShowPrinter', params: '' },
     ],
   }),
 

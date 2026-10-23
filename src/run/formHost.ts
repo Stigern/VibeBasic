@@ -5,6 +5,7 @@ import type { FileSystemApi } from '../lang/fileio/fsApi';
 import type { FontValue } from '../model/types';
 import type { FileDialogRequest } from './commonDialog';
 import type { OpenedMedia } from './mediaSource';
+import type { PrintJob, PrinterDialogRequest, PrinterDialogResult, PrinterInfo } from './printing';
 import type { ClipboardApi } from './objects/globalObjects';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 
@@ -42,6 +43,12 @@ export interface FormHost {
   system?(): SystemApi;
   /** Clipboard: the system clipboard (text). Absent: the program keeps its own copy. */
   clipboard?(): ClipboardApi;
+  /** Printer.EndDoc, Form.PrintForm: shows the pages and opens the print dialog; resolves when the job is handed over. Absent: error 482. */
+  printPages?(job: PrintJob): Promise<void>;
+  /** Printers: the printers of the system. Absent: none. */
+  listPrinters?(): Promise<PrinterInfo[]>;
+  /** CommonDialog.ShowPrinter: the Win98 Print dialog. Null when cancelled. */
+  printerDialog?(o: PrinterDialogRequest): Promise<PrinterDialogResult | null>;
   /** 'ai' only in the IDE: break mode on the line, then the Ask AI flow. */
   runtimeErrorBox(o: { number: number; description: string; compile: boolean; mode: 'ide' | 'app'; title: string }): Promise<'end' | 'debug' | 'ai'>;
 }

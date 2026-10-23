@@ -66,6 +66,8 @@ export interface Host {
    * (`Caption = "x"`, `Width`, `Hide`).
    */
   resolveName(moduleName: string, name: string): VBObject | undefined;
+  /** `Set Name = obj` for a global object of the host that can be replaced (`Set Printer = Printers(1)`); false for other names. */
+  setGlobalObject?(name: string, value: VBValue): boolean;
   msgBox(prompt: string, buttons: number, title: string): Promise<number>;
   inputBox(prompt: string, title: string, defaultText: string): Promise<string>;
   /** One Debug.Print statement; `newline` is false after a trailing `;` or `,`. */

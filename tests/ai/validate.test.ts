@@ -374,3 +374,13 @@ test('validateCode: the drawing statements and methods are valid (0.9)', () => {
     + '    SavePicture Picture1.Image, "a.bmp"\nEnd Sub\nPrivate Sub Picture1_Paint()\nEnd Sub\nPrivate Sub Picture1_Resize()\nEnd Sub';
   expect(validateCode(code, { moduleName: f.name, form: f, project: p })).toEqual([]);
 });
+
+test('validateCode: Printer, Printers, PrintForm and ShowPrinter are valid (0.9)', () => {
+  const p = newProject(), f = p.forms[0];
+  const cd = newControl(f, 'CommonDialog', { left: 0, top: 0 }, null);
+  f.controls.push(cd);
+  const code = 'Option Explicit\nPrivate Sub Form_Click()\n    Dim i As Integer\n    For i = 0 To Printers.Count - 1\n        If Printers(i).DeviceName = "x" Then Set Printer = Printers(i)\n    Next\n'
+    + '    CommonDialog1.ShowPrinter\n    Printer.Orientation = vbPRORLandscape\n    Printer.Print "x"; Tab(3); 1\n    Printer.Line (0, 0)-(100, 100), , B\n'
+    + '    Printer.NewPage\n    Printer.EndDoc\n    PrintForm\nEnd Sub';
+  expect(validateCode(code, { moduleName: f.name, form: f, project: p })).toEqual([]);
+});

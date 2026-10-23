@@ -197,6 +197,20 @@ group({
   mpReadyStateUninitialized: 0, mpReadyStateLoading: 1, mpReadyStateInteractive: 3, mpReadyStateComplete: 4,
 });
 
+// Printer (Orientation, PaperSize: only Letter and A4 print as such, ColorMode, PrintQuality, Duplex) and CommonDialog.ShowPrinter
+group({
+  vbPRORPortrait: 1, vbPRORLandscape: 2,
+  vbPRPSLetter: 1, vbPRPSLetterSmall: 2, vbPRPSTabloid: 3, vbPRPSLedger: 4, vbPRPSLegal: 5, vbPRPSStatement: 6, vbPRPSExecutive: 7,
+  vbPRPSA3: 8, vbPRPSA4: 9, vbPRPSA4Small: 10, vbPRPSA5: 11, vbPRPSB4: 12, vbPRPSB5: 13, vbPRPSUser: 256,
+  vbPRCMMonochrome: 1, vbPRCMColor: 2, vbPRPQDraft: -1, vbPRPQLow: -2, vbPRPQMedium: -3, vbPRPQHigh: -4,
+  vbPRDPSimplex: 1, vbPRDPHorizontal: 2, vbPRDPVertical: 3,
+  cdlPortrait: 1, cdlLandscape: 2,
+  cdlPDAllPages: 0, cdlPDSelection: 0x1, cdlPDPageNums: 0x2, cdlPDNoSelection: 0x4, cdlPDNoPageNums: 0x8, cdlPDCollate: 0x10,
+  cdlPDPrintToFile: 0x20, cdlPDPrintSetup: 0x40, cdlPDNoWarning: 0x80, cdlPDReturnDC: 0x100, cdlPDReturnIC: 0x200,
+  cdlPDReturnDefault: 0x400, cdlPDHelpButton: 0x800, cdlPDUseDevModeCopies: 0x40000, cdlPDDisablePrintToFile: 0x80000,
+  cdlPDHidePrintToFile: 0x100000,
+});
+
 // Clipboard formats (GetFormat, GetText, SetText): only vbCFText is supported
 group({ vbCFText: 1, vbCFBitmap: 2, vbCFMetafile: 3, vbCFDIB: 8, vbCFPalette: 9, vbCFEMetafile: 14, vbCFFiles: 15, vbCFLink: -16640, vbCFRTF: -16639 });
 

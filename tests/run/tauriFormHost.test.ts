@@ -3,6 +3,8 @@ import { expect, test } from 'vitest';
 import type { FormSnapshot, FromWindow } from '../../src/run/protocol';
 import { runDialog } from '../../src/run/dialogSpec';
 import { TauriFormHost, type TauriGlue } from '../../src/run/tauriFormHost';
+import { getBackend } from '../../src/backend/backend';
+import type { PrintJob } from '../../src/run/printing';
 
 function fakeGlue() {
   const handlers = new Map<string, ((p: unknown) => void)[]>();
@@ -126,4 +128,30 @@ test('a modal form and a dialog belong to the last visible form window', async (
   await f.tick();
   expect(f.log.created[3].o.parent).toBe('vbform-Form3');
   await host.dispose();
+});
+
+test('print job: the print window gets the pages on hello; once drawn, the main window asks for the print dialog on it; Close destroys it', async () => {
+  const f = fakeGlue();
+  const host = new TauriFormHost(f.glue);
+  const b = getBackend(), asked: string[] = [];
+  b.printWindow = async l => { asked.push(l); };
+  try {
+    const job: PrintJob = { title: 'T', device: '', copies: 1, paperSize: 9, pages: [{ paperW: 794, paperH: 1123, left: 24, top: 24, w: 746, h: 1075, ops: [] }] };
+    const done = host.printPages(job);
+    await f.tick();
+    const label = f.log.created[0].label, key = label.slice('vbdialog-'.length);
+    expect(label).toMatch(/^vbdialog-print-\d+$/);   // a run window (run-windows.json): no app commands
+    expect(f.log.created[0].o).toMatchObject({ url: `form.html#${key}`, visible: false, decorations: false });
+    f.fire('vb:hello', key);
+    await f.tick();
+    expect(f.log.emitted).toContainEqual([label, 'vb:print', job]);
+    f.fire('vb:from', { key, result: 'ready' });
+    await done;
+    expect(asked).toEqual([label]);
+    f.fire('vb:from', { key, result: 'close' });
+    await f.tick(); await f.tick();
+    expect(f.log.destroyed).toEqual([label]);
+  } finally {
+    delete b.printWindow;
+  }
 });

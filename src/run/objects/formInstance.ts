@@ -55,6 +55,10 @@ export interface FormSession {
   /** SysInfo: the system's state, or null when the host cannot tell. */
   system(): SystemApi | null;
   msgBox(prompt: string, buttons: number, title: string): Promise<number>;
+  /** PrintForm: prints the form's client area (as the snapshot shows it) with the Printer's settings. */
+  printForm(s: FormSnapshot): Promise<void>;
+  /** CommonDialog.ShowPrinter: the printers and the Printer. */
+  printSetup(): ReturnType<NonNullable<RunContext['printSetup']>>;
 }
 
 interface FormState {
@@ -109,6 +113,7 @@ export class FormInstance implements VBObject {
       timerChanged: c => this.s.syncTimer(this, c),
       propChanged: (c, p, old) => this.propChanged(c, p, old),
       dialogs: this.s.formHost,
+      printSetup: () => this.s.printSetup(),
       controlByName: n => this.state().byName.get(lc(n)),
       files: { listVolumes: () => this.s.formHost.listVolumes(), listDir: p => this.s.formHost.listDir(p), defaultPath: this.s.appPath },
       net: () => this.s.net(),
@@ -546,6 +551,11 @@ export class FormInstance implements VBObject {
       case 'load': return this.load().then(() => Empty);
       case 'unload': return this.unload(1).then(() => Empty);
       case 'refresh': this.autoLoad(); return this.paint(this.state().form, true).then(() => Empty);
+      case 'printform':
+        if (args.length) throw new VBRuntimeError(450);
+        this.autoLoad();
+        this.s.queue.flush();
+        return this.s.printForm(this.snapshot()).then(() => Empty);
     }
     if (this.codeMember(name) === 'proc') return this.callPublic(name, args);
     return this.callSync(l, args);

@@ -9,7 +9,7 @@ import { CONTROL_TYPES, getPropDef } from '../model/controls';
 import type { ControlType, FormDef, Project } from '../model/types';
 
 /** Objects the code may use without declaring them (lower case). */
-export const BUILTIN_OBJECTS = new Set(['app', 'screen', 'err', 'debug', 'clipboard', 'forms', 'me']);
+export const BUILTIN_OBJECTS = new Set(['app', 'screen', 'err', 'debug', 'clipboard', 'forms', 'me', 'printer', 'printers']);
 
 /** Names the language itself knows: built-in functions and constants, and Me/Empty/Null/Nothing/True/False. */
 export function isLanguageName(key: string): boolean {

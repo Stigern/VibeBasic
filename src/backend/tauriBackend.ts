@@ -5,6 +5,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import type { Backend, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DbValue, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import { dialogFilters } from './dialogFilters';
+import type { PrinterInfo } from '../run/printing';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
 import type { FileAccess, FileMode, FileStat } from '../lang/fileio/fsApi';
 import { AI_SETTINGS_KEY, loadAiSettingsFrom, saveAiSettingsTo, type AiSettingsIo } from './aiSettingsStore';
@@ -193,6 +194,9 @@ export class TauriBackend implements Backend {
     });
   }
   sysInfo(): Promise<SysInfoData> { return call('sys_info', {}); }
+
+  printerList(): Promise<PrinterInfo[]> { return call<PrinterInfo[]>('printer_list', {}); }
+  printWindow(label: string): Promise<void> { return call<void>('print_window', { label }); }
 
   mediaOpen(path: string): Promise<string> { return call<string>('media_open', { path }); }
   async mediaRead(token: string): Promise<Uint8Array> {

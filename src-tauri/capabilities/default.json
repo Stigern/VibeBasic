@@ -75,6 +75,8 @@
     "allow-get-embedded-project",
     "allow-quit-app",
     "allow-get-app-dir",
-    "allow-get-app-name"
+    "allow-get-app-name",
+    "allow-printer-list",
+    "allow-print-window"
   ]
 }

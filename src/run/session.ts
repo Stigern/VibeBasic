@@ -19,6 +19,9 @@ import type { ControlObject } from './objects/controlObject';
 import { FormInstance, type FormSession } from './objects/formInstance';
 import { DrawnPicture } from './objects/drawSurface';
 import { fromBase64 } from '../gfx/raster';
+import { PrinterObject, type PrinterHost } from './objects/printerObject';
+import type { PrintJob } from './printing';
+import type { FormSnapshot } from './protocol';
 
 export interface SessionCallbacks {
   debugPrint(text: string, newline: boolean): void;
@@ -88,6 +91,15 @@ export class RunSession implements Host, FormSession {
   private netSession: NetSession | null = null;
   private dbSession: DbSession | null = null;
   private commSession: CommSession | null = null;
+  private readonly printerHost: PrinterHost = {
+    print: job => this.printJob(job), resolveAsset: r => this.resolveAsset(r), title: () => this.app.title,
+  };
+  /** Printer: the default printer (Set Printer = Printers(i) replaces it). */
+  private printer: PrinterObject;
+  /** Printers: read from the system before the program starts, when its code uses Printer or Printers. */
+  private printerList: PrinterObject[] = [];
+  private readonly printers = new ObjectList('Printers', () => this.printerList, o => (o as PrinterObject).deviceName, () => new VBRuntimeError(9));
+  private readonly usesPrinters: boolean;
 
   constructor(private project: Project, readonly formHost: FormHost, private cb: SessionCallbacks, readonly mode: 'ide' | 'app') {
     for (const [k, a] of Object.entries(project.assets)) this.assets[k] = `data:${a.mime};base64,${a.dataBase64}`;
@@ -100,6 +112,8 @@ export class RunSession implements Host, FormSession {
       ...project.modules.map(m => ({ name: m.name, kind: 'module' as const, source: m.code })),
     ];
     this.program = new Program(modules, this, { appTitle: this.title, appPath: cb.appPath });
+    this.printer = new PrinterObject(this.printerHost);
+    this.usesPrinters = modules.some(m => /\bprinters?\b/i.test(m.source));
   }
 
   get appPath(): string { return this.cb.appPath; }
@@ -108,6 +122,7 @@ export class RunSession implements Host, FormSession {
 
   /** Loads and shows the startup form. */
   async start(): Promise<void> {
+    if (this.usesPrinters) await this.loadPrinters();
     const f = this.forms.get(this.project.startupForm.toLowerCase()) ?? [...this.forms.values()][0];
     if (!f) { this.end(); return; }
     await f.show(false);
@@ -115,6 +130,49 @@ export class RunSession implements Host, FormSession {
   }
 
   end(): void { this.program.end(); }
+
+  /** Printers and the default Printer from the host (none when it cannot tell within a few seconds). */
+  private async loadPrinters(): Promise<void> {
+    const list = this.formHost.listPrinters;
+    if (!list) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<[]>(r => { timer = setTimeout(() => r([]), 3000); });
+    const infos = await Promise.race([list.call(this.formHost).catch(() => []), late]);
+    clearTimeout(timer);
+    this.printerList = infos.map(i => new PrinterObject(this.printerHost, i));
+    this.printer = this.printerList.find((_, i) => infos[i].isDefault) ?? this.printerList[0] ?? this.printer;
+  }
+
+  /** CommonDialog.ShowPrinter: the printers to choose from and the Printer the choice goes to (PrinterDefault). */
+  printSetup(): { printers: PrinterObject[]; printer: PrinterObject; select(name: string): void } {
+    return {
+      printers: this.printerList, printer: this.printer,
+      select: name => { const p = this.printerList.find(x => x.deviceName === name); if (p) this.printer = p; },
+    };
+  }
+
+  private async printJob(job: PrintJob): Promise<void> {
+    this.queue.flush();
+    if (!this.formHost.printPages) throw new VBRuntimeError(482);
+    const assets: Record<string, string> = {};
+    for (const p of job.pages) {
+      for (const op of p.ops ?? []) {
+        const src = op.startsWith('{"o":"pic"') ? (JSON.parse(op) as { src: string }).src : null;
+        const url = src && !src.startsWith('data:') ? this.assets[src] : undefined;
+        if (url) assets[src!] = url;
+      }
+    }
+    try {
+      await this.formHost.printPages({ ...job, assets });
+    } catch (e) {
+      throw e instanceof VBRuntimeError ? e : new VBRuntimeError(482);   // Printer error
+    }
+  }
+
+  /** PrintForm: the form's client area on one page, at its size on the screen, with the Printer's settings. */
+  printForm(s: FormSnapshot): Promise<void> {
+    return this.printJob(this.printer.job([{ ...this.printer.layout(), form: s }]));
+  }
 
   /** Resolves when the files left open at the end are written and closed. */
   get filesClosed(): Promise<void> { return this.program.filesClosed; }
@@ -269,7 +327,17 @@ export class RunSession implements Host, FormSession {
     if (l === 'screen') return this.screen;
     if (l === 'forms') return this.formList;
     if (l === 'clipboard') return this.clipboard;
+    if (l === 'printer') return this.printer;
+    if (l === 'printers') return this.printers;
     return undefined;
+  }
+
+  /** `Set Printer = Printers(i)`: the printer the program prints on. */
+  setGlobalObject(name: string, value: VBValue): boolean {
+    if (name.toLowerCase() !== 'printer') return false;
+    if (!(value instanceof PrinterObject)) throw new VBRuntimeError(13);
+    this.printer = value;
+    return true;
   }
 
   msgBox(prompt: string, buttons: number, title: string): Promise<number> {

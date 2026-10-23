@@ -1,12 +1,13 @@
 // FormHost that shows every running form as its own Tauri window (form.html#<key>, label vbform-<key>) and every
 // MsgBox / InputBox / error dialog as a separate window (form.html#dialog-<n>, label vbdialog-<n>; n is unique for the
-// whole app, so a late dispose of an earlier run never destroys a dialog of the current one). Dialogs and modal forms
+// whole app, so a late dispose of an earlier run never destroys a dialog of the current one); a print job is form.html#print-<n>
+// (label vbdialog-print-<n>). Dialogs and modal forms
 // are child windows (`parent`) of the topmost visible form window, or of the IDE window; always-on-top only when that
 // parent does not exist.
 //
 // Wire protocol (main <-> window), all Tauri events:
 //   window -> main  'vb:hello'    key                      the page is listening; main answers:
-//   main -> window  'vb:snapshot' FormSnapshot             (form)   or   'vb:dialog' DialogSpec (dialog)
+//   main -> window  'vb:snapshot' FormSnapshot             (form)   or   'vb:dialog' DialogSpec (dialog)   or   'vb:print' PrintJob
 //   main -> window  'vb:to'       ToWindow                 emitTo(label), in order (queued until hello)
 //   window -> main  'vb:from'     { key, m: FromWindow }   or   { key, result } when a dialog closes
 // Listeners live only while a window is open; close()/dispose() destroy windows and unlisten.
@@ -23,6 +24,7 @@ import type { DialogSpec } from './dialogSpec';
 import type { RuntimeErrorInfo } from './errorDialog';
 import type { FormHost, FormWindow } from './formHost';
 import type { ClipboardApi } from './objects/globalObjects';
+import type { PrintJob, PrinterDialogRequest, PrinterDialogResult, PrinterInfo } from './printing';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 import { windowOptionsFor } from './windowOptions';
 
@@ -203,7 +205,7 @@ export class TauriFormHost implements FormHost {
     const destroy = () => (destroying ??= this.destroy(label, handle));
     const cancel = async () => { done(cancelled); await destroy(); };
     this.closers.add(cancel);
-    const title = spec.kind === 'error' ? spec.info.title : spec.kind === 'color' ? 'Color' : spec.kind === 'font' ? 'Font' : spec.title;
+    const title = spec.kind === 'error' ? spec.info.title : spec.kind === 'color' ? 'Color' : spec.kind === 'font' ? 'Font' : spec.kind === 'printer' ? spec.req.title : spec.title;
     const handle = this.glue.createWindow(label, {
       url: `form.html#${key}`, title, width: 420, height: 160, center: true,
       resizable: false, minimizable: false, maximizable: false,
@@ -284,6 +286,59 @@ export class TauriFormHost implements FormHost {
   async fontDialog(o: { font: FontValue }): Promise<FontValue | null> {
     const r = String(await this.dialog({ kind: 'font', ...o }, ''));
     return r === '' ? null : JSON.parse(r) as FontValue;
+  }
+
+  async printerDialog(o: PrinterDialogRequest): Promise<PrinterDialogResult | null> {
+    const r = String(await this.dialog({ kind: 'printer', req: o }, ''));
+    return r === '' ? null : JSON.parse(r) as PrinterDialogResult;
+  }
+
+  /** Printers: lpstat, from this (main) window. */
+  async listPrinters(): Promise<PrinterInfo[]> { return (await getBackend().printerList?.()) ?? []; }
+
+  /**
+   * Printer.EndDoc / PrintForm: a print window (label vbdialog-print-<n>: a run window, it may call no app command) shows the pages
+   * in a Print Preview frame; when they are drawn this window asks for the macOS print dialog on it (print_window), and again for
+   * its Print button. It stays open until the user closes it, also after the program ended. Resolves when the dialog is asked for.
+   */
+  async printPages(job: PrintJob): Promise<void> {
+    const n = ++dialogSeq;
+    const key = `print-${n}`, label = `vbdialog-print-${n}`;
+    await this.ensureListening();
+    const ch = this.channel(label);
+    let ready!: () => void;
+    const shown = new Promise<void>(r => { ready = r; });
+    // window.print() does nothing in WKWebView; when the native call is not there, the page tries it anyway
+    const print = () => {
+      const b = getBackend();
+      void (b.printWindow ? b.printWindow(label) : Promise.reject(new Error('no print'))).catch(() => ch.post('vb:print-self', null));
+    };
+    let closed = false;
+    const close = async () => {
+      if (closed) return;
+      closed = true;
+      ready();
+      this.entries.delete(key);
+      await this.destroy(label, handle);
+      await this.releaseIfIdle();
+    };
+    this.entries.set(key, {
+      hello: () => ch.open(['vb:print', job]),
+      from: p => {
+        if (p.result === 'ready') { ready(); print(); } else if (p.result === 'print') print(); else if (p.result === 'close' || p.cancelled) void close();
+      },
+    });
+    const handle = this.glue.createWindow(label, {
+      url: `form.html#${key}`, title: `Print Preview - ${job.title}`, width: 700, height: 820, center: true,
+      resizable: true, minimizable: true, maximizable: true, decorations: false, visible: false, alwaysOnTop: false, focus: true,
+    });
+    try {
+      await handle;
+    } catch {
+      await close();
+      throw new VBRuntimeError(482);
+    }
+    await Promise.race([shown, new Promise(r => setTimeout(r, 20000))]);   // a page that never draws does not hold up the program
   }
 
   async runtimeErrorBox(o: RuntimeErrorInfo): Promise<'end' | 'debug' | 'ai'> {

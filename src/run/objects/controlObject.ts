@@ -46,6 +46,8 @@ import type { SystemApi } from '../../backend/backend';
 import { formMetrics } from '../../controls/render';
 import { twipsToPx } from '../../model/twips';
 import { DrawSurface } from './drawSurface';
+import type { PrinterObject } from './printerObject';
+import type { PrinterDialogRequest, PrinterDialogResult } from '../printing';
 
 export interface RunContext {
   resolveAsset(ref: PictureRef): string | null;
@@ -59,7 +61,10 @@ export interface RunContext {
     fileDialog(o: FileDialogRequest): Promise<string | null>;
     colorDialog(o: { color: number }): Promise<number | null>;
     fontDialog(o: { font: FontValue }): Promise<FontValue | null>;
+    printerDialog?(o: PrinterDialogRequest): Promise<PrinterDialogResult | null>;
   };
+  /** CommonDialog.ShowPrinter: the printers, the Printer, and selecting another one (PrinterDefault). */
+  printSetup?(): { printers: PrinterObject[]; printer: PrinterObject; select(name: string): void };
   /** DriveListBox, DirListBox, FileListBox: the volumes and folder contents from the backend. */
   files?: FileContext;
   /** A control of the form by name (what `Toolbar1.ImageList` returns). */
@@ -113,7 +118,7 @@ const hasPictureRef = (v: unknown): v is HasPictureRef =>
 
 const FONT_PROPS: Record<string, keyof FontValue> = { name: 'name', size: 'size', bold: 'bold', italic: 'italic', underline: 'underline' };
 
-class FontObject implements VBObject {
+export class FontObject implements VBObject {
   readonly vbTypeName = 'Font';
   constructor(private get: () => FontValue, private set: (f: FontValue) => void) {}
   hasMember(name: string): boolean { return name.toLowerCase() in FONT_PROPS; }
@@ -955,6 +960,7 @@ export class ControlObject implements VBObject, DataConsumer {
       case 'showopen': case 'showsave': return this.showFile(l === 'showopen');
       case 'showcolor': return this.showColor();
       case 'showfont': return this.showFont();
+      case 'showprinter': return this.showPrinter();
       case 'refresh':
         if (!isBrowserType(this.def.type)) return Empty;
         this.reload();
@@ -1393,6 +1399,26 @@ export class ControlObject implements VBObject, DataConsumer {
     const f = await dialogs.fontDialog({ font: { name: toStr(p.FontName as string), size: Number(p.FontSize), bold: p.FontBold === true, italic: p.FontItalic === true, underline: p.FontUnderline === true } });
     if (f === null) return this.cancelled();
     Object.assign(p, { FontName: f.name, FontSize: f.size, FontBold: f.bold, FontItalic: f.italic, FontUnderline: f.underline });
+    return Empty;
+  }
+
+  /** The Win98 Print dialog: Copies, Orientation, FromPage / ToPage and Flags (cdlPDPageNums) come back; with PrinterDefault the
+   *  chosen printer becomes the Printer and gets the Copies and Orientation. */
+  private async showPrinter(): Promise<VBValue> {
+    const dialogs = this.dialogs();
+    if (!dialogs.printerDialog) throw new VBRuntimeError(438);
+    this.queue.flush();
+    const p = this.props, setup = this.ctx.printSetup?.();
+    const r = await dialogs.printerDialog({
+      title: toStr(p.DialogTitle as string) || 'Print', printers: setup?.printers.map(x => x.info) ?? [], device: setup?.printer.deviceName ?? '',
+      copies: Number(p.Copies), orientation: Number(p.Orientation), fromPage: Number(p.FromPage), toPage: Number(p.ToPage), min: Number(p.Min), max: Number(p.Max),
+    });
+    if (r === null) return this.cancelled();
+    Object.assign(p, { Copies: r.copies, Orientation: r.orientation, FromPage: r.fromPage, ToPage: r.toPage, Flags: (Number(p.Flags) & ~3) | (r.pageNums ? 2 : 0) });
+    if (setup && p.PrinterDefault !== false) {
+      setup.select(r.device);
+      this.ctx.printSetup!().printer.applyDialog(r);
+    }
     return Empty;
   }
 
