@@ -12,9 +12,9 @@ import { RunSession } from '../../src/run/session';
 const f = (name: string): { name: string; hidden: boolean } => ({ name, hidden: name.startsWith('.') });
 const TREE: Record<string, DirListing> = {
   '/': { dirs: ['Users', 'Volumes'], files: [] },
-  '/Users': { dirs: ['stig'], files: [f('readme.md')] },
-  '/Users/stig': { dirs: ['.cache', 'docs'], files: ['a.txt', 'b.bas', 'c.txt', '.hidden.txt', 'notes.doc'].map(f) },
-  '/Users/stig/docs': { dirs: [], files: [f('plan.txt')] },
+  '/Users': { dirs: ['alice'], files: [f('readme.md')] },
+  '/Users/alice': { dirs: ['.cache', 'docs'], files: ['a.txt', 'b.bas', 'c.txt', '.hidden.txt', 'notes.doc'].map(f) },
+  '/Users/alice/docs': { dirs: [], files: [f('plan.txt')] },
   '/Volumes': { dirs: ['Data'], files: [] },
   '/Volumes/Data': { dirs: [], files: [f('d.txt')] },
 };
@@ -44,7 +44,7 @@ async function run(code: string, controls: [Exclude<ControlType, 'Form'>, string
   const out: string[] = [];
   session = new RunSession(p, new InlineFormHost(container, backend() as Backend), {
     debugPrint: t => { out.push(t); }, onBreak: async () => 'end', onEnded: () => {},
-    readFile: async () => { throw new Error('ENOENT'); }, appPath: '/Users/stig',
+    readFile: async () => { throw new Error('ENOENT'); }, appPath: '/Users/alice',
   }, 'ide');
   await session.start();
   await flush();
@@ -102,7 +102,7 @@ test('the typical VB6 coupling: Drive1_Change -> Dir1.Path = Drive1.Drive, Dir1_
     '  Debug.Print "["; File1.FileName; "]"',
     'End Sub',
   ].join('\n'), ALL);
-  expect(r.out).toEqual(['/,/Users/stig,/Users/stig, 1 , 4 ', 'drive;', 'dir;', 'file;', '/Volumes/Data,/Volumes/Data, 1 ,d.txt, 0 ', '[]']);
+  expect(r.out).toEqual(['/,/Users/alice,/Users/alice, 1 , 4 ', 'drive;', 'dir;', 'file;', '/Volumes/Data,/Volumes/Data, 1 ,d.txt, 0 ', '[]']);
 });
 
 test('Pattern with several patterns, Hidden, PatternChange; FileName, List(i) and ListCount', async () => {
@@ -128,13 +128,13 @@ test('Pattern with several patterns, Hidden, PatternChange; FileName, List(i) an
 test('DirListBox: List(i) of the sub-folders, -1 the current folder, -2 its parent; hidden folders are left out', async () => {
   const r = await run([
     'Private Sub Form_Load()',
-    '  Dir1.Path = "/Users/stig"',
+    '  Dir1.Path = "/Users/alice"',
     '  Debug.Print Dir1.ListCount; Dir1.List(0); Dir1.List(-1); Dir1.List(-2); Dir1.List(-3)',
     '  Dir1.Path = ".."',
     '  Debug.Print Dir1.Path; Dir1.ListCount; Dir1.List(0)',
     'End Sub',
   ].join('\n'), ALL);
-  expect(r.out).toEqual([' 1 /Users/stig/docs/Users/stig/Users/', '/Users 1 /Users/stig']);
+  expect(r.out).toEqual([' 1 /Users/alice/docs/Users/alice/Users/', '/Users 1 /Users/alice']);
 });
 
 test('an unknown drive gives 68 once the volumes are known; a drive name works', async () => {
@@ -164,15 +164,15 @@ test('the user: pick a drive, double-click a folder, click a file raise Change, 
     'Private Sub File1_Click()', '  Debug.Print "file:" & File1.FileName', 'End Sub',
   ].join('\n'), ALL);
   const texts = (name: string, sel: string) => [...r.el(name).querySelectorAll(sel)].map(e => e.textContent);
-  expect(texts('Dir1', '.dir-text')).toEqual(['/', 'Users', 'stig', 'docs']);
+  expect(texts('Dir1', '.dir-text')).toEqual(['/', 'Users', 'alice', 'docs']);
   expect(texts('File1', 'option')).toEqual(['a.txt', 'b.bas', 'c.txt', 'notes.doc']);
   expect(texts('Drive1', '.vb-item')).toEqual(['/ [Macintosh HD]', '/Volumes/Data']);
 
   const row = (i: number) => r.el('Dir1').querySelectorAll('.dir-row')[i];
   await click(row(3));   // docs: a click first (the list is painted again), then the double click on the new row
   await dblclick(row(3));
-  expect(r.out).toEqual(['dirclick:0', 'dir:/Users/stig/docs']);
-  expect(texts('Dir1', '.dir-text')).toEqual(['/', 'Users', 'stig', 'docs']);
+  expect(r.out).toEqual(['dirclick:0', 'dir:/Users/alice/docs']);
+  expect(texts('Dir1', '.dir-text')).toEqual(['/', 'Users', 'alice', 'docs']);
   expect(texts('File1', 'option')).toEqual(['plan.txt']);
 
   const file = r.el('File1').querySelector('select')!;
@@ -202,5 +202,5 @@ test('Path of a folder that does not exist is error 76; Path and the list stay a
     '  Debug.Print Err.Number; File1.Path',
     'End Sub',
   ].join('\n'), ALL);
-  expect(r.out).toEqual([' 76 /Users/stig 1 ', ' 76 /Users/stig']);
+  expect(r.out).toEqual([' 76 /Users/alice 1 ', ' 76 /Users/alice']);
 });

@@ -4,3 +4,5 @@ src-tauri/target/
 .superpowers/
 .DS_Store
 .claude/launch.json
+# local build settings (APPLE_SIGNING_IDENTITY, see README)
+.env.local

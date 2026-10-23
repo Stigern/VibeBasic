@@ -58,9 +58,9 @@ describe('dialogs during run', () => {
     const p = host.inputBox({ prompt: 'Name?', title: 'T', defaultText: '' });
     const input = document.querySelector<HTMLInputElement>('input.dlg98-input')!;
     expect(document.activeElement).toBe(input);
-    input.value = 'Stig';
+    input.value = 'Alice';
     document.querySelector<HTMLButtonElement>('button.default')!.click();
-    expect(await p).toBe('Stig');
+    expect(await p).toBe('Alice');
   });
   test('runtime error box: Debug is default, disabled buttons rendered disabled', async () => {
     const { host } = await setup();

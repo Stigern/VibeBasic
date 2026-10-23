@@ -30,9 +30,19 @@ Requires Node.js, Rust and the Tauri 2 prerequisites.
 ```bash
 npm install
 npm run tauri dev      # run the IDE
-npm run tauri build    # build VibeBasic.app
+npm run build:app      # build VibeBasic.app (scripts/build-app.sh runs tauri build)
 npm test               # run the tests
 ```
+
+### Code signing
+
+The signing identity is not in the repository. To sign your builds, create a file `.env.local` next to `package.json` (it is git-ignored) with your own identity:
+
+```bash
+APPLE_SIGNING_IDENTITY="Apple Development: Your Name (TEAMID)"
+```
+
+`security find-identity -v -p codesigning` lists the identities on your Mac. `npm run build:app` loads `.env.local`, and the Tauri bundler reads `APPLE_SIGNING_IDENTITY` from the environment. Sign every build with the same identity, or macOS asks again for permissions such as Local Network access (Winsock). Without an identity the app is built unsigned.
 
 Set up the AI under Tools > Options > AI. Enter the server's base URL (for example `http://<host>:11434/v1` for Ollama) and pick a model.
 
