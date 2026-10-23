@@ -132,6 +132,36 @@ test('a 400 about response_format is retried at once without it, and later reque
   expect(c.aiChat).toHaveBeenCalledTimes(1);
 });
 
+test('a whitespace runaway is stopped as soon as it streams in (not at max_tokens) and retried without structured output', async () => {
+  const b = fakeBackend({ model: 'runaway-early' }, (...a: any[]) => {
+    if (!a[5]?.responseFormat) return Promise.resolve(OPS);
+    a[5].onDelta('content', '{"ops"');
+    a[5].onDelta('content', ' '.repeat(100));
+    const signal = a[5].signal as AbortSignal;
+    return new Promise<string>((_, reject) => {
+      if (signal.aborted) reject(new Error('cancelled'));
+      signal.addEventListener('abort', () => reject(new Error('cancelled')));
+    });
+  });
+  await askForm(b);
+  expect(b.aiChat).toHaveBeenCalledTimes(2);
+  expect(opts(b, 1).responseFormat).toBeUndefined();
+});
+
+test('a server that rejects max_tokens gets the request again at once without it, and later requests skip it', async () => {
+  const b = fakeBackend({ model: 'no-max-tokens' }, async (...a: any[]) => {
+    if (a[5]?.maxTokens !== undefined) throw new Error('The AI server answered 400: max_tokens is too large: 24576. This model supports at most 16384 completion tokens.');
+    return OPS;
+  });
+  await askForm(b);
+  expect(b.aiChat).toHaveBeenCalledTimes(2);
+  expect(opts(b, 0).maxTokens).toBe(24576);
+  expect(opts(b, 1).maxTokens).toBeUndefined();
+  await askForm(b);
+  expect(b.aiChat).toHaveBeenCalledTimes(3);
+  expect(opts(b, 2).maxTokens).toBeUndefined();
+});
+
 /** The thinking levels sent: first answer, its check-and-fix retry, then a Change... round. */
 async function levels(settings: Record<string, unknown>) {
   const replies = [BAD_SYNTAX, GOOD, GOOD];

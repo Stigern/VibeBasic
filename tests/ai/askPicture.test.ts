@@ -2,7 +2,9 @@
 // Form mode with pictures: the first request carries the form's picture, the check round a picture of the proposal,
 // a server that refuses pictures gets the request again without them, and the server is detected lazily.
 import { afterEach, expect, test, vi } from 'vitest';
-import { askAi, formPictures } from '../../src/ai/askDialog';
+import { aiRetry, askAi, formPictures } from '../../src/ai/askDialog';
+import { detectServer, withDetected } from '../../src/ai/detect';
+import { loadAiSettings } from '../../src/ai/settings';
 import { buildFormRequest } from '../../src/ai/context';
 import { FORM_STRUCTURED_OUTPUTS } from '../../src/ai/formMode';
 import type { ContentPart } from '../../src/ai/types';
@@ -98,4 +100,36 @@ test('unknown server kind and vision are detected on the first request and saved
   // once per server: the next request does not probe again
   await askForm(b);
   expect(b.aiChat).toHaveBeenCalledTimes(3);
+});
+
+test('problems the form already had are not new, also beyond the first 12 and when their numbers change', async () => {
+  const s = new IdeState(newProject());
+  const f = s.project.forms[0];
+  f.props.Height = 9000;
+  // 16 TextBoxes in one column whose Left is 40 twips off every other row: dozens of old "one column" problems
+  for (let i = 0; i < 16; i++) f.controls.push(newControl(f, 'TextBox', { left: i % 2 ? 280 : 240, top: 240 + i * 480, width: 1200, height: 315 }, null));
+  s.setActiveView({ kind: 'designer', formId: f.id });
+  const b = fakeBackend({ model: 'pic-old-problems' }, async () => '{"ops":[{"op":"set","name":"Text16","props":{"Text":"x","Width":1300}}]}');
+  await askForm(b, s);
+  expect(b.aiChat).toHaveBeenCalledTimes(1);   // no check round about problems that were there before
+});
+
+test('the server kind is used (and saved) before a slow picture probe finishes', async () => {
+  const b = fakeBackend({ model: 'pic-slow' }, () => new Promise<string>(() => {}), [{ id: 'pic-slow', ownedBy: 'vllm' }]);
+  const st = await loadAiSettings(b);
+  const got = await withDetected(st, detectServer(b, st), 50);
+  expect(got.serverKind).toBe('vllm');
+  expect(got.vision).toBeUndefined();
+  expect(b.store.get('ai')).toMatchObject({ serverKind: 'vllm' });
+});
+
+test('a picture refused with a 5xx is not retried as transient: it goes again at once without pictures', async () => {
+  aiRetry.delayMs = 1;
+  const b = fakeBackend({ model: 'pic-500' }, async (...a: any[]) => {
+    if (pictures(a[3]).length) throw new Error('The AI server answered 500: this model is missing data required for image input');
+    return CLEAN;
+  });
+  await askForm(b);
+  expect(b.aiChat).toHaveBeenCalledTimes(2);
+  expect(pictures(sent(b, 1))).toHaveLength(0);
 });

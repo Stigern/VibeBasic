@@ -68,11 +68,21 @@ interface Item { c: ControlDef; name: string; left: number; top: number; width: 
 const nameOf = (c: ControlDef) => (c.index === null ? c.name : `${c.name}(${c.index})`);
 const right = (r: Item) => r.left + r.width, bottom = (r: Item) => r.top + r.height;
 
+/** One layout problem: its text and a stable key (the rule and the controls it names, not its numbers). */
+export interface LayoutProblem { key: string; text: string }
+
+/** The layout problems of `form` as text, at most `limit` (default 12). See layoutProblems. */
+export function checkLayout(form: FormDef, only?: Set<string>, limit = 12): string[] {
+  return [...new Set(layoutProblems(form, only).map(p => p.text))].slice(0, limit);
+}
+
 /**
- * The layout problems of `form`. With `only` (lower-case names), just the problems that name one of those controls.
+ * All layout problems of `form` (no cap). With `only` (lower-case names), just the problems that name one of those controls.
  * Controls that are hidden (Visible = False), invisible at run time, Lines and Shapes are left out.
+ * Valid VB6 idioms are not reported: a Frame without caption or border has no caption strip, a Label without caption
+ * (a separator line) has no minimum size, and an Image (a background picture) may lie under other controls.
  */
-export function checkLayout(form: FormDef, only?: Set<string>): string[] {
+export function layoutProblems(form: FormDef, only?: Set<string>): LayoutProblem[] {
   const byId = new Map(form.controls.map(c => [c.id, c]));
   const items: Item[] = [];
   for (const c of form.controls) {
@@ -82,8 +92,13 @@ export function checkLayout(form: FormDef, only?: Set<string>): string[] {
     const r = isDocked(c) ? dockedRect(form, c) : { left: Number(c.props.Left) || 0, top: Number(c.props.Top) || 0, ...sizeOf(c) };
     items.push({ c, name: nameOf(c), ...r, key: `${c.parentId ?? ''}|${parent?.type === 'SSTab' ? c.tab ?? 0 : ''}` });
   }
-  const problems: string[] = [];
-  const add = (names: string[], text: string) => { if (!only || names.some(n => only.has(n.toLowerCase()))) problems.push(text); };
+  const problems: LayoutProblem[] = [];
+  const seen = new Set<string>();
+  const add = (names: string[], text: string, rule: string) => {
+    if (only && !names.some(n => only.has(n.toLowerCase()))) return;
+    const key = `${rule}|${names.map(n => n.toLowerCase()).sort().join(',')}`;
+    if (!seen.has(key)) { seen.add(key); problems.push({ key, text }); }
+  };
   const client = formClientTwips(form.props);
 
   for (const it of items) {
@@ -93,24 +108,25 @@ export function checkLayout(form: FormDef, only?: Set<string>): string[] {
     if (!isDocked(c)) {
       const pw = parent ? sizeOf(parent).width : client.width, ph = parent ? sizeOf(parent).height : client.height;
       const where = parent ? `${parent.type} ${nameOf(parent)} (Width ${pw}, Height ${ph})` : `the form (client area ${client.width} x ${client.height})`;
-      if (it.left < 0) add([name], `${name} (Left ${it.left}) starts left of ${where}.`);
-      if (it.top < 0) add([name], `${name} (Top ${it.top}) starts above ${where}.`);
-      if (right(it) > pw) add([name], `${name} (Left ${it.left}, Width ${it.width}) goes ${right(it) - pw} twips past the right edge of ${where}.`);
-      if (bottom(it) > ph) add([name], `${name} (Top ${it.top}, Height ${it.height}) goes ${bottom(it) - ph} twips past the bottom edge of ${where}.`);
+      if (it.left < 0) add([name], `${name} (Left ${it.left}) starts left of ${where}.`, 'out-left');
+      if (it.top < 0) add([name], `${name} (Top ${it.top}) starts above ${where}.`, 'out-top');
+      if (right(it) > pw) add([name], `${name} (Left ${it.left}, Width ${it.width}) goes ${right(it) - pw} twips past the right edge of ${where}.`, 'out-right');
+      if (bottom(it) > ph) add([name], `${name} (Top ${it.top}, Height ${it.height}) goes ${bottom(it) - ph} twips past the bottom edge of ${where}.`, 'out-bottom');
       if (!parent) {
         // squeezed against the form's edge (1 to 59 twips away): leave a margin
         const gaps: [string, number][] = [['left', it.left], ['top', it.top], ['right', pw - right(it)], ['bottom', ph - bottom(it)]];
-        for (const [edge, d] of gaps) if (d >= 1 && d < 60) add([name], `${name} is only ${d} twips from the ${edge} edge of the form; leave about 240 (or resize the form).`);
+        for (const [edge, d] of gaps) if (d >= 1 && d < 60) add([name], `${name} is only ${d} twips from the ${edge} edge of the form; leave about 240 (or resize the form).`, `edge-${edge}`);
       }
-      if (parent?.type === 'Frame' && it.top >= 0 && it.top < 120) add([name], `${name} (Top ${it.top}) is under the caption of Frame ${nameOf(parent)}; use Top 240 or more.`);
+      const frameCaption = parent?.type === 'Frame' && captionText(parent.props.Caption) !== '' && parent.props.BorderStyle !== 0;
+      if (frameCaption && it.top >= 0 && it.top < 120) add([name], `${name} (Top ${it.top}) is under the caption of Frame ${nameOf(parent!)}; use Top 240 or more.`, 'frame');
       const tabH = parent?.type === 'SSTab' ? (typeof parent.props.TabHeight === 'number' ? parent.props.TabHeight : 520) : 0;
-      if (tabH && it.top >= 0 && it.top < tabH) add([name], `${name} (Top ${it.top}) is under the tabs of SSTab ${nameOf(parent!)} (TabHeight ${tabH}); use Top ${tabH + 120} or more.`);
+      if (tabH && it.top >= 0 && it.top < tabH) add([name], `${name} (Top ${it.top}) is under the tabs of SSTab ${nameOf(parent!)} (TabHeight ${tabH}); use Top ${tabH + 120} or more.`, 'tab');
     }
     // too small
-    const min = MIN_SIZE[c.type];
+    const min = c.type === 'Label' && captionText(c.props.Caption) === '' ? undefined : MIN_SIZE[c.type];
     if (min && !isDocked(c)) {
-      if (min[0] && it.width < min[0]) add([name], `${name} is ${it.width} twips wide; a ${c.type} needs at least ${min[0]}.`);
-      if (min[1] && it.height < min[1]) add([name], `${name} is ${it.height} twips high; a ${c.type} needs at least ${min[1]}${c.type === 'CommandButton' ? ' (a normal one is 375 to 495)' : ''}.`);
+      if (min[0] && it.width < min[0]) add([name], `${name} is ${it.width} twips wide; a ${c.type} needs at least ${min[0]}.`, 'min-width');
+      if (min[1] && it.height < min[1]) add([name], `${name} is ${it.height} twips high; a ${c.type} needs at least ${min[1]}${c.type === 'CommandButton' ? ' (a normal one is 375 to 495)' : ''}.`, 'min-height');
     }
     // caption that does not fit
     const pad = CAPTION_PAD[c.type];
@@ -120,7 +136,7 @@ export function checkLayout(form: FormDef, only?: Set<string>): string[] {
       const wrap = c.type === 'Label' && c.props.WordWrap === true;
       const lineH = Math.round(13 * (isFont(c.props.Font) ? c.props.Font.size : 8) / 8) * TW;
       if (wrap ? Math.ceil(need / Math.max(1, it.width)) * lineH > it.height + TW : need > it.width + TW) {
-        add([name], `The Caption "${caption}" of ${name} needs about ${Math.ceil(need / 15) * 15} twips but the ${c.type} is ${it.width} wide${wrap ? ` and ${it.height} high` : ''}; it is cut off.`);
+        add([name], `The Caption "${caption}" of ${name} needs about ${Math.ceil(need / 15) * 15} twips but the ${c.type} is ${it.width} wide${wrap ? ` and ${it.height} high` : ''}; it is cut off.`, 'caption');
       }
     }
   }
@@ -134,15 +150,15 @@ export function checkLayout(form: FormDef, only?: Set<string>): string[] {
         const a = sib[i], b = sib[j];
         const ox = Math.min(right(a), right(b)) - Math.max(a.left, b.left), oy = Math.min(bottom(a), bottom(b)) - Math.max(a.top, b.top);
         if (ox > 0 && oy > 0) {
-          if (!CONTROL_TYPES[a.c.type].isContainer && !CONTROL_TYPES[b.c.type].isContainer) {
-            add([a.name, b.name], `${a.name} (Left ${a.left}, Top ${a.top}, ${a.width} x ${a.height}) and ${b.name} (Left ${b.left}, Top ${b.top}, ${b.width} x ${b.height}) overlap by ${ox} x ${oy} twips.`);
+          if (!CONTROL_TYPES[a.c.type].isContainer && !CONTROL_TYPES[b.c.type].isContainer && a.c.type !== 'Image' && b.c.type !== 'Image') {
+            add([a.name, b.name], `${a.name} (Left ${a.left}, Top ${a.top}, ${a.width} x ${a.height}) and ${b.name} (Left ${b.left}, Top ${b.top}, ${b.width} x ${b.height}) overlap by ${ox} x ${oy} twips.`, 'overlap');
           }
           continue;
         }
         if ((GROUP[a.c.type] ?? a.c.type) !== (GROUP[b.c.type] ?? b.c.type) || isDocked(a.c) || isDocked(b.c)) continue;
         const dl = Math.abs(a.left - b.left), dt = Math.abs(a.top - b.top);
-        if (ox > 0 && dl >= 1 && dl <= 60) add([a.name, b.name], `${a.name} (Left ${a.left}) and ${b.name} (Left ${b.left}) are in one column but ${dl} twips apart; give them the same Left.`);
-        if (oy > 0 && dt >= 1 && dt <= 60) add([a.name, b.name], `${a.name} (Top ${a.top}) and ${b.name} (Top ${b.top}) are in one row but ${dt} twips apart; give them the same Top.`);
+        if (ox > 0 && dl >= 1 && dl <= 60) add([a.name, b.name], `${a.name} (Left ${a.left}) and ${b.name} (Left ${b.left}) are in one column but ${dl} twips apart; give them the same Left.`, 'column');
+        if (oy > 0 && dt >= 1 && dt <= 60) add([a.name, b.name], `${a.name} (Top ${a.top}) and ${b.name} (Top ${b.top}) are in one row but ${dt} twips apart; give them the same Top.`, 'row');
       }
     }
     // rows (same Top within 60) and columns (same Left within 60) of 3 or more similar controls
@@ -161,11 +177,11 @@ export function checkLayout(form: FormDef, only?: Set<string>): string[] {
           const gaps = line.slice(1).map((r, k) => (axis === 'row' ? r.left - right(line[k]) : r.top - bottom(line[k])));
           const lo = Math.min(...gaps), hi = Math.max(...gaps);
           if (lo >= 0 && hi - lo > 120 && hi > 1.5 * lo) {
-            add(line.map(r => r.name), `The gaps between ${line.map(r => r.name).join(', ')} (a ${axis}) are ${gaps.join(', ')} twips; make them equal.`);
+            add(line.map(r => r.name), `The gaps between ${line.map(r => r.name).join(', ')} (a ${axis}) are ${gaps.join(', ')} twips; make them equal.`, `gaps-${axis}`);
           }
         }
       }
     }
   }
-  return [...new Set(problems)].slice(0, 12);
+  return problems;
 }

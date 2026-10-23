@@ -13,7 +13,7 @@ import { type CodeSelection, applyCodeProposal, extractCode, skippedProblem } fr
 import { buildCodeRequest, buildFixRequest, buildFormRequest, type FixError } from './context';
 import { detectServer, isVisionError, withDetected } from './detect';
 import { renderFormImage } from './formImage';
-import { checkLayout } from './layoutCheck';
+import { layoutProblems } from './layoutCheck';
 import { addAiLogEntry, describeRequest, finishAiLogEntry, type AiLogEntry, type AiLogMode } from './aiLog';
 import { isProse, isQuestion, showAnswer } from './answerDialog';
 import { FORM_RESPONSE_FORMAT, FORM_STRUCTURED_OUTPUTS, NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
@@ -21,7 +21,7 @@ import { type PreviewResult, showCodePreview, showFormPreview } from './previewD
 import { type AiSettings, type Thinking, loadAiSettings } from './settings';
 import { AI_CUT_OFF, type AiChatOptions, type AiUsage } from './sse';
 import { StreamLog } from './streamLog';
-import { type ChatMessage, type ContentPart, contentChars } from './types';
+import { type ChatMessage, type ContentPart, contentChars, contentText } from './types';
 import { autoFixEventNames, validateCode } from './validate';
 
 const VB_EXCLAMATION = 48;
@@ -213,17 +213,32 @@ function limitPictures(messages: ChatMessage[], max: number): ChatMessage[] {
 }
 const hasPictures = (messages: ChatMessage[]) => messages.some(m => typeof m.content !== 'string' && m.content.some(p => p.type === 'image_url'));
 
-/** The conversation is trimmed above about this many characters (24 000 is roughly 8 000 tokens). */
+/** Without a known context size, the conversation (not counting the system prompt) is trimmed above about this many characters. */
 export const MAX_CONVERSATION_CHARS = 24000;
+/** The trim budget: with a known context size, what is left after the answer and thinking (2 characters per token, on the safe side). */
+export const conversationBudget = (contextTokens: number | undefined): number =>
+  contextTokens ? Math.max(MAX_CONVERSATION_CHARS, (contextTokens - ANSWER_TOKENS - THINKING_TOKENS.high) * 2) : MAX_CONVERSATION_CHARS;
+
+/** A wish of a dropped request in one short line (the check rounds' complaints are left out). */
+const wishOf = (m: ChatMessage): string | null => {
+  if (m.role !== 'user') return null;
+  const line = contentText(m.content).replace(/^Change your last answer: /, '').split('\n')[0].trim();
+  if (!line || line.startsWith('Your answer ')) return null;
+  return line.length > 120 ? `${line.slice(0, 117)}...` : line;
+};
 
 /**
- * Drops the oldest (assistant answer, change request) pairs until the conversation fits.
- * Always keeps the system message, the first question, the latest answer and the newest request.
+ * Drops the oldest (assistant answer, change request) pairs until the conversation fits `max` characters (the system prompt
+ * does not count). Always keeps the system message, the first question, the latest answer and the newest request; the
+ * wishes of the dropped requests go into the newest request as one line.
  */
 export function trimConversation(messages: ChatMessage[], max = MAX_CONVERSATION_CHARS): ChatMessage[] {
   const out = [...messages];
-  const size = () => out.reduce((n, m) => n + contentChars(m.content), 0);
-  while (size() > max && out.length >= 6) out.splice(2, 2);
+  const size = () => out.reduce((n, m) => n + (m.role === 'system' ? 0 : contentChars(m.content)), 0);
+  const dropped: string[] = [];
+  while (size() > max && out.length >= 6) for (const m of out.splice(2, 2)) { const w = wishOf(m); if (w) dropped.push(w); }
+  const last = out[out.length - 1];
+  if (dropped.length && typeof last.content === 'string') out[out.length - 1] = { ...last, content: `${last.content}\n(Earlier wishes in this conversation: ${dropped.join('; ')}.)` };
   return out;
 }
 
@@ -242,6 +257,12 @@ export function maxTokensFor(thinking: Thinking, contextTokens: number | undefin
   return room < 1024 ? undefined : Math.min(cap, room);
 }
 
+/** "baseUrl|model" of servers that rejected max_tokens in this session: their later requests go without it. */
+const noMaxTokens = new Set<string>();
+/** An HTTP 400/422 about max_tokens (too large, unknown field, or prompt + max_tokens over the context length). */
+export const rejectsMaxTokens = (message: string): boolean =>
+  /\b(400|422)\b/.test(message) && /max_tokens|max_completion_tokens|context length|context_length|maximum context/i.test(message);
+
 /** "baseUrl|model" of servers whose structured output failed in this session: their later requests go without it. */
 const noStructuredOutput = new Set<string>();
 /** An HTTP 400/422 about the structured output field (the server does not support it, or not this schema). */
@@ -256,9 +277,15 @@ export const isWhitespaceRunaway = (content: string): boolean => {
   const tail = content.length - content.trimEnd().length;
   return tail >= 64 && tail >= content.length / 2;
 };
-/** A dropped connection, a timeout or a 5xx: worth one more try. */
+/**
+ * A dropped connection, a timeout or a 5xx: worth one more try. The total-time limit ("did not finish within") is not: the server
+ * was producing output all that time, and a second try would repeat the whole generation.
+ */
 export const isTransientError = (message: string): boolean =>
-  /^Could not connect to|did not answer within|did not finish within|stopped sending for|^The AI server answered 5\d\d\b/.test(message);
+  /^Could not connect to|did not answer within|stopped sending for|^The AI server answered 5\d\d\b/.test(message);
+/** A refused picture: an error about pictures that is not a lost connection or a timeout (a 5xx naming the picture counts). */
+const refusesPicture = (message: string): boolean =>
+  isVisionError(message) && (!isTransientError(message) || /^The AI server answered 5\d\d\b/.test(message));
 /** The pause before the automatic retry of a transient error (tests shorten it). */
 export const aiRetry = { delayMs: 2000 };
 const pause = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
@@ -337,19 +364,38 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     const level = effort && followUp && settings.fastFollowUp !== false ? 'low' : effort;
     const partial = { content: '' };
     const prepared = () => limitPictures(all, picturesOn(settings) ? pictureLimit.get(server) ?? MAX_PICTURES : 0);
+    /** One request with the max_tokens cap; a server that rejects the cap gets it again at once without, and no cap for the rest of the session. */
+    const capped = async (messages: ChatMessage[], x: AiChatOptions, m: AiLogMode): Promise<string> => {
+      const maxTokens = noMaxTokens.has(server) ? undefined : maxTokensFor(level ?? 'server', settings.contextTokens, messages.reduce((n, y) => n + contentChars(y.content), 0));
+      try { return await attempt(messages, level, { ...x, maxTokens }, m, partial); }
+      catch (e) {
+        if (o.signal?.aborted || maxTokens === undefined || !rejectsMaxTokens(e instanceof Error ? e.message : String(e))) throw e;
+        noMaxTokens.add(server);
+        return attempt(messages, level, { ...x, maxTokens: undefined }, 'retry', partial);
+      }
+    };
     const plain = async (messages: ChatMessage[], m: AiLogMode): Promise<string> => {
-      const opts: AiChatOptions = { ...o, maxTokens: maxTokensFor(level ?? 'server', settings.contextTokens, messages.reduce((n, x) => n + contentChars(x.content), 0)) };
       const so = co.structured;
-      if (so === undefined || noStructuredOutput.has(server)) return attempt(messages, level, opts, m, partial);
+      if (so === undefined || noStructuredOutput.has(server)) return capped(messages, o, m);
       const field = settings.serverKind === 'vllm' ? { structuredOutputs: so.structuredOutputs } : { responseFormat: so.responseFormat };
-      try { return await attempt(messages, level, { ...opts, ...field }, m, partial); }
+      // the whitespace runaway is stopped as soon as it shows, not at max_tokens
+      const inner = new AbortController();
+      const relay = () => inner.abort();
+      if (o.signal?.aborted) inner.abort(); else o.signal?.addEventListener('abort', relay, { once: true });
+      let runaway = false;
+      const onDelta: AiChatOptions['onDelta'] = (k, t) => {
+        o.onDelta?.(k, t);
+        if (!runaway && k === 'content' && isWhitespaceRunaway(partial.content)) { runaway = true; inner.abort(); }
+      };
+      try { return await capped(messages, { ...o, ...field, signal: inner.signal, onDelta }, m); }
       catch (e) {
         // Structured output failed (rejected, or the whitespace runaway): once more at once without it, and never again for this server and model.
         const message = e instanceof Error ? e.message : String(e);
-        if (o.signal?.aborted || !(rejectsStructuredOutput(message) || (message === AI_CUT_OFF && isWhitespaceRunaway(partial.content)))) throw e;
+        if (o.signal?.aborted || !(runaway || rejectsStructuredOutput(message) || (message === AI_CUT_OFF && isWhitespaceRunaway(partial.content)))) throw e;
         noStructuredOutput.add(server);
-        return attempt(messages, level, opts, 'retry', partial);
+        return capped(messages, o, 'retry');
       }
+      finally { o.signal?.removeEventListener('abort', relay); }
     };
     /** A refused picture: with fewer pictures when the server named its limit, else without any for the rest of the session. */
     const once = async (m: AiLogMode): Promise<string> => {
@@ -357,7 +403,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
       try { return await plain(messages, m); }
       catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        if (o.signal?.aborted || !hasPictures(messages) || isTransientError(message) || !isVisionError(message)) throw e;
+        if (o.signal?.aborted || !hasPictures(messages) || !refusesPicture(message)) throw e;
         const limit = /at most (\d+) image/i.exec(message);
         if (limit && Number(limit[1]) > 0) pictureLimit.set(server, Number(limit[1]));
         else noVision.add(server);
@@ -397,7 +443,8 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
         : [...convo, { role: 'user', content: complaint }];
       log.separator();
       const again = await waitForReply(doc, settings.model, send(followUp, true, 'retry'), log, 'Checking and fixing...');
-      if (again.kind === 'cancel' || ide.project !== project) return { kind: 'cancel' };
+      // A cancelled check round keeps the first answer (its problems are listed in the preview), as an error does.
+      if (ide.project !== project || (again.kind === 'cancel' && !got.result)) return { kind: 'cancel' };
       if (again.kind === 'reply') {
         const second = analyse(again.text);
         if (garbled(second, again.text) && lastEntry) lastEntry.status = 'not understood';
@@ -409,6 +456,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
   };
 
   const copy = (text: string) => backend.clipboardSetText(text);
+  const budget = conversationBudget(settings.contextTokens);
   /** The proposal on screen in the preview (null until there is one). */
   let shown: Done<A> | null = null;
   let next: Round<A> = await round(first, false, co.mode, co.question);
@@ -417,7 +465,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     if (next.kind === 'error') await warn(doc, next.message);
     else if (next.kind === 'done' && next.answer) {
       const a = await showAnswer(doc, next.reply, next.metrics, copy);
-      if (a !== 'ok') { next = await round(trimConversation([...next.messages, { role: 'user', content: a.more }]), true, 'change', isQuestion(a.more)); continue; }
+      if (a !== 'ok') { next = await round(trimConversation([...next.messages, { role: 'user', content: a.more }], budget), true, 'change', isQuestion(a.more)); continue; }
     }
     else if (next.kind === 'done' && !next.result) await showNotUnderstood(doc, next.reply);
     else if (next.kind === 'done') shown = next;
@@ -429,7 +477,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     if (out === 'cancel') return false;
     if (out === 'ok') { await apply(shown.result!); return true; }
     // Change...: a new answer to the whole conversation.
-    next = await round(trimConversation([...shown.messages, changeRequest(out.change)]), true, 'change');
+    next = await round(trimConversation([...shown.messages, changeRequest(out.change)], budget), true, 'change');
   }
 }
 
@@ -468,6 +516,9 @@ export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[
     { mode: o.mode ?? 'code', answers: true, question: o.question });
 }
 
+/** The most new layout problems one answer is told about. */
+const MAX_LAYOUT_PROBLEMS = 12;
+
 /** Form mode: `first` is the finished request; the proposal is applied to the form as one undo step on OK. */
 export async function runFormConversation(s: AiSession, o: { first: ChatMessage[]; itemId: string }): Promise<boolean> {
   const { ide, doc } = s;
@@ -475,7 +526,8 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
   const form = project.forms.find(f => f.id === o.itemId);
   if (!form) return false;
   type A = { parsed: Extract<ReturnType<typeof parseFormOps>, { ok: true }>; notes: string[]; problems: string[]; proposed: FormDef | null; layout: boolean };
-  const before = new Set(checkLayout(form));
+  // the problems the form already has, all of them, by rule and controls (their numbers may change)
+  const before = new Set(layoutProblems(form).map(p => p.key));
   const analyse = (text: string): Understood<A> => {
     const notes: string[] = [];
     const parsed = parseFormOps(text, form, code => fixEventNames(form, code, notes));
@@ -483,10 +535,15 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
     const extra = parsed.ops.filter((o): o is Extract<typeof o, { op: 'add' }> => o.op === 'add').map(o => ({ name: o.name, type: o.type }));
     const problems = parsed.codeText === undefined ? [] : validateCode(parsed.codeText, { moduleName: form.name, form, extraControls: extra, project });
     if (parsed.codeSkipped) problems.push(skippedProblem(parsed.codeSkipped));
+    for (const r of parsed.renamed ?? []) {
+      if (parsed.codeText !== undefined && new RegExp(`(?<![A-Za-z0-9_])${r.from.replace(/[()]/g, '\\$&')}(?![A-Za-z0-9])`, 'i').test(parsed.codeText)) {
+        problems.push(`The form already has a control named ${r.from}, so your new one was renamed to ${r.to}; your code uses ${r.from}, which is the existing control. Give the new control a name that is not taken and use that name in the code.`);
+      }
+    }
     // the layout check of the proposed form: new problems of the controls the answer adds or changes (all of them when it resizes the form)
     let proposed: FormDef | null = null;
     try { proposed = applyFormOpsToClone(form, parsed); } catch { /* the preview reports it */ }
-    const layout = proposed ? checkLayout(proposed, touchedNames(parsed.ops, proposed)).filter(p => !before.has(p)) : [];
+    const layout = proposed ? layoutProblems(proposed, touchedNames(parsed.ops, proposed)).filter(p => !before.has(p.key)).map(p => p.text).slice(0, MAX_LAYOUT_PROBLEMS) : [];
     problems.push(...layout);
     return { result: { parsed, notes, problems, proposed, layout: layout.length > 0 }, jsonReason: null };
   };

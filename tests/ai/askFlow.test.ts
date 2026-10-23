@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, expect, test, vi } from 'vitest';
-import { askAi, trimConversation, aiRetry } from '../../src/ai/askDialog';
+import { askAi, trimConversation, aiRetry, conversationBudget, isTransientError } from '../../src/ai/askDialog';
 aiRetry.delayMs = 1;   // the automatic retry of a transient error
 import { registerAiOptionsTab } from '../../src/ai/optionsTab';
 import type { Backend } from '../../src/backend/backend';
@@ -265,4 +265,25 @@ test('trimConversation drops the oldest pairs but keeps system, first question a
   const out = trimConversation(msgs, 24000);
   expect(out.map(x => x.content.slice(0, 2))).toEqual(['s', 'q', 'xx', 'c3']);
   expect(trimConversation(msgs, 100000)).toEqual(msgs);
+});
+
+test('the trim budget leaves out the system prompt and follows a known context; the wishes of dropped requests stay as one line', () => {
+  const m = (role: 'system' | 'user' | 'assistant', content: string) => ({ role, content });
+  const sys = 's'.repeat(25000);
+  const short = [m('system', sys), m('user', 'q'), m('assistant', 'a1'), m('user', 'c1'), m('assistant', 'a2'), m('user', 'c2')];
+  expect(trimConversation(short)).toEqual(short);
+  expect(conversationBudget(undefined)).toBe(24000);
+  expect(conversationBudget(262144)).toBeGreaterThan(400000);
+  const big = 'x'.repeat(13000);
+  const long = [m('system', sys), m('user', 'q'), m('assistant', big), m('user', 'Change your last answer: make it red\nAnswer with the complete result again.'),
+    m('assistant', big), m('user', 'Your answer has these problems:\n- x'), m('assistant', big), m('user', 'c3')];
+  const out = trimConversation(long, 24000);
+  expect(out.map(x => x.content.slice(0, 2))).toEqual(['ss', 'q', 'xx', 'c3']);
+  expect(out[3].content).toBe('c3\n(Earlier wishes in this conversation: make it red.)');
+});
+
+test('the 20-minute total limit is not retried as a transient error; a dropped connection or a stalled stream is', () => {
+  expect(isTransientError('The AI server did not finish within 20 minutes.')).toBe(false);
+  expect(isTransientError('The AI server did not answer within 90 seconds.')).toBe(true);
+  expect(isTransientError('The AI server answered 503: busy')).toBe(true);
 });

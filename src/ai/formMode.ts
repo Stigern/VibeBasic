@@ -6,6 +6,7 @@ import { addComponentsCmd } from '../model/components';
 import { CONTROL_TYPES, getPropDef, newControl, nextDefaultName, validateName } from '../model/controls';
 import type { ControlDef, ControlType, FormDef, Project, PropValue } from '../model/types';
 import { absoluteRect, sizeOf } from '../ide/designerLogic';
+import { isDocked, isLine } from '../model/geometry';
 import { parsePropertyInput } from '../ide/propertyEditors';
 import { applyCodeProposal, extractCode, type CodeApplyResult } from './codeMode';
 import { stripThinking } from './clean';
@@ -20,7 +21,9 @@ export type FormOp =
   | { op: 'delete'; name: string; index: number | null }
   | { op: 'form'; props: Record<string, PropValue> };
 export type ParsedFormOps =
-  | { ok: true; ops: FormOp[]; code: string | null; warnings: string[]; codeChanges?: CodeApplyResult['changes']; codeText?: string; codeSkipped?: string[] }
+  | { ok: true; ops: FormOp[]; code: string | null; warnings: string[]; codeChanges?: CodeApplyResult['changes']; codeText?: string; codeSkipped?: string[];
+      /** Added controls renamed because their name was taken: `from` (what the answer asked for, still the existing control) to `to`. */
+      renamed?: { from: string; to: string }[] }
   | { ok: false; error: string; raw: string; /** Why the reply was not usable JSON (sent back to the model). */ reason: string };
 type Ok = Extract<ParsedFormOps, { ok: true }>;
 
@@ -204,7 +207,16 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
     const same = work.controls.filter(c => c.name.toLowerCase() === n.toLowerCase());
     return same.length > 0 && (i === null || same.some(c => c.index === null || c.type !== type || c.index === i));
   };
-  const find = (n: string, i: number | null) => work.controls.filter(c => c.name.toLowerCase() === n.toLowerCase() && (i === null || c.index === i));
+  /** Names an add of this reply asked for but got renamed (taken): later ops that use them mean the new control. */
+  const alias = new Map<string, string>();
+  const renamed: { from: string; to: string }[] = [];
+  const aliasUsed = new Set<string>();
+  const find = (n: string, i: number | null) => {
+    const to = alias.get(nameKey(n, i));
+    if (to === undefined) return work.controls.filter(c => c.name.toLowerCase() === n.toLowerCase() && (i === null || c.index === i));
+    if (!aliasUsed.has(to)) { aliasUsed.add(to); warnings.push(`Later changes in this answer to ${label(n, i)} went to the new ${to}, not the existing ${label(n, i)}.`); }
+    return work.controls.filter(c => c.name.toLowerCase() === to.toLowerCase());
+  };
 
   for (const raw of rawOps) {
     if (!isObj(raw) || typeof raw.op !== 'string') continue;
@@ -220,6 +232,7 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
       const rawProps = propsOf(raw);
       const given = typeof raw.name === 'string' && raw.name.trim() ? raw.name : typeof rawProps.Name === 'string' ? rawProps.Name : '';
       let { name, index } = splitName(given);
+      let renamedFrom: { key: string; from: string; to: string } | null = null;
       if (index === null && typeof rawProps.Index === 'number' && rawProps.Index >= 0) index = Math.floor(rawProps.Index);
       if (index === null && typeof raw.index === 'number' && raw.index >= 0) index = Math.floor(raw.index);
       if (!name) name = nextDefaultName(work, type);
@@ -231,6 +244,7 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
         let n = 1;
         while (taken(`${name}${n}`, null)) n++;
         warnings.push(`Renamed ${name} to ${name}${n} because the name was taken.`);
+        renamedFrom = { key: nameKey(name, index), from: label(name, index), to: `${name}${n}` };
         name = `${name}${n}`; index = null;
       }
       const props = parseProps(type, rawProps, label(name, index), warnings);
@@ -247,12 +261,20 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
       }
       const parent = container ? find(splitName(container).name, splitName(container).index)[0] : undefined;
       const tab = parent?.type === 'SSTab' && typeof raw.tab === 'number' && raw.tab >= 0 ? Math.floor(raw.tab) : undefined;
-      const added: ControlDef = { id: `w${work.controls.length}`, type, name, index, parentId: parent?.id ?? null, props: { ...props }, ...(tab !== undefined ? { tab } : {}) };
+      // the working control starts where buildCommands puts it (240, 240, default size), so placement relative to it is right
+      const added = newControl(work, type, { left: 240, top: 240 }, parent?.id ?? null);
+      const generated = added.name;
+      added.name = name; added.index = index;
+      if (added.props.Caption === generated) added.props.Caption = name;
+      if (added.props.Text === generated) added.props.Text = name;
+      if (tab !== undefined) added.tab = tab;
+      Object.assign(added.props, props);
       work.controls.push(added);
       addedProps.set(added.id, props);
       if (raw.place !== undefined) Object.assign(props, resolvePlace(work, added, raw.place, byName, warnings, props));
       Object.assign(added.props, props);
       ops.push({ op: 'add', type, name, index, container, props, ...(tab !== undefined ? { tab } : {}) });
+      if (renamedFrom) { alias.set(renamedFrom.key, renamedFrom.to); renamed.push({ from: renamedFrom.from, to: renamedFrom.to }); }
     } else if (kind === 'set' || kind === 'delete') {
       const s = splitName(typeof raw.name === 'string' ? raw.name : '');
       if (s.index === null && typeof raw.index === 'number' && raw.index >= 0) s.index = Math.floor(raw.index);
@@ -269,6 +291,12 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
       } else {
         const props = parseProps(targets[0].type, propsOf(raw), label(targets[0].name, s.index), warnings);
         for (const t of targets) Object.assign(t.props, props);
+        if (raw.place !== undefined && targets.length > 1) {
+          // a whole control array: its members in a column (in their current order) placed as one block
+          if (Object.keys(props).length) ops.push({ op: 'set', name: targets[0].name, index: s.index, props });
+          for (const [c, geo] of placeGroup(work, targets, raw.place, byName, warnings, props)) setGeometry(c, geo);
+          continue;
+        }
         if (raw.place !== undefined) {
           const geo = resolvePlace(work, targets[0], raw.place, byName, warnings, props);
           Object.assign(props, geo);
@@ -301,7 +329,8 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
     if (r && r.changes.length) { code = r.source; codeChanges = r.changes; } else if (!r) warnings.push('Ignored code that could not be merged into the form.');
   }
   if (!ops.length && code === null) return warnings.length ? { ...fail, raw: `${reply}\n\nIgnored:\n${warnings.join('\n')}` } : fail;
-  return { ok: true, ops, code, warnings, ...(codeChanges ? { codeChanges } : {}), ...(code !== null && text !== undefined ? { codeText: text } : {}), ...(codeSkipped ? { codeSkipped } : {}) };
+  return { ok: true, ops, code, warnings, ...(codeChanges ? { codeChanges } : {}), ...(code !== null && text !== undefined ? { codeText: text } : {}), ...(codeSkipped ? { codeSkipped } : {}),
+    ...(renamed.length ? { renamed } : {}) };
 }
 
 const DEFAULT_GAP = 120;
@@ -316,8 +345,9 @@ const PLACE_KEYS: Record<string, 'below' | 'above' | 'rightOf' | 'leftOf'> = { b
  * Works across containers (the position is converted to the target's container).
  */
 function resolvePlace(work: FormDef, target: ControlDef, place: unknown, byName: (n: unknown) => ControlDef | undefined, warnings: string[],
-  given: Record<string, PropValue>): Record<string, number> {
+  given: Record<string, PropValue>, size: { width: number; height: number } = sizeOf(target)): Record<string, number> {
   if (!isObj(place)) return {};
+  if (!movable(target, 'place', warnings)) return {};
   const entry = Object.entries(place).find(([k]) => PLACE_KEYS[k.toLowerCase()]);
   if (!entry) { warnings.push(`Ignored "place" of ${target.name} without below, above, rightOf or leftOf.`); return {}; }
   const ref = byName(entry[1]);
@@ -326,7 +356,7 @@ function resolvePlace(work: FormDef, target: ControlDef, place: unknown, byName:
   const gap = Math.max(0, num(place.gap) ?? DEFAULT_GAP);
   const align = typeof place.align === 'string' ? place.align.toLowerCase() : '';
   const r = absoluteRect(work, ref.id);
-  const { width: w, height: h } = sizeOf(target);
+  const { width: w, height: h } = size;
   const origin = target.parentId ? absoluteRect(work, target.parentId) : { left: 0, top: 0 };
   let left: number, top: number;
   if (dir === 'below' || dir === 'above') {
@@ -342,12 +372,36 @@ function resolvePlace(work: FormDef, target: ControlDef, place: unknown, byName:
   return out;
 }
 
+/** Whether place/arrange can move `c` by Left/Top: not a Line (X1..Y2) and not a docked control (its edge decides); else a warning. */
+function movable(c: ControlDef, what: string, warnings: string[]): boolean {
+  if (isLine(c)) { warnings.push(`Ignored ${what} of ${label(c.name, c.index)}: a Line is placed by X1, Y1, X2 and Y2.`); return false; }
+  if (isDocked(c)) { warnings.push(`Ignored ${what} of ${label(c.name, c.index)}: it is docked (Align), so it sits at its edge.`); return false; }
+  return true;
+}
+
+/** "place" for all members of a control array: a column of them (current order, top to bottom) placed as one block. */
+function placeGroup(work: FormDef, members: ControlDef[], place: unknown, byName: (n: unknown) => ControlDef | undefined, warnings: string[],
+  given: Record<string, PropValue>): [ControlDef, Record<string, number>][] {
+  const order = [...members].sort((a, b) => rectOf(a).top - rectOf(b).top || rectOf(a).left - rectOf(b).left || (a.index ?? 0) - (b.index ?? 0));
+  const gap = isObj(place) ? Math.max(0, num(place.gap) ?? DEFAULT_GAP) : DEFAULT_GAP;
+  const column = arrange(order, { as: 'column', left: 0, top: 0, gap }, warnings);
+  if (!column.length) return [];
+  const block = {
+    width: Math.max(...column.map(([c]) => sizeOf(c).width)),
+    height: Math.max(...column.map(([c, g]) => g.Top + sizeOf(c).height)),
+  };
+  const at = resolvePlace(work, column[0][0], place, byName, warnings, given, block);
+  if (at.Left === undefined || at.Top === undefined) return [];
+  return column.map(([c, g]) => [c, { Left: at.Left + g.Left, Top: at.Top + g.Top }]);
+}
+
 /**
  * "arrange": the controls in a row, a column or a grid (`columns`, default about square), `gap` twips apart (default 120), starting at
  * `left`/`top` (default: where the first one is). A grid's columns are as wide as their widest control; in a row or a grid each control
  * is centred vertically in its row, so a Label next to a TextBox lines up with its text.
  */
-function arrange(ctrls: ControlDef[], raw: Record<string, unknown>, warnings: string[]): [ControlDef, Record<string, number>][] {
+function arrange(all: ControlDef[], raw: Record<string, unknown>, warnings: string[]): [ControlDef, Record<string, number>][] {
+  const ctrls = all.filter(c => movable(c, 'arrange', warnings));
   if (!ctrls.length) return [];
   const same = ctrls.filter(c => c.parentId === ctrls[0].parentId);
   if (same.length < ctrls.length) warnings.push(`Ignored arrange of ${ctrls.filter(c => !same.includes(c)).map(c => c.name).join(', ')}: in another container than ${ctrls[0].name}.`);

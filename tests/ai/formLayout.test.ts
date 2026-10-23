@@ -90,3 +90,66 @@ test('the form picture: rulers every 600 twips, every control placed and named',
   drawFormImage(ctx, f, L);
   expect(written).toEqual(expect.arrayContaining(['Label1', 'Text1', 'Command1', 'Name:', 'OK', '600']));
 });
+
+test('placement relative to a control added without Left/Top starts where it is created (240, 240)', () => {
+  const f = clean();
+  const r = ok(parseFormOps(JSON.stringify({ ops: [
+    { op: 'add', type: 'CommandButton', name: 'cmdX', props: { Caption: 'OK' } },
+    { op: 'add', type: 'CommandButton', name: 'cmdY', props: { Caption: 'Y' }, place: { rightOf: 'cmdX' } },
+  ] }), f));
+  expect(props(r, 'cmdY')).toMatchObject({ Left: 240 + 1215 + 120, Top: 240 });
+});
+
+test('place on a whole control array stacks its members in a column, in their order', () => {
+  const f = clean();
+  for (let i = 0; i < 3; i++) {
+    const o = newControl(f, 'OptionButton', { left: 3000, top: 600 + i * 400, width: 1215, height: 255 }, null);
+    o.name = 'Option1'; o.index = i;
+    f.controls.push(o);
+  }
+  const r = ok(parseFormOps(JSON.stringify({ ops: [{ op: 'set', name: 'Option1', props: { BackColor: 255 }, place: { below: 'Label1' } }] }), f));
+  const tops = [0, 1, 2].map(i => (r.ops.find(o => o.op === 'set' && o.index === i) as unknown as { props: { Left: number; Top: number } }).props);
+  expect(tops).toEqual([{ Left: 240, Top: 675 }, { Left: 240, Top: 675 + 375 }, { Left: 240, Top: 675 + 750 }]);
+  expect(r.ops.some(o => o.op === 'set' && o.index === null && 'BackColor' in o.props && !('Top' in o.props))).toBe(true);
+});
+
+test('an add renamed because its name was taken: later ops in the same answer go to the new control', () => {
+  const f = clean();
+  const r = ok(parseFormOps(JSON.stringify({ ops: [
+    { op: 'add', type: 'Label', name: 'Label1', props: { Caption: 'Hi' } },
+    { op: 'arrange', names: ['Label1'], as: 'row', left: 0, top: 0 },
+  ] }), f));
+  expect(r.ops.map(o => (o.op === 'form' ? 'form' : o.name))).toEqual(['Label11']);
+  expect(props(r, 'Label11')).toMatchObject({ Left: 0, Top: 0 });
+  expect(r.renamed).toEqual([{ from: 'Label1', to: 'Label11' }]);
+});
+
+test('the layout check leaves valid VB6 idioms alone: a Frame without caption, a separator Label, a background Image', () => {
+  const f = clean();
+  const fr = newControl(f, 'Frame', { left: 240, top: 1000, width: 2000, height: 1000 }, null);
+  fr.props.Caption = '';
+  f.controls.push(fr);
+  const opt = newControl(f, 'OptionButton', { left: 120, top: 60, width: 1215, height: 255 }, fr.id);
+  opt.props.Caption = 'A';
+  f.controls.push(opt);
+  const line = newControl(f, 'Label', { left: 2400, top: 1000, width: 1800, height: 15 }, null);
+  line.props.Caption = ''; line.props.BorderStyle = 1;
+  f.controls.push(line);
+  f.controls.splice(0, 0, newControl(f, 'Image', { left: 0, top: 0, width: 4000, height: 900 }, null));
+  expect(checkLayout(f)).toEqual([]);
+  fr.props.Caption = 'Group';
+  expect(checkLayout(f).join('\n')).toContain('is under the caption of Frame Frame1');
+});
+
+test('place and arrange skip Lines and docked controls with a warning', () => {
+  const f = clean();
+  f.controls.push(newControl(f, 'Line', { left: 100, top: 100, width: 1000, height: 0 }, null));
+  const r = ok(parseFormOps(JSON.stringify({ ops: [
+    { op: 'set', name: 'Line1', place: { below: 'Command1' } },
+    { op: 'arrange', names: ['Line1', 'Label1'], as: 'row', left: 120, top: 120 },
+    { op: 'set', name: 'Label1', props: { Caption: 'x' } },
+  ] }), f));
+  expect(r.ops.filter(o => o.op !== 'form' && o.name === 'Line1')).toEqual([]);
+  expect(r.warnings.join('\n')).toContain('Ignored place of Line1: a Line is placed by X1, Y1, X2 and Y2.');
+  expect(r.warnings.join('\n')).toContain('Ignored arrange of Line1');
+});
