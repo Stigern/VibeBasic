@@ -7,7 +7,8 @@ A Visual Basic 6 clone for macOS, with the authentic Windows 98 look and a built
 ## What it does
 
 - **Form designer:** drag controls onto a form, set their properties and double-click to write event code.
-- **The VB6 language:** subs, functions, control arrays, `On Error`, `MsgBox`, `InputBox` and the familiar run-time error dialog.
+- **The VB6 language:** subs, functions, control arrays, `On Error`, `MsgBox`, `InputBox` and the familiar run-time error dialog. It also covers file I/O (`Open`, `Print #`, `Line Input`, `Get`/`Put`, `Dir`…), `SaveSetting`/`GetSetting`, `ParamArray`, `New Collection` and VB6's own number and date rules.
+- **Code window:** Visual Studio-style colours (or classic VB6), folding of procedures and blocks (Edit > Outlining, Ctrl+M), indentation guides, procedure separators, matching `If`/`End If` highlighting, and automatic `End` lines.
 - **Run and debug:** F5 runs the program in real windows. Breakpoints (F9), stepping (F8) and the Immediate window work as in VB6.
 - **Make app:** builds a standalone Mac `.app` from your project.
 - **Controls:** the classic intrinsic controls, plus ActiveX-style components picked under Project > Components (Ctrl+T):
@@ -22,6 +23,9 @@ A Visual Basic 6 clone for macOS, with the authentic Windows 98 look and a built
   - Ask AI (Ctrl+I) writes code in the code window, or lays out controls in the form designer.
   - **Ask AI** in the error dialog suggests a fix for the line that failed.
   - Every suggestion is shown as a preview. You can refine it with **Change...**, and it is applied as one undo step.
+  - With a vision model, the AI sees a picture of your form. A layout check catches overlapping controls and cut-off captions, and the AI places controls relative to each other ("below Text1", "arrange as a row").
+  - Generated code is checked before you see it: syntax, event signatures, missing procedures and wrong properties. Problems go back to the model once.
+  - Questions get plain answers. Tools > AI Log shows every request, answer, token count and timing.
 
 ## Build
 
