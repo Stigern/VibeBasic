@@ -55,7 +55,9 @@ export function describeControlTypes(): string {
     + ' events Data1_Validate(Action, Save) and Data1_Reposition, Adodc1_WillMove and Adodc1_MoveComplete. SQL from code: Data1.Database.Execute "CREATE TABLE IF NOT EXISTS ..."'
     + ' (Data1.Database.OpenRecordset("SELECT ...")) or Adodc1.Recordset.ActiveConnection.Execute sql; there is no New ADODB.Connection.'
     + ' A DataGrid shows the DataSource\'s records (AllowUpdate, AllowAddNew, AllowDelete; Columns(0) is the first column: Caption, Width, Value; RowColChange, AfterColUpdate).'
-    + ' DataList and DataCombo list the ListField of the RowSource\'s records; BoundText is the BoundColumn of the chosen one, bound to DataSource / DataField.');
+    + ' DataList and DataCombo list the ListField of the RowSource\'s records; BoundText is the BoundColumn of the chosen one, bound to DataSource / DataField.'
+    + ' The Sheridan 3D controls: an SSPanel (or SSFrame) is a container like a Frame (BevelOuter 0 none, 1 inset, 2 raised, BevelWidth, Font3D 0-4; FloodType 1 left to right ... 5 circle with FloodPercent makes a progress bar);'
+    + ' SSCheck and SSOption have a Boolean Value and Click(Value As Integer); SSRibbon is a toggle button (Value, PictureUp, PictureDn) and ribbons of one container with the same GroupNumber release each other.');
   return lines.join('\n');
 }
 

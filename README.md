@@ -15,6 +15,7 @@ A Visual Basic 6 clone for macOS, with the authentic Windows 98 look and a built
   - Media and data: MSFlexGrid, MSChart, RichTextBox, MaskedEdit, MMControl and MediaPlayer.
   - Networking: WebBrowser, Inet and Winsock.
   - Databases: the Data control, the ADO Data Control, DataGrid, DataList and DataCombo, with data binding. They use SQLite files (`.db`) instead of Jet `.mdb` files.
+  - Sheridan 3D controls: SSPanel (with the flood bar), SSFrame, SSCommand, SSCheck, SSOption and SSRibbon.
   - Microsoft Agent, with characters of its own.
 - **AI assistant:** connects to any OpenAI-compatible server, such as Ollama or vLLM.
   - Ask AI (Ctrl+I) writes code in the code window, or lays out controls in the form designer.

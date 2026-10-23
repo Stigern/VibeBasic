@@ -72,6 +72,7 @@ export class FormInstance implements VBObject {
   private st: FormState | null = null;
   private window: FormWindow | null = null;
   private opening: Promise<void> | null = null;
+  private readonly quiet = new Set<ControlObject>();   // an option or ribbon released by its group: no Click
   private early: ToWindow[] | null = null;        // messages queued while the window opens
   private loadDone: Promise<void> | null = null;
   private unloading = false;
@@ -401,9 +402,22 @@ export class FormInstance implements VBObject {
           if (changed) ev = 'Click';
         }
         break;
-      case 'CommandButton':
+      case 'CommandButton': case 'SSCommand':
         if (prop === 'Value' && v === true) { c.props.Value = false; ev = 'Click'; }
         break;
+      // Sheridan 3D: Click(Value As Integer) gets the new Value (True = -1). Option and ribbon groups release the others silently.
+      case 'SSCheck': if (prop === 'Value' && changed) { void this.fireControl(c, 'Click', [new VBRef(v === true ? -1 : 0)]); return; } break;
+      case 'SSOption': case 'SSRibbon': {
+        const group = (o: ControlObject): boolean => o !== c && o.def.type === c.def.type && o.def.parentId === c.def.parentId && o.props.Value === true
+          && (c.def.type === 'SSOption' || (Number(o.props.GroupNumber) || 0) === (Number(c.props.GroupNumber) || 0));
+        if (prop === 'Value' && v === true && (c.def.type === 'SSOption' || Number(c.props.GroupNumber) > 0)) {
+          for (const o of this.st?.byId.values() ?? []) if (group(o)) { this.quiet.add(o); o.setMember('Value', [], false); this.quiet.delete(o); }
+        }
+        if (prop === 'Value' && changed && !this.quiet.has(c) && (v === true || c.def.type === 'SSRibbon')) {
+          void this.fireControl(c, 'Click', [new VBRef(v === true ? -1 : 0)]);
+        }
+        return;
+      }
     }
     if (ev) void this.fireControl(c, ev, []);
   }

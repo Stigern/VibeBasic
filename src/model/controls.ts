@@ -108,6 +108,11 @@ const SHAPE_ONLY_METHODS = (): MethodDef[] => [
 export const MCI_BUTTONS = ['Prev', 'Next', 'Play', 'Pause', 'Back', 'Step', 'Stop', 'Record', 'Eject'] as const;
 const AGENT_MOUSE = 'ByVal CharacterID As String, ByVal Button As Integer, ByVal Shift As Integer, ByVal x As Integer, ByVal y As Integer';
 
+
+const SS_ALIGNMENTS = ['Left Top', 'Left Middle', 'Left Bottom', 'Right Top', 'Right Middle', 'Right Bottom', 'Center Top', 'Center Middle', 'Center Bottom'];
+const SS_BEVELS = ['None', 'Inset', 'Raised'];
+const SS_FONT3D = ['None', 'Raised with light shading', 'Raised with heavy shading', 'Inset with light shading', 'Inset with heavy shading'];
+
 const def = (d: Omit<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'> &
   Partial<Pick<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'>>): ControlTypeDef =>
   ({ methods: baseMethods(), isContainer: false, invisibleAtRuntime: false, ...d });
@@ -757,6 +762,78 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     methods: [...baseMethods(), { name: 'ReFill', params: '' }],
   }),
 
+  // THREED32.OCX (Sheridan 3D Controls). All six draw Win98 bevels (model/sheridan.ts); Font3D is a one-pixel light / dark text shadow.
+  // SSPanel is a container like Frame. FloodType / FloodPercent fill the panel like a progress bar (FloodShowPct writes the percentage).
+  SSPanel: def({
+    type: 'SSPanel', component: 'THREED32.OCX', namePrefix: 'SSPanel', defaultWidth: 1815, defaultHeight: 855, isContainer: true,
+    toolboxTooltip: 'SSPanel', defaultEvent: 'Click', defaultMember: 'Caption',
+    props: [
+      ...common(), str('Caption'), en('Alignment', 7, SS_ALIGNMENTS),
+      en('BevelOuter', 2, SS_BEVELS), en('BevelInner', 0, SS_BEVELS), int('BevelWidth', 1, { min: 1, max: 10 }), int('BorderWidth', 0, { min: 0, max: 30 }),
+      en('Font3D', 0, SS_FONT3D),
+      en('FloodType', 0, ['None', 'Left to Right', 'Right to Left', 'Top to Bottom', 'Bottom to Top', 'Widening Circle']),
+      int('FloodPercent', 0, { min: 0, max: 100 }), color('FloodColor', 0x800000), bool('FloodShowPct', true),
+      en('AutoSize', 0, ['None', 'Width To Caption', 'Height To Caption']), bool('RoundedCorners', true), bool('Outline', false),
+      color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(),
+    ],
+    events: [evClick(), evDbl(), ...evMouse()],
+  }),
+
+  SSCommand: def({
+    type: 'SSCommand', component: 'THREED32.OCX', namePrefix: 'SSCommand', defaultWidth: 1215, defaultHeight: 495, toolboxTooltip: 'SSCommand',
+    defaultEvent: 'Click', defaultMember: 'Value',
+    props: [
+      ...common(), str('Caption'), picture(), en('AutoSize', 0, ['None', 'Adjust Picture To Button', 'Adjust Button To Picture']),
+      int('BevelWidth', 2, { min: 1, max: 10 }), en('Font3D', 0, SS_FONT3D), bool('Outline', false), bool('RoundedCorners', true),
+      color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(), rt('Value', 'bool', false),
+    ],
+    events: [evClick(), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  SSCheck: def({
+    type: 'SSCheck', component: 'THREED32.OCX', namePrefix: 'SSCheck', defaultWidth: 1215, defaultHeight: 255, toolboxTooltip: 'SSCheck',
+    defaultEvent: 'Click', defaultMember: 'Value',
+    props: [
+      ...common(), str('Caption'), bool('Value', false), en('Alignment', 0, ['Left Justify', 'Right Justify']), en('Font3D', 0, SS_FONT3D),
+      color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(),
+    ],
+    events: [ev('Click', 'Value As Integer'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  SSOption: def({
+    type: 'SSOption', component: 'THREED32.OCX', namePrefix: 'SSOption', defaultWidth: 1215, defaultHeight: 255, toolboxTooltip: 'SSOption',
+    defaultEvent: 'Click', defaultMember: 'Value',
+    props: [
+      ...common(), str('Caption'), bool('Value', false), en('Alignment', 0, ['Left Justify', 'Right Justify']), en('Font3D', 0, SS_FONT3D),
+      color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(),
+    ],
+    events: [ev('Click', 'Value As Integer'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
+  SSFrame: def({
+    type: 'SSFrame', component: 'THREED32.OCX', namePrefix: 'SSFrame', defaultWidth: 1815, defaultHeight: 1335, isContainer: true,
+    toolboxTooltip: 'SSFrame', defaultEvent: 'Click', defaultMember: 'Caption',
+    props: [
+      ...common(), str('Caption'), en('Alignment', 0, ['Left Justify', 'Right Justify', 'Center']), en('ShadowStyle', 0, ['Inset', 'Raised']),
+      en('Font3D', 0, SS_FONT3D), color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(),
+    ],
+    events: [evClick(), evDbl(), ...evMouse()],
+  }),
+
+  // A toggle button: Value is True while it is down. Ribbons of one container with the same GroupNumber (above 0) work like option
+  // buttons; GroupAllowAllUp lets a click on the one that is down release it.
+  SSRibbon: def({
+    type: 'SSRibbon', component: 'THREED32.OCX', namePrefix: 'SSRibbon', defaultWidth: 495, defaultHeight: 495, toolboxTooltip: 'SSRibbon',
+    defaultEvent: 'Click', defaultMember: 'Value',
+    props: [
+      ...common(), str('Caption'), bool('Value', false), int('GroupNumber', 0, { min: 0, max: 32767 }), bool('GroupAllowAllUp', true),
+      picture('PictureUp'), picture('PictureDn'), int('BevelWidth', 1, { min: 1, max: 10 }), en('Font3D', 0, SS_FONT3D),
+      bool('Outline', false), bool('RoundedCorners', true),
+      color('BackColor', BTN_FACE), color('ForeColor', BTN_TEXT), font(),
+    ],
+    events: [ev('Click', 'Value As Integer'), ...evFocus(), ...evKeys(), ...evMouse()],
+  }),
+
   // MSCHRT20.OCX. A table of RowCount x ColumnCount numbers: a column is a series, a row a data point (as MSChart's default). Row and Column
   // (from 1) pick the cell that Data, RowLabel and ColumnLabel work on; ChartData takes a 2-D array whose first row / column may be labels.
   // ChartLines is the data as the window gets it (see model/chart.ts); AxisTitles holds the Plot.Axis(id).AxisTitle.Text of the four axes.
@@ -851,6 +928,7 @@ export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'Data', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar',
   'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit',
   'WebBrowser', 'Inet', 'Winsock', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Adodc', 'DataGrid', 'DataList', 'DataCombo',
+  'SSPanel', 'SSCommand', 'SSCheck', 'SSOption', 'SSFrame', 'SSRibbon',
 ];
 
 // ---------------------------------------------------------------------------------------------------------------

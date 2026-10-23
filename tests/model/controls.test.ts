@@ -18,7 +18,7 @@ const ALL = Object.keys(CONTROL_TYPES) as ControlType[];
 const NON_FORM = ALL.filter(t => t !== 'Form') as Exclude<ControlType, 'Form'>[];
 
 test('registry has every ControlType keyed by its own type', () => {
-  expect(ALL.sort()).toEqual(['CheckBox', 'ComboBox', 'CommandButton', 'Form', 'Frame', 'HScrollBar', 'Image', 'Label', 'ListBox', 'OptionButton', 'PictureBox', 'ProgressBar', 'TextBox', 'Timer', 'VScrollBar', 'Shape', 'Line', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'DriveListBox', 'DirListBox', 'FileListBox', 'SSTab', 'ImageList', 'Toolbar', 'DTPicker', 'MonthView', 'MaskedEdit', 'WebBrowser', 'Inet', 'Winsock', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Data', 'Adodc', 'DataGrid', 'DataList', 'DataCombo'].sort());
+  expect(ALL.sort()).toEqual(['CheckBox', 'ComboBox', 'CommandButton', 'Form', 'Frame', 'HScrollBar', 'Image', 'Label', 'ListBox', 'OptionButton', 'PictureBox', 'ProgressBar', 'TextBox', 'Timer', 'VScrollBar', 'Shape', 'Line', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'DriveListBox', 'DirListBox', 'FileListBox', 'SSTab', 'ImageList', 'Toolbar', 'DTPicker', 'MonthView', 'MaskedEdit', 'WebBrowser', 'Inet', 'Winsock', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Data', 'Adodc', 'DataGrid', 'DataList', 'DataCombo', 'SSPanel', 'SSCommand', 'SSCheck', 'SSOption', 'SSFrame', 'SSRibbon'].sort());
   for (const [k, d] of Object.entries(CONTROL_TYPES)) expect(d.type).toBe(k);
 });
 
@@ -93,7 +93,7 @@ test('defaults from the control table', () => {
 
 test('flags: containers, invisible at runtime, tooltips', () => {
   for (const t of ALL) {
-    expect(CONTROL_TYPES[t].isContainer).toBe(t === 'Form' || t === 'Frame' || t === 'PictureBox' || t === 'SSTab');
+    expect(CONTROL_TYPES[t].isContainer).toBe(t === 'Form' || t === 'Frame' || t === 'PictureBox' || t === 'SSTab' || t === 'SSPanel' || t === 'SSFrame');
     expect(CONTROL_TYPES[t].invisibleAtRuntime).toBe(t === 'Timer' || t === 'CommonDialog' || t === 'ImageList' || t === 'Inet' || t === 'Winsock' || t === 'Agent');
     expect(CONTROL_TYPES[t].toolboxTooltip.length).toBeGreaterThan(0);
   }
@@ -163,7 +163,7 @@ test('methods', () => {
 
 test('toolbox order follows VB6', () => {
   expect(TOOLBOX_ORDER).toEqual(['Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
-    'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'Data', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar', 'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit', 'WebBrowser', 'Inet', 'Winsock', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Adodc', 'DataGrid', 'DataList', 'DataCombo']);
+    'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'Data', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar', 'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit', 'WebBrowser', 'Inet', 'Winsock', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Adodc', 'DataGrid', 'DataList', 'DataCombo', 'SSPanel', 'SSCommand', 'SSCheck', 'SSOption', 'SSFrame', 'SSRibbon']);
 });
 
 test('getPropDef is case-insensitive and returns undefined for unknown', () => {
