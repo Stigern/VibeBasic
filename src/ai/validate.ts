@@ -1,7 +1,7 @@
 // Checks the code the AI proposed: cheap automatic fixes plus a list of problems that is fed back to the model once.
 // The checks only report; none of them changes the code. A false report costs a slow extra model round, so every
 // rule stays silent when it is not sure (a name whose status is uncertain counts as known).
-import type { Expr, MissingArg, ModuleAst, Param, PrintItem, ProcDecl, Stmt, VBTypeName } from '../lang/ast';
+import { gfxExprs, type Expr, type MissingArg, type ModuleAst, type Param, type PrintItem, type ProcDecl, type Stmt, type VBTypeName } from '../lang/ast';
 import { BUILTINS, CANONICAL_NAMES } from '../lang/builtins';
 import { compileProblems, type CheckModule } from '../lang/compileCheck';
 import { parseModuleLenient } from '../lang/parser';
@@ -217,6 +217,7 @@ function procNames(p: ProcDecl): { declared: Set<string>; implicit: Set<string> 
         case 'putFile': expr(s.file); if (s.rec) expr(s.rec); expr(s.target); break;
         case 'seekFile': expr(s.file); expr(s.pos); break;
         case 'name': expr(s.from); expr(s.to); break;
+        case 'gfx': gfxExprs(s).forEach(expr); break;
         case 'exit': case 'onError': case 'resume': case 'goto': case 'label': case 'end': case 'stop': break;
         default: { const never: never = s; void never; }
       }
@@ -395,6 +396,7 @@ function checkProc(c: Checker, p: ProcDecl): void {
         case 'putFile': expr(s.file); if (s.rec) expr(s.rec); expr(s.target); break;
         case 'seekFile': expr(s.file); expr(s.pos); break;
         case 'name': expr(s.from); expr(s.to); break;
+        case 'gfx': gfxExprs(s).forEach(expr); break;
         case 'exit': case 'onError': case 'resume': case 'goto': case 'label': case 'end': case 'stop': break;
         default: { const never: never = s; void never; }
       }

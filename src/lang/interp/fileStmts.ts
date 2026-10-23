@@ -11,8 +11,11 @@ import { assign, evalExpr, lookup } from './eval';
 import { Frame, Variable, lc } from './scope';
 import { shown } from './staticTypes';
 
+/** What print items are written to: a text line (Debug.Print, Print #) or the pieces of a Print on an object. */
+export type PrintSink = Pick<PrintLine, 'addItem' | 'addSemicolon' | 'addComma' | 'addSpc' | 'addTab'>;
+
 /** Evaluates print items into `line`; true when the statement ends the line (no trailing `;` or `,`). */
-export function* printItems(f: Frame, items: PrintItem[], line: PrintLine): Gen<boolean> {
+export function* printItems(f: Frame, items: PrintItem[], line: PrintSink): Gen<boolean> {
   for (const it of items) {
     if (it.expr) line.addItem(shown(f, it.expr, yield* evalExpr(f, it.expr)));
     else if (it.fn) {

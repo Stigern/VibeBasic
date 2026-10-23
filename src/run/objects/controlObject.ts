@@ -1,7 +1,7 @@
 // Run-time control objects: a ControlObject mirrors one control's properties and queues every change
 // as a patch to the form window; a ControlArrayObject is the `Command1(i)` collection.
 
-import type { OutSlot, VBObject } from '../../lang/host';
+import type { GraphicsCall, OutSlot, VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
 import { Empty, Nothing, Null, NullT, coerce, isDate, isObject, toBool, toStr, type VBDate, type VBRef, type VBValue } from '../../lang/values';
 import { CONTROL_TYPES, getPropDef, type PropDef } from '../../model/controls';
@@ -43,6 +43,9 @@ import { CoolBarControl, ImageComboControl } from './comboBands';
 import { CalendarControl } from './calendarControl';
 import type { CommSession } from '../comm';
 import type { SystemApi } from '../../backend/backend';
+import { formMetrics } from '../../controls/render';
+import { twipsToPx } from '../../model/twips';
+import { DrawSurface } from './drawSurface';
 
 export interface RunContext {
   resolveAsset(ref: PictureRef): string | null;
@@ -82,7 +85,14 @@ export interface RunContext {
   system?(): SystemApi | null;
   /** Runs `fn` with the program's locale current (dates shown by data binding after an await). */
   inProgramScope?<T>(fn: () => T): T;
+  /** A PictureBox got a new size from code: its Resize event (and Paint when AutoRedraw is False). */
+  resized?(ctrl: ControlObject): void;
+  /** Refresh on a Form or PictureBox: with AutoRedraw False the surface is erased and its Paint event runs. */
+  repaint?(ctrl: ControlObject): Promise<VBValue>;
 }
+
+/** Drawing methods that return a value (`x = Picture1.Point(1, 2)`). */
+const GFX_FUNCTIONS = new Set(['point', 'textwidth', 'textheight', 'scalex', 'scaley']);
 
 /** The property a control shows a bound field in (DataSource / DataField). */
 const BOUND_PROP: Record<string, string> = { TextBox: 'Text', Label: 'Caption', CheckBox: 'Value', ComboBox: 'Text', ListBox: 'Text', DTPicker: 'Value', MaskedEdit: 'Text' };
@@ -171,6 +181,8 @@ export class ControlObject implements VBObject, DataConsumer {
   private filling = false;
   /** ListBox / ComboBox ItemData: a Long per item (it moves with the item). */
   private itemData: number[] = [];
+  /** Form and PictureBox: the drawing (Print, Line, Circle ..., the scale, Point, Image). */
+  readonly gfx: DrawSurface | null = null;
 
   constructor(readonly def: ControlDef, private formKey: string, private queue: PatchQueue, private ctx: RunContext) {
     const td = CONTROL_TYPES[def.type];
@@ -195,6 +207,19 @@ export class ControlObject implements VBObject, DataConsumer {
       this.reload();
     } else if (def.type === 'DriveListBox') this.loadVolumes();
     if (def.type === 'SSTab') syncSSTab(this.props, 'Tabs');
+    if (def.type === 'PictureBox' || (def.type as string) === 'Form') {
+      const p = this.props;
+      this.gfx = new DrawSurface({
+        props: p,
+        clientPx: () => {
+          if ((def.type as string) === 'Form') { const m = formMetrics(p); return { w: m.clientWidth, h: m.clientHeight }; }
+          const b = Number(p.BorderStyle) === 1 ? 4 : 0;
+          return { w: Math.max(0, twipsToPx(Number(p.Width) || 0) - b), h: Math.max(0, twipsToPx(Number(p.Height) || 0) - b) };
+        },
+        emit: ops => this.queue.set(this.formKey, this.def.id, { GfxOps: ops }),
+        resolveAsset: r => this.ctx.resolveAsset(r),
+      });
+    }
     if (def.type === 'Winsock') this.ext = new WinsockControl(this.netHost());
     else if (def.type === 'Inet') this.ext = new InetControl(this.netHost());
     else if (def.type === 'WebBrowser') this.ext = new WebBrowserControl(this.netHost());
@@ -696,6 +721,9 @@ export class ControlObject implements VBObject, DataConsumer {
       case 'DateClick': case 'DateDblClick': return args.map(a => dateValue(Number(a)));
       case 'SelChange': if (this.def.type === 'MonthView') return args.map(a => dateValue(Number(a))); break;
       case 'Click': case 'DblClick': if ((this.def.type === 'DataList' || this.def.type === 'DataCombo') && !args.length) return [2]; break;   // dbcAreaList
+      case 'MouseDown': case 'MouseMove': case 'MouseUp':   // X, Y in the ScaleMode of a Form or PictureBox
+        if (this.gfx && args.length === 4) return [args[0], args[1], ...this.gfx.mouse(Number(args[2]), Number(args[3]))];
+        break;
     }
     return args;
   }
@@ -747,6 +775,12 @@ export class ControlObject implements VBObject, DataConsumer {
       if (this.def.index === null) throw new VBRuntimeError(343, 'Object not an array');
       return this.def.index;
     }
+    if (this.gfx) {   // Form / PictureBox: CurrentX, ScaleWidth, Image ...; Point(x, y), TextWidth(s) ...
+      if (GFX_FUNCTIONS.has(l)) return this.callMethod(name, args) as VBValue;
+      const gp = getPropDef(this.def.type, name);
+      const v = gp ? this.gfx.get(gp.name) : undefined;
+      if (v !== undefined) { if (args.length) throw new VBRuntimeError(450); return v; }
+    }
     // a method used as a function: `s = Inet1.OpenURL(url)` (the interpreter waits for a Promise)
     if (this.ext && !getPropDef(this.def.type, name) && CONTROL_TYPES[this.def.type].methods.some(m => m.name.toLowerCase() === l)) return this.callMethod(name, args) as VBValue;
     const pd = this.propDef(name);
@@ -792,6 +826,7 @@ export class ControlObject implements VBObject, DataConsumer {
   setMember(name: string, args: VBValue[], value: VBValue): void | Promise<void> {
     const pd = this.propDef(name);
     if (pd.runtime === 'ro' || name.toLowerCase() === 'name' || name.toLowerCase() === 'index') throw new VBRuntimeError(383);
+    if (this.gfx && this.gfx.set(pd.name, this.plain(value))) { if (args.length) throw new VBRuntimeError(450); return; }
     if (this.rich?.set) {
       if (args.length) throw new VBRuntimeError(450);
       // the object itself, not its default member: the ImageList a control names, the ComboItem SelectedItem becomes
@@ -906,6 +941,11 @@ export class ControlObject implements VBObject, DataConsumer {
     if (!CONTROL_TYPES[this.def.type].methods.some(m => m.name.toLowerCase() === l)) throw new VBRuntimeError(438);
     if (this.ext) { const r = this.ext.call(l, args, refs); if (r !== undefined) return r; }
     if (this.rich?.call) { const r = this.rich.call(l, args, refs); if (r !== undefined) return r; }
+    if (this.gfx) {
+      if (l === 'refresh') return this.ctx.repaint?.(this) ?? Empty;
+      const r = this.gfx.call(l, args.map(a => this.plain(a)));
+      if (r !== undefined) return r;
+    }
     switch (l) {
       case 'move': return this.move(args);
       case 'setfocus': this.queue.send(this.formKey, { t: 'focus', id: this.def.id }); this.ctx.focused?.(this); return Empty;
@@ -1140,6 +1180,11 @@ export class ControlObject implements VBObject, DataConsumer {
     }
     if (this.def.type === 'RichTextBox' && (name === 'SelStart' || name === 'SelLength' || name === 'SelText' || name === 'Text')) this.refreshSelFormat();
     this.send(patch);
+    if (this.gfx && v !== old) {
+      if (name === 'BackColor') this.gfx.backChanged();
+      else if (name === 'Picture') this.gfx.pictureChanged();
+      else if ((name === 'Width' || name === 'Height' || name === 'BorderStyle') && this.def.type === 'PictureBox') this.ctx.resized?.(this);
+    }
     if (this.grid && (name === 'Rows' || name === 'Cols' || name === 'FixedRows' || name === 'FixedCols')) this.gridResized();
     if (this.def.type === 'Timer' && (name === 'Enabled' || name === 'Interval')) this.ctx.timerChanged(this);
     const changed = name === 'SelText' ? 'Text' : name;
@@ -1250,6 +1295,12 @@ export class ControlObject implements VBObject, DataConsumer {
     this.queue.set(this.formKey, this.def.id, props);
   }
 
+  /** Print, PSet, Line, Circle, Scale (Form and PictureBox). */
+  graphics(call: GraphicsCall): void {
+    if (!this.gfx) throw new VBRuntimeError(438);
+    this.gfx.graphics(call);
+  }
+
   // -- SSTab ------------------------------------------------------------------------------------------------
 
   /** TabCaption(i) / TabEnabled(i) / TabVisible(i): i is 0-based, below Tabs. */
@@ -1350,12 +1401,14 @@ export class ControlObject implements VBObject, DataConsumer {
   private move(args: VBValue[]): VBValue {
     if (args.length < 1 || args.length > 4) throw new VBRuntimeError(450);
     const patch: Record<string, PropValue> = {};
+    const before = [this.props.Width, this.props.Height];
     ['Left', 'Top', 'Width', 'Height'].forEach((k, i) => {
       const a = args[i];
       if (a === undefined || a === Empty) return;
       patch[k] = this.props[k] = num(this.plain(a));
     });
     this.send(patch);
+    if (this.def.type === 'PictureBox' && (this.props.Width !== before[0] || this.props.Height !== before[1])) this.ctx.resized?.(this);
     return Empty;
   }
 

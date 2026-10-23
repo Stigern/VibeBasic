@@ -28,7 +28,7 @@ function enumLabels(values: { value: number; label: string }[]): string[] {
  *  a wrong guess there only changes how a control looks. Alignment, ScrollBars, Style, MultiSelect, Value, the data and
  *  protocol enums ... keep their values (they change what a program does, and Alignment was misread without them). */
 const NAME_ONLY_ENUMS = new Set(['align', 'appearance', 'arrows', 'autosize', 'backstyle', 'bevelinner', 'bevelouter', 'borderstyle', 'daylength',
-  'fillstyle', 'floodtype', 'font3d', 'gridcelleffect', 'gridlines', 'linestyle', 'monthlength', 'orientation', 'scrolling', 'shadowstyle', 'shape',
+  'drawmode', 'drawstyle', 'scalemode', 'fillstyle', 'floodtype', 'font3d', 'gridcelleffect', 'gridlines', 'linestyle', 'monthlength', 'orientation', 'scrolling', 'shadowstyle', 'shape',
   'startupposition', 'tickstyle', 'windowstate']);
 
 /** "Alignment(0 Left,1 Right,2 Center)": an enum property with its values; other properties by name. */

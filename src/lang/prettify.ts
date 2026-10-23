@@ -41,7 +41,7 @@ const KEYWORD_SPELLING: Record<string, string> = {
 };
 
 /** Names that are neither keywords nor registered built-ins but have a fixed VB6 spelling. */
-const EXTRA_NAMES = ['Debug', 'Print', 'Tab', 'Spc', 'LSet', 'RSet', 'Collection'];
+const EXTRA_NAMES = ['Debug', 'Print', 'Tab', 'Spc', 'LSet', 'RSet', 'Collection', 'PSet', 'Line', 'Circle', 'Scale', 'Cls'];
 
 /** Identifiers that are keywords inside a file statement (VB6 colours them): the statement word, and Open's clauses. */
 const FILE_STATEMENT_WORDS = new Set(['print', 'write', 'input', 'get', 'put', 'seek']);
@@ -158,6 +158,7 @@ function prettifyPhysicalLine(line: string, known: Map<string, string>): string 
   const parts: string[] = [];
   let prev: Token | undefined;
   let prevUnary = false;
+  let gfx = '';             // in a drawing statement (its word): `Line (x1, y1)-Step(x2, y2)` is written as VB6 does
   let head = true;          // the statement so far is just a leading name (a.b.c)
   let prevHead = false;     // prev is the last name of that leading chain
 
@@ -191,7 +192,9 @@ function prettifyPhysicalLine(line: string, known: Map<string, string>): string 
     if (t.kind === 'comment') text = text.trimEnd();
 
     // ---- unary +/-
-    if (t.kind === 'op' && (t.text === '+' || t.text === '-')) {
+    const gfxDash = (gfx === 'line' || gfx === 'scale') && isOp(t, '-') && (isOp(prev, ')') || (prev?.kind === 'ident' && prev.text.toLowerCase() === gfx));
+    if (gfxDash) unary = true;
+    else if (t.kind === 'op' && (t.text === '+' || t.text === '-')) {
       if (!prev) {
         unary = next !== undefined && body.slice(end(t), start(next)) === '';
         // a leading +/- (continuation line) keeps the written spacing
@@ -207,7 +210,9 @@ function prettifyPhysicalLine(line: string, known: Map<string, string>): string 
     else if (t.kind === 'comment') sep = prev.kind === 'colon' ? ' ' : orig === '' ? ' ' : orig;
     else if (prev.kind === 'colon') sep = ' ';
     else if (t.kind === 'colon') sep = '';
+    else if (gfxDash) sep = isOp(prev, ')') ? '' : ' ';
     else if (prevUnary) sep = '';
+    else if (gfx && isOp(t, '(') && kw(prev, 'step')) sep = '';
     else if (prev.kind === 'op' && (prev.text === '(' || prev.text === '.' || prev.text === '!' || prev.text === '#' || prev.text === ':=')) sep = '';
     else if (t.kind === 'op') {
       switch (t.text) {
@@ -228,6 +233,8 @@ function prettifyPhysicalLine(line: string, known: Map<string, string>): string 
     parts.push(sep, text);
 
     // ---- statement bookkeeping
+    if (t.kind === 'ident' && head && (lower === 'line' || lower === 'scale' || lower === 'pset' || lower === 'circle')) gfx = lower;
+    if (t.kind === 'colon') gfx = '';
     if (t.kind === 'colon' || (t.kind === 'keyword' && STATEMENT_STARTERS.has(lower))) { head = true; prevHead = false; }
     else {
       if (!(t.kind === 'ident' || isOp(t, '.') || (t.kind === 'keyword' && lower === 'me'))) head = false;

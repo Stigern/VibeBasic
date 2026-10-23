@@ -34,7 +34,20 @@ export interface VBObject {
   item?(index: number): VBObject;         // control arrays: Command1(2)
   /** The elements for `For Each` (a control array's controls in index order, a collection's items). */
   items?(): VBObject[];
+  /** Print, PSet, Line, Circle and Scale on this object (Form, PictureBox, Printer); absent: error 438. */
+  graphics?(call: GraphicsCall): void | Promise<void>;
 }
+
+/** One piece of a Print statement on an object: text (numbers already formatted), `Spc(n)`, `Tab(n)` or the next print zone (`,`). */
+export type PrintPiece = string | { spc: number } | { tab: number } | { zone: true };
+export interface GfxCallPoint { step: boolean; x: number; y: number }
+/** A drawing statement with its arguments evaluated (see GfxStmt). Absent colour: ForeColor. */
+export type GraphicsCall =
+  | { method: 'print'; pieces: PrintPiece[]; newline: boolean }
+  | { method: 'pset'; at: GfxCallPoint; color?: number }
+  | { method: 'line'; from?: GfxCallPoint; to: GfxCallPoint; color?: number; box: '' | 'b' | 'bf' }
+  | { method: 'circle'; at: GfxCallPoint; radius: number; color?: number; start?: number; end?: number; aspect?: number }
+  | { method: 'scale'; from?: GfxCallPoint; to?: GfxCallPoint };
 
 /** A by-reference argument of a host method: assigning `value` stores into the caller's variable (converted to its type). */
 export interface OutSlot { value: VBValue }
@@ -61,6 +74,9 @@ export interface Host {
   /** Beep: the system beep (a short tone); a host without sound may leave it out. */
   beep?(): void;
   loadPicture(path: string): Promise<VBValue>;
+  /** SavePicture: the file bytes of a picture (`ext` the file's extension, lower case: an Image is BMP for 'bmp', else PNG);
+   *  throws 481 when the value is not a picture. Absent: error 481. */
+  pictureBytes?(picture: VBValue, ext: string): Uint8Array;
   /** An unhandled run-time (or compile) error; `'end'` ends the program, `'debug'` enters break mode. */
   onRuntimeError(err: VBRuntimeError, at: CodeLocation): Promise<'end' | 'debug'>;
   onBreak(info: BreakInfo): Promise<'continue' | 'end'>;

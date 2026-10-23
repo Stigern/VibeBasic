@@ -10,6 +10,7 @@ import { ribbonClick } from '../model/sheridan';
 import { userClickButton } from '../model/toolbar';
 import type { ControlDef, PropValue } from '../model/types';
 import { domText, vbPos, vbText } from '../controls/textPos';
+import { GfxLayer } from '../gfx/dom';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 
 type Props = Record<string, PropValue>;
@@ -98,6 +99,12 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   /** Applies props to the mirror and the DOM (also keeps text typed by the user across rebuilds of the control). The user's own
    *  TextBox selection (`fromUser`) is already in the field: it goes to the mirror only (selecting again would lose its direction). */
   function apply(id: string, props: Props, fromUser = false): void {
+    if ('GfxOps' in props) {   // drawing (Form, PictureBox): to its canvas, not a property
+      const { GfxOps: gfx, ...rest } = props;
+      if (Array.isArray(gfx)) layerOf(id)?.push(gfx);
+      if (!Object.keys(rest).length) return;
+      props = rest;
+    }
     const { RtfOps: ops, ...plain } = props;
     Object.assign(propsOf(id), plain);
     if (Array.isArray(ops)) for (const o of ops) Object.assign(propsOf(id), parseOp(o));   // the mirror ends where the replay ends
@@ -111,6 +118,19 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   }
   computeTabOrder();
   for (const id of defs.keys()) retab(id);
+
+  // --- drawing: one canvas layer per Form / PictureBox, made on its first op ---
+  const layers = new Map<string, GfxLayer>();
+  const resolveAsset = (src: string): string | null => s.assets[src] ?? (src.startsWith('data:') ? src : null);
+  function layerOf(id: string): GfxLayer | null {
+    let l = layers.get(id);
+    if (l) return l;
+    const host = id === 'form' ? surface.drawLayer : surface.views.get(id)?.childHost?.querySelector<HTMLElement>(':scope > .draw-layer');
+    if (!host) return null;
+    layers.set(id, l = new GfxLayer(host, resolveAsset));
+    return l;
+  }
+  for (const [id, ops] of Object.entries(s.gfx ?? {})) layerOf(id)?.push(ops);
 
   // --- TextBox selection ---
   // The user's caret and selection reach the run session as state only when they differ from what it knows, and only before the
@@ -220,7 +240,8 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   // area (X / Y relative to it, maybe negative). The document's listeners see the pointer anywhere while a button is down.
   let captured: string | null = null;
   function mouseTo(id: string, event: string, e: MouseEvent): void {
-    const v = id === 'form' ? surface.clientEl : viewOf(id)?.el;
+    // a PictureBox: from the inside of its border (its drawing's 0, 0)
+    const v = id === 'form' ? surface.clientEl : (defs.get(id)?.type === 'PictureBox' ? viewOf(id)?.childHost : undefined) ?? viewOf(id)?.el;
     if (!v) return;
     const box = v.getBoundingClientRect();
     const button = event === 'MouseMove' ? e.buttons & 7 : e.button === 0 ? 1 : e.button === 2 ? 2 : e.button === 1 ? 4 : 0;
@@ -515,6 +536,8 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
           break;
         case 'removeControl':
           if (!defs.has(m.id)) break;
+          layers.get(m.id)?.dispose();
+          layers.delete(m.id);
           surface.removeControl(m.id);
           defs.delete(m.id);
           state.delete(m.id);
@@ -543,6 +566,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
       observer?.disconnect();
       // an open combo list holds a document listener until it is closed
       for (const v of surface.views.values()) v.inputEl?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      for (const l of layers.values()) l.dispose();
       surface.dispose();   // media Blob URLs
       surface.el.remove();
     },

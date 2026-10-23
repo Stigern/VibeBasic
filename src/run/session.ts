@@ -17,6 +17,8 @@ import { AppObject, PictureObject, ScreenObject } from './objects/appObjects';
 import { ClipboardObject, ObjectList } from './objects/globalObjects';
 import type { ControlObject } from './objects/controlObject';
 import { FormInstance, type FormSession } from './objects/formInstance';
+import { DrawnPicture } from './objects/drawSurface';
+import { fromBase64 } from '../gfx/raster';
 
 export interface SessionCallbacks {
   debugPrint(text: string, newline: boolean): void;
@@ -336,6 +338,16 @@ export class RunSession implements Host, FormSession {
     const bytes = await this.readFile(path);
     const ext = /\.([^./]+)$/.exec(full)?.[1]?.toLowerCase() ?? '';
     return new PictureObject({ asset: `data:${MIME[ext] ?? 'application/octet-stream'};base64,${base64(bytes)}` });
+  }
+
+  /** SavePicture: an Image (drawn pixels) as BMP or PNG by the extension; a loaded or design-time picture as its own bytes. */
+  pictureBytes(picture: VBValue, ext: string): Uint8Array {
+    if (picture instanceof DrawnPicture) return picture.fileBytes(ext);
+    const ref = picture instanceof PictureObject ? picture.pictureRef : null;
+    const url = ref ? this.resolveAsset(ref) : null;
+    const m = url ? /^data:[^,]*;base64,(.*)$/s.exec(url) : null;
+    if (!m) throw new VBRuntimeError(481);
+    return fromBase64(m[1]);
   }
 
   /** 'ai' (Ask AI) is 'debug' for the program; the break that follows tells the IDE to start the AI flow. */

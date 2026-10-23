@@ -3,7 +3,7 @@ import { tokenize } from './lexer';
 import { Parser, parenthesised } from './exprParser';
 import type { Token } from './tokens';
 import type {
-  ArrayBound, CaseTest, CompareOp, ConstDecl, DebugPrintStmt, EnumDecl, Expr, IfBranch, MissingArg,
+  ArrayBound, CaseTest, CompareOp, ConstDecl, DebugPrintStmt, EnumDecl, Expr, GfxPoint, GfxStmt, IfBranch, MissingArg,
   ModuleAst, NameExpr, OpenMode, OpenStmt, Param, PrintItem, ProcDecl, ReDimDecl, Stmt, TypeDecl, TypeSuffix, VarDecl, VBTypeName,
 } from './ast';
 
@@ -40,8 +40,9 @@ export const UNSUPPORTED_KEYWORDS: Record<string, string> = {
   event: 'Event', raiseevent: 'RaiseEvent', withevents: 'WithEvents', friend: 'Friend', global: 'Global',
   lib: 'Lib', alias: 'Alias', gosub: 'GoSub', return: 'Return',
 };
-/** Unsupported statements that are plain identifiers; only unsupported when they start a statement and are not assigned to / member-accessed. */
-export const UNSUPPORTED_IDENTS: Record<string, string> = { print: 'Print', line: 'Line', circle: 'Circle', pset: 'PSet' };
+/** The drawing statements with their own syntax (`[obj.]Line (x1, y1)-(x2, y2), , B`): plain identifiers, statements only when
+ *  they start one (or end its object part) and are not assigned to or member-accessed. */
+export const GFX_STATEMENTS: Record<string, string> = { print: 'Print', pset: 'PSet', line: 'Line', circle: 'Circle', scale: 'Scale' };
 /** File I/O statements that are an identifier followed by `#` (also `Line Input #`, and `Open`/`Close` as keywords). */
 export const HASH_STATEMENTS: Record<string, string> = { print: 'Print', write: 'Write', input: 'Input', get: 'Get', put: 'Put', seek: 'Seek' };
 
@@ -289,9 +290,9 @@ export class StatementParser extends Parser {
         this.expectOp('=');
         return { kind: w, target, value: this.parseExpression(), line: t.line };
       }
-      if (UNSUPPORTED_IDENTS[w] && !(n.kind === 'op' && (n.text === '=' || n.text === '.'))) {
+      if (GFX_STATEMENTS[w] && !(n.kind === 'op' && (n.text === '=' || n.text === '.'))) {
         if (w === 'line' && n.kind === 'ident' && n.text.toLowerCase() === 'input') this.unsupported('Line Input');
-        this.unsupported(UNSUPPORTED_IDENTS[w]);
+        return this.gfxStatement(undefined);
       }
     }
     return this.assignOrCall();
@@ -472,6 +473,14 @@ export class StatementParser extends Parser {
 
   private assignOrCall(): Stmt {
     const start = this.peek();
+    const dot = this.gfxDot();
+    if (dot >= 0) {
+      // `Picture1.Line (0, 0)-(9, 9)`, `.Circle ...` inside With: the object part, then the statement's own syntax
+      const object: Expr = dot === this.pos ? { kind: 'withObject', line: start.line }
+        : new StatementParser([...this.tokens.slice(this.pos, dot), { ...this.tokens[dot], kind: 'eof', text: '' }]).objectPart();
+      this.pos = dot + 1;
+      return this.gfxStatement(object);
+    }
     const head = this.parsePostfix();
     if (this.isOp('=')) {
       if (!this.isLvalue(head)) this.fail('Syntax error', start);
@@ -491,6 +500,111 @@ export class StatementParser extends Parser {
     }
     if (!this.isLvalue(head)) this.fail('Syntax error', start);
     return this.callFrom(head, start, false);
+  }
+
+  // ---- drawing statements ----
+
+  /** The object part of `obj.Line ...` (a sub-parser over just those tokens). */
+  objectPart(): Expr {
+    const e = this.parsePostfix();
+    if (this.peek().kind !== 'eof') this.fail('Syntax error');
+    return e;
+  }
+
+  /**
+   * The index of the `.` before a drawing statement word that ends the head of this statement (`Picture1(i).Line`, `Me.Print`,
+   * `.Circle` in a With block), when the word is not assigned to or followed by a member; -1 otherwise.
+   */
+  private gfxDot(): number {
+    const tk = this.tokens;
+    const isGfx = (j: number): boolean => {
+      const t = tk[j], n = tk[j + 1];
+      return t?.kind === 'ident' && !t.suffix && GFX_STATEMENTS[lower(t)] !== undefined
+        && !(n?.kind === 'op' && (n.text === '=' || n.text === '.' || n.text === '!'));
+    };
+    let i = this.pos;
+    const t0 = tk[i];
+    if (t0.kind === 'op' && t0.text === '.') {
+      if (isGfx(i + 1)) return i;
+      if (tk[i + 1]?.kind !== 'ident') return -1;
+      i += 2;
+    } else if (t0.kind === 'ident' || (t0.kind === 'keyword' && lower(t0) === 'me')) i++;
+    else return -1;
+    for (;;) {
+      const t = tk[i];
+      if (t.kind === 'op' && t.text === '(') {
+        let depth = 0;
+        for (; i < tk.length; i++) {
+          const u = tk[i];
+          if (u.kind === 'newline' || u.kind === 'eof') return -1;
+          if (u.kind === 'op' && u.text === '(') depth++;
+          else if (u.kind === 'op' && u.text === ')' && --depth === 0) break;
+        }
+        i++;
+      } else if (t.kind === 'op' && (t.text === '.' || t.text === '!') && (tk[i + 1]?.kind === 'ident' || tk[i + 1]?.kind === 'keyword')) {
+        if (t.text === '.' && isGfx(i + 1)) return i;
+        i += 2;
+      } else return -1;
+    }
+  }
+
+  /** `[Step] (x, y)`. */
+  private gfxPoint(allowStep: boolean): GfxPoint {
+    let step = false;
+    if (allowStep && this.isKeyword('step')) { this.advance(); step = true; }
+    this.expectOp('(');
+    const x = this.parseExpression();
+    this.expectOp(',');
+    const y = this.parseExpression();
+    this.expectOp(')');
+    return { step, x, y };
+  }
+
+  /** Print / PSet / Line / Circle / Scale; the cursor is on the word. */
+  private gfxStatement(object: Expr | undefined): GfxStmt {
+    const t = this.advance();
+    const line = t.line;
+    const base = object ? { kind: 'gfx' as const, object, line } : { kind: 'gfx' as const, line };
+    const comma = (): boolean => { if (!this.isOp(',')) return false; this.advance(); return true; };
+    const optional = (): Expr | undefined => (this.isOp(',') || this.atEnd() ? undefined : this.parseExpression());
+    switch (lower(t)) {
+      case 'print': return { ...base, method: 'print', items: this.printItems() };
+      case 'pset': {
+        const at = this.gfxPoint(true);
+        return { ...base, method: 'pset', at, color: comma() ? this.parseExpression() : undefined };
+      }
+      case 'line': {
+        const from = this.isOp('-') ? undefined : this.gfxPoint(true);
+        this.expectOp('-');
+        const to = this.gfxPoint(true);
+        let color: Expr | undefined, box: '' | 'b' | 'bf' = '';
+        if (comma()) {
+          color = optional();
+          if (comma()) {
+            const b = this.peek();
+            if (b.kind !== 'ident' || b.suffix || !/^bf?$/i.test(b.text)) this.fail('Syntax error');
+            this.advance();
+            box = lower(b) as 'b' | 'bf';
+          }
+        }
+        return { ...base, method: 'line', from, to, color, box };
+      }
+      case 'circle': {
+        const at = this.gfxPoint(true);
+        this.expectOp(',');
+        const radius = this.parseExpression();
+        const rest: (Expr | undefined)[] = [];
+        while (rest.length < 4 && comma()) rest.push(optional());
+        const [color, start, end, aspect] = rest;
+        return { ...base, method: 'circle', at, radius, color, start, end, aspect };
+      }
+      default: {   // scale
+        if (!this.isOp('(')) return { ...base, method: 'scale' };
+        const from = this.gfxPoint(false);
+        this.expectOp('-');
+        return { ...base, method: 'scale', from, to: this.gfxPoint(false) };
+      }
+    }
   }
 
   /** Turns a parsed head expression plus optional paren-less arguments into a CallStmt. */
@@ -1124,9 +1238,6 @@ export class StatementParser extends Parser {
       return;
     }
     if (visibility) this.fail('Expected: identifier');
-    if (first.kind === 'ident' && UNSUPPORTED_IDENTS[lower(first)] && !this.isOp('=', 1) && !this.isOp('.', 1)) {
-      this.unsupported(UNSUPPORTED_IDENTS[lower(first)]);
-    }
     this.fail('Invalid outside procedure');
   }
 

@@ -87,6 +87,34 @@ const listMethods = (): MethodDef[] => [
 ];
 
 // ---------------------------------------------------------------------------------------------------------------
+// Drawing (Form and PictureBox: see run/objects/drawSurface.ts)
+
+const DRAW_MODES = ['Blackness', 'Not Merge Pen', 'Mask Not Pen', 'Not Copy Pen', 'Mask Pen Not', 'Invert', 'Xor Pen', 'Not Mask Pen',
+  'Mask Pen', 'Not Xor Pen', 'Nop', 'Merge Not Pen', 'Copy Pen', 'Merge Pen Not', 'Merge Pen', 'Whiteness'];
+const FILL_STYLES = ['Solid', 'Transparent', 'Horizontal Line', 'Vertical Line', 'Upward Diagonal', 'Downward Diagonal', 'Cross', 'Diagonal Cross'];
+/** AutoRedraw ... ScaleMode, and the run-time CurrentX/Y, Scale*, hDC and Image. ScaleLeft/Top/Width/Height are Single. */
+const drawProps = (): PropDef[] => [
+  bool('AutoRedraw', false), bool('ClipControls', true),
+  p('DrawMode', 'enum', 13, { enumValues: DRAW_MODES.map((l, i) => ({ value: i + 1, label: `${i + 1} - ${l}` })) }),
+  en('DrawStyle', 0, ['Solid', 'Dash', 'Dot', 'Dash-Dot', 'Dash-Dot-Dot', 'Transparent', 'Inside Solid']),
+  int('DrawWidth', 1, { min: 1, max: 32767 }), color('FillColor', 0), en('FillStyle', 1, FILL_STYLES),
+  bool('FontTransparent', true), bool('HasDC', true, { runtime: 'ro' }),
+  en('ScaleMode', 1, ['User', 'Twip', 'Point', 'Pixel', 'Character', 'Inch', 'Millimeter', 'Centimeter']),
+  rt('ScaleLeft', 'int', 0), rt('ScaleTop', 'int', 0), rt('ScaleWidth', 'int', 0), rt('ScaleHeight', 'int', 0),
+  rt('CurrentX', 'int', 0), rt('CurrentY', 'int', 0), rt('hDC', 'int', 0, 'ro'), rt('Image', 'picture', null, 'ro'),
+];
+const drawMethods = (): MethodDef[] => [
+  { name: 'Cls', params: '' }, { name: 'Print', params: '[a; b, c]' }, { name: 'PSet', params: '[Step] (X, Y), [Color]' },
+  { name: 'Line', params: '[[Step] (X1, Y1)]-[Step] (X2, Y2), [Color], [B[F]]' },
+  { name: 'Circle', params: '[Step] (X, Y), Radius, [Color], [Start], [End], [Aspect]' },
+  { name: 'Point', params: 'X As Single, Y As Single' },
+  { name: 'PaintPicture', params: 'Picture, X1, Y1, [Width1], [Height1], [X2], [Y2], [Width2], [Height2], [Opcode]' },
+  { name: 'Scale', params: '[(X1, Y1)-(X2, Y2)]' }, { name: 'ScaleX', params: 'Width As Single, [FromScale], [ToScale]' },
+  { name: 'ScaleY', params: 'Height As Single, [FromScale], [ToScale]' },
+  { name: 'TextWidth', params: 'Str As String' }, { name: 'TextHeight', params: 'Str As String' },
+];
+
+// ---------------------------------------------------------------------------------------------------------------
 // The registry
 
 const scrollProps = (): PropDef[] => [
@@ -132,16 +160,16 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       bool('ControlBox', true, { runtime: 'ro' }), bool('MaxButton', true, { runtime: 'ro' }), bool('MinButton', true, { runtime: 'ro' }),
       en('WindowState', 0, ['Normal', 'Minimized', 'Maximized']),
       bool('KeyPreview', false),
-      font(), picture(), picture('Icon'),
+      font(), picture(), picture('Icon'), ...drawProps(),
     ],
     events: [
       ev('Load'), ev('Unload', 'Cancel As Integer'), ev('QueryUnload', 'Cancel As Integer, UnloadMode As Integer'),
-      ev('Activate'), ev('Deactivate'), ev('Resize'), ev('Initialize'),
+      ev('Activate'), ev('Deactivate'), ev('Resize'), ev('Initialize'), ev('Paint'),
       evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse(),
     ],
     methods: [
       { name: 'Show', params: '[Modal], [OwnerForm]' }, { name: 'Hide', params: '' },
-      { name: 'Refresh', params: '' }, { name: 'Move', params: MOVE },
+      { name: 'Refresh', params: '' }, { name: 'Move', params: MOVE }, ...drawMethods(),
     ],
   }),
 
@@ -249,8 +277,10 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     defaultEvent: 'Click', defaultMember: 'Picture',
     props: [
       ...common(), picture(), bool('AutoSize', false), en('BorderStyle', 1, ['None', 'Fixed Single']), color('BackColor', BTN_FACE),
+      color('ForeColor', BTN_TEXT), font(), ...drawProps(),
     ],
-    events: [evChange(), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
+    events: [evChange(), evClick(), evDbl(), ev('Paint'), ev('Resize'), ...evFocus(), ...evKeys(), ...evMouse()],
+    methods: [...baseMethods(), ...drawMethods()],
   }),
 
   Image: def({

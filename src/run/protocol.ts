@@ -7,6 +7,8 @@ export interface FormSnapshot {
   assets: Record<string, string>;                 // asset key -> data URL
   handled: Record<string, string[]>;              // control id / 'form' -> events that have code
   mode: 'ide' | 'app';
+  /** What is drawn on the form and its PictureBoxes before the window opened (id / 'form' -> GfxOps). */
+  gfx?: Record<string, string[]>;
 }
 
 export type ToWindow =

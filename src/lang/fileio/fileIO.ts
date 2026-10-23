@@ -451,6 +451,14 @@ export class FileIO {
     await this.call(a => a.fsCopy(f, this.resolve(to)));
   }
 
+  /** SavePicture: the whole file (made or replaced). */
+  async writeFile(path: string, bytes: Uint8Array): Promise<void> {
+    const full = this.resolve(path);
+    if (this.isOpen(full)) throw new VBRuntimeError(75);
+    const { id } = await this.call(a => a.fioOpen(full, 'output', ''));
+    try { await this.call(a => a.fioWrite(id, 0, bytes), 57); } finally { await this.call(a => a.fioClose(id)); }
+  }
+
   async mkDir(path: string): Promise<void> { const p = this.resolve(path); await this.call(a => a.fsMkDir(p)); }
   async rmDir(path: string): Promise<void> { const p = this.resolve(path); await this.call(a => a.fsRmDir(p)); }
 

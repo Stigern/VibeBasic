@@ -1,11 +1,10 @@
 // A form of the running program (its default instance): properties, controls as members, and the VB6
 // life cycle — Initialize → Load → (shown) → Resize → Activate; QueryUnload → Unload; Show [vbModal] / Hide.
 
-import type { VBObject } from '../../lang/host';
+import type { GraphicsCall, VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
 import type { Program } from '../../lang/interp/program';
 import { Empty, Nothing, VBArray, VBRef, coerce, toBool, type VBValue } from '../../lang/values';
-import { formScaleSize } from '../../controls/render';
 import { CONTROL_TYPES, getPropDef } from '../../model/controls';
 import type { ControlDef, FormDef, PictureRef, PropValue } from '../../model/types';
 import type { FormHost, FormWindow } from '../formHost';
@@ -128,6 +127,8 @@ export class FormInstance implements VBObject {
       controls: () => this.controls(),
       msgBox: (p, b, t) => this.s.msgBox(p, b, t),
       inProgramScope: fn => this.s.program.inScope(fn),
+      resized: c => { if (this.visible && this.st?.byId.get(c.def.id) === c) void this.fireControl(c, 'Resize', []).then(() => this.paint(c)); },
+      repaint: c => this.paint(c, true).then(() => Empty),
     };
     // Load Name(i) / Unload Name(i). A control without a view (Winsock, Timer ...) starts from the design-time properties
     // of the lowest element; a visible one from its current properties, hidden (Visible = False) and last in the tab
@@ -238,11 +239,15 @@ export class FormInstance implements VBObject {
       if (modal) this.s.pushModal(this);
     }
     if (this.loaded && this.visible) await this.s.formActivated(this);
-    if (!wasVisible && this.loaded && this.visible) this.deliver({ t: 'focusInitial' });
+    if (!wasVisible && this.loaded && this.visible) {
+      this.deliver({ t: 'focusInitial' });
+      await this.paintAll();
+    }
     if (modal && this.visible && this.loaded) await new Promise<void>(r => this.modalWaiters.push(r));
   }
 
   private async open(modal: boolean): Promise<void> {
+    this.s.queue.flush();   // what was queued before is in the snapshot (drawings too: GfxOps must not be drawn twice)
     this.early = [];
     const w = await this.s.formHost.openForm(this.snapshot(), { modal });
     const early = this.early;
@@ -338,12 +343,14 @@ export class FormInstance implements VBObject {
     const design = new Set(this.def.controls.map(d => d.id));
     const controls = [...st.byId.values()].filter(c => design.has(c.def.id) || !CONTROL_TYPES[c.def.type].invisibleAtRuntime);
     for (const c of controls) handled[c.def.id] = this.handledEvents(c.def);
+    const gfx: Record<string, string[]> = {};
+    for (const c of [st.form, ...controls]) { const ops = c.gfx?.snapshot(); if (ops) gfx[c.def.id] = ops; }
     const form: FormDef = {
       id: this.def.id, name: this.def.name, code: '',
       props: { ...copyProps(st.form.props), Visible: true },
       controls: controls.map(c => ({ ...c.def, props: copyProps(c.props) })),
     };
-    return { key: this.key, form, assets: this.s.assets, handled, mode: this.s.mode };
+    return { key: this.key, form, assets: this.s.assets, handled, mode: this.s.mode, ...(Object.keys(gfx).length ? { gfx } : {}) };
   }
 
   private onMessage(m: FromWindow): void {
@@ -357,7 +364,7 @@ export class FormInstance implements VBObject {
       case 'moved': st.form.applyState({ Left: m.left, Top: m.top }); break;
       case 'resized':
         st.form.applyState({ Width: m.width, Height: m.height });
-        void this.s.fire(this.name, 'Form_Resize', []);
+        void this.s.fire(this.name, 'Form_Resize', []).then(() => this.paint(st.form));
         break;
       case 'closeRequest': void this.unload(0); break;
       case 'event': {
@@ -365,7 +372,7 @@ export class FormInstance implements VBObject {
         if (!target) return;
         if (m.state) target.applyState(m.state);
         if (m.event === 'GotFocus' && m.id !== 'form') this.setActive(m.id);
-        const args = (m.id === 'form' ? m.args : target.eventArgs(m.event, m.args)).map(a => new VBRef(a));
+        const args = target.eventArgs(m.event, m.args).map(a => new VBRef(a));
         const done = m.id === 'form' ? this.s.fire(this.name, `Form_${m.event}`, args) : this.fireControl(target, m.event, args);
         if (m.requestId !== undefined) {
           const requestId = m.requestId, ref = args[args.length - 1];
@@ -387,7 +394,7 @@ export class FormInstance implements VBObject {
     const v = c.props[prop];
     const changed = v !== old;
     if (c.def.id === 'form') {
-      if ((prop === 'Width' || prop === 'Height') && changed && this.visible) void this.s.fire(this.name, 'Form_Resize', []);
+      if ((prop === 'Width' || prop === 'Height') && changed && this.visible) void this.s.fire(this.name, 'Form_Resize', []).then(() => this.paint(c));
       return;
     }
     let ev: string | null = null;
@@ -448,7 +455,7 @@ export class FormInstance implements VBObject {
 
   hasMember(name: string): boolean {
     const l = lc(name);
-    if (this.controlNames.has(l) || l === 'scalewidth' || l === 'scaleheight' || l === 'name' || FORM_METHODS.has(l) || FORM_OBJECTS.has(l)) return true;
+    if (this.controlNames.has(l) || l === 'name' || FORM_METHODS.has(l) || FORM_OBJECTS.has(l)) return true;
     const pd = getPropDef('Form', name);
     if (pd) return pd.runtime !== 'none';
     // Public variables are properties; Public Subs/Functions go through callMethod (they may wait)
@@ -464,7 +471,7 @@ export class FormInstance implements VBObject {
    *  load the form (its module-level values live on after Unload, as in VB6): `frmLogin.OK` after the dialog has closed. */
   private codeMember(name: string): 'proc' | 'var' | null {
     const l = lc(name);
-    if (this.controlNames.has(l) || l === 'scalewidth' || l === 'scaleheight' || l === 'visible' || FORM_METHODS.has(l) || FORM_OBJECTS.has(l)
+    if (this.controlNames.has(l) || l === 'visible' || FORM_METHODS.has(l) || FORM_OBJECTS.has(l)
       || getPropDef('Form', name)) return null;
     return this.publicMember(name);
   }
@@ -491,10 +498,6 @@ export class FormInstance implements VBObject {
         return c.item(Number(coerce(args[0], 'Long')));
       }
       return c;
-    }
-    if (l === 'scalewidth' || l === 'scaleheight') {
-      const sz = formScaleSize(st.form.props);
-      return l === 'scalewidth' ? sz.width : sz.height;
     }
     if (l === 'visible') return this.visible;
     if (FORM_METHODS.has(l)) return this.callSync(l, args);
@@ -525,7 +528,7 @@ export class FormInstance implements VBObject {
       target.setMember(target.defaultMember, [], value);
       return;
     }
-    if (l === 'scalewidth' || l === 'scaleheight' || (FORM_OBJECTS.has(l) && !getPropDef('Form', name))) throw new VBRuntimeError(383);
+    if (FORM_OBJECTS.has(l) && !getPropDef('Form', name)) throw new VBRuntimeError(383);
     if (l === 'visible') {
       if (toBool(value)) void this.show(false); else this.hide();
       return;
@@ -542,16 +545,48 @@ export class FormInstance implements VBObject {
       }
       case 'load': return this.load().then(() => Empty);
       case 'unload': return this.unload(1).then(() => Empty);
+      case 'refresh': this.autoLoad(); return this.paint(this.state().form, true).then(() => Empty);
     }
     if (this.codeMember(name) === 'proc') return this.callPublic(name, args);
     return this.callSync(l, args);
+  }
+
+  /** Print, PSet, Line, Circle, Scale on the form. */
+  graphics(call: GraphicsCall): void {
+    this.autoLoad();
+    this.state().form.graphics(call);
+  }
+
+  /** The Paint event of the form or a PictureBox, when its AutoRedraw is False and it is shown; `erase` (Refresh) clears it first.
+   *  A Refresh inside its own Paint event raises no other. */
+  private async paint(c: ControlObject, erase = false): Promise<void> {
+    const g = c.gfx;
+    if (!g || g.painting || c.props.AutoRedraw === true || !this.visible || this.s.ended) return;
+    const isForm = c.def.id === 'form';
+    if (!this.s.program.hasProcedure(this.name, isForm ? 'Form_Paint' : `${c.name}_Paint`)) return;
+    if (erase) g.erase();
+    g.painting = true;
+    try {
+      await (isForm ? this.s.fire(this.name, 'Form_Paint', []) : this.fireControl(c, 'Paint', []));
+    } finally {
+      g.painting = false;
+    }
+  }
+
+  /** Shown: the form's Paint, then each visible PictureBox's (VB6 paints the parent first). */
+  private async paintAll(): Promise<void> {
+    const st = this.st;
+    if (!st) return;
+    await this.paint(st.form);
+    for (const c of [...st.byId.values()]) if (c.def.type === 'PictureBox' && c.props.Visible !== false && this.st === st) await this.paint(c);
   }
 
   private callSync(l: string, args: VBValue[]): VBValue {
     this.autoLoad();
     switch (l) {
       case 'hide': this.hide(); return Empty;
-      case 'setfocus': case 'zorder': case 'refresh': return Empty;
+      case 'setfocus': case 'zorder': return Empty;
+      case 'refresh': void this.paint(this.state().form, true); return Empty;
       case 'show': void this.show(false); return Empty;
     }
     return this.state().form.callMethod(l, args) as VBValue;   // the form's own object has no async methods

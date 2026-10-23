@@ -30,6 +30,19 @@ group({
   vbBlue: 0xff0000, vbMagenta: 0xff00ff, vbCyan: 0xffff00, vbWhite: 0xffffff,
 });
 
+// Drawing: DrawMode, DrawStyle, FillStyle, ScaleMode (ScaleX / ScaleY also vbHimetric and the container), PaintPicture opcodes
+group({
+  vbBlackness: 1, vbNotMergePen: 2, vbMaskNotPen: 3, vbNotCopyPen: 4, vbMaskPenNot: 5, vbInvert: 6, vbXorPen: 7, vbNotMaskPen: 8,
+  vbMaskPen: 9, vbNotXorPen: 10, vbNop: 11, vbMergeNotPen: 12, vbCopyPen: 13, vbMergePenNot: 14, vbMergePen: 15, vbWhiteness: 16,
+  vbSolid: 0, vbDash: 1, vbDot: 2, vbDashDot: 3, vbDashDotDot: 4, vbInvisible: 5, vbInsideSolid: 6,
+  vbFSSolid: 0, vbFSTransparent: 1, vbHorizontalLine: 2, vbVerticalLine: 3, vbUpwardDiagonal: 4, vbDownwardDiagonal: 5, vbCross: 6, vbDiagonalCross: 7,
+  vbUser: 0, vbTwips: 1, vbPoints: 2, vbPixels: 3, vbCharacters: 4, vbInches: 5, vbMillimeters: 6, vbCentimeters: 7, vbHimetric: 8,
+  vbContainerPosition: 9, vbContainerSize: 10,
+  vbSrcCopy: 0xcc0020, vbSrcPaint: 0xee0086, vbSrcAnd: 0x8800c6, vbSrcInvert: 0x660046, vbSrcErase: 0x440328, vbNotSrcCopy: 0x330008,
+  vbNotSrcErase: 0x1100a6, vbMergeCopy: 0xc000ca, vbMergePaint: 0xbb0226, vbPatCopy: 0xf00021, vbPatPaint: 0xfb0a09, vbPatInvert: 0x5a0049,
+  vbDstInvert: 0x550009,
+});
+
 // Keys
 group({
   vbKeyReturn: 13, vbKeyEscape: 27, vbKeySpace: 32, vbKeyBack: 8, vbKeyTab: 9,

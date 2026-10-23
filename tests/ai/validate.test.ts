@@ -363,3 +363,14 @@ test('the compile errors the run would raise at the call are found (review 08 fi
 test('vbUseDefault and the FirstWeekOfYear constants are known names (review 08 final #10)', () => {
   expect(inForm1(sub('    Debug.Print FormatNumber(0.5, 2, vbUseDefault), DatePart("ww", Now, vbMonday, vbFirstFourDays)'))).toEqual([]);
 });
+
+test('validateCode: the drawing statements and methods are valid (0.9)', () => {
+  const p = newProject(), f = p.forms[0];
+  const pic = newControl(f, 'PictureBox', { left: 0, top: 0 }, null);
+  f.controls.push(pic);
+  const code = 'Option Explicit\nPrivate Sub Form_Paint()\n    Dim c As Long\n    Cls\n    ScaleMode = vbPixels\n    Print "x"; 1, Tab(3);\n'
+    + '    Line (0, 0)-Step(10, 10), vbRed, BF\n    Circle (5, 5), 3, , -1, -2, 0.5\n    PSet (1, 1): c = Point(1, 1)\n'
+    + '    Picture1.Line -(5, 5)\n    Picture1.Print TextWidth("a")\n    Picture1.PaintPicture Picture1.Picture, 0, 0\n    Scale (0, 0)-(1, 1)\n'
+    + '    SavePicture Picture1.Image, "a.bmp"\nEnd Sub\nPrivate Sub Picture1_Paint()\nEnd Sub\nPrivate Sub Picture1_Resize()\nEnd Sub';
+  expect(validateCode(code, { moduleName: f.name, form: f, project: p })).toEqual([]);
+});

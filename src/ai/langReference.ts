@@ -2,7 +2,7 @@
 // tables (built-in functions and constants, the parser's type and unsupported-word tables), so a new built-in shows up
 // by itself. Everything is sorted: the card, and with it the system prompt, is byte-identical on every build (prefix caching).
 import { BUILTINS, CANONICAL_NAMES, CONSTANTS } from '../lang/builtins';
-import { TYPE_KEYWORDS, UNSUPPORTED_IDENTS, UNSUPPORTED_KEYWORDS } from '../lang/parseStatements';
+import { GFX_STATEMENTS, TYPE_KEYWORDS, UNSUPPORTED_KEYWORDS } from '../lang/parseStatements';
 import { BUILTIN_OBJECTS } from './knownNames';
 
 const byName = (a: string, b: string): number => a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0;
@@ -57,17 +57,18 @@ export function buildLanguageReference(): string {
   const types = Object.values(TYPE_KEYWORDS).map(String).sort(byName);
   const objects = [...BUILTIN_OBJECTS].map(cap).sort(byName);
   const words = Object.values(UNSUPPORTED_KEYWORDS).sort(byName);
-  const drawing = Object.values(UNSUPPORTED_IDENTS).sort(byName);
+  const drawing = Object.values(GFX_STATEMENTS).sort(byName);
   return [
     'Language reference (VibeBasic dialect of VB6):',
     `Statements: ${STATEMENTS}`,
     `Types: ${types.join(', ')} (suffixes % & ! # $). Operators: + - * / \\ Mod ^ &, = <> < > <= >=, Like, Is, Not, And, Or, Xor, Eqv, Imp; rs!Name is rs("Name") (a Recordset field).`,
     `Objects: ${objects.join(', ')}.`,
+    `Drawing on a Form or PictureBox as in VB6: ${drawing.join(', ')} (Line (x1, y1)-(x2, y2)[, c][, B[F]]), Cls, Point, PaintPicture; AutoRedraw or Paint.`,
     'Built-in functions by argument count (String functions also have a $ form, e.g. Left$):',
     ...functionLines(),
     'Constant groups (prefix, count, examples):',
     ...constantGroups(),
-    `Not available: ${words.join(', ')}; ${drawing.join(' / ')} on forms; class modules;`
+    `Not available: ${words.join(', ')}; class modules;`
       + ' CreateObject / GetObject (no COM automation); Shell (programs cannot be started); named arguments (x:=1).',
   ].join('\n');
 }

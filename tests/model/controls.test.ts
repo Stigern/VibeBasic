@@ -157,7 +157,8 @@ test('methods', () => {
   expect(m('ComboBox', 'RemoveItem')?.params).toBe('Index As Integer');
   expect(m('ComboBox', 'Clear')).toBeDefined();
   expect(m('TextBox', 'AddItem')).toBeUndefined();
-  expect(CONTROL_TYPES.Form.methods.map(x => x.name).sort()).toEqual(['Hide', 'Move', 'Refresh', 'Show']);
+  expect(CONTROL_TYPES.Form.methods.map(x => x.name).sort()).toEqual(['Circle', 'Cls', 'Hide', 'Line', 'Move', 'PSet', 'PaintPicture',
+    'Point', 'Print', 'Refresh', 'Scale', 'ScaleX', 'ScaleY', 'Show', 'TextHeight', 'TextWidth']);
   expect(m('Form', 'Show')?.params).toBe('[Modal], [OwnerForm]');
 });
 
