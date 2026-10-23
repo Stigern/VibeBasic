@@ -234,3 +234,23 @@ Debug.Print Format(CDate("2026-10-22"), "yyyy-mm-dd"); " "; Format(CDate("10/22/
     expect(host.lines()).toEqual(['True', 'False']);
   });
 });
+
+test('ParamArray collects the remaining arguments in a 0-based Variant array', async () => {
+  const src = `Sub Show(ByVal head As String, ParamArray args() As Variant)
+Debug.Print head; LBound(args); UBound(args)
+Dim i As Integer, t As Long
+For i = LBound(args) To UBound(args)
+t = t + args(i)
+Next
+Debug.Print t
+End Sub
+Sub Main()
+Show "a", 1, 2, 3
+Show "b"
+End Sub
+`;
+  const host = new TestHost();
+  const prog = new Program([{ name: 'Module1', kind: 'module', source: src }], host, { locale: 'en-US' });
+  await prog.runEvent('Module1', 'Main');
+  expect(host.lines()).toEqual(['a 0  2 ', ' 6 ', 'b 0 -1 ', ' 0 ']);
+});

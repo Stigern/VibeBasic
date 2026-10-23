@@ -103,6 +103,8 @@ test('Option Explicit: undeclared variables', () => {
 
 test('unsupported functions and statements', () => {
   expect(inForm1(sub('    SaveSetting "App", "S", "K", Text1(0).Text'))).toEqual(['SaveSetting is not supported in VibeBasic. Use a module-level variable instead.']);
+  expect(inForm1(sub('    Shell "notepad.exe"'))).toEqual(['Shell is not supported in VibeBasic. Programs cannot be started.']);
+  expect(inForm1(sub('    Label1.Caption = StrConv("a b", vbProperCase) & Environ("HOME")\n    Beep'))).toEqual([]);
   expect(validateCode('Sub Main()\n    Dim o\n    Set o = CreateObject("Scripting.Dictionary")\nEnd Sub', { moduleName: 'Module2', form: null }))
     .toEqual(['CreateObject is not supported in VibeBasic.']);
   expect(validateCode('Sub Main()\n    Print #1, "x"\nEnd Sub', { moduleName: 'Module2', form: null }))
@@ -195,7 +197,6 @@ End Sub
 
 Private Sub Text1_Click(Index As Integer)
     Label1.Caption = Greet("x") & Greet("y", True) & Greet("z", , "!")
-    ' ParamArray is not in the dialect: the variadic built-ins stand in for it
     Label1.Tag = Choose(Index + 1, "a", "b", "c", "d") & UBound(Array(1, 2, 3, 4, 5))
 End Sub
 

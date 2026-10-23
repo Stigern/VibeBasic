@@ -99,6 +99,8 @@ export interface Param {
   defaultValue?: Expr;
   type?: VBTypeName;
   isArray: boolean;
+  /** `ParamArray args()`: the last parameter, takes all remaining arguments as a 0-based Variant array. */
+  paramArray?: boolean;
 }
 
 export interface TypeDecl { name: string; visibility: 'public' | 'private'; fields: VarDecl[]; line: number }

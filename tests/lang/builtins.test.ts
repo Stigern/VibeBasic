@@ -509,6 +509,17 @@ test('IIf / Choose / Switch / Array / Environ / Command', () => {
   expect(call('Command')).toBe('');
 });
 
+test('StrConv, Beep, Shell', () => {
+  expect(call('StrConv', 'hello wORLD o\'neil', 3)).toBe("Hello World O'neil");
+  expect(call('StrConv', 'abc', 1)).toBe('ABC');
+  expect(call('StrConv', 'ABC', 2)).toBe('abc');
+  expect(call('StrConv', 'abc', 64)).toBe('abc');
+  expect(call('StrConv', 'abc', 128)).toBe('abc');
+  expect(() => call('Beep')).not.toThrow();   // the test host has no sound
+  expect(() => call('Shell', 'notepad.exe')).toThrow(expect.objectContaining({ number: 5, description: 'Shell is not available in VibeBasic' }));
+  expect(call('Environ', 'HOME')).toBe('');
+});
+
 test('dialogs go to the host', async () => {
   const calls: unknown[][] = [];
   const host = new TestHost();

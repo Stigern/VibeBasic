@@ -55,6 +55,8 @@ export interface Host {
   /** One Debug.Print statement; `newline` is false after a trailing `;` or `,`. */
   debugPrint(text: string, newline: boolean): void;
   doEvents(): Promise<void>;
+  /** Beep: the system beep (a short tone); a host without sound may leave it out. */
+  beep?(): void;
   loadPicture(path: string): Promise<VBValue>;
   /** An unhandled run-time (or compile) error; `'end'` ends the program, `'debug'` enters break mode. */
   onRuntimeError(err: VBRuntimeError, at: CodeLocation): Promise<'end' | 'debug'>;

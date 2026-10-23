@@ -533,11 +533,22 @@ export function* callProc(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[]): 
 
 function* bindArgs(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[]): Gen<BoundArg[]> {
   const params = ref.proc.params;
-  if (args.length > params.length) throw compileError('Wrong number of arguments or invalid property assignment');
+  const rest = params.length > 0 && params[params.length - 1].paramArray ? params.length - 1 : -1;
+  if (args.length > params.length && rest < 0) throw compileError('Wrong number of arguments or invalid property assignment');
   const out: BoundArg[] = [];
   for (let i = 0; i < params.length; i++) {
     const p = params[i];
     const a = args[i];
+    if (i === rest) {   // ParamArray: every remaining argument, by value, in a 0-based Variant array
+      const extra = args.slice(i);
+      const arr = new VBArray('Variant', [[0, extra.length - 1]]);
+      for (let k = 0; k < extra.length; k++) {
+        const e = extra[k];
+        arr.set([k], e.kind === 'missing' ? Empty : yield* evalExpr(f, e));
+      }
+      out.push({ value: arr });
+      break;
+    }
     if (a === undefined || a.kind === 'missing') {
       if (!p.optional) throw compileError('Argument not optional');
       out.push(MISSING);

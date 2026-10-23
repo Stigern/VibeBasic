@@ -14,11 +14,25 @@ import { CODE_SYSTEM_PROMPT, FORM_SYSTEM_PROMPT } from './prompts';
 const COMMON = new Set(['left', 'top', 'width', 'height', 'visible', 'enabled', 'tabindex', 'tabstop', 'tag', 'tooltiptext']);
 const BASE_METHODS = new Set(['move', 'setfocus', 'refresh', 'zorder']);
 
+/** The labels of an enum property: the registry's "0 - " numbering and "Justify" dropped, and a library prefix all of them share (ccOrientation, tvw, sld) cut off. */
+function enumLabels(values: { value: number; label: string }[]): string[] {
+  const labels = values.map(v => v.label.replace(/^-?\d+ - /, '').replace(/ Justify$/, ''));
+  if (labels.length < 2 || labels.some(l => /\s/.test(l))) return labels;
+  let n = 0;
+  while (n < labels[0].length && labels.every(l => l[n] === labels[0][n])) n++;
+  while (n > 0 && !labels.every(l => /[A-Z0-9]/.test(l[n] ?? ''))) n--;
+  return n >= 2 && !/^\d/.test(labels[0].slice(n)) ? labels.map(l => l.slice(n)) : labels;
+}
+
+/** "Alignment(0 Left,1 Right,2 Center)": an enum property with its values; other properties by name. */
+const propText = (p: PropDef): string =>
+  p.enumValues?.length ? `${p.name}(${enumLabels(p.enumValues).map((l, i) => `${p.enumValues![i].value} ${l}`).join(',')})` : p.name;
+
 /** One line per control type, e.g. "CommandButton: Caption, Default, … | events: Click, … | methods: …". */
 export function describeControlTypes(): string {
   const lines: string[] = [];
   for (const td of Object.values(CONTROL_TYPES)) {
-    const props = td.props.filter(p => !COMMON.has(p.name.toLowerCase()) && (p.designTime || p.runtime !== 'none')).map(p => p.name);
+    const props = td.props.filter(p => !COMMON.has(p.name.toLowerCase()) && (p.designTime || p.runtime !== 'none')).map(propText);
     const methods = td.methods.filter(m => !BASE_METHODS.has(m.name.toLowerCase())).map(m => m.name);
     let line = `${td.type}: ${props.join(', ')} | events: ${td.events.map(e => e.name).join(', ')}`;
     if (methods.length) line += ` | methods: ${methods.join(', ')}`;
@@ -167,7 +181,7 @@ const literal = (e: Expr): string | null =>
   e.kind === 'number' ? String(e.value) : e.kind === 'string' ? quote(e.value) : e.kind === 'bool' ? (e.value ? 'True' : 'False')
     : e.kind === 'unary' && e.op === 'neg' && e.operand.kind === 'number' ? `-${e.operand.value}` : null;
 const asType = (t: VBTypeName | undefined): string => t === undefined ? '' : ` As ${typeof t === 'string' ? t : 'userType' in t ? t.userType : t.objectType}`;
-const param = (p: Param): string => `${p.optional ? 'Optional ' : ''}${p.byRef ? '' : 'ByVal '}${p.name}${p.isArray ? '()' : ''}${asType(p.type)}`;
+const param = (p: Param): string => `${p.paramArray ? 'ParamArray ' : p.optional ? 'Optional ' : ''}${p.byRef || p.paramArray ? '' : 'ByVal '}${p.name}${p.isArray ? '()' : ''}${asType(p.type)}`;
 const signature = (p: ProcDecl): string =>
   `Public ${p.kind === 'sub' ? 'Sub' : 'Function'} ${p.name}(${p.params.map(param).join(', ')})${p.kind === 'function' ? asType(p.returnType) : ''}`;
 

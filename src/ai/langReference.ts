@@ -13,6 +13,7 @@ const cap = (s: string): string => s[0].toUpperCase() + s.slice(1);
 function functionLines(): string[] {
   const groups = new Map<string, { min: number; max: number; names: string[] }>();
   for (const [key, b] of BUILTINS) {
+    if (key === 'shell') continue;   // exists only to raise a clear error; the card lists it as not available
     const sig = b.maxArgs >= 100 ? `${b.minArgs}+` : b.minArgs === b.maxArgs ? `${b.minArgs}` : `${b.minArgs}-${b.maxArgs}`;
     const g = groups.get(sig) ?? { min: b.minArgs, max: b.maxArgs, names: [] };
     g.names.push(canonical(key));
@@ -64,7 +65,7 @@ export function buildLanguageReference(): string {
     'Constant groups (prefix, count, examples):',
     ...constantGroups(),
     `Not available: ${words.join(', ')}; file I/O (${fileIo.join(', ')}); ${drawing.join(' / ')} on forms; class modules;`
-      + ' CreateObject / GetObject (no COM automation); named arguments (x:=1). Keep data in variables.',
+      + ' CreateObject / GetObject (no COM automation); Shell (programs cannot be started); named arguments (x:=1). Keep data in variables.',
   ].join('\n');
 }
 

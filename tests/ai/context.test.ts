@@ -60,6 +60,18 @@ test('form request', () => {
   expect(m[1].content).toContain('Private Sub Command1_Click()');
 });
 test('control types one line per type', () => expect(describeControlTypes()).toContain('CommandButton: Caption, '));
+test('enum properties list their values; the whole system prompt stays within budget', () => {
+  const t = describeControlTypes();
+  expect(t).toContain('Alignment(0 Left,1 Right,2 Center)');
+  expect(t).toContain('BorderStyle(0 None,1 Fixed Single)');
+  expect(t).toContain('ScrollBars(0 None,1 Horizontal,2 Vertical,3 Both)');
+  expect(t).not.toMatch(/\d - /);
+  expect(t).toContain('MultiLine,');   // booleans stay plain
+  const p = project();
+  for (const content of [buildCodeRequest(p, 'm1', 1, 'x')[0].content, buildFormRequest(p, p.forms[0].id, 'x')[0].content]) {
+    expect(content.length / 3.5).toBeLessThanOrEqual(7000);   // card + control types + rules, at about 3.5 characters per token
+  }
+});
 test('system prompts contain format rules', () => { expect(CODE_SYSTEM_PROMPT).toContain('```vb'); expect(FORM_SYSTEM_PROMPT).toContain('"ops"'); });
 
 test('system prompts are identical for different projects', () => {

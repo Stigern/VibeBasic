@@ -92,11 +92,12 @@ const ALTERNATIVES: Record<string, string> = {
   savesetting: NO_REGISTRY, getsetting: NO_REGISTRY, deletesetting: NO_REGISTRY,
   open: NO_FILES, close: NO_FILES, 'line input': NO_FILES,
   'print #': NO_FILES, 'write #': NO_FILES, 'input #': NO_FILES, 'get #': NO_FILES, 'put #': NO_FILES, 'seek #': NO_FILES,
+  shell: 'Programs cannot be started.',
   print: 'Use a Label, a TextBox or Debug.Print instead.',
 };
 /** Functions that parse fine but do not exist in VibeBasic, with the name as written in VB6. */
 const UNSUPPORTED_CALLS: Record<string, string> = {
-  savesetting: 'SaveSetting', getsetting: 'GetSetting', deletesetting: 'DeleteSetting', createobject: 'CreateObject', getobject: 'GetObject',
+  savesetting: 'SaveSetting', getsetting: 'GetSetting', deletesetting: 'DeleteSetting', createobject: 'CreateObject', getobject: 'GetObject', shell: 'Shell',
 };
 const unsupported = (name: string): string => {
   const alt = ALTERNATIVES[name.toLowerCase()];
@@ -160,7 +161,10 @@ const lc = (s: string) => s.toLowerCase();
 interface Arity { name: string; min: number; max: number }
 /** A built-in with this many or more maximum arguments takes any number (Choose, Array). */
 const ANY_COUNT = 100;
-const procArity = (p: ProcDecl): Arity => ({ name: p.name, min: p.params.filter(x => !x.optional).length, max: p.params.length });
+const procArity = (p: ProcDecl): Arity => ({
+  name: p.name, min: p.params.filter(x => !x.optional && !x.paramArray).length,
+  max: p.params.some(x => x.paramArray) ? ANY_COUNT : p.params.length,
+});
 
 /** "Twice takes 1 argument, not 2." */
 function arityMessage(a: Arity, given: number): string {
