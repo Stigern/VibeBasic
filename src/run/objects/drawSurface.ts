@@ -101,6 +101,12 @@ export class DrawSurface {
     return [xTwips * ux + this.left(), yTwips * uy + this.top()];
   }
 
+  /** The reverse of `mouse`: a point in the current scale as twips from the client area's origin (PopupMenu X, Y). */
+  twips(x: number, y: number): [number, number] {
+    const [ux, uy] = this.units();
+    return [(x - this.left()) / ux, (y - this.top()) / uy];
+  }
+
   // -- properties ---------------------------------------------------------------------------------------------
 
   /** A drawing property's value, or undefined for the others. */

@@ -1,0 +1,27 @@
+Type=Exe
+Form=Form1.frm
+Form=Form2.frm
+Module=Module1; Module1.bas
+Class=Konto; Class1.cls
+Object={831FDD16-0C5C-11D2-A9FC-0000F8754DA1}#2.0#0; MSCOMCTL.OCX
+Object={0ECD9B60-23AA-11D0-B351-00A0C9055D8E}#6.0#0; MSHFLXGD.OCX
+Reference=*\G{00020430-0000-0000-C000-000000000046}#2.0#0#..\..\WINDOWS\System32\stdole2.tlb#OLE Automation
+Reference=*\G{00025E01-0000-0000-C000-000000000046}#5.0#0#..\..\Program Files\Common Files\Microsoft Shared\DAO\dao360.dll#Microsoft DAO 3.6 Object Library
+UserControl=Knapp.ctl
+Startup="Form2"
+HelpFile=""
+Title="Syltetøy"
+Command32=""
+Name="Demo"
+HelpContextID="0"
+CompatibleMode="0"
+MajorVer=1
+MinorVer=2
+RevisionVer=3
+AutoIncrementVer=0
+ServerSupportFiles=0
+VersionCompanyName="Eksempel"
+CompilationType=0
+
+[MS Transaction Server]
+AutoRefresh=1

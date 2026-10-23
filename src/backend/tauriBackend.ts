@@ -65,7 +65,7 @@ export class TauriBackend implements Backend {
   }
 
   openProjectDialog(): Promise<string | null> {
-    return this.openFileDialog([PROJECT_FILTER]);
+    return this.openFileDialog([{ name: 'Visual Basic Project', extensions: ['vbb', 'vbp'] }]);
   }
 
   async saveProjectDialog(defaultFileName: string): Promise<string | null> {

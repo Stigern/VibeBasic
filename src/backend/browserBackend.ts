@@ -192,7 +192,7 @@ export class BrowserBackend implements Backend {
   }
 
   async openProjectDialog(): Promise<string | null> {
-    return this.ask('Open project (file name, *.vbb):', 'Project1.vbb');
+    return this.ask('Open project (file name, *.vbb or a VB6 *.vbp):', 'Project1.vbb');
   }
 
   async saveProjectDialog(defaultFileName: string): Promise<string | null> {

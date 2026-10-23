@@ -168,3 +168,29 @@ function channel(): MessageChannel | null {
 export function nextTick(): Promise<void> {
   return macrotask();
 }
+
+/**
+ * Runs `root` to completion now, procedure calls (SubCall) included, for the debugger (a Property Get shown in the
+ * Locals window). A generator that would wait (yields a Promise) is closed and `onWait()` is called, which must throw.
+ */
+export function runCallsSync<T>(root: Gen<T>, onWait: () => never): T {
+  const stack: Gen<unknown>[] = [root];
+  let input: Resume = { ok: true, value: undefined };
+  while (stack.length > 0) {
+    const g = stack[stack.length - 1];
+    let r: IteratorResult<Yielded, unknown>;
+    try {
+      r = input.ok ? g.next(input.value) : g.throw(input.error);
+    } catch (e) {
+      stack.pop();
+      input = { ok: false, error: e };
+      continue;
+    }
+    if (r.done) { stack.pop(); input = { ok: true, value: r.value }; continue; }
+    if (r.value instanceof SubCall) { stack.push(r.value.gen); input = { ok: true, value: undefined }; continue; }
+    for (let i = stack.length - 1; i >= 0; i--) { try { stack[i].return(undefined); } catch { /* closing */ } }
+    onWait();
+  }
+  if (!input.ok) throw input.error;
+  return input.value as T;
+}

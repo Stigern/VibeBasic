@@ -100,6 +100,8 @@ export interface RunContext {
   resized?(ctrl: ControlObject): void;
   /** Refresh on a Form or PictureBox: with AutoRedraw False the surface is erased and its Paint event runs. */
   repaint?(ctrl: ControlObject): Promise<VBValue>;
+  /** The form shows a menu bar (a visible top-level menu; not on an MDI child): it takes its height off the client area. */
+  menuBar?(): boolean;
 }
 
 /** Drawing methods that return a value (`x = Picture1.Point(1, 2)`). */
@@ -229,7 +231,7 @@ export class ControlObject implements VBObject, DataConsumer {
       this.gfx = new DrawSurface({
         props: p,
         clientPx: () => {
-          if ((def.type as string) === 'Form') { const m = formMetrics(p); return { w: m.clientWidth, h: m.clientHeight }; }
+          if ((def.type as string) === 'Form') { const m = formMetrics(p, this.ctx.menuBar?.() ?? false); return { w: m.clientWidth, h: m.clientHeight }; }
           const b = Number(p.BorderStyle) === 1 ? 4 : 0;
           return { w: Math.max(0, twipsToPx(Number(p.Width) || 0) - b), h: Math.max(0, twipsToPx(Number(p.Height) || 0) - b) };
         },

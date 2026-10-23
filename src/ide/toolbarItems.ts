@@ -20,7 +20,8 @@ export function buildToolbarItems(actions: IdeActions, state: IdeState): IdeTool
   const inCode = () => state.activeView.kind === 'code';
   return [
     tb('new', 'New Project', 'newProject', design), sep,
-    tb('addForm', 'Add Form', 'addForm', design), tb('addModule', 'Add Module', 'addModule', design), sep,
+    tb('addForm', 'Add Form', 'addForm', design), tb('addModule', 'Add Module', 'addModule', design),
+    tb('menuEditor', 'Menu Editor', 'menuEditor', () => design() && state.activeView.kind === 'designer'), sep,
     tb('open', 'Open Project', 'openProject', design), tb('save', 'Save Project', 'saveProject'), sep,
     edit('cut', 'Cut', 'cut'), edit('copy', 'Copy', 'copy'), edit('paste', 'Paste', 'paste'), tb('find', 'Find', 'find', inCode), sep,
     tb('undo', 'Undo', 'undo', () => design() && (state.activeView.kind === 'code' || state.stack.canUndo)),
@@ -43,7 +44,7 @@ export function geometryReadout(state: IdeState): { pos: string; size: string } 
   const id = sel.ids[sel.ids.length - 1];
   if (!id) return { pos: `${num(form.props.Left)}, ${num(form.props.Top)}`, size: `${num(form.props.Width)} x ${num(form.props.Height)}` };
   const c: ControlDef | undefined = form.controls.find(k => k.id === id);
-  if (!c) return none;
+  if (!c || c.type === 'Menu') return none;   // a menu (picked in the Properties window) has no position
   const p = controlPos(c), sz = sizeOf(c);
   return { pos: `${p.left}, ${p.top}`, size: 'Width' in c.props || c.type === 'Line' ? `${sz.width} x ${sz.height}` : '' };
 }

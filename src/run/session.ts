@@ -76,11 +76,18 @@ export class RunSession implements Host, FormSession {
   private readonly app: AppObject;
   /** The form activated last (Screen.ActiveForm); null when no form is shown. */
   private activeForm: FormInstance | null = null;
-  /** The shown forms in the order they were last activated (the next one to activate when the active form goes). */
+  /** The shown forms in the order they were last activated (the next one to activate when the active form goes). MDI children
+   *  are not in it: the MDI form stands for them. */
   private activation: FormInstance[] = [];
+  /** The MDI form's active child (MDIForm.ActiveForm), and its shown children in the order they were last activated. */
+  private mdiActive: FormInstance | null = null;
+  private mdiActivation: FormInstance[] = [];
+  /** New Form1: the number of the last instance made (its key is "Form1:<n>"). */
+  private instanceSeq = 0;
   private readonly screen = new ScreenObject({
-    form: () => this.activeForm ?? Nothing,
-    control: () => this.activeForm?.activeControl() ?? Nothing,
+    // VB6: when the MDI form is the active window, Screen.ActiveForm is its active child
+    form: () => (this.activeForm?.isMdi && this.mdiActive ? this.mdiActive : this.activeForm) ?? Nothing,
+    control: () => (this.activeForm?.isMdi && this.mdiActive ? this.mdiActive : this.activeForm)?.activeControl() ?? Nothing,
   }, (pointer, icon) => this.setScreenPointer(pointer, icon));
   /** Screen.MousePointer and MouseIcon: they win over the cursor of every control in every form window, until the program ends. */
   private screenPointer = 0;
@@ -311,21 +318,73 @@ export class RunSession implements Host, FormSession {
     this.maybeEnd();
   }
 
+  // -- MDI ------------------------------------------------------------------------------------------------------
+
+  mdiForm(): FormInstance | null {
+    const def = this.project.forms.find(f => f.mdi);
+    return def ? this.forms.get(def.name.toLowerCase()) ?? null : null;
+  }
+  mdiActiveChild(): FormInstance | null { return this.mdiActive; }
+  mdiChildren(): FormInstance[] {
+    return [...this.forms.values()].filter(f => f.isMdiChild && f.loaded).sort((a, b) => b.loadOrder - a.loadOrder);
+  }
+  /** The MDI form's window shows the active child as active. */
+  private sendMdiActive(): void {
+    this.mdiForm()?.deliver({ t: 'mdiActive', key: this.mdiActive?.key ?? null });
+  }
+
+  /** `New Form1` (Dim f As New Form1, Set f = New Form1): a new instance of a form with its own controls and variables. Not the
+   *  MDI form (there is one). */
+  objectFactory(typeName: string): (() => VBObject) | undefined {
+    const def = this.project.forms.find(f => f.name.toLowerCase() === typeName.toLowerCase());
+    if (!def || def.mdi) return undefined;
+    return () => {
+      const key = `${def.name}:${++this.instanceSeq}`;
+      this.program.addFormInstance(def.name, key);
+      const f = new FormInstance(def, this, key);
+      this.forms.set(key.toLowerCase(), f);
+      return f;
+    };
+  }
+
   async formActivated(form: FormInstance): Promise<void> {
-    if (this.activeForm === form || this.ended) return;
+    if (this.ended) return;
+    if (form.isMdiChild) {   // the MDI form is (or becomes) the active window; the child the active one in it
+      const parent = this.mdiForm();
+      if (parent && this.activeForm !== parent) await this.formActivated(parent);
+      if (this.mdiActive === form || this.ended) return;
+      const old = this.mdiActive;
+      this.mdiActive = form;
+      this.mdiActivation = [...this.mdiActivation.filter(f => f !== form), form];
+      this.sendMdiActive();
+      if (old?.loaded) await old.fireForm('Deactivate', []);
+      if (form.loaded && this.mdiActive === form) await form.fireForm('Activate', []);
+      return;
+    }
+    if (this.activeForm === form) return;
     const old = this.activeForm;
     this.activeForm = form;
     this.activation = [...this.activation.filter(f => f !== form), form];
-    if (old?.loaded) await this.fire(old.name, 'Form_Deactivate', []);
-    if (form.loaded && this.activeForm === form) await this.fire(form.name, 'Form_Activate', []);
+    if (old?.loaded) await old.fireForm('Deactivate', []);
+    if (form.loaded && this.activeForm === form) await form.fireForm('Activate', []);
   }
 
-  /** Hide raises Deactivate (Unload does not, as in VB6); the modal form on top, or else the form active before, is activated. */
+  /** Hide raises Deactivate (Unload does not, as in VB6); the modal form on top, or else the form active before, is activated.
+   *  An MDI child: the child active before it in the MDI form. */
   formLeft(form: FormInstance, hidden: boolean): void {
+    if (form.isMdiChild) {
+      this.mdiActivation = this.mdiActivation.filter(f => f !== form);
+      if (this.mdiActive !== form || this.ended) return;
+      this.mdiActive = null;
+      if (hidden && form.loaded) void form.fireForm('Deactivate', []);
+      const next = [...this.mdiActivation].reverse().find(f => f.loaded && f.visible);
+      if (next) void this.formActivated(next); else this.sendMdiActive();
+      return;
+    }
     this.activation = this.activation.filter(f => f !== form);
     if (this.activeForm !== form || this.ended) return;
     this.activeForm = null;
-    if (hidden && form.loaded) void this.fire(form.name, 'Form_Deactivate', []);
+    if (hidden && form.loaded) void form.fireForm('Deactivate', []);
     const top = this.modalStack[this.modalStack.length - 1];
     const next = top?.visible ? top : [...this.activation].reverse().find(f => f.loaded && f.visible);
     if (next) void this.formActivated(next);

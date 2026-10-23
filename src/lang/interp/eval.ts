@@ -400,7 +400,8 @@ function typeOfIs(v: VBValue, typeName: string): boolean {
 
 /**
  * How `New T` makes an object (`Set c = New Class1`, `Dim c As New Collection`): an object of a class module of the
- * project, else a built-in class (Collection, see BUILTIN_CLASSES). VB6 does not allow New with a user-defined type or a
+ * project, else a form of the project (Host.objectFactory: another instance), else a built-in class (Collection, ADODB…,
+ * see BUILTIN_CLASSES). VB6 does not allow New with a user-defined type or a
  * plain type (compile error "Invalid use of New keyword"); a name that is no class is "User-defined type not defined".
  * A class module's object comes back before Class_Initialize has run (`ready` runs it).
  */
@@ -410,6 +411,8 @@ export function objectFactory(rt: Runtime, type: VBTypeName, module: ModuleScope
   const name = lc(t.objectType);
   const cls = rt.classes.get(name);
   if (cls) return () => rt.newInstance(cls);
+  const host = rt.host.objectFactory?.(t.objectType);   // a form: Dim f As New Form1
+  if (host) return host;
   const b = BUILTIN_CLASSES.get(name);
   if (b) return () => b.create(rt.builtinCtx);
   throw compileError('User-defined type not defined');

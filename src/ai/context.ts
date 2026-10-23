@@ -4,6 +4,8 @@ import { parseModuleLenient } from '../lang/parser';
 import { CONTROL_TYPES, type PropDef } from '../model/controls';
 import { absoluteRect, shownInDesign } from '../ide/designerLogic';
 import { formClientTwips, isLine } from '../model/geometry';
+import { hasMenuBar, isMenu, shortcutText } from '../model/menus';
+import { formObjectName, isMdiChild } from '../model/mdi';
 import { listProcedures } from '../model/procedures';
 import type { ControlDef, ControlType, FormDef, FontValue, ModuleDef, Project, PropValue } from '../model/types';
 import type { TextMessage } from './types';
@@ -31,8 +33,9 @@ function enumLabels(values: { value: number; label: string }[]): string[] {
  *  a wrong guess there only changes how a control looks. Alignment, ScrollBars, Style, MultiSelect, Value, the data and
  *  protocol enums ... keep their values (they change what a program does, and Alignment was misread without them). */
 const NAME_ONLY_ENUMS = new Set(['align', 'appearance', 'arrows', 'autosize', 'backstyle', 'bevelinner', 'bevelouter', 'borderstyle', 'daylength',
-  'drawmode', 'drawstyle', 'scalemode', 'fillstyle', 'floodtype', 'font3d', 'gridcelleffect', 'gridlines', 'linestyle', 'monthlength', 'orientation', 'scrolling', 'shadowstyle', 'shape',
-  'startupposition', 'tickstyle', 'windowstate']);
+  'drawmode', 'drawstyle', 'scalemode', 'fillstyle', 'floodtype', 'font3d', 'gridcelleffect', 'gridlines', 'linestyle', 'monthlength',
+  'negotiateposition', 'orientation', 'scrolling', 'shadowstyle', 'shape', 'shortcut', 'startupposition', 'tickstyle',
+  'windowstate']);   // Shortcut: written as text ("Ctrl+O")
 
 /** "Alignment(0 Left,1 Right,2 Center)": an enum property with its values; other properties by name. */
 const propText = (p: PropDef): string =>
@@ -112,7 +115,9 @@ export function describeControlTypes(): string {
     + ' A DataGrid shows the DataSource\'s records (Columns(0) is the first column: Caption, Width, Value).'
     + ' DataList and DataCombo list the ListField of the RowSource\'s records; BoundText is the BoundColumn of the chosen one, bound to DataSource / DataField.'
     + ' The Sheridan 3D controls: an SSPanel (or SSFrame) is a container like a Frame (BevelOuter 0 none, 1 inset, 2 raised, BevelWidth, Font3D 0-4; FloodType 1 left to right ... 5 circle with FloodPercent makes a progress bar);'
-    + ' SSCheck and SSOption have a Boolean Value and Click(Value As Integer); SSRibbon is a toggle button (Value, PictureUp, PictureDn) and ribbons of one container with the same GroupNumber release each other.');
+    + ' SSCheck and SSOption have a Boolean Value and Click(Value As Integer); SSRibbon is a toggle button (Value, PictureUp, PictureDn) and ribbons of one container with the same GroupNumber release each other.'
+    + ' An MDIForm (events MDIForm_Load ...; AutoShowChildren, ScrollBars) holds only Align controls and invisible ones; forms with MDIChild = True show inside it.'
+    + ' MDIForm1.ActiveForm is the active child, MDIForm1.Arrange vbCascade (vbTileHorizontal, vbTileVertical); a menu with WindowList lists the children; Set f = New Form2: f.Show opens another instance.');
   return lines.join('\n');
 }
 
@@ -143,7 +148,7 @@ function propParts(type: ControlType, props: Record<string, PropValue>, skip: Se
     const v = props[pd.name];
     // An empty Text is still worth showing: it tells the model the box is blank on purpose.
     if (same(v, pd.default) && pd.name !== 'Text') continue;
-    out.push(`${pd.name}=${fmtValue(v)}`);
+    out.push(`${pd.name}=${type === 'Menu' && pd.name === 'Shortcut' ? quote(shortcutText(v)) : fmtValue(v)}`);   // Shortcut="Ctrl+O"
   }
   for (const [k, v] of Object.entries(props)) if (!defs.has(k) && !skip.has(k.toLowerCase())) out.push(`${k}=${fmtValue(v)}`);
   return out;
@@ -158,7 +163,7 @@ export const MAP_COLS = 48, MAP_ROWS = 16;
  * Containers are drawn before their children, siblings in z-order. Controls invisible at run time and Lines are left out.
  */
 export function layoutMap(form: FormDef, cols = MAP_COLS, rows = MAP_ROWS): string {
-  const cl = formClientTwips(form.props);
+  const cl = formClientTwips(form.props, hasMenuBar(form.controls));
   const cw = Math.max(1, cl.width) / cols, ch = Math.max(1, cl.height) / rows;
   const grid = Array.from({ length: rows }, () => Array<string>(cols).fill('.'));
   const put = (y: number, x: number, ch_: string) => { if (y >= 0 && y < rows && x >= 0 && x < cols) grid[y][x] = ch_; };
@@ -166,7 +171,7 @@ export function layoutMap(form: FormDef, cols = MAP_COLS, rows = MAP_ROWS): stri
   const visit = (parentId: string | null) => { for (const c of form.controls) if (c.parentId === parentId) { order.push(c); visit(c.id); } };
   visit(null);
   for (const c of order) {
-    if (CONTROL_TYPES[c.type].invisibleAtRuntime || isLine(c) || !shownInDesign(form, c.id)) continue;
+    if (CONTROL_TYPES[c.type].invisibleAtRuntime || isLine(c) || isMenu(c) || !shownInDesign(form, c.id)) continue;
     const r = absoluteRect(form, c.id);
     const clamp = (v: number, n: number) => Math.min(n - 1, Math.max(0, v));
     const x1 = clamp(Math.floor(r.left / cw), cols), y1 = clamp(Math.floor(r.top / ch), rows);
@@ -191,7 +196,7 @@ export function describeForm(form: FormDef, opts: { map?: boolean } = {}): strin
   const lines: string[] = [];
   const formParts = propParts('Form', form.props, new Set(['left', 'top', 'width', 'height', 'tabindex']));
   for (const k of ['Width', 'Height']) if (k in form.props) formParts.push(`${k}=${fmtValue(form.props[k])}`);
-  lines.push(['Form', form.name, ...formParts].join(' '));
+  lines.push([formObjectName(form), form.name, ...formParts].join(' '));
   const byId = new Map(form.controls.map(c => [c.id, c]));
   for (const c of form.controls) {
     const geo = ['Left', 'Top', 'Width', 'Height', 'X1', 'Y1', 'X2', 'Y2'].filter(k => k in c.props).map(k => `${k}=${fmtValue(c.props[k])}`);
@@ -202,7 +207,7 @@ export function describeForm(form: FormDef, opts: { map?: boolean } = {}): strin
     lines.push([...head, ...geo, ...propParts(c.type, c.props, new Set(['left', 'top', 'width', 'height', 'x1', 'y1', 'x2', 'y2', 'tabindex']))].join(' '));
   }
   if (opts.map) {
-    const cl = formClientTwips(form.props);
+    const cl = formClientTwips(form.props, hasMenuBar(form.controls));
     lines.push(`Layout map of the client area (${cl.width} x ${cl.height} twips; one character is about ${Math.round(cl.width / MAP_COLS)} x ${Math.round(cl.height / MAP_ROWS)} twips):`, layoutMap(form));
   }
   return lines.join('\n');
@@ -218,7 +223,7 @@ function describeFormControls(f: FormDef): string {
     seen.add(k);
     items.push(`${c.name} (${c.type})`);
   }
-  return `${f.name}: ${items.length ? items.join(', ') : '(no controls)'}`;
+  return `${f.name}${f.mdi ? ' (MDIForm)' : isMdiChild(f) ? ' (MDI child)' : ''}: ${items.length ? items.join(', ') : '(no controls)'}`;
 }
 
 /** "Form1: Command1 (CommandButton), Text1 (TextBox)" per form; control arrays are listed once. */

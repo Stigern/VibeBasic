@@ -27,17 +27,29 @@ export type ToWindow =
   | { t: 'cursor'; css: string }                                  // Screen.MousePointer / MouseIcon: '' = none
   | { t: 'drag'; id: string; action: number }                     // Ctl.Drag: 0 cancel, 1 begin (follows the mouse), 2 drop where the mouse is
   | { t: 'oleDrag'; id: string }                                  // Ctl.OLEDrag: an OLE drag from the control starts
-  | { t: 'oleEffect'; effect: number };                           // the drop target's Effect (the drag cursor: none, copy, move)
+  | { t: 'oleEffect'; effect: number }                           // the drop target's Effect (the drag cursor: none, copy, move)
+  | { t: 'eventDone'; requestId: number }        // an event sent with a requestId (a menu's Click before it opens) has run
+  // PopupMenu: show menu `id`'s items at (x, y) (client twips; null: at the mouse), `bold` the default item; answer with popupDone
+  | { t: 'popup'; requestId: number; id: string; flags: number; x: number | null; y: number | null; bold: string | null }
+  // MDI (to the MDI form's window, whose workspace shows the children; see mdiWorkspace.ts): a child opens / gets a message / closes,
+  // the session's active child (null: none), Arrange
+  | { t: 'mdiOpen'; snapshot: FormSnapshot }
+  | { t: 'mdiTo'; key: string; m: ToWindow }
+  | { t: 'mdiClose'; key: string }
+  | { t: 'mdiActive'; key: string | null }
+  | { t: 'mdiArrange'; arrangement: number };
 
 export type FromWindow =
   | { t: 'ready' }
   | { t: 'event'; id: string | 'form'; event: string; args: (number | string)[]; state?: Record<string, PropValue>; requestId?: number }
-  | { t: 'state'; id: string; props: Record<string, PropValue> }   // the user changed something that has no handler
+  | { t: 'state'; id: string; props: Record<string, PropValue> }   // the user changed something that has no handler ('form': WindowState)
   | { t: 'focused'; id: string }                                   // a control got the focus and has no GotFocus code (Me.ActiveControl)
   | { t: 'closeRequest' }
   | { t: 'activated' }                                             // the user brought the form to the front (focus from outside it)
   | { t: 'resized'; width: number; height: number }                // twips
   | { t: 'moved'; left: number; top: number }                      // twips: the user moved the window
+  | { t: 'popupDone'; requestId: number; id: string | null }       // the item chosen in a PopupMenu, or null (cancelled)
+  | { t: 'mdiFrom'; key: string; m: FromWindow }                   // a message of MDI child `key` (shown in this window)
   | OleMessage;
 
 /**

@@ -9,6 +9,7 @@ import { addControlsCmd } from '../../src/model/commands';
 import { CONTROL_TYPES, getPropDef, newControl, type PropDef } from '../../src/model/controls';
 import type { ControlDef, ControlType, PropValue } from '../../src/model/types';
 import { messageBox98 } from '../../src/ui98/dialogs';
+import { formHasProp } from '../../src/model/mdi';
 
 vi.mock('../../src/ui98/dialogs', async orig => ({ ...(await orig<typeof import('../../src/ui98/dialogs')>()), messageBox98: vi.fn() }));
 vi.mock('../../src/ide/propertyEditors', async orig => ({ ...(await orig<typeof import('../../src/ide/propertyEditors')>()), showFontDialog: vi.fn() }));
@@ -307,7 +308,7 @@ test.each(Object.keys(CONTROL_TYPES) as ControlType[])('%s: every design-time pr
   if (defs0.some(d => d.name === 'TabIndex')) add('Label', 6000);   // so that TabIndex + 1 is a free position (VB6 clamps)
   ide.setSelection({ formId: form().id, ids: id === 'form' ? [] : [id] });
   const target = () => (id === 'form' ? form() : form().controls.find(c => c.id === id)!);
-  const defs = CONTROL_TYPES[type].props.filter(d => d.designTime);
+  const defs = CONTROL_TYPES[type].props.filter(d => d.designTime && (type !== 'Form' || formHasProp({}, d.name)));   // not the MDI form's own
   expect(rowNames()).toEqual(['(Name)', ...[...defs.map(d => d.name), ...(id === 'form' ? [] : ['Index'])].sort((a, b) => a.localeCompare(b))]);
   for (const d of defs) {
     const where = `${type}.${d.name}`;

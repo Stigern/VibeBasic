@@ -47,12 +47,13 @@ function sameType(a: VBTypeName, b: VBTypeName): boolean {
   return false;
 }
 
-/** The message for `New T`, null when T can be made (a class module, a built-in class). Matches eval.ts objectFactory. */
-export function newProblem(t: VBTypeName, classes: ReadonlySet<string>): { message: string; hint: string } | null {
+/** The message for `New T`, null when T can be made: a class module or form of the project (`newable`), a built-in class.
+ *  Matches eval.ts objectFactory. */
+export function newProblem(t: VBTypeName, newable: ReadonlySet<string>): { message: string; hint: string } | null {
   if (typeof t === 'string' || 'userType' in t) return { message: 'Invalid use of New keyword', hint: 'Invalid use of New keyword' };
   const n = lc(t.objectType);
-  if (classes.has(n) || BUILTIN_CLASSES.has(n)) return null;
-  return { message: 'User-defined type not defined', hint: `User-defined type not defined: New ${t.objectType}. New makes an object of a class module of the project or a built-in class (Collection, Dictionary, ADODB.Recordset ...).` };
+  if (newable.has(n) || BUILTIN_CLASSES.has(n)) return null;
+  return { message: 'User-defined type not defined', hint: `User-defined type not defined: New ${t.objectType}. New makes an object of a class module or form of the project or a built-in class (Collection, Dictionary, ADODB.Recordset ...).` };
 }
 
 export function compileProblems(modules: CheckModule[], opts: CompileCheckOptions = {}): CompileProblem[] {
@@ -95,6 +96,8 @@ export function compileProblems(modules: CheckModule[], opts: CompileCheckOption
     globalOther.add(lc(m.name));
   }
   for (const m of modules) if (m.kind === 'form') globalOther.add(lc(m.name));
+  const formNames = new Set(modules.filter(m => m.kind === 'form').map(m => lc(m.name)));
+  const newable = new Set([...classes, ...formNames]);   // New Class1, New Form1 (another instance)
 
   for (const m of modules) {
     const moduleVars = new Map<string, VarInfo>(m.ast.variables.map(d => [lc(d.name), { type: resolveType(d.type, m), isArray: d.isArray }]));
@@ -103,7 +106,7 @@ export function compileProblems(modules: CheckModule[], opts: CompileCheckOption
     const report = (line: number, message: string, hint = message) => out.push({ module: m.name, line, message, hint });
     const newDecl = (d: VarDecl) => {
       if (!d.isNew) return;
-      const p = newProblem(resolveType(d.type, m), classes);
+      const p = newProblem(resolveType(d.type, m), newable);
       if (p) report(d.line, p.message, p.hint);
     };
     const events = new Set((m.ast.events ?? []).map(e => lc(e.name)));
@@ -177,7 +180,7 @@ export function compileProblems(modules: CheckModule[], opts: CompileCheckOption
       const expr = (e: Expr | MissingArg, line: number): void => {
         walkExpr(e, x => {
           if (x.kind === 'call') call(x.target, x.args, line);
-          else if (x.kind === 'new') { const p = newProblem(resolveType({ objectType: x.typeName }, m), classes); if (p) report(line, p.message, p.hint); }
+          else if (x.kind === 'new') { const p = newProblem(resolveType({ objectType: x.typeName }, m), newable); if (p) report(line, p.message, p.hint); }
         });
       };
       walkStmts(proc.body, s => {

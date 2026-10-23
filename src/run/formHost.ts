@@ -16,7 +16,8 @@ export interface FormWindow {
 }
 
 export interface FormHost {
-  openForm(s: FormSnapshot, o: { modal: boolean }): Promise<FormWindow>;
+  /** `mdiParent`: an MDI child, shown inside the workspace of that (open) MDI form's window, not in a window of its own. */
+  openForm(s: FormSnapshot, o: { modal: boolean; mdiParent?: string }): Promise<FormWindow>;
   messageBox(o: { prompt: string; title: string; buttons: number }): Promise<number>;
   inputBox(o: { prompt: string; title: string; defaultText: string }): Promise<string>;
   /** CommonDialog.ShowOpen / ShowSave: the Mac file dialog, opened from the main window. The chosen path (a list of them for `multiple`), null when cancelled. */

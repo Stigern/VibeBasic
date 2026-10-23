@@ -44,6 +44,13 @@ function isAsset(a: unknown): boolean {
   return isObject(a) && typeof a.mime === 'string' && typeof a.dataBase64 === 'string';
 }
 
+const WATCH_KINDS = new Set(['watch', 'breakTrue', 'breakChange']);
+function isWatch(w: unknown): boolean {
+  const nameOrNull = (v: unknown) => v === null || typeof v === 'string';
+  return isObject(w) && typeof w.expression === 'string' && w.expression.trim() !== '' && nameOrNull(w.module)
+    && nameOrNull(w.procedure) && WATCH_KINDS.has(w.kind as string);
+}
+
 function isProjectShape(o: Record<string, unknown>): boolean {
   return typeof o.name === 'string' && typeof o.title === 'string' && typeof o.startupForm === 'string'
     && Array.isArray(o.forms) && o.forms.every(isForm)
@@ -85,5 +92,9 @@ export function parseProject(text: string): Project {
   const project = rest as unknown as Project;
   // Old projects (no `components`) keep the components that existed before; a used component is always checked.
   project.components = loadedComponents(raw.components, project);
+  // watches (0.9): kept when well-formed, else dropped (they are only a debugging aid)
+  const watches = Array.isArray(raw.watches) ? raw.watches.filter(isWatch) as Project['watches'] : [];
+  if (watches?.length) project.watches = watches;
+  else delete project.watches;
   return project;
 }

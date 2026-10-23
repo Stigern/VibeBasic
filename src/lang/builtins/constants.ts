@@ -60,6 +60,9 @@ for (let i = 1; i <= 12; i++) c('vbKeyF' + i, 111 + i);
 // Shift masks and mouse buttons (event arguments)
 group({ vbShiftMask: 1, vbCtrlMask: 2, vbAltMask: 4, vbLeftButton: 1, vbRightButton: 2, vbMiddleButton: 4 });
 
+// PopupMenu flags
+group({ vbPopupMenuLeftAlign: 0, vbPopupMenuCenterAlign: 4, vbPopupMenuRightAlign: 8, vbPopupMenuLeftButton: 0, vbPopupMenuRightButton: 2 });
+
 // CheckBox / forms / comparison
 group({
   vbUnchecked: 0, vbChecked: 1, vbGrayed: 2,
@@ -144,6 +147,12 @@ group({
   tbrDefault: 0, tbrCheck: 1, tbrButtonGroup: 2, tbrSeparator: 3, tbrPlaceholder: 4, tbrDropdown: 5,
   tbrUnpressed: 0, tbrPressed: 1, tbrStandard: 0, tbrFlat: 1,
   vbAlignNone: 0, vbAlignTop: 1, vbAlignBottom: 2, vbAlignLeft: 3, vbAlignRight: 4,
+});
+
+// Forms: QueryUnload's UnloadMode; MDIForm.Arrange
+group({
+  vbFormControlMenu: 0, vbFormCode: 1, vbAppWindows: 2, vbAppTaskManager: 3, vbFormMDIForm: 4, vbFormOwner: 5,
+  vbCascade: 0, vbTileHorizontal: 1, vbTileVertical: 2, vbArrangeIcons: 3,
 });
 
 // DTPicker (Format) and MonthView (StartOfWeek)

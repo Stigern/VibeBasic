@@ -104,4 +104,7 @@ export interface Host {
   commandLine?(): string | Promise<string>;
   /** Environ: the process environment as NAME / value pairs in its order (absent: Environ gives ""). */
   environment?(): readonly (readonly [string, string])[] | Promise<readonly (readonly [string, string])[]>;
+  /** `New T` of a host class (`Set f = New Form1`: a new instance of a form): what makes one, undefined for a name it does not
+   *  know. Asked when the New is reached (or the `As New` variable is declared), so it must be cheap and make nothing yet. */
+  objectFactory?(typeName: string): (() => VBObject) | undefined;
 }

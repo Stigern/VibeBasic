@@ -2,6 +2,7 @@ import { expect, test } from 'vitest';
 import { autoFixEventNames, validateCode } from '../../src/ai/validate';
 import { describeProjectSymbols } from '../../src/ai/context';
 import { newControl, newForm, newProject } from '../../src/model/controls';
+import { newMdiForm } from '../../src/model/mdi';
 
 const form = () => {
   const f = newProject().forms[0];
@@ -448,4 +449,14 @@ test('validateCode: drag and drop events, DataObject members, Drag / OLEDrag and
     + '    If Data.GetFormat(vbCFFiles) Then Caption = Data.Files(1) & Data.Files.Count\n    Effect = vbDropEffectCopy\n    Picture1.OLEDrag\n'
     + '    Picture1.DragMode = vbAutomatic\n    Picture1.OLEDropMode = vbOLEDropManual\nEnd Sub';
   expect(validateCode(code, { moduleName: 'Form1', form: f })).toEqual([]);
+});
+
+test('MDI: MDIForm_ events on the MDI form, New of a form, ActiveForm and Arrange', () => {
+  const p = newProject();
+  const mdi = newMdiForm('MDIForm1');
+  p.forms.push(mdi);
+  const check = (code: string) => validateCode(code, { moduleName: 'MDIForm1', form: mdi, project: p });
+  expect(check('Private Sub MDIForm_Load()\n    Dim f As New Form1\n    f.Show\n    Me.Arrange vbCascade\n    Debug.Print Me.ActiveForm.Name\nEnd Sub')).toEqual([]);
+  expect(check('Private Sub Form_Load()\nEnd Sub').join()).toContain('MDIForm_Load');
+  expect(check('Private Sub MDIForm_KeyPress(KeyAscii As Integer)\nEnd Sub').join()).toContain('no KeyPress event');
 });

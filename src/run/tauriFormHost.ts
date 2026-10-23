@@ -91,6 +91,8 @@ export class TauriFormHost implements FormHost {
   private openDialogs = 0;
   /** Open form windows in opening order (owner candidates for dialogs and modal forms). */
   private order: { label: string; visible: boolean }[] = [];
+  /** Open form windows by key: how to send to one, and the listeners of the MDI children it shows (by child key). */
+  private formWindows = new Map<string, { post(m: ToWindow): void; children: Map<string, (m: FromWindow) => void> }>();
 
   constructor(private glue: TauriGlue = tauriGlue) {}
 
@@ -140,7 +142,8 @@ export class TauriFormHost implements FormHost {
     if (this.closing.get(label) === p) this.closing.delete(label);
   }
 
-  async openForm(s: FormSnapshot, o: { modal: boolean }): Promise<FormWindow> {
+  async openForm(s: FormSnapshot, o: { modal: boolean; mdiParent?: string }): Promise<FormWindow> {
+    if (o.mdiParent !== undefined) return this.openChild(s, o.mdiParent);
     const label = `vbform-${s.key}`;
     await this.closing.get(label);
     await this.ensureListening();
@@ -152,10 +155,13 @@ export class TauriFormHost implements FormHost {
     const slot = { label, visible: true };
     this.order.push(slot);
     const w = { apply: () => ch.post('vb:to', { t: 'blocked', blocked: sessionBlocked || this.openDialogs > 0 } satisfies ToWindow) };
+    const fw = { post: (m: ToWindow) => ch.post('vb:to', m), children: new Map<string, (m: FromWindow) => void>() };
+    this.formWindows.set(s.key, fw);
     this.entries.set(s.key, {
       hello: () => ch.open(['vb:snapshot', s]),
       from: p => {
         if (!p.m) return;
+        if (p.m.t === 'mdiFrom') { fw.children.get(p.m.key)?.(p.m.m); return; }
         if (listeners.length) for (const l of listeners) l(p.m); else early.push(p.m);
       },
     });
@@ -164,6 +170,7 @@ export class TauriFormHost implements FormHost {
       if (closed) return;
       closed = true;
       this.entries.delete(s.key);
+      if (this.formWindows.get(s.key) === fw) this.formWindows.delete(s.key);
       this.forms.delete(w);
       this.order = this.order.filter(x => x !== slot);
       if (this.forms.size === 0) this.cascade = 0;
@@ -186,6 +193,31 @@ export class TauriFormHost implements FormHost {
         if (m.t === 'show' || m.t === 'hide') slot.visible = m.t === 'show';
         if (m.t === 'blocked') { sessionBlocked = m.blocked; w.apply(); } else ch.post('vb:to', m);
       },
+      onMessage: cb => { listeners.push(cb); for (const m of early.splice(0)) cb(m); },
+      close,
+    };
+  }
+
+  /** An MDI child: no window of its own; the workspace in its MDI form's window shows it, and its messages go through that window. */
+  private async openChild(s: FormSnapshot, parentKey: string): Promise<FormWindow> {
+    const parent = this.formWindows.get(parentKey);
+    if (!parent) throw new Error(`MDI form ${parentKey} has no window`);
+    const listeners: ((m: FromWindow) => void)[] = [];
+    const early: FromWindow[] = [];
+    const listener = (m: FromWindow) => { if (listeners.length) for (const l of listeners) l(m); else early.push(m); };
+    parent.children.set(s.key, listener);
+    parent.post({ t: 'mdiOpen', snapshot: s });
+    let closed = false;
+    const close = async () => {
+      if (closed) return;
+      closed = true;
+      this.closers.delete(close);
+      if (parent.children.get(s.key) === listener) parent.children.delete(s.key);
+      parent.post({ t: 'mdiClose', key: s.key });
+    };
+    this.closers.add(close);
+    return {
+      send: m => { if (!closed) parent.post({ t: 'mdiTo', key: s.key, m }); },
       onMessage: cb => { listeners.push(cb); for (const m of early.splice(0)) cb(m); },
       close,
     };

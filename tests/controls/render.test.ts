@@ -661,7 +661,8 @@ describe('form surface', () => {
 describe('client-area helper', () => {
   test('Sizable: 4px border, 18px title bar', () => {
     const m = formMetrics({ Width: 4800, Height: 3600, BorderStyle: 2 });
-    expect(m).toEqual({ outerWidth: 320, outerHeight: 240, border: 4, titleHeight: 18, clientWidth: 312, clientHeight: 214 });
+    expect(m).toEqual({ outerWidth: 320, outerHeight: 240, border: 4, titleHeight: 18, menuHeight: 0, clientWidth: 312, clientHeight: 214 });
+    expect(formMetrics({ Width: 4800, Height: 3600, BorderStyle: 2 }, true)).toMatchObject({ menuHeight: 19, clientHeight: 195 });   // with a menu bar
   });
   test('other border styles: 3px; None: 0 and no title bar', () => {
     for (const bs of [1, 3, 4]) expect(formMetrics({ Width: 4800, Height: 3600, BorderStyle: bs }).border).toBe(3);
