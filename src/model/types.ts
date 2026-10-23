@@ -12,7 +12,8 @@ export type ControlType = 'Form' | 'CommandButton' | 'Label' | 'TextBox' | 'Chec
   | 'WebBrowser' | 'Inet' | 'Winsock'
   | 'MSChart'
   | 'MMControl' | 'MediaPlayer' | 'Agent'
-  | 'Data' | 'Adodc' | 'DataGrid' | 'DataList' | 'DataCombo';
+  | 'Data' | 'Adodc' | 'DataGrid' | 'DataList' | 'DataCombo'
+  | 'SSPanel' | 'SSCommand' | 'SSCheck' | 'SSOption' | 'SSFrame' | 'SSRibbon';
 export interface FontValue { name: string; size: number; bold: boolean; italic: boolean; underline: boolean }
 export interface PictureRef { asset: string }                 // key in Project.assets
 export type PropValue = string | number | boolean | string[] | FontValue | PictureRef | null;

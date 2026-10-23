@@ -80,10 +80,10 @@ describe('every control type', () => {
     const v = renderControl({ id: 'x', type, name: 'x', index: null, parentId: null, props: {} }, 'run', none);
     expect(v.el.dataset.controlId).toBe('x');
   });
-  test('Frame and PictureBox expose childHost; others do not', () => {
+  test('Frame, PictureBox, SSPanel and SSFrame expose childHost; others do not', () => {
     for (const t of ALL_TYPES) {
       const v = renderControl(mk(t), 'run', none);
-      expect(!!v.childHost).toBe(t === 'Frame' || t === 'PictureBox');
+      expect(!!v.childHost).toBe(t === 'Frame' || t === 'PictureBox' || t === 'SSPanel' || t === 'SSFrame');
     }
   });
   test('interactive element exposed as inputEl', () => {

@@ -5,7 +5,7 @@
 //  - every control is `div.vb-ctl.vb-<Type>.vb-<mode>[data-control-id]`, absolutely positioned in its parent host;
 //  - `inputEl` is the real interactive element (button / input / textarea / select, or the focusable scroll bar
 //    widget). In design mode it is inert (pointer-events: none, tabIndex -1). Plan 03 attaches DOM events to it;
-//  - Frame and PictureBox expose `childHost`; Form and PictureBox also own an empty `div.draw-layer` that the
+//  - Frame, PictureBox, SSPanel and SSFrame expose `childHost`; Form and PictureBox also own an empty `div.draw-layer` that the
 //    drawing methods of phase 6 will fill, below all child controls.
 import './controls.css';
 import { vbColorToCss } from '../model/colors';
@@ -22,6 +22,8 @@ import { agentControl } from './agent';
 import { dtPicker, maskedEdit, monthView } from './calendar';
 import { inetIcon, webBrowser, winsockIcon } from './webBrowser';
 import { dataBar, dataGrid } from './dataControls';
+import { ssCommand, ssFrame, ssPanel, ssRibbon } from './sheridan';
+import { font3dShadow } from '../model/sheridan';
 import { decodeRuns, encodeRuns, formatAt, readRuns, replaceRange, selectionOffsets, setSelectionOffsets, writeRuns, type Run, type RtfFormat, type RtfPatch } from './richText';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../model/types';
 import { h, mnemonicNodes } from '../ui98/dom';
@@ -245,6 +247,18 @@ function checkOrOption(c: Ctx, kind: 'checkbox' | 'radio'): Renderer {
         }
       }
       if (has(k, 'Alignment')) c.el.classList.toggle('vb-right', c.num('Alignment') === 1);
+    },
+  };
+}
+
+/** SSCheck and SSOption: the CheckBox / OptionButton look with a Boolean Value and Font3D on the caption. */
+function ssToggle(c: Ctx, kind: 'checkbox' | 'radio'): Renderer {
+  const base = checkOrOption(c, kind);
+  return {
+    ...base,
+    patch(k) {
+      base.patch(k);
+      if (has(k, 'Font3D')) c.el.querySelector<HTMLElement>('.vb-opt-text')!.style.textShadow = font3dShadow(c.num('Font3D'));
     },
   };
 }
@@ -1467,6 +1481,12 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   DataGrid: dataGrid,
   DataList: listBox,
   DataCombo: comboBox,
+  SSPanel: ssPanel,
+  SSCommand: ssCommand,
+  SSCheck: c => ssToggle(c, 'checkbox'),
+  SSOption: c => ssToggle(c, 'radio'),
+  SSFrame: ssFrame,
+  SSRibbon: ssRibbon,
 };
 
 // ---------------------------------------------------------------------------------------------------------------

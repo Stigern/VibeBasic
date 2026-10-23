@@ -6,6 +6,7 @@
 
 import { renderFormSurface, type ControlView } from '../controls/render';
 import { encodeRuns, readRuns } from '../controls/richText';
+import { ribbonClick } from '../model/sheridan';
 import { userClickButton } from '../model/toolbar';
 import type { ControlDef, PropValue } from '../model/types';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
@@ -13,7 +14,7 @@ import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 type Props = Record<string, PropValue>;
 type Target = { id: string; def: ControlDef | null };
 
-const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'Toolbar', 'DTPicker', 'MSChart', 'TreeView', 'ListView', 'MSFlexGrid', 'RichTextBox', 'DataGrid']);
+const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'Toolbar', 'DTPicker', 'MSChart', 'TreeView', 'ListView', 'MSFlexGrid', 'RichTextBox', 'DataGrid', 'SSPanel', 'SSFrame', 'SSCommand']);
 const KEY_CODES: Record<string, number> = {
   Backspace: 8, Tab: 9, Enter: 13, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34, End: 35, Home: 36,
   ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46,
@@ -138,6 +139,24 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
         if (d.type === 'OptionButton' && d.id !== tg.id && d.parentId === tg.def!.parentId) { apply(d.id, { Value: false }); send({ t: 'state', id: d.id, props: { Value: false } }); }
       }
       if (was) apply(tg.id, { Value: true }); else emit(tg.id, 'Click', [], { Value: true });
+    } else if (type === 'SSCheck') {   // Click(Value As Integer): the new Value, True = -1
+      const now = state.get(tg.id)!.Value !== true;
+      emit(tg.id, 'Click', [now ? -1 : 0], { Value: now });
+    } else if (type === 'SSOption') {
+      const was = state.get(tg.id)!.Value === true;
+      for (const d of defs.values()) {
+        if (d.type === 'SSOption' && d.id !== tg.id && d.parentId === tg.def!.parentId && state.get(d.id)!.Value === true) {
+          apply(d.id, { Value: false }); send({ t: 'state', id: d.id, props: { Value: false } });
+        }
+      }
+      if (was) apply(tg.id, { Value: true }); else emit(tg.id, 'Click', [-1], { Value: true });
+    } else if (type === 'SSRibbon') {   // a toggle; ribbons of one container with the same GroupNumber (above 0) release each other
+      const me = state.get(tg.id)!, group = Number(me.GroupNumber) || 0;
+      const down = group > 0 ? [...defs.values()].filter(d => d.type === 'SSRibbon' && d.id !== tg.id && d.parentId === tg.def!.parentId
+        && (Number(state.get(d.id)!.GroupNumber) || 0) === group && state.get(d.id)!.Value === true).map(d => d.id) : [];
+      const r = ribbonClick({ value: me.Value === true, group, allowAllUp: me.GroupAllowAllUp !== false }, down);
+      for (const id of r.release) { apply(id, { Value: false }); send({ t: 'state', id, props: { Value: false } }); }
+      emit(tg.id, 'Click', [r.value ? -1 : 0], { Value: r.value });
     }
   });
   on<MouseEvent>('dblclick', e => { const tg = clickTarget(e); if (!blocked && tg && usable(tg.id)) emit(tg.id, 'DblClick'); });

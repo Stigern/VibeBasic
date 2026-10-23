@@ -28,6 +28,7 @@ export const COMPONENTS: readonly ComponentDef[] = [
   { file: 'MSADODC.OCX', name: 'Microsoft ADO Data Control 6.0 (SP6) (OLEDB)' },
   { file: 'MSDATGRD.OCX', name: 'Microsoft DataGrid Control 6.0 (SP6) (OLEDB)' },
   { file: 'MSDATLST.OCX', name: 'Microsoft DataList Controls 6.0 (SP6) (OLEDB)' },
+  { file: 'THREED32.OCX', name: 'Sheridan 3D Controls' },
   { file: 'AGENTCTL.DLL', name: 'Microsoft Agent Control 2.0', dir: 'C:\\WINDOWS\\MSAGENT' },
 ];
 

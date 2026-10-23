@@ -66,6 +66,18 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
     + '<path d="M11.500 9v4c0 .6 1 1 2 1s2-.4 2-1V9" fill="#ffff80" stroke="#000"/><ellipse cx="13.500" cy="9" rx="2" ry=".8" fill="#ffffc0" stroke="#000"/>'),
   DataCombo: svg(box(0, 2, 13, 8) + '<rect x="9" y="3" width="3" height="6" fill="#c0c0c0"/><path d="M9.500 5.500h2L10.500 7.500z" fill="#000"/>'
     + '<path d="M2 6h5" stroke="#000"/><path d="M11.500 10v4c0 .6 1 1 2 1s2-.4 2-1v-4" fill="#ffff80" stroke="#000"/><ellipse cx="13.500" cy="10" rx="2" ry=".8" fill="#ffffc0" stroke="#000"/>'),
+  SSPanel: svg('<rect x="1" y="3" width="14" height="10" fill="#c0c0c0"/><path d="M1.500 12.500V3.500h13" stroke="#fff" fill="none"/><path d="M14.500 3.500v9h-13" stroke="#808080" fill="none"/>'
+    + '<rect x="3" y="6" width="5" height="4" fill="#000080"/><path d="M9 8h4" stroke="#000"/>'),
+  SSCommand: svg('<rect x="1" y="3" width="14" height="10" fill="#c0c0c0" stroke="#000"/><path d="M2 12V4h11" stroke="#fff" fill="none"/><path d="M13.500 4v8h-11" stroke="#808080" fill="none"/>'
+    + '<rect x="4" y="6" width="3" height="4" fill="#008080"/><path d="M8 8h4" stroke="#000"/>'),
+  SSCheck: svg('<rect x="2" y="2" width="11" height="11" fill="#c0c0c0"/><path d="M2.500 12.500v-10h10" stroke="#fff" fill="none"/><path d="M12.500 2.500v10h-10" stroke="#808080" fill="none"/>'
+    + '<rect x="4" y="4" width="7" height="7" fill="#fff" stroke="#000"/><path d="M5 7.500l2 2 3-4" stroke="#008000" fill="none" stroke-width="1.500"/>'),
+  SSOption: svg('<circle cx="8" cy="8" r="6.500" fill="#c0c0c0" stroke="#808080"/><path d="M3.500 4.500A6 6 0 0 1 11.500 2.500" stroke="#fff" fill="none"/>'
+    + '<circle cx="8" cy="8" r="3.500" fill="#fff" stroke="#000"/><circle cx="8" cy="8" r="1.500" fill="#008000"/>'),
+  SSFrame: svg('<rect x="1.500" y="4.500" width="13" height="9" fill="none" stroke="#808080"/><path d="M2.500 13.500V5.500h12" stroke="#fff" fill="none"/>'
+    + '<rect x="3" y="2" width="6" height="5" fill="#c0c0c0"/><path d="M4 4.500h4" stroke="#000"/>'),
+  SSRibbon: svg('<rect x="2" y="2" width="12" height="12" fill="#c0c0c0"/><path d="M2.500 13.500v-11h11" stroke="#fff" fill="none"/><path d="M13.500 2.500v11h-11" stroke="#808080" fill="none"/>'
+    + '<path d="M5 11V5l3 3 3-3v6" stroke="#0000c0" fill="none" stroke-width="1.500"/>'),
   Agent: svg('<rect x="1.500" y="0.500" width="9" height="6" rx="2" fill="#ffffe1" stroke="#000"/><path d="M4 6.500l-1 2.500 3-2.500" fill="#ffffe1" stroke="#000"/>'
     + box(6, 8, 9, 7, '#c0c0c0') + '<rect x="7" y="9" width="7" height="4" fill="#000080"/><rect x="8" y="10" width="1" height="1" fill="#00ffff"/><rect x="12" y="10" width="1" height="1" fill="#00ffff"/>'
     + '<rect x="10" y="6" width="1" height="2" fill="#ff0000"/>'),

@@ -96,6 +96,11 @@ group({ sbrNormal: 0, sbrSimple: 1, sbrText: 0, sbrLeft: 0, sbrCenter: 1, sbrRig
 // SSTab
 group({ ssStyleTabbedDialog: 0, ssStylePropertyPage: 1 });
 
+// Sheridan 3D Controls (THREED32.OCX): SSPanel Alignment
+group({
+  ssLeftTop: 0, ssLeftMiddle: 1, ssLeftBottom: 2, ssRightTop: 3, ssRightMiddle: 4, ssRightBottom: 5, ssCenterTop: 6, ssCenterMiddle: 7, ssCenterBottom: 8,
+});
+
 // Toolbar (Button.Style, Button.Value, Toolbar.Style) and Align
 group({
   tbrDefault: 0, tbrCheck: 1, tbrButtonGroup: 2, tbrSeparator: 3, tbrPlaceholder: 4, tbrDropdown: 5,
