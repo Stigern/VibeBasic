@@ -7,7 +7,7 @@ test('About shows the version and the rendered changelog', async () => {
   const done = showAbout(document);
   const dlg = document.querySelector('.dlg98')!;
   expect(dlg.textContent).toContain('VibeBasic');
-  expect(dlg.textContent).toContain('Version 0.7.0');
+  expect(dlg.textContent).toContain(`Version ${__APP_VERSION__}`);
   expect(dlg.textContent).toContain('Changelog');
   const log = dlg.querySelector('.about98-log')!;
   expect(log.textContent).toContain('• Movable and resizable toolbox.');

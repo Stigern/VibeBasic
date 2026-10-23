@@ -2,6 +2,14 @@
 
 All notable changes to VibeBasic. Format follows Keep a Changelog.
 
+## [0.7.5] - 2026-10-23
+
+### Changed
+- The AI knows the language: a compact reference card, generated from VibeBasic's own built-in functions, statements and constants, is part of the fixed system prompt.
+- The AI knows the project: public procedures, variables and other forms' controls are sent with each request, so it can call your own code.
+- The size limit for code sent to the AI follows the server's real context (read from the model list on Test Connection); servers that do not report it keep the 400-line rule.
+- With code selected in the code window, Ask AI works on the selection, and a body-only answer replaces just the selection.
+
 ## [0.7.0] - 2026-10-23
 
 ### Added
