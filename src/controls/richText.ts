@@ -3,17 +3,17 @@
 // so a span never nests in another and an attribute that is switched off really is off. Text offsets are offsets in
 // textContent (line breaks are "\n" characters), which is what Text, SelStart and SelLength count.
 
-export interface RtfFormat { bold: boolean; italic: boolean; underline: boolean; color: number; fontName: string; fontSize: number }
+export interface RtfFormat { bold: boolean; italic: boolean; underline: boolean; strike: boolean; color: number; fontName: string; fontSize: number }
 export type RtfPatch = Partial<RtfFormat>;
 export interface Run { text: string; fmt: RtfPatch }
 
-export const RTF_KEYS: readonly (keyof RtfFormat)[] = ['bold', 'italic', 'underline', 'color', 'fontName', 'fontSize'];
-const DATA: Record<keyof RtfFormat, string> = { bold: 'vbBold', italic: 'vbItalic', underline: 'vbUnderline', color: 'vbColor', fontName: 'vbFontName', fontSize: 'vbFontSize' };
+export const RTF_KEYS: readonly (keyof RtfFormat)[] = ['bold', 'italic', 'underline', 'strike', 'color', 'fontName', 'fontSize'];
+const DATA: Record<keyof RtfFormat, string> = { bold: 'vbBold', italic: 'vbItalic', underline: 'vbUnderline', strike: 'vbStrike', color: 'vbColor', fontName: 'vbFontName', fontSize: 'vbFontSize' };
 
 const sameFmt = (a: RtfPatch, b: RtfPatch): boolean => RTF_KEYS.every(k => a[k] === b[k]);
 const encode = (v: string | number | boolean): string => (typeof v === 'boolean' ? (v ? '1' : '0') : String(v));
 function decode(k: keyof RtfFormat, v: string): string | number | boolean {
-  if (k === 'bold' || k === 'italic' || k === 'underline') return v === '1';
+  if (k === 'bold' || k === 'italic' || k === 'underline' || k === 'strike') return v === '1';
   return k === 'color' || k === 'fontSize' ? Number(v) : v;
 }
 
@@ -54,19 +54,108 @@ export function decodeRuns(text: string): Run[] | null {
 /** The text of the runs. */
 export const runsText = (runs: Run[]): string => runs.map(r => r.text).join('');
 
-/** Replaces the content of `root` by the runs; `style` sets the inline style of a span from its format. */
-export function writeRuns(root: HTMLElement, runs: Run[], style: (el: HTMLElement, fmt: RtfPatch) => void): void {
+/** Replaces the content of `root` by the runs; `style` sets the inline style of a span from its format. With paragraph formats the
+ *  paragraphs become block elements (each holds its text including its closing "\n", so textContent is the same either way). */
+export function writeRuns(root: HTMLElement, runs: Run[], style: (el: HTMLElement, fmt: RtfPatch) => void, paras: Paras = []): void {
   const doc = root.ownerDocument;
-  const nodes: Node[] = [];
-  for (const r of mergeRuns(runs)) {
-    if (RTF_KEYS.every(k => r.fmt[k] === undefined)) { nodes.push(doc.createTextNode(r.text)); continue; }
+  const make = (r: Run): Node => {
+    if (RTF_KEYS.every(k => r.fmt[k] === undefined)) return doc.createTextNode(r.text);
     const span = doc.createElement('span');
     for (const k of RTF_KEYS) if (r.fmt[k] !== undefined) span.dataset[DATA[k]] = encode(r.fmt[k]!);
     style(span, r.fmt);
     span.textContent = r.text;
-    nodes.push(span);
+    return span;
+  };
+  const merged = mergeRuns(runs);
+  if (!paras.some(f => !isDefaultPara(f))) { root.replaceChildren(...merged.map(make)); return; }
+  const groups: Node[][] = [[]];
+  for (const r of merged) {
+    for (let rest = r.text; rest !== '';) {
+      const i = rest.indexOf('\n');
+      groups[groups.length - 1].push(make({ text: i < 0 ? rest : rest.slice(0, i + 1), fmt: r.fmt }));
+      rest = i < 0 ? '' : rest.slice(i + 1);
+      if (i >= 0) groups.push([]);
+    }
   }
-  root.replaceChildren(...nodes);
+  root.replaceChildren(...groups.flatMap((g, i) => (g.length ? [paraElement(doc, g, paras[i] ?? {})] : [])));
+}
+
+function paraElement(doc: Document, nodes: Node[], f: ParaFmt): HTMLElement {
+  const el = doc.createElement('div');
+  el.className = 'vb-para';
+  const indent = f.indent ?? 0, hang = f.hanging ?? 0, right = f.rightIndent ?? 0;
+  if (f.align) { el.style.textAlign = f.align === 1 ? 'right' : 'center'; el.dataset.vbAlign = String(f.align); }
+  if (f.bullet) el.dataset.vbBullet = '1';
+  if (indent + hang > 0 || f.bullet) el.style.paddingLeft = `${Math.max(0, indent + hang) / 15}px`;
+  if (hang !== 0) el.style.textIndent = `${-hang / 15}px`;
+  if (right > 0) el.style.paddingRight = `${right / 15}px`;
+  el.append(...nodes);
+  return el;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Paragraph formats: kept by paragraph number (paragraphs end at "\n"), only what differs from the default.
+
+/** Alignment 0 left, 1 right, 2 center (rtfLeft, rtfRight, rtfCenter); the indents are in twips. */
+export interface ParaFmt { align?: number; bullet?: boolean; indent?: number; rightIndent?: number; hanging?: number }
+export type Paras = ParaFmt[];
+export const PARA_KEYS: readonly (keyof ParaFmt)[] = ['align', 'bullet', 'indent', 'rightIndent', 'hanging'];
+
+export const isDefaultPara = (f: ParaFmt | undefined): boolean => !f || PARA_KEYS.every(k => !f[k]);
+
+/** The paragraph formats without defaults and without trailing default paragraphs. */
+export function trimParas(paras: Paras): Paras {
+  const out = paras.map(f => (isDefaultPara(f) ? {} : { ...f }));
+  while (out.length && isDefaultPara(out[out.length - 1])) out.pop();
+  return out;
+}
+
+export const encodeParas = (paras: Paras): string => { const t = trimParas(paras); return t.length ? JSON.stringify(t) : ''; };
+
+export function decodeParas(text: string): Paras {
+  if (text === '') return [];
+  try { const a = JSON.parse(text) as unknown; return Array.isArray(a) ? a.map(x => ({ ...(x as ParaFmt) })) : []; } catch { return []; }
+}
+
+/** The paragraph (0-based) that holds the character offset. */
+export function paraIndexAt(text: string, offset: number): number {
+  let n = 0;
+  for (let i = text.indexOf('\n'); i >= 0 && i < offset; i = text.indexOf('\n', i + 1)) n++;
+  return n;
+}
+
+/** The first and last paragraph of a selection (a selection that ends with a line break does not reach the next paragraph). */
+export function paraSpan(text: string, start: number, length: number): [number, number] {
+  const end = length > 0 && text[start + length - 1] === '\n' ? start + length - 1 : start + length;
+  return [paraIndexAt(text, start), paraIndexAt(text, Math.max(start, end))];
+}
+
+/** Sets `patch` on the paragraphs of the selection. */
+export function formatParas(paras: Paras, text: string, start: number, length: number, patch: ParaFmt): Paras {
+  const [a, b] = paraSpan(text, start, length);
+  const out = paras.slice();
+  for (let i = a; i <= b; i++) out[i] = { ...(out[i] ?? {}), ...patch };
+  for (let i = 0; i < out.length; i++) out[i] ??= {};
+  return trimParas(out);
+}
+
+/** The paragraph formats after the text changed from `oldText` to `newText`: what was replaced is found from the common start and end;
+ *  line breaks that go away take the paragraphs after them, new ones copy the format of the paragraph they were typed in. */
+export function adjustParas(paras: Paras, oldText: string, newText: string): Paras {
+  if (!paras.length || oldText === newText) return paras;
+  let p = 0;
+  const max = Math.min(oldText.length, newText.length);
+  while (p < max && oldText[p] === newText[p]) p++;
+  let q = 0;
+  while (q < max - p && oldText[oldText.length - 1 - q] === newText[newText.length - 1 - q]) q++;
+  const count = (t: string) => { let n = 0; for (const c of t) if (c === '\n') n++; return n; };
+  const removed = count(oldText.slice(p, oldText.length - q)), added = count(newText.slice(p, newText.length - q));
+  const at = paraIndexAt(oldText, p);
+  const out = paras.slice();
+  for (let i = 0; i < out.length; i++) out[i] ??= {};
+  while (out.length <= at) out.push({});
+  out.splice(at + 1, removed, ...Array.from({ length: added }, () => ({ ...out[at] })));
+  return trimParas(out);
 }
 
 function mergeRuns(runs: Run[]): Run[] {
@@ -137,6 +226,23 @@ export function replaceRange(runs: Run[], start: number, length: number, text: s
   const f = fmt ?? formatAt(runs, start, length);
   const rs = splitAt(splitAt(runs, start), start + length);
   return [...slice(rs, 0, start), { text, fmt: f }, ...slice(rs, start + length, n)];
+}
+
+/** The runs of the characters [start, start + length). */
+export function runsBetween(runs: Run[], start: number, length: number): Run[] {
+  const n = total(runs);
+  start = Math.min(Math.max(0, start), n);
+  const end = Math.min(start + Math.max(0, length), n);
+  return slice(splitAt(splitAt(runs, start), end), start, end);
+}
+
+/** Replaces [start, start + length) by runs of their own. */
+export function replaceRuns(runs: Run[], start: number, length: number, ins: Run[]): Run[] {
+  const n = total(runs);
+  start = Math.min(Math.max(0, start), n);
+  length = Math.min(Math.max(0, length), n - start);
+  const rs = splitAt(splitAt(runs, start), start + length);
+  return [...slice(rs, 0, start), ...ins, ...slice(rs, start + length, n)];
 }
 
 // ---------------------------------------------------------------------------------------------------------------

@@ -117,6 +117,8 @@ export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, 
   openFileDialog(filters: FileFilter[]): Promise<string | null>;
   /** Generic open dialog (CommonDialog.ShowOpen): `filters` in the order shown (the first is selected), `initDir` '' for the default folder. Null when cancelled. An extension `*` means every file. */
   showOpenDialog(filters: FileFilter[], title: string, initDir: string): Promise<string | null>;
+  /** CommonDialog.ShowOpen with cdlOFNAllowMultiselect: the same, for one or more files (the full paths, in the order the dialog gives them). */
+  showOpenMultipleDialog(filters: FileFilter[], title: string, initDir: string): Promise<string[] | null>;
   /** Generic save dialog (CommonDialog.ShowSave). `defaultName` is the file name suggested ('' for none). Null when cancelled. */
   showSaveDialog(filters: FileFilter[], title: string, initDir: string, defaultName?: string): Promise<string | null>;
   /** DriveListBox: the startup disk "/" first, then /Volumes/*. */

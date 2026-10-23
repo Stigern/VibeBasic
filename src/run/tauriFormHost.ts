@@ -231,7 +231,7 @@ export class TauriFormHost implements FormHost {
   }
 
   /** ShowOpen / ShowSave: the Mac dialog opens from this (main) window; the form windows ignore input meanwhile. */
-  async fileDialog(o: FileDialogRequest): Promise<string | null> {
+  async fileDialog(o: FileDialogRequest): Promise<string | string[] | null> {
     if (this.openDialogs++ === 0) for (const f of this.forms) f.apply();
     try {
       return await runFileDialog(getBackend(), o);

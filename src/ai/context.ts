@@ -75,6 +75,8 @@ export function describeControlTypes(): string {
     + ' A ListView\'s ColumnHeaders are lines "Text|Key|Width|Alignment(0 left, 1 right, 2 center)"; Nodes, ListItems and the cells of an MSFlexGrid (TextMatrix) are filled by code at run time.'
     + ' A CommonDialog is invisible at run time and has only Left and Top (no Width, Height, Enabled, TabIndex) and no Move, SetFocus, Refresh or ZOrder; code opens it with ShowOpen, ShowSave, ShowColor, ShowFont or ShowPrinter (ShowHelp does not work).'
     + ' Its Filter looks like "Text (*.txt)|*.txt|All (*.*)|*.*".'
+    + ' With Flags = cdlOFNAllowMultiselect Or cdlOFNExplorer, FileName is the folder, Chr(0), then the names separated by Chr(0); DefaultExt is added to a ShowSave name.'
+    + ' A RichTextBox formats with SelBold, SelColor, SelAlignment ... and reads or writes RTF with TextRTF and SelRTF; LoadFile path[, rtfText] and SaveFile path[, rtfText] use a file; Find(text, [start], [end], [options]) selects the match and returns its position (-1 if none).'
     + ' DriveListBox, DirListBox and FileListBox show the Mac\'s volumes, folders and files: Drive1.Drive is the path of a volume ("/" is the startup disk), Dir1.Path a folder, File1.Pattern "*.txt;*.bas".'
     + ' The usual link is Drive1_Change: Dir1.Path = Drive1.Drive, and Dir1_Change: File1.Path = Dir1.Path; File1.FileName is the selected file. The lists are filled asynchronously, so a read of ListCount or List(i) waits for the folder.'
     + ' An SSTab is a container with Tabs tabs (Tab is the current one, 0-based); TabCaption is one caption per line. A control added with "container" set to an SSTab goes on the tab given by "tab" (0-based, default the current tab); Top must leave room for the tabs (TabHeight, 520).'

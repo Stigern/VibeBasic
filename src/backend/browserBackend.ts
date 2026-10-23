@@ -216,6 +216,12 @@ export class BrowserBackend implements Backend {
     return this.ask(`${title || 'Open'} (file name${ext ? ', ' + ext : ''}):`, initDir ? `${initDir.replace(/\/+$/, '')}/` : '');
   }
 
+  /** The browser has no dialog: the names are asked for in one prompt, separated by `;`. */
+  async showOpenMultipleDialog(filters: FileFilter[], title: string, initDir: string): Promise<string[] | null> {
+    const r = await this.showOpenDialog(filters, title, initDir);
+    return r === null ? null : r.split(';').map(x => x.trim()).filter(Boolean);
+  }
+
   async showSaveDialog(_filters: FileFilter[], title: string, initDir: string, defaultName = ''): Promise<string | null> {
     return this.ask(`${title || 'Save as'} (file name):`, initDir ? `${initDir.replace(/\/+$/, '')}/${defaultName}` : defaultName);
   }

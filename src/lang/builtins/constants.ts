@@ -111,14 +111,18 @@ group({
   flexAlignCenterBottom: 5, flexAlignRightTop: 6, flexAlignRightCenter: 7, flexAlignRightBottom: 8, flexAlignGeneral: 9,
 });
 
-// CommonDialog (Flags are stored but not used) and RichTextBox
+// CommonDialog (cdlOFNAllowMultiselect and cdlOFNExplorer are honoured, the other Flags are stored) and RichTextBox
 group({
   cdlCancel: 32755,
   cdlOFNReadOnly: 0x1, cdlOFNOverwritePrompt: 0x2, cdlOFNHideReadOnly: 0x4, cdlOFNNoChangeDir: 0x8, cdlOFNAllowMultiselect: 0x200,
   cdlOFNPathMustExist: 0x800, cdlOFNFileMustExist: 0x1000, cdlOFNCreatePrompt: 0x2000, cdlOFNExplorer: 0x80000,
   cdlCCRGBInit: 0x1, cdlCCFullOpen: 0x2, cdlCCPreventFullOpen: 0x4,
   cdlCFScreenFonts: 0x1, cdlCFPrinterFonts: 0x2, cdlCFBoth: 0x3, cdlCFEffects: 0x100,
+  cdlOFNNoValidate: 0x100, cdlOFNExtensionDifferent: 0x400, cdlOFNNoNetworkButton: 0x20000, cdlOFNLongNames: 0x200000,
+  cdlCCHelpButton: 0x8, cdlCFANSIOnly: 0x400, cdlCFNoSimulations: 0x1000, cdlCFLimitSize: 0x2000, cdlCFFixedPitchOnly: 0x4000,
+  cdlCFWYSIWYG: 0x8000, cdlCFForceFontExist: 0x10000, cdlCFScalableOnly: 0x20000, cdlCFTTOnly: 0x40000, cdlCFNoFaceSel: 0x80000,
   rtfNone: 0, rtfHorizontal: 1, rtfVertical: 2, rtfBoth: 3,
+  rtfRTF: 0, rtfText: 1, rtfLeft: 0, rtfRight: 1, rtfCenter: 2, rtfWholeWord: 2, rtfMatchCase: 4, rtfNoHighlight: 8,
 });
 
 // StatusBar / TabStrip

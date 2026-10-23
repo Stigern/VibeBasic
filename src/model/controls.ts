@@ -479,14 +479,16 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     events: [evClick(), evDbl(), ev('RowColChange'), ev('SelChange'), ...evFocus(), ...evKeys(), ...evMouse()],
   }),
   // Invisible at run time, like Timer (Left and Top only). ShowOpen / ShowSave / ShowColor / ShowFont / ShowPrinter are run by the run
-  // session; ShowHelp is not supported (438). FileTitle is run-time only.
+  // session; ShowHelp is not supported (438). FileTitle is run-time only. Flags: cdlOFNAllowMultiselect (with cdlOFNExplorer FileName is
+  // "folder" & Chr(0) & "a" & Chr(0) & "b"), cdlCCRGBInit (Color is the first colour) and the print flags are used; MaxFileSize and the
+  // other Flags are stored. DefaultExt is added to a ShowSave name without extension.
   CommonDialog: def({
     type: 'CommonDialog', component: 'COMDLG32.OCX', namePrefix: 'CommonDialog', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true, toolboxTooltip: 'CommonDialog',
     defaultEvent: '', defaultMember: null,
     props: [
       int('Left', 0), int('Top', 0), str('Tag'),
       str('FileName'), rt('FileTitle', 'string', ''), str('Filter'), int('FilterIndex', 1, { min: 0 }),
-      str('DialogTitle'), str('InitDir'), int('Flags', 0),
+      str('DialogTitle'), str('InitDir'), int('Flags', 0), str('DefaultExt'), int('MaxFileSize', 260, { min: 1, max: 32767 }),
       color('Color', 0), str('FontName', 'MS Sans Serif'), int('FontSize', 8, { min: 1, max: 999 }),
       bool('FontBold', false), bool('FontItalic', false), bool('FontUnderline', false),
       bool('CancelError', false),
@@ -500,7 +502,8 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
   }),
 
-  // Text is plain text; the formatting of the selection is run-time only (SelBold ...). The window reports SelStart, SelLength and the Sel* format.
+  // Text is plain text; the formatting (SelBold ..., the paragraph formats SelAlignment ...) is run-time only and reaches RTF through TextRTF, SelRTF,
+  // LoadFile and SaveFile. The window reports SelStart, SelLength and the Sel* format.
   RichTextBox: def({
     type: 'RichTextBox', component: 'RICHTX32.OCX', namePrefix: 'RichTextBox', defaultWidth: 2415, defaultHeight: 975, toolboxTooltip: 'RichTextBox',
     defaultEvent: 'Change', defaultMember: 'Text',
@@ -511,8 +514,16 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       rt('SelStart', 'int', 0), rt('SelLength', 'int', 0), rt('SelText', 'string', ''),
       rt('SelBold', 'bool', false), rt('SelItalic', 'bool', false), rt('SelUnderline', 'bool', false),
       rt('SelColor', 'color', WIN_TEXT), rt('SelFontName', 'string', 'MS Sans Serif'), rt('SelFontSize', 'int', 8),
+      rt('SelStrikeThru', 'bool', false), rt('SelAlignment', 'int', 0), rt('SelBullet', 'bool', false), rt('SelIndent', 'int', 0),
+      rt('SelRightIndent', 'int', 0), rt('SelHangingIndent', 'int', 0), rt('SelCharOffset', 'int', 0), int('RightMargin', 0, { min: 0 }),
+      rt('TextRTF', 'string', ''), rt('SelRTF', 'string', ''),
     ],
     events: [evChange(), ev('SelChange'), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse()],
+    methods: [
+      ...baseMethods(), { name: 'LoadFile', params: 'FileName As String, [FileType]' }, { name: 'SaveFile', params: 'FileName As String, [FileType]' },
+      { name: 'Find', params: 'Str As String, [Start], [End], [Options]' }, { name: 'Span', params: 'Characters As String, [Forward], [Negate]' },
+      { name: 'UpTo', params: 'Characters As String, [Forward], [Negate]' }, { name: 'GetLineFromChar', params: 'CharPos As Long' },
+    ],
   }),
   // The drives, folders and files come from the backend at run time. Drive is the path of a volume ("/" is the startup disk);
   // Drives ('path|name' lines), and a folder / file list (the full paths of the sub-folders, the file names) are the window's data.

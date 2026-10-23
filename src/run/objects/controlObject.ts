@@ -5,7 +5,10 @@ import type { GraphicsCall, OutSlot, VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
 import { Empty, Nothing, Null, NullT, coerce, isDate, isObject, toBool, toStr, type VBDate, type VBRef, type VBValue } from '../../lang/values';
 import { CONTROL_TYPES, getPropDef, type PropDef } from '../../model/controls';
-import { decodeRuns, encodeRuns, formatAt, formatRange, replaceRange, runsText, type RtfPatch, type Run } from '../../controls/richText';
+import { adjustParas, decodeParas, decodeRuns, encodeParas, encodeRuns, formatAt, formatParas, formatRange, isDefaultPara, paraIndexAt, paraSpan, replaceRange, replaceRuns, runsBetween, runsText, trimParas, type ParaFmt, type Paras, type RtfFormat, type RtfPatch, type Run } from '../../controls/richText';
+import { fromRtf, toRtf, type RtfDoc } from './rtf';
+import { findText, lineFromChar, RTF_NO_HIGHLIGHT, spanText, upToText } from './richOps';
+import { decode1252, decodeText, encode1252 } from '../../lang/fileio/textFormat';
 import type { DirListing, Volume } from '../../backend/backend';
 import { formatValue } from '../../lang/builtins/format';
 import { dateParts } from '../../lang/values';
@@ -13,7 +16,7 @@ import { clampDate, dayOf, setPart, weekdayOf } from '../../model/dateControls';
 import { joinFields } from '../../model/fieldLines';
 import { clipText, fitText, fromText, maskedText, parseMask, typeChar } from '../../model/mask';
 import { flagOn, syncSSTab } from '../../model/ssTab';
-import { baseName, filterIndexFor, type FileDialogRequest } from '../commonDialog';
+import { baseName, filterIndexFor, multiFileName, type FileDialogRequest } from '../commonDialog';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../../model/types';
 import type { PatchQueue } from '../patchQueue';
 import { PictureObject, type HasPictureRef } from './appObjects';
@@ -58,7 +61,7 @@ export interface RunContext {
   propChanged?(ctrl: ControlObject, prop: string, old: PropValue): void;
   /** CommonDialog: the dialogs of the form host (file, colour, font). Null result = cancelled. */
   dialogs?: {
-    fileDialog(o: FileDialogRequest): Promise<string | null>;
+    fileDialog(o: FileDialogRequest): Promise<string | string[] | null>;
     colorDialog(o: { color: number }): Promise<number | null>;
     fontDialog(o: { font: FontValue }): Promise<FontValue | null>;
     printerDialog?(o: PrinterDialogRequest): Promise<PrinterDialogResult | null>;
@@ -71,6 +74,9 @@ export interface RunContext {
   controlByName?(name: string): ControlObject | ControlArrayObject | undefined;
   /** Inet, Winsock, WebBrowser: the run's network (made on first use). Throws when there is none. */
   net?(): NetSession;
+  /** RichTextBox.LoadFile / SaveFile: a whole file (a path as Open takes it) through the file system; rejects with the VB error. */
+  loadBytes?(path: string): Promise<Uint8Array>;
+  saveBytes?(path: string, bytes: Uint8Array): Promise<void>;
   /** Raises an event of the control from outside code (a socket's DataArrival ...); resolves when the handler has finished. */
   raise?(ctrl: ControlObject, event: string, args: VBRef[]): Promise<void>;
   /** MMControl, MediaPlayer: opens a file of the program (relative to App.Path) for the window to play; error 53 when it is missing. */
@@ -106,7 +112,11 @@ const DATA_REFS = new Set(['DataSource', 'RowSource']);
 const strProp = (v: PropValue | undefined): string => (typeof v === 'string' ? v : '');
 
 /** RichTextBox: the props that go to the window in order, as RtfOps (see send). */
-const RTF_OP_PROPS = new Set(['Text', 'Runs', 'SelStart', 'SelLength', 'SelBold', 'SelItalic', 'SelUnderline', 'SelColor', 'SelFontName', 'SelFontSize']);
+const RTF_OP_PROPS = new Set(['Text', 'Runs', 'Paras', 'SelStart', 'SelLength', 'SelBold', 'SelItalic', 'SelUnderline', 'SelStrikeThru', 'SelColor', 'SelFontName', 'SelFontSize']);
+/** RichTextBox methods that return a value (`pos = RichTextBox1.Find("x")`). */
+const RTF_FUNCTIONS = new Set(['find', 'getlinefromchar']);
+/** RichTextBox: the Sel property of each paragraph format. */
+const PARA_PROPS: Record<string, keyof ParaFmt> = { SelAlignment: 'align', SelBullet: 'bullet', SelIndent: 'indent', SelRightIndent: 'rightIndent', SelHangingIndent: 'hanging' };
 
 /** The properties that name an ImageList of the form (`Toolbar1.ImageList = ImageList1`). */
 const IMAGE_REFS = new Set(['ImageList', 'Icons', 'SmallIcons']);
@@ -167,6 +177,8 @@ export class ControlObject implements VBObject, DataConsumer {
   /** RichTextBox: the text with its formats (the window gets it as the prop `Runs`) and the format waiting at the insertion point. */
   private runs: Run[] = [];
   private pendingFmt: RtfPatch | null = null;
+  /** RichTextBox: the paragraph formats (alignment, bullet, indents) by paragraph; the window gets them as the prop `Paras`. */
+  private paras: Paras = [];
   /** DirListBox / FileListBox: the last folder listing, the load in progress (reads of ListCount and List wait for it) and a FileName to select once it is there. */
   private listing: DirListing | null = null;
   private loading: Promise<void> | null = null;
@@ -765,7 +777,12 @@ export class ControlObject implements VBObject, DataConsumer {
     this.ext?.applyState?.(props);
     this.rich?.applyState?.(props);
     if (this.def.type === 'RichTextBox') {   // the user typed, or moved the selection
-      if ('Runs' in props) this.runs = decodeRuns(String(props.Runs ?? '')) ?? (this.props.Text ? [{ text: String(this.props.Text), fmt: {} }] : []);
+      if ('Runs' in props) {
+        const before = runsText(this.runs);
+        this.runs = decodeRuns(String(props.Runs ?? '')) ?? (this.props.Text ? [{ text: String(this.props.Text), fmt: {} }] : []);
+        this.paras = adjustParas(this.paras, before, runsText(this.runs));   // as the window does for the same edit
+        this.props.Paras = encodeParas(this.paras);
+      }
       if ('SelStart' in props || 'SelLength' in props) this.pendingFmt = null;
     }
   }
@@ -796,6 +813,7 @@ export class ControlObject implements VBObject, DataConsumer {
     }
     // a method used as a function: `s = Inet1.OpenURL(url)` (the interpreter waits for a Promise)
     if (this.ext && !getPropDef(this.def.type, name) && CONTROL_TYPES[this.def.type].methods.some(m => m.name.toLowerCase() === l)) return this.callMethod(name, args) as VBValue;
+    if (this.def.type === 'RichTextBox' && RTF_FUNCTIONS.has(l)) return this.callMethod(name, args) as VBValue;
     const pd = this.propDef(name);
     if (this.rich?.get) { const v = this.rich.get(pd.name, args); if (v !== undefined) return v; }
     if (this.chart) { const v = this.chartGet(pd, args); if (v !== undefined) return v; }
@@ -913,6 +931,7 @@ export class ControlObject implements VBObject, DataConsumer {
     }
     if (args.length) throw new VBRuntimeError(450);
     if (this.def.type === 'MaskedEdit' && pd.name === 'SelText' && String(this.props.Mask ?? '') !== '') { this.maskSelText(toStr(this.plain(value))); return; }
+    if (this.def.type === 'RichTextBox' && (pd.name === 'TextRTF' || pd.name === 'SelRTF')) { this.setRtf(pd.name === 'SelRTF', toStr(this.plain(value))); return; }
     if (isDateType(this.def.type) && DATE_PARTS.has(pd.name)) { this.setDatePart(pd.name, num(this.plain(value))); return; }
     const v = this.convert(pd, value);
     if (this.ext?.set?.(pd.name, v)) return;
@@ -954,6 +973,7 @@ export class ControlObject implements VBObject, DataConsumer {
     if (!CONTROL_TYPES[this.def.type].methods.some(m => m.name.toLowerCase() === l)) throw new VBRuntimeError(438);
     if (this.ext) { const r = this.ext.call(l, args, refs); if (r !== undefined) return r; }
     if (this.rich?.call) { const r = this.rich.call(l, args, refs); if (r !== undefined) return r; }
+    if (this.def.type === 'RichTextBox') { const r = this.richCall(l, args); if (r !== undefined) return r; }
     if (this.gfx) {
       if (l === 'refresh') return this.ctx.repaint?.(this) ?? Empty;
       const r = this.gfx.call(l, args.map(a => this.plain(a)));
@@ -1026,6 +1046,13 @@ export class ControlObject implements VBObject, DataConsumer {
       case 'SelText': {
         const t = String(this.props.Text ?? ''), s = Number(this.props.SelStart), n = Number(this.props.SelLength);
         return t.substr(s, n);
+      }
+      case 'TextRTF': case 'SelRTF': {
+        if (this.def.type !== 'RichTextBox') break;
+        if (pd.name === 'TextRTF') return toRtf(this.runs, this.paras, this.baseFormat());
+        const text = String(this.props.Text ?? ''), s = Number(this.props.SelStart), n = Number(this.props.SelLength);
+        const [a, b] = paraSpan(text, s, n);
+        return toRtf(runsBetween(this.runs, s, n), this.paras.slice(a, b + 1), this.baseFormat());
       }
       case 'Name': return this.def.name;
       case 'Caption':
@@ -1203,7 +1230,7 @@ export class ControlObject implements VBObject, DataConsumer {
         this.props.ListIndex = i; patch.ListIndex = i;
       }
     }
-    if (this.def.type === 'RichTextBox' && (name === 'SelStart' || name === 'SelLength' || name === 'SelText' || name === 'Text')) this.refreshSelFormat();
+    if (this.def.type === 'RichTextBox' && (name === 'SelStart' || name === 'SelLength' || name === 'SelText' || name === 'Text' || PARA_PROPS[name])) this.refreshSelFormat();
     this.send(patch);
     if (this.gfx && v !== old) {
       if (name === 'BackColor') this.gfx.backChanged();
@@ -1269,26 +1296,42 @@ export class ControlObject implements VBObject, DataConsumer {
   /** RichTextBox: SelBold ... describe the selection as it is now. */
   private refreshSelFormat(): void {
     const p = this.props, f = p.Font as FontValue;
-    const fmt = { bold: f.bold, italic: f.italic, underline: f.underline, color: p.ForeColor, fontName: f.name, fontSize: f.size,
+    const fmt = { bold: f.bold, italic: f.italic, underline: f.underline, strike: false, color: p.ForeColor, fontName: f.name, fontSize: f.size,
       ...formatAt(this.runs, Number(p.SelStart), Number(p.SelLength)), ...(Number(p.SelLength) === 0 ? this.pendingFmt : null) };
-    Object.assign(p, { SelBold: fmt.bold, SelItalic: fmt.italic, SelUnderline: fmt.underline, SelColor: fmt.color, SelFontName: fmt.fontName, SelFontSize: fmt.fontSize });
+    Object.assign(p, { SelBold: fmt.bold, SelItalic: fmt.italic, SelUnderline: fmt.underline, SelStrikeThru: fmt.strike, SelColor: fmt.color, SelFontName: fmt.fontName, SelFontSize: fmt.fontSize });
+    const pf = this.paras[paraIndexAt(String(p.Text ?? ''), Number(p.SelStart))] ?? {};   // the first paragraph of the selection
+    Object.assign(p, { SelAlignment: pf.align ?? 0, SelBullet: pf.bullet === true, SelIndent: pf.indent ?? 0, SelRightIndent: pf.rightIndent ?? 0, SelHangingIndent: pf.hanging ?? 0 });
+  }
+
+  /** RichTextBox: the control's own format, which the formats of the runs are changes of. */
+  private baseFormat(): RtfFormat {
+    const f = this.props.Font as FontValue;
+    return { bold: f.bold, italic: f.italic, underline: f.underline, strike: false, color: Number(this.props.ForeColor), fontName: f.name, fontSize: f.size };
   }
 
   /** RichTextBox: SelText, Text and the Sel<Format> properties work on the runs. False for every other property. */
   private writeRich(pd: PropDef, v: PropValue, patch: Record<string, PropValue>): boolean {
     const name = pd.name, p = this.props;
     const s = Math.min(Number(p.SelStart), runsText(this.runs).length), n = Number(p.SelLength);
-    const FMT: Record<string, keyof RtfPatch> = { SelBold: 'bold', SelItalic: 'italic', SelUnderline: 'underline', SelColor: 'color', SelFontName: 'fontName', SelFontSize: 'fontSize' };
+    const FMT: Record<string, keyof RtfPatch> = { SelBold: 'bold', SelItalic: 'italic', SelUnderline: 'underline', SelStrikeThru: 'strike', SelColor: 'color', SelFontName: 'fontName', SelFontSize: 'fontSize' };
+    const oldText = runsText(this.runs), oldParas = encodeParas(this.paras);
     if (name === 'SelText') {
       const ins = String(v);
       const fmt = this.pendingFmt ? { ...formatAt(this.runs, s, n), ...this.pendingFmt } : null;
       this.runs = replaceRange(this.runs, s, n, ins, fmt);
+      this.paras = adjustParas(this.paras, oldText, runsText(this.runs));
       this.pendingFmt = null;
       p.SelStart = s + ins.length; p.SelLength = 0;
       Object.assign(patch, { SelStart: p.SelStart, SelLength: 0 });
     } else if (name === 'Text') {
       this.runs = v === '' ? [] : [{ text: String(v), fmt: {} }];
+      this.paras = [];   // a new Text is plain: no paragraph formats
       this.pendingFmt = null;
+    } else if (PARA_PROPS[name]) {   // SelAlignment ...: the paragraphs of the selection
+      if (name === 'SelAlignment' && (v as number < 0 || v as number > 2)) throw new VBRuntimeError(380);
+      p[name] = v;
+      patch[name] = v;
+      this.paras = formatParas(this.paras, oldText, s, n, { [PARA_PROPS[name]]: v } as ParaFmt);
     } else if (FMT[name]) {
       p[name] = v;
       patch[name] = v;
@@ -1301,7 +1344,98 @@ export class ControlObject implements VBObject, DataConsumer {
     p.Text = runsText(this.runs);
     p.Runs = encodeRuns(this.runs);
     Object.assign(patch, { Text: p.Text, Runs: p.Runs });
+    if (encodeParas(this.paras) !== oldParas) { p.Paras = encodeParas(this.paras); patch.Paras = p.Paras; }
     return true;
+  }
+
+  /** RichTextBox: TextRTF, LoadFile (the whole content) and SelRTF (the selection) take a document. Text that is not RTF is plain text. */
+  private setRtf(selection: boolean, text: string): void {
+    this.setContent(fromRtf(text, this.baseFormat()) ?? { runs: text === '' ? [] : [{ text, fmt: {} }], paras: [] }, selection);
+  }
+
+  private setContent(doc: RtfDoc, selection: boolean): void {
+    const p = this.props, old = p.Text;
+    const oldText = runsText(this.runs);
+    if (!selection) {
+      this.runs = doc.runs;
+      this.paras = doc.paras;
+      p.SelStart = 0; p.SelLength = 0;
+    } else {
+      const s = Math.min(Number(p.SelStart), oldText.length), n = Math.min(Number(p.SelLength), oldText.length - s);
+      this.runs = replaceRuns(this.runs, s, n, doc.runs);
+      let np = adjustParas(this.paras, oldText, runsText(this.runs));
+      const at = paraIndexAt(oldText, s);
+      doc.paras.forEach((f, k) => {   // the paragraph formats of the inserted text
+        if (isDefaultPara(f)) return;
+        np = np.slice();
+        while (np.length <= at + k) np.push({});
+        np[at + k] = { ...f };
+      });
+      this.paras = trimParas(np);
+      p.SelStart = s + runsText(doc.runs).length; p.SelLength = 0;
+    }
+    this.pendingFmt = null;
+    p.Text = runsText(this.runs);
+    p.Runs = encodeRuns(this.runs);
+    p.Paras = encodeParas(this.paras);
+    this.refreshSelFormat();
+    this.send({ Text: p.Text, Runs: p.Runs, Paras: p.Paras, SelStart: p.SelStart, SelLength: p.SelLength });
+    this.ctx.propChanged?.(this, 'Text', old);
+  }
+
+  /** The RichTextBox methods: Find, Span, UpTo, GetLineFromChar, LoadFile, SaveFile. Undefined for any other. */
+  private richCall(l: string, args: VBValue[]): VBValue | Promise<VBValue> | undefined {
+    const given = (i: number): VBValue | undefined => (args[i] === undefined || args[i] === Empty ? undefined : this.plain(args[i]));
+    const text = String(this.props.Text ?? ''), sel = (): number => Math.min(Number(this.props.SelStart) || 0, text.length);
+    const select = (start: number, length: number): void => {
+      this.write(this.propDef('SelStart'), start);
+      this.write(this.propDef('SelLength'), length);
+    };
+    switch (l) {
+      case 'find': {   // Find(String, [Start], [End], [Options]): the position, or -1; the match is selected unless rtfNoHighlight
+        if (args.length < 1 || args.length > 4) throw new VBRuntimeError(450);
+        const what = toStr(this.plain(args[0])), start = given(1), end = given(2), opt = given(3);
+        const from = start === undefined ? 0 : num(start), to = end === undefined ? text.length : num(end), options = opt === undefined ? 0 : num(opt);
+        if (from < 0 || to < 0) throw new VBRuntimeError(380);
+        const at = findText(text, what, from, to, options);
+        if (at >= 0 && (options & RTF_NO_HIGHLIGHT) === 0) select(at, what.length);
+        return at;
+      }
+      case 'span': case 'upto': {
+        if (args.length < 1 || args.length > 3) throw new VBRuntimeError(450);
+        const set = toStr(this.plain(args[0])), fwd = given(1), neg = given(2);
+        const forward = fwd === undefined ? true : toBool(fwd), negate = neg === undefined ? false : toBool(neg);
+        if (l === 'span') { const r = spanText(text, sel(), set, forward, negate); select(r.start, r.length); } else select(upToText(text, sel(), set, forward, negate), 0);
+        return Empty;
+      }
+      case 'getlinefromchar': {
+        if (args.length !== 1) throw new VBRuntimeError(450);
+        const pos = num(this.plain(args[0]));
+        if (pos < 0) throw new VBRuntimeError(380);
+        return lineFromChar(text, pos);
+      }
+      case 'loadfile': case 'savefile': return this.fileCall(l === 'loadfile', args, given);
+    }
+    return undefined;
+  }
+
+  /** LoadFile / SaveFile path[, rtfRTF 0 | rtfText 1]. A file that is not RTF is loaded as plain text, as the RichEdit control does. */
+  private async fileCall(load: boolean, args: VBValue[], given: (i: number) => VBValue | undefined): Promise<VBValue> {
+    if (args.length < 1 || args.length > 2) throw new VBRuntimeError(450);
+    const path = toStr(this.plain(args[0])), kind = given(1) === undefined ? 0 : num(given(1)!);
+    if (kind !== 0 && kind !== 1) throw new VBRuntimeError(380);
+    if (!this.ctx.loadBytes || !this.ctx.saveBytes) throw new VBRuntimeError(68);
+    if (load) {
+      const text = decodeText(await this.ctx.loadBytes(path));
+      const plain = (): RtfDoc => { const t = text.replace(/\r\n?/g, '\n'); return { runs: t === '' ? [] : [{ text: t, fmt: {} }], paras: [] }; };
+      this.setContent(kind === 1 ? plain() : fromRtf(text, this.baseFormat()) ?? plain(), false);
+    } else if (kind === 0) {
+      await this.ctx.saveBytes(path, new TextEncoder().encode(toRtf(this.runs, this.paras, this.baseFormat())));
+    } else {   // plain text: Windows-1252 when it can hold the text (as VB6 writes it), else UTF-8; line breaks are CR LF
+      const t = runsText(this.runs).replace(/\n/g, '\r\n');
+      await this.ctx.saveBytes(path, decode1252(encode1252(t)) === t ? encode1252(t) : new TextEncoder().encode(t));
+    }
+    return Empty;
   }
 
   private send(props: Record<string, PropValue>): void {
@@ -1390,22 +1524,26 @@ export class ControlObject implements VBObject, DataConsumer {
   private async showFile(open: boolean): Promise<VBValue> {
     const dialogs = this.dialogs();
     this.queue.flush();
-    const p = this.props;
-    const path = await dialogs.fileDialog({
+    const p = this.props, flags = Number(p.Flags) || 0;
+    const prev = toStr(p.FileName as string);
+    const r = await dialogs.fileDialog({
       kind: open ? 'open' : 'save', filter: toStr(p.Filter as string), filterIndex: Number(p.FilterIndex),
-      title: toStr(p.DialogTitle as string), initDir: toStr(p.InitDir as string), fileName: toStr(p.FileName as string),
+      title: toStr(p.DialogTitle as string), initDir: toStr(p.InitDir as string), fileName: prev.includes('\0') ? '' : prev,
+      multiple: open && (flags & 0x200) !== 0, defaultExt: toStr(p.DefaultExt as string),   // cdlOFNAllowMultiselect
     });
-    if (path === null) return this.cancelled();
-    p.FileName = path;
-    p.FileTitle = baseName(path);
-    p.FilterIndex = filterIndexFor(toStr(p.Filter as string), Number(p.FilterIndex), path);
+    const paths = r === null ? [] : Array.isArray(r) ? r : [r];
+    if (paths.length === 0) return this.cancelled();
+    // several files: "folder" & Chr(0) & "a" & Chr(0) & "b" with cdlOFNExplorer (a space between them without it), as VB6 gives them
+    p.FileName = Array.isArray(r) ? multiFileName(paths, (flags & 0x80000) !== 0) : paths[0];
+    p.FileTitle = baseName(paths[0]);
+    p.FilterIndex = filterIndexFor(toStr(p.Filter as string), Number(p.FilterIndex), paths[0]);
     return Empty;
   }
 
   private async showColor(): Promise<VBValue> {
     const dialogs = this.dialogs();
     this.queue.flush();
-    const c = await dialogs.colorDialog({ color: Number(this.props.Color) });
+    const c = await dialogs.colorDialog({ color: (Number(this.props.Flags) & 1) !== 0 ? Number(this.props.Color) : 0 });   // cdlCCRGBInit: Color is where the dialog starts, else black
     if (c === null) return this.cancelled();
     this.props.Color = c;
     return Empty;

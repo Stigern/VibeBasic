@@ -30,7 +30,7 @@ import { msCommIcon, sysInfoIcon } from './systemIcons';
 import { dataBar, dataGrid } from './dataControls';
 import { ssCommand, ssFrame, ssPanel, ssRibbon } from './sheridan';
 import { font3dShadow } from '../model/sheridan';
-import { decodeRuns, encodeRuns, formatAt, readRuns, replaceRange, selectionOffsets, setSelectionOffsets, writeRuns, type Run, type RtfFormat, type RtfPatch } from './richText';
+import { adjustParas, decodeParas, paraIndexAt, decodeRuns, encodeRuns, formatAt, isDefaultPara, readRuns, replaceRange, selectionOffsets, setSelectionOffsets, writeRuns, type Paras, type Run, type RtfFormat, type RtfPatch } from './richText';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../model/types';
 import { h, mnemonicNodes } from '../ui98/dom';
 import { cursorCss } from './cursor';
@@ -589,7 +589,7 @@ function commonDialog(c: Ctx): Renderer {
 
 /** Sel* property -> the format key it holds. */
 const RTF_PROPS: readonly [string, keyof RtfFormat][] = [
-  ['SelBold', 'bold'], ['SelItalic', 'italic'], ['SelUnderline', 'underline'], ['SelColor', 'color'], ['SelFontName', 'fontName'], ['SelFontSize', 'fontSize'],
+  ['SelBold', 'bold'], ['SelItalic', 'italic'], ['SelUnderline', 'underline'], ['SelStrikeThru', 'strike'], ['SelColor', 'color'], ['SelFontName', 'fontName'], ['SelFontSize', 'fontSize'],
 ];
 
 /**
@@ -603,15 +603,18 @@ function richTextBox(c: Ctx): Renderer {
   let cur = { start: 0, length: 0 };
   let pending: RtfPatch | null = null;
   let mouse = false;
+  /** The paragraph formats (the session sends them as Paras) and the text they were made for. */
+  let paras: Paras = [];
+  let lastText = '';
   const font = (): FontValue => { const f = c.props.Font; return isFont(f) ? f : DEFAULTS.RichTextBox.Font as FontValue; };
   const base = (): RtfFormat => {
     const f = font();
-    return { bold: f.bold, italic: f.italic, underline: f.underline, color: c.num('ForeColor'), fontName: f.name, fontSize: f.size };
+    return { bold: f.bold, italic: f.italic, underline: f.underline, strike: false, color: c.num('ForeColor'), fontName: f.name, fontSize: f.size };
   };
   const style = (el: HTMLElement, f: RtfPatch): void => {
     if (f.bold !== undefined) el.style.fontWeight = f.bold ? '700' : '400';
     if (f.italic !== undefined) el.style.fontStyle = f.italic ? 'italic' : 'normal';
-    if (f.underline !== undefined) el.style.textDecoration = f.underline ? 'underline' : 'none';
+    if (f.underline !== undefined || f.strike !== undefined) el.style.textDecoration = [f.underline ? 'underline' : '', f.strike ? 'line-through' : ''].filter(Boolean).join(' ') || 'none';
     if (f.color !== undefined) el.style.color = vbColorToCss(f.color);
     if (f.fontName !== undefined) el.style.fontFamily = fontFamily(f.fontName);
     if (f.fontSize !== undefined) el.style.fontSize = `${Math.round(f.fontSize * 96 / 72)}px`;
@@ -622,24 +625,40 @@ function richTextBox(c: Ctx): Renderer {
   const show = (): void => { if (focused()) setSelectionOffsets(input, cur.start, cur.length); };
   /** The format at the selection: the control's own, what the text says there, and what waits for the next typing. */
   const effective = (runs: Run[] = readRuns(input)): RtfFormat => ({ ...base(), ...formatAt(runs, cur.start, cur.length), ...(cur.length === 0 ? pending : null) });
-  const write = (runs: Run[]): void => writeRuns(input, runs, style);
+  const write = (runs: Run[]): void => { lastText = runs.map(r => r.text).join(''); writeRuns(input, runs, style, paras); };
+  /** The user's edit changed the text: the paragraph formats follow it, and the paragraphs are made again when there are any. */
+  function sync(): void {
+    const t = input.textContent ?? '';
+    if (t === lastText) return;
+    paras = adjustParas(paras, lastText, t);
+    lastText = t;
+    if (paras.some(f => !isDefaultPara(f)) || input.querySelector('.vb-para')) {
+      const s = selectionOffsets(input);
+      write(readRuns(input));
+      if (s) setSelectionOffsets(input, s.start, s.length);
+    }
+  }
 
   /** The user moved the selection or typed. */
   function report(): void {
+    sync();
     const s = selectionOffsets(input);
     if (!s) return;
     if (s.start !== cur.start || s.length !== cur.length) pending = null;
     cur = s;
-    const f = effective();
-    c.fire('vbselchange', { SelStart: s.start, SelLength: s.length, SelBold: f.bold, SelItalic: f.italic, SelUnderline: f.underline,
-      SelColor: f.color, SelFontName: f.fontName, SelFontSize: f.fontSize });
+    const f = effective(), pf = paras[paraIndexAt(lastText, s.start)] ?? {};
+    c.fire('vbselchange', { SelStart: s.start, SelLength: s.length, SelBold: f.bold, SelItalic: f.italic, SelUnderline: f.underline, SelStrikeThru: f.strike,
+      SelColor: f.color, SelFontName: f.fontName, SelFontSize: f.fontSize,
+      SelAlignment: pf.align ?? 0, SelBullet: pf.bullet === true, SelIndent: pf.indent ?? 0, SelRightIndent: pf.rightIndent ?? 0, SelHangingIndent: pf.hanging ?? 0 });
   }
   /** Typed text, Enter and paste go through the runs when a format is waiting (and always for Enter and paste: plain text only). */
   function insert(text: string): void {
     const s = selectionOffsets(input) ?? cur;
     cur = s;
     const runs = readRuns(input);
-    write(replaceRange(runs, s.start, s.length, text, pending ? { ...formatAt(runs, s.start, s.length), ...pending } : null));
+    const next = replaceRange(runs, s.start, s.length, text, pending ? { ...formatAt(runs, s.start, s.length), ...pending } : null);
+    paras = adjustParas(paras, lastText, next.map(r => r.text).join(''));
+    write(next);
     cur = { start: s.start + text.length, length: 0 };
     pending = null;
     setSelectionOffsets(input, cur.start, 0);
@@ -687,15 +706,21 @@ function richTextBox(c: Ctx): Renderer {
 
   function apply(k: Keys): void {
     let rewrote = false;
+    const parasSent = has(k, 'Paras');
+    if (parasSent) paras = decodeParas(c.str('Paras'));
     if (has(k, 'Runs') && c.str('Runs') !== '' && encodeRuns(readRuns(input)) !== c.str('Runs')) {   // text with formats (set by code, or the echo of the user's own typing)
       const runs = decodeRuns(c.str('Runs'));
       if (runs) { write(runs); rewrote = true; }
     }
-    if (has(k, 'Text') && (input.textContent ?? '') !== c.str('Text')) {
-      input.textContent = c.str('Text');
-      pending = null;
+    if (k !== null && has(k, 'Runs') && c.str('Runs') === '' && input.querySelector('span') && (input.textContent ?? '') === c.str('Text')) {
+      write(c.str('Text') === '' ? [] : [{ text: c.str('Text'), fmt: {} }]);   // the same text, now without formats
       rewrote = true;
     }
+    if (has(k, 'Text') && (input.textContent ?? '') !== c.str('Text')) {
+      write(c.str('Text') === '' ? [] : [{ text: c.str('Text'), fmt: {} }]);
+      pending = null;
+      rewrote = true;
+    } else if (parasSent && !rewrote) { write(readRuns(input)); rewrote = true; }
     if (has(k, 'ScrollBars')) {
       const sb = c.num('ScrollBars');
       input.style.overflowX = sb === 1 || sb === 3 ? 'scroll' : 'hidden';

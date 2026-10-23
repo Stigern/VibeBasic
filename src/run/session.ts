@@ -3,6 +3,7 @@
 
 import type { BreakInfo, CodeLocation, Host, VBObject } from '../lang/host';
 import { VBRuntimeError } from '../lang/errors';
+import { fsError } from '../lang/fileio/fsApi';
 import { macrotask } from '../lang/interp/driver';
 import { Program, type SourceModule } from '../lang/interp/program';
 import { Nothing, type VBRef, type VBValue } from '../lang/values';
@@ -409,6 +410,27 @@ export class RunSession implements Host, FormSession {
       const n = (e as { vbNumber?: unknown } | null)?.vbNumber;
       throw new VBRuntimeError(n === 7 ? 7 : 53);
     }
+  }
+
+  /** RichTextBox.LoadFile / SaveFile: a whole file through the file system (the same errors as Open: 53, 76 ...). */
+  async loadBytes(path: string): Promise<Uint8Array> {
+    const fs = this.fileSystem();
+    if (!fs) throw new VBRuntimeError(68);
+    const full = this.resolvePath(path);
+    try {
+      const { id, len } = await fs.fioOpen(full, 'binary', 'read');
+      try { return await fs.fioRead(id, 0, len); } finally { await fs.fioClose(id); }
+    } catch (e) { throw fsError(e); }
+  }
+
+  async saveBytes(path: string, bytes: Uint8Array): Promise<void> {
+    const fs = this.fileSystem();
+    if (!fs) throw new VBRuntimeError(68);
+    const full = this.resolvePath(path);
+    try {
+      const { id } = await fs.fioOpen(full, 'output', '');
+      try { await fs.fioWrite(id, 0, bytes); } finally { await fs.fioClose(id); }
+    } catch (e) { throw fsError(e); }
   }
 
   /** The full path of a file of the program, as Open resolves it (CurDir; the drive letter dropped). */

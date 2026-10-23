@@ -58,6 +58,9 @@ export interface FormSession {
   net(): NetSession;
   /** MMControl and MediaPlayer: a file of the program (relative to App.Path); error 53 when it cannot be read. */
   readFile(path: string): Promise<Uint8Array>;
+  /** RichTextBox.LoadFile / SaveFile: a whole file through the file system. */
+  loadBytes(path: string): Promise<Uint8Array>;
+  saveBytes(path: string, bytes: Uint8Array): Promise<void>;
   /** The full path of a file of the program. */
   resolvePath(path: string): string;
   /** Data control, Adodc: the run's databases (made on first use; throws when the host has none). */
@@ -129,6 +132,8 @@ export class FormInstance implements VBObject {
       controlByName: n => this.state().byName.get(lc(n)),
       files: { listVolumes: () => this.s.formHost.listVolumes(), listDir: p => this.s.formHost.listDir(p), defaultPath: this.s.appPath },
       net: () => this.s.net(),
+      loadBytes: p => this.s.loadBytes(p),
+      saveBytes: (p, b) => this.s.saveBytes(p, b),
       // MMControl / MediaPlayer: a window of its own reads the file itself (FormHost.openMedia); the inline host shares this document
       openMedia: async (p, mime) => {
         const host = this.s.formHost;

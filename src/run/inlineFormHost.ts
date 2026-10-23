@@ -83,7 +83,7 @@ export class InlineFormHost implements FormHost {
     return this.withDialog(() => runDialog(this.doc, { kind: 'input', ...o })) as Promise<string>;
   }
 
-  fileDialog(o: FileDialogRequest): Promise<string | null> {
+  fileDialog(o: FileDialogRequest): Promise<string | string[] | null> {
     return this.withDialog(() => runFileDialog(this.backend ?? getBackend(), o));
   }
 

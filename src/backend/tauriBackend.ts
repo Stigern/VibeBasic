@@ -93,6 +93,11 @@ export class TauriBackend implements Backend {
     return typeof r === 'string' ? r : null;
   }
 
+  async showOpenMultipleDialog(filters: FileFilter[], title: string, initDir: string): Promise<string[] | null> {
+    const r = await open({ multiple: true, directory: false, title: title || undefined, defaultPath: initDir || undefined, filters: dialogFilters(filters) });
+    return Array.isArray(r) ? r : typeof r === 'string' ? [r] : null;
+  }
+
   async showSaveDialog(filters: FileFilter[], title: string, initDir: string, defaultName = ''): Promise<string | null> {
     const defaultPath = initDir ? (defaultName ? `${initDir.replace(/\/+$/, '')}/${defaultName}` : initDir) : defaultName || undefined;
     return (await save({ title: title || undefined, defaultPath, filters: dialogFilters(filters) })) ?? null;

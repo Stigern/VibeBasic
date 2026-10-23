@@ -138,6 +138,7 @@
 .vb-ctl.vb-ctl .vb-rtf { white-space: pre-wrap; overflow-wrap: break-word; overflow: hidden; padding: 0 1px; user-select: text; -webkit-user-select: text; }
 /* a final line break only shows its new line when something follows it */
 .vb-rtf::after { content: '\200b'; }
+.vb-rtf .vb-para[data-vb-bullet]::before { content: '\2022\00a0\00a0'; }
 
 /* ---------- ProgressBar ---------- */
 .vb-ProgressBar { background-color: #c0c0c0; padding: 2px; box-shadow: inset -1px -1px #fff, inset 1px 1px #808080; }
