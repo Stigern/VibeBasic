@@ -797,7 +797,7 @@ export function newControl(form: FormDef, type: Exclude<ControlType, 'Form'>,
   }
   if ('Caption' in props && type !== 'SSTab') props.Caption = name;   // an SSTab's Caption is its first tab's
   if (type === 'TextBox' || type === 'ComboBox') props.Text = name;
-  if ('TabIndex' in props) props.TabIndex = form.controls.filter(c => 'TabIndex' in c.props).length;
+  if ('TabIndex' in props) props.TabIndex = form.controls.reduce((m, c) => (typeof c.props.TabIndex === 'number' ? Math.max(m, c.props.TabIndex + 1) : m), 0);
   return { id: newId(), type, name, index: null, parentId, props };
 }
 

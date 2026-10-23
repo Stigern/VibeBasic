@@ -178,6 +178,7 @@ test('copy/cut/paste actions keep container children; delete and select all', as
   actions.copy();
   expect(clipboardHasControls()).toBe(true);
   box.mockResolvedValue(7);
+  ide.setSelection({ formId: form().id, ids: [] });   // with the frame selected, paste would go into it
   actions.paste();
   await vi.waitFor(() => expect(form().controls).toHaveLength(4));
   const [, , fr2, cmd2] = form().controls;
@@ -292,4 +293,67 @@ test('Toolbox double-click: a control larger than the form shrinks to fit and ne
   expect(c.props.Width as number).toBeLessThan(4815);
   placeControlCentered(ide, 'CommandButton');   // small controls keep their default size
   expect(form().controls.find(x => x.type === 'CommandButton')!.props.Width).toBe(1215);
+});
+
+test('paste with a Frame or PictureBox selected pastes into it (review08 #4)', async () => {
+  const btn = add('CommandButton', 0, 0, 1200, 480);
+  const fr = add('Frame', 2000, 600, 3000, 2000);
+  const pic = add('PictureBox', 600, 3000, 2000, 1500);
+  ide.setSelection({ formId: form().id, ids: [btn.id] });
+  actions.cut();
+  ide.setSelection({ formId: form().id, ids: [fr.id] });
+  actions.paste();
+  await vi.waitFor(() => expect(form().controls).toHaveLength(3));
+  expect(form().controls[2]).toMatchObject({ name: 'Command1', parentId: fr.id });
+  ide.setSelection({ formId: form().id, ids: [pic.id] });
+  box.mockResolvedValue(7);
+  actions.paste();
+  await vi.waitFor(() => expect(form().controls).toHaveLength(4));
+  expect(form().controls[3].parentId).toBe(pic.id);
+});
+
+test('copied pictures and ImageList images go along to another project, and a cut keeps them for the paste (review08 #7)', async () => {
+  const pic = add('PictureBox', 0, 0, 1200, 1200);
+  const il = add('ImageList', 2000, 0);
+  ide.stack.execute({ label: 'x', do: p => {
+    p.assets.a1 = { mime: 'image/png', dataBase64: 'AAA' };
+    p.assets.a2 = { mime: 'image/png', dataBase64: 'BBB' };
+    p.forms[0].controls[0].props.Picture = { asset: 'a1' };
+    p.forms[0].controls[1].props.ListImages = ['k|a2|'];
+  }, undo: () => {} });
+  ide.setSelection({ formId: form().id, ids: [pic.id, il.id] });
+  actions.cut();
+  expect(ide.project.assets).toEqual({});   // the cut controls took their pictures along
+  actions.paste();
+  await vi.waitFor(() => expect(form().controls).toHaveLength(2));
+  expect(Object.keys(ide.project.assets).sort()).toEqual(['a1', 'a2']);
+  // another project
+  const other = new IdeState();
+  const host2 = document.createElement('div');
+  document.body.appendChild(host2);
+  const actions2: IdeActions = {};
+  registerDesignerActions(other, actions2);
+  openDesigner(other, other.project.forms[0].id, { mdiHost: host2, actions: actions2 });
+  actions2.paste();
+  await vi.waitFor(() => expect(other.project.forms[0].controls).toHaveLength(2));
+  expect(other.project.assets.a1).toEqual({ mime: 'image/png', dataBase64: 'AAA' });
+  expect(other.project.assets.a2).toEqual({ mime: 'image/png', dataBase64: 'BBB' });
+  other.stack.undo();   // one undo step takes them out again
+  expect(other.project.assets).toEqual({});
+});
+
+test('TabIndex stays unique: delete renumbers, new and pasted controls come last (review08 #9)', async () => {
+  const [c1, c2, c3] = [0, 1, 2].map(i => add('CommandButton', i * 1300, 0, 1200, 480));
+  expect([c1, c2, c3].map(c => c.props.TabIndex)).toEqual([0, 1, 2]);
+  ide.setSelection({ formId: form().id, ids: [c1.id] });
+  actions.delete();
+  const tabs = () => form().controls.map(c => `${c.name}:${c.props.TabIndex}`);
+  expect(tabs()).toEqual(['Command2:0', 'Command3:1']);
+  add('CommandButton', 0, 1000, 1200, 480);
+  expect(tabs()).toEqual(['Command2:0', 'Command3:1', 'Command1:2']);
+  box.mockResolvedValue(7);
+  await pasteControls(ide, form().id, [structuredClone(form().controls[0])]);
+  expect(tabs()).toEqual(['Command2:0', 'Command3:1', 'Command1:2', 'Command4:3']);
+  ide.stack.undo(); ide.stack.undo(); ide.stack.undo();   // undo of the delete restores the old numbers
+  expect(tabs()).toEqual(['Command1:0', 'Command2:1', 'Command3:2']);
 });

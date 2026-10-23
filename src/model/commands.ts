@@ -2,6 +2,7 @@
 // only through these. Commands look up forms/controls by id every time they run, and capture what undo needs
 // (old values, array positions, deleted subtrees) at do-time, so they work as long as the stack is used in order.
 
+import { assetRefCount, controlAssetIds } from './assetRefs';
 import { CONTROL_TYPES } from './controls';
 import { setControlPos } from './geometry';
 import type { Asset, ControlDef, FormDef, ModuleDef, Project, PropValue } from './types';
@@ -100,21 +101,56 @@ export function addControlsCmd(formId: string, defs: ControlDef[]): Command {
   };
 }
 
+/** Deletes controls and their descendants. As in VB6 the pictures only they used go with them (the assets nothing else names
+ *  are removed), and the TabIndex values of the remaining controls are renumbered without gaps. */
 export function deleteControlsCmd(formId: string, idList: string[]): Command {
   const ids = [...idList];
   let removed: { index: number; def: ControlDef }[] = [];
-  return {
-    label: ids.length === 1 ? 'Delete control' : `Delete ${ids.length} controls`,
+  let droppedAssets: [string, Asset][] = [];
+  const del: Command = {
+    label: '',
     do(p) {
       const f = formOf(p, formId);
       const all = withDescendants(f, ids);
       removed = [];
       f.controls.forEach((def, index) => { if (all.has(def.id)) removed.push({ index, def }); });
       f.controls = f.controls.filter(c => !all.has(c.id));
+      droppedAssets = [];
+      for (const a of new Set(removed.flatMap(r => controlAssetIds(r.def)))) {
+        if (a in p.assets && a !== p.iconAsset && assetRefCount(p, a) === 0) { droppedAssets.push([a, p.assets[a]]); delete p.assets[a]; }
+      }
+    },
+    undo(p) {
+      for (const [a, asset] of droppedAssets) p.assets[a] = asset;
+      const f = formOf(p, formId);
+      for (const r of removed) f.controls.splice(r.index, 0, r.def); // ascending index: each lands at its original slot
+    },
+  };
+  return compositeCmd(ids.length === 1 ? 'Delete control' : `Delete ${ids.length} controls`, [del, tabIndexCmd(formId)]);
+}
+
+/** Renumbers the TabIndex of the form's controls 0, 1, 2, ... in their current tab order, without gaps (VB6). With `place`, that
+ *  control is first moved to position `place.index` (clamped to the last one), and the others shift around it. */
+export function tabIndexCmd(formId: string, place?: { id: string; index: number }): Command {
+  let old: { id: string; value: PropValue }[] = [];
+  return {
+    label: 'Change TabIndex',
+    do(p) {
+      const f = formOf(p, formId);
+      const order = f.controls.filter(c => typeof c.props.TabIndex === 'number')
+        .map((c, i) => ({ c, i })).sort((a, b) => (a.c.props.TabIndex as number) - (b.c.props.TabIndex as number) || a.i - b.i).map(x => x.c);
+      if (place) {
+        const at = order.findIndex(c => c.id === place.id);
+        if (at < 0) throw new Error(`Control not found: ${place.id}`);
+        const [c] = order.splice(at, 1);
+        order.splice(Math.max(0, Math.min(place.index, order.length)), 0, c);
+      }
+      old = [];
+      order.forEach((c, i) => { if (c.props.TabIndex !== i) { old.push({ id: c.id, value: c.props.TabIndex }); c.props.TabIndex = i; } });
     },
     undo(p) {
       const f = formOf(p, formId);
-      for (const r of removed) f.controls.splice(r.index, 0, r.def); // ascending index: each lands at its original slot
+      for (const o of old) controlOf(f, o.id).props.TabIndex = o.value;
     },
   };
 }
@@ -317,6 +353,21 @@ export function renameCmd(formId: string, targetId: string | 'form', newName: st
       if (targetId === 'form') { f.name = oldName; p.startupForm = oldStartup; }
       else { const c = controlOf(f, targetId); c.name = oldName; c.index = oldIndex; }
     },
+  };
+}
+
+/** Renames a standard module (Properties window, (Name)). Like renameCmd it never touches code. */
+export function renameModuleCmd(moduleId: string, newName: string): Command {
+  let oldName = '';
+  const mod = (p: Project): ModuleDef => {
+    const m = p.modules.find(x => x.id === moduleId);
+    if (!m) throw new Error(`Module not found: ${moduleId}`);
+    return m;
+  };
+  return {
+    label: 'Rename',
+    do(p) { const m = mod(p); oldName = m.name; m.name = newName; },
+    undo(p) { mod(p).name = oldName; },
   };
 }
 

@@ -91,3 +91,16 @@ describe('multi-line editor', () => {
     expect(listOf()).toEqual([]);
   });
 });
+
+test('multi-line Text with MultiLine = False is not flattened by clicking its row (review08 #13)', () => {
+  const t = newControl(form(), 'TextBox', { left: 2000, top: 0 }, null);
+  t.props.Text = 'a\nb';
+  ide.stack.execute(addControlsCmd(form().id, [t]));
+  ide.setSelection({ formId: form().id, ids: [t.id] });
+  const undoBefore = ide.stack.undoLabel;
+  rowEl('Text').click();
+  rowEl('Left').click();
+  win.commitPendingEdit();
+  expect(form().controls.find(c => c.id === t.id)!.props.Text).toBe('a\nb');
+  expect(ide.stack.undoLabel).toBe(undoBefore);
+});

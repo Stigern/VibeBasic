@@ -2,9 +2,10 @@
 // bottom. Every edit goes through IdeState.stack as one undo step. Dropdowns and editor popups are rendered in
 // the body-level popup layer (ui98/floating.ts), so the window's scrolling panes never clip them.
 import { getBackend, type Backend } from '../backend/backend';
-import { addAssetCmd, compositeCmd, renameCmd, setPropertyCmd, type Command } from '../model/commands';
+import { assetOf, assetUsedElsewhere } from '../model/assetRefs';
+import { addAssetCmd, compositeCmd, removeAssetCmd, renameCmd, renameModuleCmd, setPropertyCmd, tabIndexCmd, type Command } from '../model/commands';
 import { CONTROL_TYPES, getPropDef, newId, validateName, type PropDef } from '../model/controls';
-import type { ControlDef, ControlType, FontValue, FormDef, PropValue } from '../model/types';
+import type { ControlDef, ControlType, FontValue, FormDef, ModuleDef, PropValue } from '../model/types';
 import { messageBox98, vbYes } from '../ui98/dialogs';
 import { createCombo } from '../ui98/combo';
 import { h } from '../ui98/dom';
@@ -17,7 +18,8 @@ import { CATEGORIES, categoryOf, describeProperty, type Category } from './prope
 
 const VB_OK_EXCL = 48, VB_YESNO_QUESTION = 4 | 32;
 const NAME_DEF: PropDef = { name: '(Name)', kind: 'string', default: '', designTime: true, runtime: 'rw' };
-const INDEX_DEF: PropDef = { name: 'Index', kind: 'int', default: 0, designTime: true, runtime: 'rw', min: 0 };
+// Index is listed for every single control (VB6): blank = not in a control array, a number makes or joins one
+const INDEX_DEF: PropDef = { name: 'Index', kind: 'int', default: null, designTime: true, runtime: 'rw', min: 0, max: 32767 };
 const DEFAULT_FONT: FontValue = { name: 'MS Sans Serif', size: 8, bold: false, italic: false, underline: false };
 
 // The chosen tab (Alphabetic / Categorized) is remembered for the session and, when storage works, across runs.
@@ -71,6 +73,10 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
   const root = h('div', { class: 'pw98' }, objectCombo.el, tabs.el, desc);
   host.replaceChildren(root);
 
+  // A standard module is shown (a single (Name) row, VB6) after it was picked in the Project Explorer or its code window was
+  // activated, until a form or control is selected or another window is activated.
+  let moduleId: string | null = null;
+  const currentModule = (): ModuleDef | undefined => (moduleId ? ide.project.modules.find(m => m.id === moduleId) : undefined);
   const currentForm = (): FormDef | undefined => {
     const fid = ide.selection?.formId ?? (ide.activeView.kind === 'designer' ? ide.activeView.formId : undefined);
     return ide.project.forms.find(f => f.id === fid);
@@ -132,19 +138,48 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     ide.stack.execute(compositeCmd('Rename', cmds));
   }
 
-  async function setIndex(form: FormDef, t: Target, v: number): Promise<void> {
-    if (form.controls.some(c => c.id !== t.id && c.name.toLowerCase() === t.name.toLowerCase() && c.index === v)) return invalid();
+  async function setModuleName(m: ModuleDef, text: string): Promise<void> {
+    const name = text.trim();
+    if (!validateName(name)) return invalid();
+    if (name === m.name) { refresh(); return; }
+    const clash = ide.project.modules.some(x => x.id !== m.id && x.name.toLowerCase() === name.toLowerCase())
+      || ide.project.forms.some(f => f.name.toLowerCase() === name.toLowerCase());
+    if (clash) return invalid();
+    ide.stack.execute(renameModuleCmd(m.id, name));
+  }
+
+  async function setIndex(form: FormDef, t: Target, v: number | null): Promise<void> {
+    const same = form.controls.filter(c => c.id !== t.id && c.name.toLowerCase() === t.name.toLowerCase());
+    // blank leaves the array only for its last member; a number must be free in the array
+    if (v === null ? same.length > 0 : same.some(c => c.index === v)) return invalid();
     if (v !== t.index) ide.stack.execute(renameCmd(form.id, t.id, t.name, v)); else refresh();
   }
 
   async function applyValue(form: FormDef, ts: Target[], def: PropDef, value: PropValue): Promise<void> {
     if (def === NAME_DEF) return typeof value === 'string' ? setName(form, ts[0], value) : undefined;
-    if (def === INDEX_DEF) return setIndex(form, ts[0], value as number);
+    if (def === INDEX_DEF) return setIndex(form, ts[0], value as number | null);
     if (ts.every(t => JSON.stringify(t.props[def.name] ?? def.default) === JSON.stringify(value))) { refresh(); return; }
+    if (def.name === 'TabIndex' && typeof value === 'number' && ts.every(t => t.id !== 'form')) {
+      // VB6: the others shift so that TabIndex stays unique and without gaps; a value past the last is the last
+      const last = form.controls.filter(c => typeof c.props.TabIndex === 'number').length - 1;
+      if (ts.length === 1 && Math.min(value, last) === ts[0].props.TabIndex) { refresh(); return; }
+      const cmds = ts.map(t => tabIndexCmd(form.id, { id: t.id, index: value }));
+      ide.stack.execute(cmds.length > 1 ? compositeCmd('Change TabIndex', cmds) : cmds[0]);
+      return;
+    }
     setValue(form, ts, def, value);
   }
 
+  /** Removes the pictures `def` of `ts` names that nothing else names, for when they are replaced or cleared (one undo step). */
+  function dropPictures(ts: Target[], def: PropDef): Command[] {
+    const own = new Map<string, number>();
+    for (const t of ts) { const a = assetOf(t.props[def.name]); if (a) own.set(a, (own.get(a) ?? 0) + 1); }
+    const p = ide.project;
+    return [...own].filter(([a, n]) => a in p.assets && a !== p.iconAsset && !assetUsedElsewhere(p, a, n)).map(([a]) => removeAssetCmd(a));
+  }
+
   async function applyText(form: FormDef, ts: Target[], def: PropDef, text: string): Promise<void> {
+    if (def === INDEX_DEF && text.trim() === '') return setIndex(form, ts[0], null);
     const r = parsePropertyInput(def, text);
     if (!r.ok) return invalid();
     return applyValue(form, ts, def, r.value);
@@ -156,12 +191,30 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     if (!path) return;
     const bytes = await backend.readBinaryFile(path);
     const id = `asset-${newId()}`;
-    setValue(form, ts, def, { asset: id }, [addAssetCmd(id, { mime: mimeFromPath(path), dataBase64: bytesToBase64(bytes) })]);
+    setValue(form, ts, def, { asset: id }, [addAssetCmd(id, { mime: mimeFromPath(path), dataBase64: bytesToBase64(bytes) }), ...dropPictures(ts, def)]);
   }
 
   /** Values a bool/enum row cycles through (double-click) and lists in its dropdown. */
   const choices = (def: PropDef): { value: PropValue; label: string }[] =>
     def.kind === 'bool' ? [{ value: true, label: 'True' }, { value: false, label: 'False' }] : (def.enumValues ?? []);
+
+  /** Single-line text box: Enter commits, Escape restores the old value, leaving the row commits. */
+  function inlineEditor(def: PropDef, initial: string, live: () => boolean, commitText: (t: string) => void): HTMLInputElement {
+    const el = h('input', { type: 'text', class: 'pw98-editor', value: initial });
+    const shown = el.value;   // as the input sanitised it (no line breaks): an untouched row never commits
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); wantFocus = true; commitText(el.value); }
+      else if (e.key === 'Escape') { e.preventDefault(); el.value = initial; el.select(); }
+    });
+    el.addEventListener('blur', () => { if (el.value !== shown) commitText(el.value); });
+    flushEdit = () => {
+      if (!live() || el.value === shown) return true;
+      const ok = (def === INDEX_DEF && el.value.trim() === '') || parsePropertyInput(def, el.value).ok;
+      commitText(el.value);
+      return ok;
+    };
+    return el;
+  }
 
   /** Builds the editor of the active row in `cell`. */
   function editorFor(form: FormDef, ts: Target[], def: PropDef, cell: HTMLElement, value: PropValue | undefined): HTMLElement | null {
@@ -188,22 +241,7 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     const commitText = (t: string) => { if (!live()) return; done = true; void applyText(form, ts, def, t); };
     const commitValue = (v: PropValue) => { if (!live()) return; done = true; void applyValue(form, ts, def, v); };
 
-    // single-line text box: Enter commits, Escape restores the old value, leaving the row commits
-    const inline = (initial: string): HTMLInputElement => {
-      const el = h('input', { type: 'text', class: 'pw98-editor', value: initial });
-      el.addEventListener('keydown', e => {
-        if (e.key === 'Enter') { e.preventDefault(); wantFocus = true; commitText(el.value); }
-        else if (e.key === 'Escape') { e.preventDefault(); el.value = initial; el.select(); }
-      });
-      el.addEventListener('blur', () => { if (el.value !== initial) commitText(el.value); });
-      flushEdit = () => {
-        if (!live() || el.value === initial) return true;
-        const ok = parsePropertyInput(def, el.value).ok;
-        commitText(el.value);
-        return ok;
-      };
-      return el;
-    };
+    const inline = (initial: string): HTMLInputElement => inlineEditor(def, initial, live, commitText);
     const button = (label: string, title: string, onclick: () => void) => {
       const b = h('button', { type: 'button', class: 'pw98-btn', title }, label);
       b.addEventListener('mousedown', e => e.preventDefault());   // the row keeps the focus
@@ -256,7 +294,8 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
         return combo.el.querySelector('input');
       }
       case 'text': case 'list': {
-        const multi = def.kind === 'list' || ts.every(t => t.props.MultiLine === true);
+        // a value with line breaks (MultiLine set to False afterwards keeps them, VB6) gets the multi-line editor too
+        const multi = def.kind === 'list' || ts.every(t => t.props.MultiLine === true) || (typeof value === 'string' && value.includes('\n'));
         if (!multi) { const el = inline(mixed ? '' : String(value ?? '')); cell.replaceChildren(el); return el; }
         openActive = openMultiline;
         cell.replaceChildren(valText(), button('', 'Edit', openMultiline));
@@ -309,6 +348,8 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     epoch++;
     openActive = null;
     for (const c of closers.splice(0)) c();
+    const mod = currentModule();
+    if (mod) { renderModule(mod, hadFocus); return; }
     const form = currentForm();
     root.classList.toggle('pw98-empty', !form);
     if (!form) { for (const l of lists) l.replaceChildren(); desc.replaceChildren(); objectCombo.setItems([]); objectCombo.setValue(''); rowOrder = []; return; }
@@ -328,7 +369,7 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
       return o && o.designTime && o.kind === d.kind && (d.kind !== 'enum' || JSON.stringify(o.enumValues) === JSON.stringify(d.enumValues));
     }));
     const rows: PropDef[] = [...(multi ? [] : [NAME_DEF]), ...defs];
-    if (!multi && first.index !== null) rows.push(INDEX_DEF);
+    if (!multi && first.id !== 'form') rows.push(INDEX_DEF);
     const byName = (a: PropDef, b: PropDef) => (a === NAME_DEF ? -1 : b === NAME_DEF ? 1 : a.name.localeCompare(b.name));
     rows.sort(byName);
     if (active && !rows.some(r => r.name === active)) active = null;
@@ -382,16 +423,54 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     // Description pane
     desc.replaceChildren(...(active ? [h('b', {}, active), h('div', {}, describeProperty(active))] : []));
 
-    // Read-only while a program runs or is in break mode (edit-and-continue comes in phase 6)
-    if (ide.mode !== 'design') for (const el of root.querySelectorAll<HTMLElement>('input, textarea, select, button')) el.setAttribute('disabled', '');
-    root.classList.toggle('pw98-readonly', ide.mode !== 'design');
-    objectCombo.el.querySelector('input')!.disabled = false;   // the object box still selects
+    lockIfRunning();
 
     const f = focusEl as HTMLElement | null;
     if (hadFocus && f) {
       f.focus();
       if (f instanceof HTMLInputElement && !f.readOnly) f.select();
     }
+  }
+
+  /** A standard module: the object box and a single (Name) row. */
+  function renderModule(m: ModuleDef, hadFocus: boolean): void {
+    root.classList.remove('pw98-empty');
+    objectEntries = [];
+    const label = `${m.name} Module`;
+    objectCombo.setItems([label]);
+    objectCombo.setValue(label);
+    if (active !== NAME_DEF.name) active = null;
+    const myEpoch = epoch;
+    let done = false;
+    const live = () => !done && myEpoch === epoch && ide.mode === 'design';
+    const cell = h('div', { class: 'pw98-value' });
+    const row = h('div', { class: `pw98-row${active ? ' selected' : ''}`, 'data-prop': NAME_DEF.name, tabindex: '-1' },
+      h('div', { class: 'pw98-name' }, NAME_DEF.name), cell);
+    let focusEl: HTMLElement = row;
+    if (active) {
+      focusEl = inlineEditor(NAME_DEF, m.name, live, t => { if (!live()) return; done = true; void setModuleName(m, t); });
+      cell.replaceChildren(focusEl);
+    } else cell.textContent = m.name;
+    const activate = (e: Event) => {
+      if (ide.mode !== 'design' || active === NAME_DEF.name) return;
+      if (e.type === 'mousedown') e.preventDefault();
+      select(NAME_DEF.name);
+    };
+    row.addEventListener('mousedown', activate);
+    row.addEventListener('click', activate);
+    rowOrder = [NAME_DEF.name];
+    lists[1 - tabs.selected].replaceChildren();
+    lists[tabs.selected].replaceChildren(row);
+    desc.replaceChildren(...(active ? [h('b', {}, active), h('div', {}, describeProperty(active))] : []));
+    lockIfRunning();
+    if (hadFocus) { focusEl.focus(); if (focusEl instanceof HTMLInputElement) focusEl.select(); }
+  }
+
+  /** Read-only while a program runs or is in break mode (edit-and-continue comes in phase 6). */
+  function lockIfRunning(): void {
+    if (ide.mode !== 'design') for (const el of root.querySelectorAll<HTMLElement>('input, textarea, select, button')) el.setAttribute('disabled', '');
+    root.classList.toggle('pw98-readonly', ide.mode !== 'design');
+    objectCombo.el.querySelector('input')!.disabled = false;   // the object box still selects
   }
 
   function select(name: string): void {
@@ -444,7 +523,8 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
       e.preventDefault();
       e.stopPropagation();
       const form = currentForm();
-      if (form && d?.kind === 'picture') void applyValue(form, targets(form), d, null);
+      const ts = form && d?.kind === 'picture' ? targets(form) : [];
+      if (form && d && ts.some(x => x.props[d.name] != null)) setValue(form, ts, d, null, dropPictures(ts, d));
       return;
     }
     if (!d || t.closest('.cb98')) return;   // dropdown lists handle their own keys (first-letter selection)
@@ -458,12 +538,18 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     if (active === NAME_DEF.name) return NAME_DEF;
     const form = currentForm();
     if (!form || !active) return undefined;
-    return active === INDEX_DEF.name && targets(form)[0].index !== null ? INDEX_DEF : getPropDef(targets(form)[0].type, active);
+    return active === INDEX_DEF.name && targets(form)[0].id !== 'form' ? INDEX_DEF : getPropDef(targets(form)[0].type, active);
   };
 
-  ide.on('selection', refresh);
+  const isModule = (id: string | null) => !!id && ide.project.modules.some(m => m.id === id);
+  // The Project Explorer clears the form selection when it selects a module; any form selection shows the form again.
+  ide.on('selection', () => { moduleId = ide.selection === null && isModule(ide.explorerItemId) ? ide.explorerItemId : null; refresh(); });
   ide.on('project', refresh);
-  ide.on('activeView', refresh);
+  ide.on('activeView', () => {
+    const v = ide.activeView;
+    moduleId = v.kind === 'code' && isModule(v.itemId) ? v.itemId : null;
+    refresh();
+  });
   ide.on('mode', refresh);
   refresh();
   return {
