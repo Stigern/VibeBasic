@@ -18,6 +18,7 @@ import { TBR_DROPDOWN, TBR_PLACEHOLDER, TBR_SEPARATOR, parseButton } from '../mo
 import { flagOn, ssTabLayout } from '../model/ssTab';
 import { twipsToPx } from '../model/twips';
 import { msChart } from './chart';
+import { domPos, domText } from './textPos';
 import { animation, mediaPlayer, mmControl } from './media';
 import { imageCombo } from './imageCombo';
 import { coolBar } from './coolbar';
@@ -206,6 +207,8 @@ function label(c: Ctx): Renderer {
 
 function textBox(c: Ctx): Renderer {
   let input: HTMLInputElement | HTMLTextAreaElement;
+  /** A selection set by code while the field has no focus: applied when it gets it (selecting an unfocused field may focus it). */
+  let pendingSel: [number, number] | null = null;
   return {
     structural: ['MultiLine'],
     build() {
@@ -213,9 +216,18 @@ function textBox(c: Ctx): Renderer {
       else input = h('input', { type: 'text', class: 'vb-input vb-single', spellcheck: false, autocomplete: 'off' });
       c.el.replaceChildren(input);
       c.setInput(input);
+      pendingSel = null;
+      input.addEventListener('focus', () => { if (pendingSel) { const [a, b] = pendingSel; pendingSel = null; input.setSelectionRange(a, b); } });
     },
     patch(k) {
-      if (has(k, 'Text') && input.value !== c.str('Text')) input.value = c.str('Text');
+      const multi = input instanceof HTMLTextAreaElement;
+      // the field holds LF line breaks (VB: CR LF); compared as the field holds it, so a CR LF text is not written back on every patch
+      if (has(k, 'Text') && input.value !== domText(c.str('Text'), multi)) input.value = domText(c.str('Text'), multi);
+      if (k !== null && has(k, 'SelStart', 'SelLength')) {   // set by code (the program sends both): select in the field
+        const t = c.str('Text'), s = Math.min(Math.max(0, c.num('SelStart')), t.length), e = Math.min(t.length, s + Math.max(0, c.num('SelLength')));
+        const range: [number, number] = [domPos(t, s, multi), domPos(t, e, multi)];
+        if (input.ownerDocument.activeElement === input) { pendingSel = null; input.setSelectionRange(...range); } else pendingSel = range;
+      }
       if (input instanceof HTMLInputElement) {
         if (has(k, 'PasswordChar')) input.type = c.str('PasswordChar') ? 'password' : 'text';
       } else if (has(k, 'ScrollBars')) {

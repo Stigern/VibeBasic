@@ -45,7 +45,7 @@ describe('mountFormWindow', () => {
     const el = inputOf(get(t1)) as HTMLInputElement;
     el.value = 'a';
     el.dispatchEvent(new Event('input', { bubbles: true }));
-    expect(sent).toEqual([{ t: 'state', id: t1.id, props: { Text: 'a' } }]);
+    expect(sent).toEqual([{ t: 'state', id: t1.id, props: { Text: 'a', SelStart: 1, SelLength: 0 } }]);
   });
 
   test('handled Change carries state.Text', () => {
@@ -54,7 +54,7 @@ describe('mountFormWindow', () => {
     const el = inputOf(get(t1)) as HTMLInputElement;
     el.value = 'ab';
     el.dispatchEvent(new Event('input', { bubbles: true }));
-    expect(sent).toEqual([{ t: 'event', id: t1.id, event: 'Change', args: [], state: { Text: 'ab' } }]);
+    expect(sent).toEqual([{ t: 'event', id: t1.id, event: 'Change', args: [], state: { Text: 'ab', SelStart: 2, SelLength: 0 } }]);
   });
 
   test('checkbox toggles and reports state', () => {
@@ -209,7 +209,8 @@ describe('mountFormWindow', () => {
     const get = mount([t1], { [t1.id]: ['GotFocus', 'LostFocus'] });
     const el = inputOf(get(t1));
     el.focus(); el.blur();
-    expect(sent.map(m => (m as { event: string }).event)).toEqual(['GotFocus', 'LostFocus']);
+    expect(sent.filter(m => m.t === 'event').map(m => (m as { event: string }).event)).toEqual(['GotFocus', 'LostFocus']);
+    expect(sent[0]).toEqual({ t: 'activated' });   // the focus came from outside the form
   });
 
   test('form click, close button and resize', () => {
@@ -293,6 +294,7 @@ describe('mountFormWindow', () => {
     const ok = mk('CommandButton', { Default: true });
     mount([t1, ok], { [ok.id]: ['Click'] });
     await Promise.resolve();
+    win.receive({ t: 'focusInitial' });   // the session sends it after Form_Activate
     expect(document.activeElement).toBe(root.querySelector('input'));
     sent.length = 0;
     key(document.activeElement!, 'keydown', 'Enter', 13);
@@ -303,6 +305,7 @@ describe('mountFormWindow', () => {
     const l = mk('Label');
     mount([l], { form: ['KeyPress'] }, { KeyPreview: true });
     await Promise.resolve();
+    win.receive({ t: 'focusInitial' });
     expect(document.activeElement).toBe(root.firstElementChild);
     sent.length = 0;
     expect(typeKey(document.activeElement!, 'q')).toBe(true);   // not a text field: not swallowed

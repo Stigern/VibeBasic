@@ -1017,6 +1017,11 @@ export class ControlObject implements VBObject, DataConsumer {
       }
       case 'int': {
         const n = num(v);
+        if (this.def.type === 'TextBox' && (pd.name === 'SelStart' || pd.name === 'SelLength')) {   // 380 below 0; at most the text
+          if (n < 0) throw new VBRuntimeError(380);
+          const len = String(this.props.Text ?? '').length;
+          return pd.name === 'SelStart' ? Math.min(n, len) : Math.min(n, len - Math.min(Number(this.props.SelStart) || 0, len));
+        }
         if (pd.min !== undefined && n < pd.min) throw new VBRuntimeError(380);
         if (pd.max !== undefined && n > pd.max) throw new VBRuntimeError(380);
         if (this.def.type === 'FlatScrollBar' && pd.name === 'Value') {   // the FlatScrollBar clamps a Value outside Min .. Max
@@ -1042,7 +1047,7 @@ export class ControlObject implements VBObject, DataConsumer {
     if (this.def.type === 'RichTextBox' && this.writeRich(pd, v, patch)) {
       // handled: the text with its formats is kept here, the window gets it as Runs
     } else if (name === 'SelText') {
-      const t = String(this.props.Text ?? ''), s = Number(this.props.SelStart), n = Number(this.props.SelLength);
+      const t = String(this.props.Text ?? ''), s = Math.min(Number(this.props.SelStart) || 0, t.length), n = Math.max(0, Number(this.props.SelLength) || 0);
       const ins = String(v);
       this.props.Text = t.slice(0, s) + ins + t.slice(s + n);
       this.props.SelStart = s + ins.length; this.props.SelLength = 0;
@@ -1059,6 +1064,13 @@ export class ControlObject implements VBObject, DataConsumer {
         if (name === 'Path') { Object.assign(patch, { List: [], ListIndex: -1 }); Object.assign(this.props, { List: [], ListIndex: -1 }); this.reload(); }
         else if (this.def.type === 'FileListBox' && (name === 'Pattern' || name === 'Hidden' || name === 'Normal' || name === 'Archive')) Object.assign(patch, this.listProps());
       }
+      if (this.def.type === 'TextBox' && (name === 'SelStart' || name === 'Text')) {
+        // VB6: a new SelStart is an insertion point; a new Text puts it at the start. The window gets both, so it selects
+        // without a SelStart / SelLength of its own (the user's selection reaches the mirror as state)
+        if (name === 'Text') this.props.SelStart = 0;
+        this.props.SelLength = 0;
+        Object.assign(patch, { SelStart: this.props.SelStart, SelLength: 0 });
+      } else if (this.def.type === 'TextBox' && name === 'SelLength') patch.SelStart = this.props.SelStart;
       if (name === 'ListIndex') {
         const i = v as number;
         if (this.def.type === 'ComboBox') { this.props.Text = i >= 0 ? this.list()[i] : ''; patch.Text = this.props.Text; }

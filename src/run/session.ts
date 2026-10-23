@@ -65,6 +65,8 @@ export class RunSession implements Host, FormSession {
   private readonly app: AppObject;
   /** The form activated last (Screen.ActiveForm); null when no form is shown. */
   private activeForm: FormInstance | null = null;
+  /** The shown forms in the order they were last activated (the next one to activate when the active form goes). */
+  private activation: FormInstance[] = [];
   private readonly screen = new ScreenObject({
     form: () => this.activeForm ?? Nothing,
     control: () => this.activeForm?.activeControl() ?? Nothing,
@@ -183,12 +185,30 @@ export class RunSession implements Host, FormSession {
   }
 
   formUnloaded(form: FormInstance): void {
-    if (this.activeForm === form) this.activeForm = null;
+    this.formLeft(form, false);
     this.updateBlocked();
     this.maybeEnd();
   }
 
-  formActivated(form: FormInstance): void { this.activeForm = form; }
+  async formActivated(form: FormInstance): Promise<void> {
+    if (this.activeForm === form || this.ended) return;
+    const old = this.activeForm;
+    this.activeForm = form;
+    this.activation = [...this.activation.filter(f => f !== form), form];
+    if (old?.loaded) await this.fire(old.name, 'Form_Deactivate', []);
+    if (form.loaded && this.activeForm === form) await this.fire(form.name, 'Form_Activate', []);
+  }
+
+  /** Hide raises Deactivate (Unload does not, as in VB6); the modal form on top, or else the form active before, is activated. */
+  formLeft(form: FormInstance, hidden: boolean): void {
+    this.activation = this.activation.filter(f => f !== form);
+    if (this.activeForm !== form || this.ended) return;
+    this.activeForm = null;
+    if (hidden && form.loaded) void this.fire(form.name, 'Form_Deactivate', []);
+    const top = this.modalStack[this.modalStack.length - 1];
+    const next = top?.visible ? top : [...this.activation].reverse().find(f => f.loaded && f.visible);
+    if (next) void this.formActivated(next);
+  }
 
   pushModal(form: FormInstance): void {
     if (!this.modalStack.includes(form)) this.modalStack.push(form);
@@ -222,7 +242,7 @@ export class RunSession implements Host, FormSession {
     if (own) {
       if (l === 'me') return own;
       const c = own.control(name);
-      if (c) return c;
+      if (c) { own.autoLoad(); return c; }   // the form's own code touches a control: VB6 loads the form (again, after Unload Me)
     }
     const f = this.forms.get(l);
     if (f) return f;

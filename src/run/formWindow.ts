@@ -9,6 +9,7 @@ import { encodeRuns, readRuns } from '../controls/richText';
 import { ribbonClick } from '../model/sheridan';
 import { userClickButton } from '../model/toolbar';
 import type { ControlDef, PropValue } from '../model/types';
+import { domText, vbPos, vbText } from '../controls/textPos';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 
 type Props = Record<string, PropValue>;
@@ -27,13 +28,23 @@ function vbKeyCode(e: KeyboardEvent): number {
   return e.key.length === 1 ? e.key.toUpperCase().charCodeAt(0) : 0;
 }
 const shiftBits = (e: MouseEvent | KeyboardEvent): number => (e.shiftKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.altKey ? 4 : 0);
-/** KeyAscii for the keys that raise KeyPress: typable characters, Enter and Backspace. */
+const CTRL_PUNCT: Record<string, number> = { '[': 27, '\\': 28, ']': 29 };
+/** KeyAscii for the keys that raise KeyPress: typable characters, Enter, Backspace, Escape (27) and Ctrl+A .. Ctrl+Z (1 .. 26),
+ *  Ctrl+[ \ ] (27 .. 29). Cmd combinations are the menus' (none). */
 function keyAscii(e: KeyboardEvent): number | null {
-  if (e.isComposing || e.ctrlKey || e.metaKey) return null;
+  if (e.isComposing || e.metaKey) return null;
+  if (e.key === 'Escape') return 27;
+  if (e.ctrlKey) {
+    if (e.altKey) return null;
+    if (/^[a-z]$/i.test(e.key)) return e.key.toUpperCase().charCodeAt(0) - 64;
+    return CTRL_PUNCT[e.key] ?? null;
+  }
   if (e.key === 'Enter') return 13;
   if (e.key === 'Backspace') return 8;
   return e.key.length === 1 ? e.key.charCodeAt(0) : null;
 }
+/** A KeyAscii that puts something in a text field (the control characters of Escape and Ctrl+letter do not). */
+const typable = (ascii: number): boolean => ascii >= 32 || ascii === 8 || ascii === 13;
 
 /** One RichTextBox change of an RtfOps list (props in the order the program set them). */
 function parseOp(o: string): Props {
@@ -44,7 +55,7 @@ function isTextField(el: EventTarget | null): el is HTMLInputElement | HTMLTextA
   return el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && (el.type === 'text' || el.type === 'password'));
 }
 
-export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: FromWindow) => void): { receive(m: ToWindow): void; dispose(): void } {
+export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: FromWindow) => void): { receive(m: ToWindow): void; dispose(): void } {
   const surface = renderFormSurface(s.form, 'run', ref => s.assets[ref.asset] ?? (ref.asset.startsWith('data:') ? ref.asset : null));
   surface.el.tabIndex = -1;   // so keys reach the form's listeners when no control has focus
   surface.el.style.outline = 'none';
@@ -84,11 +95,16 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     const ie = surface.views.get(id)?.inputEl;
     if (ie && ie.tabIndex >= 0 && tabRank.has(id)) ie.tabIndex = tabRank.get(id)!;
   }
-  /** Applies props to the mirror and the DOM (also keeps text typed by the user across rebuilds of the control). */
-  function apply(id: string, props: Props): void {
+  /** Applies props to the mirror and the DOM (also keeps text typed by the user across rebuilds of the control). The user's own
+   *  TextBox selection (`fromUser`) is already in the field: it goes to the mirror only (selecting again would lose its direction). */
+  function apply(id: string, props: Props, fromUser = false): void {
     const { RtfOps: ops, ...plain } = props;
     Object.assign(propsOf(id), plain);
     if (Array.isArray(ops)) for (const o of ops) Object.assign(propsOf(id), parseOp(o));   // the mirror ends where the replay ends
+    if (fromUser && isTextBox(id) && ('SelStart' in props || 'SelLength' in props)) {
+      const { SelStart: _s, SelLength: _l, ...rest } = props;
+      props = rest;
+    }
     surface.update(id, props);
     if (id === 'form') return;
     if ('TabIndex' in props) { computeTabOrder(); for (const k of defs.keys()) retab(k); } else retab(id);
@@ -96,10 +112,47 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   computeTabOrder();
   for (const id of defs.keys()) retab(id);
 
+  // --- TextBox selection ---
+  // The user's caret and selection reach the run session as state only when they differ from what it knows, and only before the
+  // next message (an event that may read SelStart) or after a pause: moving the caret sends nothing while nothing can read it.
+  const selDirty = new Set<string>();
+  let selTimer: ReturnType<typeof setTimeout> | null = null;
+  const isTextBox = (id: string): boolean => defs.get(id)?.type === 'TextBox';
+  /** SelStart / SelLength of a TextBox field in VB characters (`vb`: the text the field shows). */
+  function selOf(id: string, vb?: string): Props | null {
+    const el = viewOf(id)?.inputEl ?? null;
+    if (!isTextField(el)) return null;
+    const multi = el instanceof HTMLTextAreaElement, cur = propsOf(id).Text;
+    const t = vb ?? (typeof cur === 'string' && domText(cur, multi) === el.value ? cur : vbText(el.value, multi));
+    const a = vbPos(t, el.selectionStart ?? 0, multi), b = vbPos(t, el.selectionEnd ?? 0, multi);
+    return { SelStart: a, SelLength: b - a };
+  }
+  function flushSel(): void {
+    if (selTimer) { clearTimeout(selTimer); selTimer = null; }
+    for (const id of selDirty) {
+      const sel = selOf(id), cur = propsOf(id);
+      if (sel && (sel.SelStart !== (cur.SelStart ?? 0) || sel.SelLength !== (cur.SelLength ?? 0))) { Object.assign(cur, sel); post({ t: 'state', id, props: sel }); }
+    }
+    selDirty.clear();
+  }
+  function markSel(e: Event): void {
+    const tg = targetOf(e.target);
+    if (blocked || !tg || !isTextBox(tg.id) || e.target !== viewOf(tg.id)?.inputEl) return;
+    selDirty.add(tg.id);
+    if (selTimer) clearTimeout(selTimer);
+    selTimer = setTimeout(() => { selTimer = null; if (!disposed) flushSel(); }, 150);
+  }
+  // capture: marked before the KeyUp / MouseUp / GotFocus of the same event is sent
+  for (const type of ['select', 'keyup', 'mouseup', 'focusin']) surface.el.addEventListener(type, markSel, { capture: true, signal: ac.signal });
+
   // --- sending ---
+  function send(m: FromWindow): void {
+    if (selDirty.size) flushSel();
+    post(m);
+  }
   /** `event` only when the event has code; changed state always (on the event, or alone). */
   function emit(id: string, event: string, args: (number | string)[] = [], st?: Props): void {
-    if (st) apply(id, st);
+    if (st) apply(id, st, true);
     if (handles(id, event)) send({ t: 'event', id, event, args, ...(st ? { state: st } : {}) });
     else if (st && id !== 'form') send({ t: 'state', id, props: st });
   }
@@ -176,6 +229,12 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   on('mousemove', mouse('MouseMove'));
 
   // --- focus ---
+  // the focus came from outside the form (another form, or the window became the key window): the form is the active one
+  on<FocusEvent>('focusin', e => {
+    if (!blocked && !(e.relatedTarget instanceof Node && surface.el.contains(e.relatedTarget))) send({ t: 'activated' });
+  });
+  const view = root.ownerDocument.defaultView;
+  if (root.dataset.vbWindow !== undefined && view) view.addEventListener('focus', () => { if (!blocked && !disposed) send({ t: 'activated' }); }, { signal: ac.signal });
   on<FocusEvent>('focusin', e => {
     const tg = targetOf(e.target);
     if (blocked || !tg?.def || targetOf(e.relatedTarget)?.id === tg.id) return;
@@ -193,7 +252,11 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     const tg = targetOf(e.target);
     if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl) return;
     const type = tg.def.type, el = e.target as HTMLElement;
-    if (type === 'TextBox' || type === 'MaskedEdit' || ((type === 'ComboBox' || type === 'DataCombo' || type === 'ImageCombo') && !(el as HTMLInputElement).readOnly)) {
+    if (type === 'TextBox') {   // a multi-line box gives CR LF line breaks (the textarea holds LF); the caret moved with the text
+      const text = vbText((el as HTMLInputElement).value, el instanceof HTMLTextAreaElement);
+      selDirty.delete(tg.id);
+      emit(tg.id, 'Change', [], { Text: text, ...selOf(tg.id, text) });
+    } else if (type === 'MaskedEdit' || ((type === 'ComboBox' || type === 'DataCombo' || type === 'ImageCombo') && !(el as HTMLInputElement).readOnly)) {
       emit(tg.id, 'Change', [], { Text: (el as HTMLInputElement).value });
     } else if (type === 'RichTextBox') {
       emit(tg.id, 'Change', [], { Text: el.textContent ?? '', Runs: encodeRuns(readRuns(el)) });
@@ -325,6 +388,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   /** A MaskedEdit with a Mask puts typed characters in itself (see calendar.ts). */
   const isMasked = (el: EventTarget | null): el is HTMLInputElement => el instanceof HTMLInputElement && el.dataset.mask === '1';
   function insertKey(el: EventTarget | null, ascii: number): void {
+    if (!typable(ascii)) return;
     if (isMasked(el)) { if (!el.readOnly) el.dispatchEvent(new CustomEvent('vbmaskkey', { detail: { ascii } })); return; }
     if (!isTextField(el) || el.readOnly) return;
     const start = el.selectionStart ?? el.value.length, end = el.selectionEnd ?? start;
@@ -361,8 +425,9 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     for (const id of chain) emit(id, 'KeyDown', [code, shift]);
     const ascii = keyAscii(e);
     const pc = ascii === null ? [] : chain.filter(id => handles(id, 'KeyPress'));
-    if (pc.length) { if (isTextField(e.target)) e.preventDefault(); sendKeyPress(pc, ascii!, e.target); }
-    else if (ascii !== null && isMasked(e.target)) { e.preventDefault(); insertKey(e.target, ascii); }
+    // a control character (Esc, Ctrl+C ...) is reported, but the field keeps its own action for it (copy, paste ...)
+    if (pc.length) { if (isTextField(e.target) && typable(ascii!)) e.preventDefault(); sendKeyPress(pc, ascii!, e.target); }
+    else if (ascii !== null && typable(ascii) && isMasked(e.target)) { e.preventDefault(); insertKey(e.target, ascii); }
     if (e.key === 'Enter' && !prevented && tg.def?.type !== 'CommandButton' && tg.def?.type !== 'RichTextBox' && !(e.target instanceof HTMLTextAreaElement)) clickButton('Default');
     else if (e.key === 'Escape' && !prevented) clickButton('Cancel');
   });
@@ -405,7 +470,8 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
       .find(id => usable(id) && (viewOf(id)?.inputEl?.tabIndex ?? -1) >= 0);
     (first ? viewOf(first)!.inputEl! : surface.el).focus();
   }
-  queueMicrotask(() => { if (disposed) return; send({ t: 'ready' }); focusInitial(); });
+  // the session sends focusInitial once Form_Activate has run (VB6: Load, Resize, Activate, then the first control's GotFocus)
+  queueMicrotask(() => { if (!disposed) send({ t: 'ready' }); });
 
   return {
     receive(m) {
@@ -429,7 +495,10 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
           state.delete(m.id);
           computeTabOrder();
           break;
-        case 'show': surface.el.style.display = ''; focusInitial(); break;
+        case 'show': surface.el.style.display = ''; break;
+        case 'focusInitial':   // unless code (SetFocus in Form_Activate) has already put the focus in the form
+          if (!surface.el.contains(root.ownerDocument.activeElement)) focusInitial();
+          break;
         case 'hide': surface.el.style.display = 'none'; break;
         case 'blocked': setBlocked(m.blocked); break;
         case 'keyResult': {
@@ -444,6 +513,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     dispose() {
       if (disposed) return;
       disposed = true;
+      if (selTimer) clearTimeout(selTimer);
       ac.abort();
       observer?.disconnect();
       // an open combo list holds a document listener until it is closed

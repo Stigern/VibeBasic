@@ -35,8 +35,11 @@ export interface FormSession {
   fire(moduleName: string, proc: string, args: VBRef[]): Promise<void>;
   syncTimer(form: FormInstance, timer: ControlObject): void;
   formUnloaded(form: FormInstance): void;
-  /** The form became the active one (shown, or the user focused it): Screen.ActiveForm. */
-  formActivated(form: FormInstance): void;
+  /** The form became the active one (shown, or the user focused it): Screen.ActiveForm; Deactivate on the form that was active,
+   *  then Activate on this one (nothing when it already is the active one). */
+  formActivated(form: FormInstance): Promise<void>;
+  /** The form was hidden or unloaded: when it was the active one, the form below it becomes active. */
+  formLeft(form: FormInstance, hidden: boolean): void;
   pushModal(form: FormInstance): void;
   popModal(form: FormInstance): void;
   updateBlocked(): void;
@@ -183,7 +186,7 @@ export class FormInstance implements VBObject {
 
   private setActive(id: string | null): void {
     this.activeId = id;
-    if (this.visible) this.s.formActivated(this);
+    if (this.visible) void this.s.formActivated(this);
   }
 
   timers(): ControlObject[] {
@@ -210,7 +213,8 @@ export class FormInstance implements VBObject {
       : runLoad();
   }
 
-  private autoLoad(): void {
+  /** VB6 loads a form when code touches one of its properties or controls (not its Public variables and procedures). */
+  autoLoad(): void {
     if (!this.loaded && !this.s.ended) void this.load();
   }
 
@@ -231,10 +235,8 @@ export class FormInstance implements VBObject {
       if (!wasVisible) this.deliver({ t: 'show' });
       if (modal) this.s.pushModal(this);
     }
-    if (!wasVisible && this.loaded) {
-      this.s.formActivated(this);
-      await this.s.fire(this.name, 'Form_Activate', []);
-    }
+    if (this.loaded && this.visible) await this.s.formActivated(this);
+    if (!wasVisible && this.loaded && this.visible) this.deliver({ t: 'focusInitial' });
     if (modal && this.visible && this.loaded) await new Promise<void>(r => this.modalWaiters.push(r));
   }
 
@@ -257,6 +259,7 @@ export class FormInstance implements VBObject {
     if (this.st) this.st.form.props.Visible = false;
     this.deliver({ t: 'hide' });
     this.releaseModal();
+    this.s.formLeft(this, true);
   }
 
   /** QueryUnload(Cancel, UnloadMode) then Unload(Cancel); false when cancelled. */
@@ -340,6 +343,7 @@ export class FormInstance implements VBObject {
     switch (m.t) {
       case 'ready': this.s.queue.flush(); break;
       case 'focused': this.setActive(m.id); break;
+      case 'activated': if (this.visible && !this.blocked) void this.s.formActivated(this); break;
       case 'state': st.byId.get(m.id)?.applyState(m.props); break;
       case 'resized':
         st.form.applyState({ Width: m.width, Height: m.height });
@@ -446,12 +450,27 @@ export class FormInstance implements VBObject {
     return this.s.program.hasPublicMember(this.name, name);
   }
 
+  /** A Public member of the form's code that no property, control or built-in member of the form hides. Using one does not
+   *  load the form (its module-level values live on after Unload, as in VB6): `frmLogin.OK` after the dialog has closed. */
+  private codeMember(name: string): 'proc' | 'var' | null {
+    const l = lc(name);
+    if (this.controlNames.has(l) || l === 'scalewidth' || l === 'scaleheight' || l === 'visible' || FORM_METHODS.has(l) || FORM_OBJECTS.has(l)
+      || getPropDef('Form', name)) return null;
+    return this.publicMember(name);
+  }
+
   private callPublic(name: string, args: VBValue[]): Promise<VBValue> {
-    this.autoLoad();
     return this.s.program.callPublic(this.name, name, args);
   }
 
   getMember(name: string, args: VBValue[]): VBValue {
+    const pm = this.codeMember(name);
+    if (pm === 'var') {
+      const v = this.s.program.getPublicVar(this.name, name);
+      return args.length && v instanceof VBArray ? v.get(args.map(a => Number(coerce(a, 'Long')))) : v;
+    }
+    // `x = Form2.GetCount` (no parentheses): the interpreter awaits a Promise from getMember
+    if (pm === 'proc') return this.callPublic(name, args) as unknown as VBValue;
     this.autoLoad();
     const st = this.state();
     const l = lc(name);
@@ -474,19 +493,18 @@ export class FormInstance implements VBObject {
       if (args.length) throw new VBRuntimeError(450);
       return l === 'count' ? this.controls().length : this.activeControl();
     }
-    if (!getPropDef('Form', name)) {
-      const pm = this.publicMember(name);
-      if (pm === 'var') {
-        const v = this.s.program.getPublicVar(this.name, name);
-        return args.length && v instanceof VBArray ? v.get(args.map(a => Number(coerce(a, 'Long')))) : v;
-      }
-      // `x = Form2.GetCount` (no parentheses): the interpreter awaits a Promise from getMember
-      if (pm === 'proc') return this.callPublic(name, args) as unknown as VBValue;
-    }
     return st.form.getMember(name, args);
   }
 
   setMember(name: string, args: VBValue[], value: VBValue): void {
+    if (this.codeMember(name) === 'var') {
+      if (args.length) {
+        const arr = this.s.program.getPublicVar(this.name, name);
+        if (!(arr instanceof VBArray)) throw new VBRuntimeError(13);
+        arr.set(args.map(a => Number(coerce(a, 'Long'))), value);
+      } else this.s.program.setPublicVar(this.name, name, value);
+      return;
+    }
     this.autoLoad();
     const st = this.state();
     const l = lc(name);
@@ -502,14 +520,6 @@ export class FormInstance implements VBObject {
       if (toBool(value)) void this.show(false); else this.hide();
       return;
     }
-    if (!getPropDef('Form', name) && this.publicMember(name) === 'var') {
-      if (args.length) {
-        const arr = this.s.program.getPublicVar(this.name, name);
-        if (!(arr instanceof VBArray)) throw new VBRuntimeError(13);
-        arr.set(args.map(a => Number(coerce(a, 'Long'))), value);
-      } else this.s.program.setPublicVar(this.name, name, value);
-      return;
-    }
     st.form.setMember(name, args, value);
   }
 
@@ -523,7 +533,7 @@ export class FormInstance implements VBObject {
       case 'load': return this.load().then(() => Empty);
       case 'unload': return this.unload(1).then(() => Empty);
     }
-    if (!FORM_METHODS.has(l) && !getPropDef('Form', name) && this.publicMember(name) === 'proc') return this.callPublic(name, args);
+    if (this.codeMember(name) === 'proc') return this.callPublic(name, args);
     return this.callSync(l, args);
   }
 
