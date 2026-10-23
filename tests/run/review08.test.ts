@@ -200,4 +200,67 @@ Private Sub Form_Deactivate(): Debug.Print "F2 deactivate": End Sub`, controls: 
     await start(project([{ name: 'Form1', code: 'Private Sub Form_Activate(): Text2.SetFocus: End Sub', controls: [['TextBox', 'Text1'], ['TextBox', 'Text2']] }]));
     expect(document.activeElement).toBe(inputOf('Text2'));
   });
+  test('5: a MultiSelect ListBox keeps every selection (user and code), SelCount', async () => {
+    const s = await start(project([{ name: 'Form1', code: `Private Sub Form_Load()
+  List1.AddItem "a": List1.AddItem "b": List1.AddItem "c"
+  List2.AddItem "x": List2.AddItem "y": List2.AddItem "z"
+End Sub
+Private Sub Command1_Click()
+  Dim i As Integer
+  For i = 0 To List1.ListCount - 1
+    If List1.Selected(i) Then Debug.Print List1.List(i)
+  Next
+  Debug.Print "count " & List1.SelCount & " index " & List1.ListIndex
+  List2.Selected(0) = True: List2.Selected(2) = True
+  Debug.Print List2.Selected(0) & " " & List2.Selected(2) & " " & List2.SelCount
+  List2.RemoveItem 0
+  Debug.Print List2.Selected(0) & " " & List2.Selected(1) & " " & List2.SelCount
+End Sub`, controls: [['ListBox', 'List1', { MultiSelect: 1 }], ['ListBox', 'List2', { MultiSelect: 2 }], ['CommandButton', 'Command1']] }]));
+    const l1 = inputOf<HTMLSelectElement>('List1');
+    l1.options[0].selected = true; l1.dispatchEvent(new Event('change', { bubbles: true }));
+    l1.options[2].selected = true; l1.dispatchEvent(new Event('change', { bubbles: true }));
+    click('Command1'); await settle(s);
+    expect(out).toEqual(['a', 'c', 'count 2 index 2', 'True True 2', 'False True 1']);
+    const l2 = inputOf<HTMLSelectElement>('List2');
+    expect([...l2.options].map(o => o.selected)).toEqual([false, true]);
+  });
+
+  test('13: ListBox and ComboBox ItemData move with their items', async () => {
+    const s = await start(project([{ name: 'Form1', code: `Private Sub Command1_Click()
+  List1.AddItem "Cid": List1.ItemData(List1.NewIndex) = 3
+  List1.AddItem "Ann": List1.ItemData(List1.NewIndex) = 1
+  List1.AddItem "Bob": List1.ItemData(List1.NewIndex) = 2
+  Debug.Print List1.List(0) & List1.ItemData(0) & List1.List(1) & List1.ItemData(1) & List1.List(2) & List1.ItemData(2)
+  List1.RemoveItem 0
+  Debug.Print List1.ItemData(0) & List1.ItemData(1)
+  Combo1.AddItem "x": Combo1.ItemData(0) = 42
+  Debug.Print CStr(Combo1.ItemData(0))
+  On Error Resume Next
+  Debug.Print List1.ItemData(5)
+  Debug.Print CStr(Err.Number)
+  List1.Clear
+  List1.AddItem "z"
+  Debug.Print CStr(List1.ItemData(0))
+End Sub`, controls: [['ListBox', 'List1', { Sorted: true }], ['ComboBox', 'Combo1'], ['CommandButton', 'Command1']] }]));
+    click('Command1'); await settle(s);
+    expect(out).toEqual(['Ann1Bob2Cid3', '23', '42', '381', '0']);
+  });
+
+  test('20: a ComboBox gets ListIndex -1 once the user types in it', async () => {
+    const s = await start(project([{ name: 'Form1', code: `Private Sub Form_Load()
+  Combo1.AddItem "apple": Combo1.AddItem "banana"
+End Sub
+Private Sub cmdOK_Click()
+  Debug.Print Combo1.ListIndex & " " & Combo1.Text
+End Sub`, controls: [['ComboBox', 'Combo1'], ['CommandButton', 'cmdOK']] }]));
+    const item = elOf('Combo1').querySelectorAll<HTMLElement>('.vb-item')[1];
+    item.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    await settle(s);
+    click('cmdOK'); await settle(s);
+    const t = inputOf('Combo1');
+    t.value = 'cherry';
+    t.dispatchEvent(new Event('input', { bubbles: true }));
+    click('cmdOK'); await settle(s);
+    expect(out).toEqual(['1 banana', '-1 cherry']);
+  });
 });

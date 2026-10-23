@@ -256,7 +256,10 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
       const text = vbText((el as HTMLInputElement).value, el instanceof HTMLTextAreaElement);
       selDirty.delete(tg.id);
       emit(tg.id, 'Change', [], { Text: text, ...selOf(tg.id, text) });
-    } else if (type === 'MaskedEdit' || ((type === 'ComboBox' || type === 'DataCombo' || type === 'ImageCombo') && !(el as HTMLInputElement).readOnly)) {
+    } else if (type === 'ComboBox' && !(el as HTMLInputElement).readOnly) {   // typed text is no item of the list: ListIndex -1
+      const pick = el.dataset.vbPick;
+      emit(tg.id, 'Change', [], { Text: (el as HTMLInputElement).value, ListIndex: pick === undefined ? -1 : Number(pick) });
+    } else if (type === 'MaskedEdit' || ((type === 'DataCombo' || type === 'ImageCombo') && !(el as HTMLInputElement).readOnly)) {
       emit(tg.id, 'Change', [], { Text: (el as HTMLInputElement).value });
     } else if (type === 'RichTextBox') {
       emit(tg.id, 'Change', [], { Text: el.textContent ?? '', Runs: encodeRuns(readRuns(el)) });
@@ -266,7 +269,14 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
     const tg = targetOf(e.target);
     if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl) return;
     const type = tg.def.type, el = e.target as HTMLElement;
-    if (type === 'ListBox' || type === 'FileListBox' || type === 'DataList') emit(tg.id, 'Click', [], { ListIndex: (el as HTMLSelectElement).selectedIndex });
+    if (type === 'ListBox' && (el as HTMLSelectElement).multiple) {
+      // MultiSelect: every item's flag; ListIndex is the item the user changed (the focus), as in VB6
+      const opts = [...(el as HTMLSelectElement).options], was = String(propsOf(tg.id).SelFlags ?? '');
+      const flags = opts.map(o => (o.selected ? '1' : '0')).join('');
+      const changed = opts.findIndex((o, i) => o.selected !== (was[i] === '1'));
+      const li = changed >= 0 ? changed : Number(propsOf(tg.id).ListIndex ?? -1);
+      emit(tg.id, 'Click', [], { ListIndex: li, SelFlags: flags });
+    } else if (type === 'ListBox' || type === 'FileListBox' || type === 'DataList') emit(tg.id, 'Click', [], { ListIndex: (el as HTMLSelectElement).selectedIndex });
     else if (type === 'HScrollBar' || type === 'VScrollBar' || type === 'Slider' || type === 'UpDown' || type === 'FlatScrollBar') emit(tg.id, 'Change', [], { Value: Number(el.dataset.value) || 0 });
     else if (type === 'DTPicker') emit(tg.id, 'Change', [], { Value: el.dataset.value ? Number(el.dataset.value) : null });
   });

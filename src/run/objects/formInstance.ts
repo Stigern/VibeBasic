@@ -141,6 +141,7 @@ export class FormInstance implements VBObject {
         }
         const def: ControlDef = { ...t.def, id: `${t.def.id}~${index}`, index, props };
         const c = new ControlObject(def, this.key, this.s.queue, ctx);
+        if (!invisible) c.copyItemData(t);
         this.state().byId.set(def.id, c);
         if (def.type === 'Timer') this.s.syncTimer(this, c);
         if (!invisible) this.s.queue.send(this.key, { t: 'addControl', def: { ...def, props: copyProps(c.props) }, handled: this.handledEvents(def) });
@@ -388,7 +389,7 @@ export class FormInstance implements VBObject {
         if (prop === 'Text' && changed) ev = 'Change';
         else if (prop === 'ListIndex' && changed) ev = 'Click';
         break;
-      case 'ListBox': if (prop === 'ListIndex' && changed) ev = 'Click'; break;
+      case 'ListBox': if ((prop === 'ListIndex' || prop === 'SelFlags') && changed) ev = 'Click'; break;
       case 'HScrollBar': case 'VScrollBar': case 'FlatScrollBar': if (prop === 'Value' && changed) ev = 'Change'; break;
       case 'RichTextBox':
         if (prop === 'Text' && changed) ev = 'Change';

@@ -166,6 +166,8 @@ export class ControlObject implements VBObject, DataConsumer {
   private chart: ChartModel | null = null;
   /** A bound control is being filled from its data control (no DataChanged). */
   private filling = false;
+  /** ListBox / ComboBox ItemData: a Long per item (it moves with the item). */
+  private itemData: number[] = [];
 
   constructor(readonly def: ControlDef, private formKey: string, private queue: PatchQueue, private ctx: RunContext) {
     const td = CONTROL_TYPES[def.type];
@@ -766,7 +768,11 @@ export class ControlObject implements VBObject, DataConsumer {
     if (this.def.type === 'SSTab') { const v = this.ssTabGet(pd, args); if (v !== undefined) return v; }
     if (pd.kind === 'list') return this.getListItem(args);
     if (pd.name === 'Selected') return this.selected(args);
+    if (pd.name === 'ItemData' && isListType(this.def.type)) return this.itemDataArr()[this.listArg(args)];
     if (args.length) throw new VBRuntimeError(450);
+    if (pd.name === 'SelCount' && this.def.type === 'ListBox') {
+      return this.isMulti() ? this.selFlags().filter(Boolean).length : Number(this.props.ListIndex) >= 0 ? 1 : 0;
+    }
     if (IMAGE_REFS.has(pd.name) || DATA_REFS.has(pd.name)) {   // the ImageList / data control itself (its name when the form cannot be asked)
       const name = String(this.props[pd.name] ?? '');
       return name === '' ? Nothing : (this.ctx.controlByName?.(name) as VBValue | undefined) ?? name;
@@ -828,11 +834,22 @@ export class ControlObject implements VBObject, DataConsumer {
       return;
     }
     if (pd.name === 'Selected') {
-      if (args.length !== 1) throw new VBRuntimeError(450);
-      const i = num(args[0]);
-      if (i < 0 || i >= this.list().length) throw badIndex();
-      if (toBool(this.plain(value))) this.write(this.propDef('ListIndex'), i);
+      const i = this.listArg(args), on = toBool(this.plain(value));
+      if (this.isMulti()) {   // MultiSelect: each item has its own flag; selecting one makes it the ListIndex (the focus) too
+        const flags = this.selFlags(), old = this.props.SelFlags;
+        flags[i] = on;
+        this.setSelFlags(flags);
+        if (on && this.props.ListIndex !== i) this.write(this.propDef('ListIndex'), i);
+        else if (this.props.SelFlags !== old) this.ctx.propChanged?.(this, 'SelFlags', old ?? '');
+        return;
+      }
+      if (on) this.write(this.propDef('ListIndex'), i);
       else if (this.props.ListIndex === i) this.write(this.propDef('ListIndex'), -1);
+      return;
+    }
+    if (pd.name === 'ItemData' && isListType(this.def.type)) {
+      const i = this.listArg(args);
+      this.itemDataArr()[i] = num(this.plain(value));
       return;
     }
     if (args.length) throw new VBRuntimeError(450);
@@ -946,11 +963,39 @@ export class ControlObject implements VBObject, DataConsumer {
   }
 
   private selected(args: VBValue[]): VBValue {
+    const i = this.listArg(args);
+    return this.isMulti() ? this.selFlags()[i] : this.props.ListIndex === i;
+  }
+
+  /** The one item index argument of List(i), Selected(i), ItemData(i): 381 outside the list. */
+  private listArg(args: VBValue[]): number {
     if (args.length !== 1) throw new VBRuntimeError(450);
     const i = num(args[0]);
     if (i < 0 || i >= this.list().length) throw badIndex();
-    return this.props.ListIndex === i;
+    return i;
   }
+
+  /** A ListBox with MultiSelect: Selected(i) is a flag per item (SelFlags, '0' / '1' per item, also what the window shows). */
+  private isMulti(): boolean { return this.def.type === 'ListBox' && Number(this.props.MultiSelect) > 0; }
+  private selFlags(): boolean[] {
+    const f = typeof this.props.SelFlags === 'string' ? this.props.SelFlags : '';
+    return this.list().map((_, i) => f[i] === '1');
+  }
+  private setSelFlags(flags: boolean[], patch?: Record<string, PropValue>): void {
+    const v = flags.map(b => (b ? '1' : '0')).join('');
+    this.props.SelFlags = v;
+    if (patch) patch.SelFlags = v; else this.send({ SelFlags: v });
+  }
+  /** ItemData, as long as the list. */
+  private itemDataArr(): number[] {
+    const n = this.list().length, d = this.itemData;
+    while (d.length < n) d.push(0);
+    d.length = n;
+    return d;
+  }
+
+  /** Load List1(i): the new element gets the items' ItemData too (its List is copied with the properties). */
+  copyItemData(from: ControlObject): void { this.itemData = [...from.itemData]; }
 
   private getListItem(args: VBValue[]): VBValue {
     if (args.length !== 1) throw new VBRuntimeError(450);
@@ -1074,6 +1119,7 @@ export class ControlObject implements VBObject, DataConsumer {
       if (name === 'ListIndex') {
         const i = v as number;
         if (this.def.type === 'ComboBox') { this.props.Text = i >= 0 ? this.list()[i] : ''; patch.Text = this.props.Text; }
+        if (this.isMulti() && i >= 0 && !this.selFlags()[i]) { const f = this.selFlags(); f[i] = true; this.setSelFlags(f, patch); }
       } else if (name === 'Text' && this.def.type === 'ComboBox') {
         const i = this.list().findIndex(s => s === v);
         this.props.ListIndex = i; patch.ListIndex = i;
@@ -1313,9 +1359,12 @@ export class ControlObject implements VBObject, DataConsumer {
       at = num(this.plain(args[1]));
       if (at < 0 || at > list.length) throw new VBRuntimeError(5);
     }
+    const data = this.itemDataArr(), flags = this.selFlags();
     list.splice(at, 0, item);
+    data.splice(at, 0, 0);
     this.props.NewIndex = at;
     const patch: Record<string, PropValue> = { List: [...list] };
+    if (this.isMulti()) { flags.splice(at, 0, false); this.setSelFlags(flags, patch); }
     const li = this.props.ListIndex as number;
     if (li >= at) { this.props.ListIndex = li + 1; patch.ListIndex = li + 1; }
     this.send(patch);
@@ -1327,8 +1376,11 @@ export class ControlObject implements VBObject, DataConsumer {
     const i = num(this.plain(args[0]));
     const list = this.list();
     if (i < 0 || i >= list.length) throw new VBRuntimeError(5);
+    const data = this.itemDataArr(), flags = this.selFlags();
     list.splice(i, 1);
+    data.splice(i, 1);
     const patch: Record<string, PropValue> = { List: [...list] };
+    if (this.isMulti()) { flags.splice(i, 1); this.setSelFlags(flags, patch); }
     const li = this.props.ListIndex as number;
     if (li === i) { this.props.ListIndex = -1; patch.ListIndex = -1; }
     else if (li > i) { this.props.ListIndex = li - 1; patch.ListIndex = li - 1; }
@@ -1340,7 +1392,9 @@ export class ControlObject implements VBObject, DataConsumer {
     this.props.List = [];
     this.props.ListIndex = -1;
     this.props.NewIndex = -1;
+    this.itemData = [];
     const patch: Record<string, PropValue> = { List: [], ListIndex: -1 };
+    if (this.def.type === 'ListBox') { this.props.SelFlags = ''; patch.SelFlags = ''; }
     if (this.def.type === 'ComboBox') { this.props.Text = ''; patch.Text = ''; }
     this.send(patch);
     return Empty;

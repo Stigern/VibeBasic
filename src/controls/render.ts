@@ -316,16 +316,21 @@ function listBox(c: Ctx): Renderer {
       c.setInput(sel);
     },
     patch(k) {
+      if (has(k, 'MultiSelect')) sel.multiple = c.num('MultiSelect') > 0;
       if (has(k, 'List', 'Sorted')) {
         const keep = k === null ? -1 : sel.selectedIndex;
         const items = c.list('List');
         if (c.bool('Sorted')) items.sort((a, b) => a.localeCompare(b));
         sel.replaceChildren(...items.map(t => h('option', {}, t)));
-        sel.selectedIndex = keep < items.length ? keep : -1;
+        if (!sel.multiple) sel.selectedIndex = keep < items.length ? keep : -1;
       }
-      if (has(k, 'MultiSelect')) sel.multiple = c.num('MultiSelect') > 0;
       if (has(k, 'Height')) sel.size = Math.max(2, Math.floor((twipsToPx(c.num('Height')) - 4) / 13));
-      if (has(k, 'ListIndex')) sel.selectedIndex = c.num('ListIndex');
+      if (sel.multiple) {   // MultiSelect: SelFlags ('0' / '1' per item) is the selection; ListIndex is only the focus
+        if (has(k, 'List', 'Sorted', 'MultiSelect', 'SelFlags')) {
+          const f = c.str('SelFlags');
+          [...sel.options].forEach((o, i) => { o.selected = f[i] === '1'; });
+        }
+      } else if (has(k, 'ListIndex', 'MultiSelect')) sel.selectedIndex = c.num('ListIndex');
     },
   };
 }
@@ -358,7 +363,8 @@ function comboBox(c: Ctx): Renderer {
     c.props.Text = items[i];
     markSel();
     close();
-    c.fire('input');
+    input.dataset.vbPick = String(i);   // the text comes from the list (a typed text has no ListIndex)
+    try { c.fire('input'); } finally { delete input.dataset.vbPick; }
     c.fire('change');
     c.el.dispatchEvent(new CustomEvent('vbselect', { bubbles: true, detail: { index: i } }));
   }
