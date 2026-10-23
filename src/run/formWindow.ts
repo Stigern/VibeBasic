@@ -11,12 +11,18 @@ import { userClickButton } from '../model/toolbar';
 import type { ControlDef, PropValue } from '../model/types';
 import { domText, vbPos, vbText } from '../controls/textPos';
 import { GfxLayer } from '../gfx/dom';
+import { parseMnemonic } from '../ui98/dom';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 
 type Props = Record<string, PropValue>;
 type Target = { id: string; def: ControlDef | null };
 
 const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'Toolbar', 'DTPicker', 'MSChart', 'TreeView', 'ListView', 'MSFlexGrid', 'RichTextBox', 'DataGrid', 'SSPanel', 'SSFrame', 'SSCommand', 'CoolBar', 'Animation']);   // Calendar raises its own Click
+/** Alt+letter presses these (their Caption's &), or moves the focus to the next control in tab order (a Label's or Frame's). */
+const ACCEL_CLICK = new Set(['CommandButton', 'CheckBox', 'OptionButton', 'SSCommand', 'SSCheck', 'SSOption', 'SSRibbon']);
+const ACCEL_FOCUS = new Set(['Label', 'Frame', 'SSFrame']);
+/** The controls a mouse press focuses by hand: WebKit does not focus a button or check box on a click, VB6 does (GotFocus, Validate). */
+const CLICK_FOCUS = new Set(['CommandButton', 'CheckBox', 'OptionButton']);
 const KEY_CODES: Record<string, number> = {
   Backspace: 8, Tab: 9, Enter: 13, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34, End: 35, Home: 36,
   ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46,
@@ -198,6 +204,11 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
     if (closeBtn) { if (!blocked) send({ t: 'closeRequest' }); return; }
     const tg = clickTarget(e);
     if (blocked || !tg) return;
+    // the focus is moving to this control and the Validate event of the control it leaves has not answered: Cancel eats the click
+    if (validation) { validation.held.push(() => clicked(tg)); return; }
+    clicked(tg);
+  });
+  function clicked(tg: Target): void {
     if (tg.id === 'form') { emit('form', 'Click'); return; }
     const type = tg.def!.type;
     if (!usable(tg.id)) return;
@@ -232,7 +243,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
       if (r.value === (me.Value === true)) return;   // a ribbon that stays down (GroupAllowAllUp = False): nothing changed, no Click
       emit(tg.id, 'Click', [r.value ? -1 : 0], { Value: r.value });
     }
-  });
+  }
   on<MouseEvent>('dblclick', e => { const tg = clickTarget(e); if (!blocked && tg && usable(tg.id)) emit(tg.id, 'DblClick'); });
 
   // --- mouse ---
@@ -250,6 +261,8 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   on<MouseEvent>('mousedown', e => {
     const tg = targetOf(e.target);
     if (blocked || !tg || !usable(tg.id)) return;   // a disabled control gets no mouse events
+    const ie = tg.def && CLICK_FOCUS.has(tg.def.type) && e.button === 0 ? viewOf(tg.id)?.inputEl : undefined;
+    if (ie && ie.tabIndex >= 0 && ie.ownerDocument.activeElement !== ie) { e.preventDefault(); ie.focus(); }
     captured = tg.id;
     mouseTo(tg.id, 'MouseDown', e);
   });
@@ -271,16 +284,27 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   });
   const view = root.ownerDocument.defaultView;
   if (root.dataset.vbWindow !== undefined && view) view.addEventListener('focus', () => { if (!blocked && !disposed) send({ t: 'activated' }); }, { signal: ac.signal });
+  // Validate: when the focus leaves a control that has Validate code for a control whose CausesValidation is True, the event goes to the
+  // program first; LostFocus, GotFocus and the click on the new control wait for its answer (`held`). Cancel puts the focus back, silently.
+  let validation: { requestId: number; from: string; held: (() => void)[] } | null = null;
+  let silent = false;
+  const later = (f: () => void): void => { if (validation) validation.held.push(f); else f(); };
   on<FocusEvent>('focusin', e => {
     const tg = targetOf(e.target);
-    if (blocked || !tg?.def || targetOf(e.relatedTarget)?.id === tg.id) return;
-    if (handles(tg.id, 'GotFocus')) emit(tg.id, 'GotFocus');
-    else send({ t: 'focused', id: tg.id });   // the run session keeps ActiveControl
+    if (silent || blocked || !tg?.def || targetOf(e.relatedTarget)?.id === tg.id) return;
+    later(() => {
+      if (handles(tg.id, 'GotFocus')) emit(tg.id, 'GotFocus');
+      else send({ t: 'focused', id: tg.id });   // the run session keeps ActiveControl
+    });
   });
   on<FocusEvent>('focusout', e => {
-    const tg = targetOf(e.target);
-    if (blocked || !tg?.def || targetOf(e.relatedTarget)?.id === tg.id) return;
-    emit(tg.id, 'LostFocus');
+    const tg = targetOf(e.target), to = targetOf(e.relatedTarget);
+    if (silent || blocked || !tg?.def || to?.id === tg.id) return;
+    if (!validation && to?.def && handles(tg.id, 'Validate') && propsOf(to.id).CausesValidation !== false && usable(to.id)) {
+      validation = { requestId: ++reqSeq, from: tg.id, held: [] };
+      send({ t: 'event', id: tg.id, event: 'Validate', args: [0], requestId: validation.requestId });
+    }
+    later(() => emit(tg.id, 'LostFocus'));
   });
 
   // --- text, lists, scroll bars ---
@@ -431,6 +455,31 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
       if (usable(n) && (viewOf(n)?.inputEl?.tabIndex ?? -1) >= 0) { viewOf(n)!.inputEl!.focus(); return; }
     }
   }
+  /** The control shown and enabled, and so are the containers around it. */
+  function reachable(id: string): boolean {
+    for (let d = defs.get(id), n = 0; d && n < 50; d = d.parentId !== null ? defs.get(d.parentId) : undefined, n++) if (!usable(d.id)) return false;
+    return true;
+  }
+  /** Alt+letter: the letter of a Caption's & (the key's own letter: Option+O on a Mac types another character). The control is pressed
+   *  or, for a Label or Frame, the focus goes to the next control in tab order; with several matches the next one after the focused one. */
+  function accelerate(e: KeyboardEvent): boolean {
+    const code = /^Key([A-Z])$/.exec(e.code) ?? /^Digit(\d)$/.exec(e.code);
+    const letter = code ? code[1].toLowerCase() : e.key.length === 1 ? e.key.toLowerCase() : null;
+    if (!letter) return false;
+    const hits = [...tabRank].sort((a, b) => a[1] - b[1]).map(([id]) => id).filter(id => {
+      const t = defs.get(id)?.type;
+      if (!t || !(ACCEL_CLICK.has(t) || ACCEL_FOCUS.has(t)) || !reachable(id)) return false;
+      const { text, index } = parseMnemonic(String(propsOf(id).Caption ?? ''));
+      return index >= 0 && text[index].toLowerCase() === letter;
+    });
+    if (!hits.length) return false;
+    const here = targetOf(root.ownerDocument.activeElement)?.id ?? '';
+    const id = hits[(hits.indexOf(here) + 1) % hits.length];
+    const v = viewOf(id);
+    if (ACCEL_FOCUS.has(defs.get(id)!.type)) focusNext(id);
+    else { v?.inputEl?.focus(); (v?.inputEl ?? v?.el)?.click(); }
+    return true;
+  }
   /** A MaskedEdit with a Mask puts typed characters in itself (see calendar.ts). */
   const isMasked = (el: EventTarget | null): el is HTMLInputElement => el instanceof HTMLInputElement && el.dataset.mask === '1';
   function insertKey(el: EventTarget | null, ascii: number): void {
@@ -465,6 +514,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   on<KeyboardEvent>('keydown', e => {
     const tg = targetOf(e.target) ?? { id: 'form', def: null };
     if (blocked) { e.preventDefault(); return; }
+    if (e.altKey && !e.ctrlKey && !e.metaKey && accelerate(e)) { e.preventDefault(); return; }   // Option+O would type a special character
     const prevented = e.defaultPrevented;   // e.g. an open combo list closing on Escape
     const chain = chainOf(tg.id);
     const code = vbKeyCode(e), shift = shiftBits(e);
@@ -482,6 +532,16 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
     if (blocked) return;
     for (const id of chainOf(tg.id)) emit(id, 'KeyUp', [vbKeyCode(e), shiftBits(e)]);
   });
+
+  // --- Screen.MousePointer: over this form and everything in it, whatever the controls ask for ---
+  let screenStyle: HTMLStyleElement | null = null;
+  function setScreenCursor(css: string): void {
+    surface.el.toggleAttribute('data-vb-screen', css !== '');
+    if (!css) { screenStyle?.remove(); screenStyle = null; return; }
+    if (!screenStyle) { screenStyle = root.ownerDocument.createElement('style'); root.ownerDocument.head.appendChild(screenStyle); }
+    screenStyle.textContent = `[data-vb-screen], [data-vb-screen] * { cursor: ${css} !important; }`;
+  }
+  if (s.cursor) setScreenCursor(s.cursor);
 
   // --- blocked overlay ---
   function setBlocked(b: boolean): void {
@@ -549,6 +609,17 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
           break;
         case 'hide': surface.el.style.display = 'none'; break;
         case 'blocked': setBlocked(m.blocked); break;
+        case 'validated': {
+          const v = validation;
+          if (!v || v.requestId !== m.requestId) break;
+          validation = null;
+          if (m.cancel) {   // the focus stays where it was: no LostFocus, GotFocus or click
+            silent = true;
+            try { viewOf(v.from)?.inputEl?.focus(); } finally { silent = false; }
+          } else for (const f of v.held) f();
+          break;
+        }
+        case 'cursor': setScreenCursor(m.css); break;
         case 'keyResult': {
           const p = pending.get(m.requestId);
           pending.delete(m.requestId);
@@ -567,6 +638,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
       // an open combo list holds a document listener until it is closed
       for (const v of surface.views.values()) v.inputEl?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
       for (const l of layers.values()) l.dispose();
+      screenStyle?.remove();
       surface.dispose();   // media Blob URLs
       surface.el.remove();
     },

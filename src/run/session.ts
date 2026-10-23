@@ -22,6 +22,7 @@ import { fromBase64 } from '../gfx/raster';
 import { PrinterObject, type PrinterHost } from './objects/printerObject';
 import type { PrintJob } from './printing';
 import type { FormSnapshot } from './protocol';
+import { cursorCss } from '../controls/cursor';
 
 export interface SessionCallbacks {
   debugPrint(text: string, newline: boolean): void;
@@ -75,7 +76,10 @@ export class RunSession implements Host, FormSession {
   private readonly screen = new ScreenObject({
     form: () => this.activeForm ?? Nothing,
     control: () => this.activeForm?.activeControl() ?? Nothing,
-  });
+  }, (pointer, icon) => this.setScreenPointer(pointer, icon));
+  /** Screen.MousePointer and MouseIcon: they win over the cursor of every control in every form window, until the program ends. */
+  private screenPointer = 0;
+  private screenIcon: PictureRef | null = null;
   /** Forms: the loaded forms in the order they were loaded. */
   private readonly formList = new ObjectList('Object',
     () => [...this.forms.values()].filter(f => f.loaded).sort((a, b) => a.loadOrder - b.loadOrder), o => (o as FormInstance).name,
@@ -172,6 +176,16 @@ export class RunSession implements Host, FormSession {
   /** PrintForm: the form's client area on one page, at its size on the screen, with the Printer's settings. */
   printForm(s: FormSnapshot): Promise<void> {
     return this.printJob(this.printer.job([{ ...this.printer.layout(), form: s }]));
+  }
+
+  /** The CSS cursor of Screen.MousePointer ('' = none). */
+  screenCursor(): string { return cursorCss(this.screenPointer, this.screenIcon ? this.resolveAsset(this.screenIcon) : null); }
+
+  private setScreenPointer(pointer: number, icon: PictureRef | null): void {
+    this.screenPointer = pointer;
+    this.screenIcon = icon;
+    const css = this.screenCursor();
+    for (const f of this.forms.values()) f.deliver({ t: 'cursor', css });
   }
 
   /** Resolves when the files left open at the end are written and closed. */
@@ -449,6 +463,8 @@ export class RunSession implements Host, FormSession {
   onEnd(): void {
     if (this.ended) return;
     this._state = 'ended';
+    this.screenPointer = 0;   // Screen.MousePointer is back to the default at the end
+    this.screenIcon = null;
     for (const t of this.timers.values()) clearInterval(t);
     this.timers.clear();
     this.queue.stop();

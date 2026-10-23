@@ -9,6 +9,8 @@ export interface FormSnapshot {
   mode: 'ide' | 'app';
   /** What is drawn on the form and its PictureBoxes before the window opened (id / 'form' -> GfxOps). */
   gfx?: Record<string, string[]>;
+  /** The CSS cursor Screen.MousePointer puts over every form window when the window opens. */
+  cursor?: string;
 }
 
 export type ToWindow =
@@ -20,7 +22,9 @@ export type ToWindow =
   | { t: 'removeControl'; id: string }                       // Unload Command1(i)
   | { t: 'show' } | { t: 'hide' }
   | { t: 'blocked'; blocked: boolean }            // modal form or break mode: ignore input
-  | { t: 'keyResult'; requestId: number; keyAscii: number };
+  | { t: 'keyResult'; requestId: number; keyAscii: number }
+  | { t: 'validated'; requestId: number; cancel: boolean }       // the Validate event ran: Cancel keeps the focus where it was
+  | { t: 'cursor'; css: string };                                 // Screen.MousePointer / MouseIcon: '' = none
 
 export type FromWindow =
   | { t: 'ready' }

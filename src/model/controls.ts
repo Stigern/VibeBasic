@@ -7,6 +7,7 @@ import { syncSSTab } from './ssTab';
 import { MAX_DATE, MIN_DATE, nowSerial, systemStartOfWeek } from './dateControls';
 import { fitText } from './mask';
 import { CHART_TYPE_NAMES } from './chart';
+import { MOUSE_POINTERS } from '../controls/cursor';
 import type { ControlDef, ControlType, FontValue, FormDef, PropValue, Project } from './types';
 
 export type PropKind = 'string' | 'text' | 'int' | 'bool' | 'color' | 'enum' | 'font' | 'picture' | 'list'
@@ -141,9 +142,21 @@ const SS_ALIGNMENTS = ['Left Top', 'Left Middle', 'Left Bottom', 'Right Top', 'R
 const SS_BEVELS = ['None', 'Inset', 'Raised'];
 const SS_FONT3D = ['None', 'Raised with light shading', 'Raised with heavy shading', 'Inset with light shading', 'Inset with heavy shading'];
 
+/** MousePointer and MouseIcon (every visible control but Shape and Line; the Form), CausesValidation and the Validate event (every control with GotFocus). */
+const pointerProps = (): PropDef[] => [
+  p('MousePointer', 'enum', 0, { enumValues: MOUSE_POINTERS.map(([value, l]) => ({ value, label: `${value} - ${l}` })) }), picture('MouseIcon'),
+];
+
 const def = (d: Omit<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'> &
-  Partial<Pick<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'>>): ControlTypeDef =>
-  ({ methods: baseMethods(), isContainer: false, invisibleAtRuntime: false, ...d });
+  Partial<Pick<ControlTypeDef, 'methods' | 'isContainer' | 'invisibleAtRuntime'>>): ControlTypeDef => {
+  const t: ControlTypeDef = { methods: baseMethods(), isContainer: false, invisibleAtRuntime: false, ...d };
+  if (t.type === 'Form' || !(t.invisibleAtRuntime || t.type === 'Shape' || t.type === 'Line')) t.props = [...t.props, ...pointerProps()];
+  if (t.type !== 'Form' && t.events.some(e => e.name === 'GotFocus')) {
+    t.props = [...t.props, bool('CausesValidation', true)];
+    t.events = [...t.events, ev('Validate', 'Cancel As Boolean')];
+  }
+  return t;
+};
 
 export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
   // Form is not a "real" control: it has no TabIndex/TabStop/ToolTipText, so only the applicable common props.
@@ -169,7 +182,8 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
     methods: [
       { name: 'Show', params: '[Modal], [OwnerForm]' }, { name: 'Hide', params: '' },
-      { name: 'Refresh', params: '' }, { name: 'Move', params: MOVE }, { name: 'PrintForm', params: '' }, ...drawMethods(),
+      { name: 'Refresh', params: '' }, { name: 'Move', params: MOVE }, { name: 'PrintForm', params: '' },
+      { name: 'ValidateControls', params: '' }, ...drawMethods(),
     ],
   }),
 

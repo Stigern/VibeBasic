@@ -2,7 +2,8 @@
 
 import type { VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
-import { Nothing, toStr, type VBValue } from '../../lang/values';
+import { Nothing, coerce, toStr, type VBValue } from '../../lang/values';
+import { MOUSE_POINTERS } from '../../controls/cursor';
 import type { PictureRef } from '../../model/types';
 
 /** Any picture value carries its asset reference; `null` is an empty picture (`LoadPicture("")`). */
@@ -59,16 +60,32 @@ export class AppObject extends PropObject {
 
 export class ScreenObject extends PropObject {
   readonly vbTypeName = 'Screen';
-  private mousePointer: VBValue = 0;
-  /** `active` gives the form that was activated last and its control with the focus (Nothing when there is none). */
-  constructor(private active: { form(): VBValue; control(): VBValue } = { form: () => Nothing, control: () => Nothing }) {
+  private mousePointer = 0;
+  private mouseIcon: PictureObject | null = null;
+  /** `active` gives the form that was activated last and its control with the focus (Nothing when there is none); `pointer` hears
+   *  MousePointer / MouseIcon (the cursor over every form window; 99 shows the icon). */
+  constructor(private active: { form(): VBValue; control(): VBValue } = { form: () => Nothing, control: () => Nothing },
+    private pointer: (pointer: number, icon: PictureRef | null) => void = () => {}) {
     super();
-    this.setters = { mousepointer: v => { this.mousePointer = v; } };   // accepted and ignored
+    this.setters = {
+      mousepointer: v => {
+        const n = Math.trunc(Number(coerce(v, 'Long')));
+        if (!MOUSE_POINTERS.some(([k]) => k === n)) throw new VBRuntimeError(380);
+        this.mousePointer = n;
+        this.pointer(n, this.mouseIcon?.pictureRef ?? null);
+      },
+      mouseicon: v => {
+        if (v !== Nothing && !(v instanceof PictureObject)) throw new VBRuntimeError(13);
+        this.mouseIcon = v === Nothing ? null : v as PictureObject;
+        this.pointer(this.mousePointer, this.mouseIcon?.pictureRef ?? null);
+      },
+    };
   }
   protected props(): Record<string, () => VBValue> {
     const scr = typeof screen !== 'undefined' ? screen : { width: 1024, height: 768 };
     return {
       width: () => (scr.width || 1024) * 15, height: () => (scr.height || 768) * 15, mousepointer: () => this.mousePointer,
+      mouseicon: () => this.mouseIcon ?? Nothing,
       activeform: () => this.active.form(), activecontrol: () => this.active.control(),
     };
   }

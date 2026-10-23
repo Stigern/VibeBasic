@@ -18,6 +18,8 @@
 .vb-ctl.vb-disabled, .vb-ctl.vb-disabled * { color: #808080 !important; }
 .vb-ctl.vb-disabled .vb-text, .vb-ctl.vb-disabled .vb-opt-text, .vb-ctl.vb-disabled .vb-frame-legend,
 .vb-ctl.vb-disabled .vb-btn { text-shadow: 1px 1px 0 #fff; }
+/* MousePointer: the control's cursor (inline style) also over its field or button */
+.vb-ctl[data-vb-cursor] * { cursor: inherit; }
 .draw-layer { position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none; }
 
 /* ---------- CommandButton (98.css button + overrides) ---------- */

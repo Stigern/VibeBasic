@@ -33,6 +33,7 @@ import { font3dShadow } from '../model/sheridan';
 import { decodeRuns, encodeRuns, formatAt, readRuns, replaceRange, selectionOffsets, setSelectionOffsets, writeRuns, type Run, type RtfFormat, type RtfPatch } from './richText';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../model/types';
 import { h, mnemonicNodes } from '../ui98/dom';
+import { cursorCss } from './cursor';
 
 export type AssetResolver = (ref: PictureRef) => string | null;   // data URL
 export type RenderMode = 'design' | 'run';
@@ -1605,6 +1606,11 @@ export function renderControl(def: ControlDef, mode: RenderMode, assets: AssetRe
     const disabled = mode === 'run' && 'Enabled' in defaults && !ctx.bool('Enabled');
     el.classList.toggle('vb-disabled', disabled);
     if (mode === 'run' && has(keys, 'ToolTipText')) el.title = ctx.str('ToolTipText');
+    if (mode === 'run' && 'MousePointer' in defaults && has(keys, 'MousePointer', 'MouseIcon')) {   // the whole control, its field or button too (controls.css)
+      const css = cursorCss(ctx.num('MousePointer'), ctx.pic('MouseIcon'));
+      el.style.cursor = css;
+      el.toggleAttribute('data-vb-cursor', css !== '');
+    }
 
     r.patch(keys);
 
@@ -1738,6 +1744,10 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
   }
 
   function patchClient(keys: Keys): void {
+    if (mode === 'run' && has(keys, 'MousePointer', 'MouseIcon')) {
+      const ref = get('MouseIcon');
+      clientEl.style.cursor = cursorCss(num('MousePointer'), isRef(ref) ? assets(ref) : null);
+    }
     if (has(keys, 'BackColor')) clientEl.style.backgroundColor = vbColorToCss(num('BackColor'));
     if (has(keys, 'ForeColor')) clientEl.style.color = vbColorToCss(num('ForeColor'));
     if (has(keys, 'Font')) { const f = get('Font'); if (isFont(f)) applyFont(clientEl, f); }

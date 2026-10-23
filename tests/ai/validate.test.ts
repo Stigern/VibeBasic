@@ -384,3 +384,11 @@ test('validateCode: Printer, Printers, PrintForm and ShowPrinter are valid (0.9)
     + '    Printer.NewPage\n    Printer.EndDoc\n    PrintForm\nEnd Sub';
   expect(validateCode(code, { moduleName: f.name, form: f, project: p })).toEqual([]);
 });
+
+test('validateCode: Validate, MousePointer constants, Screen.MousePointer and ValidateControls are valid (0.9 B3)', () => {
+  const f = newProject().forms[0];
+  f.controls.push(newControl(f, 'TextBox', { left: 0, top: 0 }, null));   // Text1
+  const code = 'Private Sub Text1_Validate(Cancel As Boolean)\n    Cancel = (Text1.Text = "")\nEnd Sub\n'
+    + 'Private Sub Form_Click()\n    Screen.MousePointer = vbHourglass\n    Text1.MousePointer = vbCrosshair\n    ValidateControls\n    Screen.MousePointer = vbDefault\nEnd Sub';
+  expect(validateCode(code, { moduleName: 'Form1', form: f })).toEqual([]);
+});

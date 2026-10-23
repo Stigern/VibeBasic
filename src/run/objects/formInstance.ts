@@ -34,6 +34,8 @@ export interface FormSession {
   fire(moduleName: string, proc: string, args: VBRef[]): Promise<void>;
   syncTimer(form: FormInstance, timer: ControlObject): void;
   formUnloaded(form: FormInstance): void;
+  /** The CSS cursor Screen.MousePointer puts over every form window ('' = none). */
+  screenCursor(): string;
   /** The form became the active one (shown, or the user focused it): Screen.ActiveForm; Deactivate on the form that was active,
    *  then Activate on this one (nothing when it already is the active one). */
   formActivated(form: FormInstance): Promise<void>;
@@ -68,7 +70,7 @@ interface FormState {
 }
 
 const lc = (s: string): string => s.toLowerCase();
-const FORM_METHODS = new Set(['show', 'hide', 'refresh', 'move', 'setfocus', 'zorder']);
+const FORM_METHODS = new Set(['show', 'hide', 'refresh', 'move', 'setfocus', 'zorder', 'validatecontrols']);
 /** Members every form has besides its registry properties: Controls, ActiveControl and Count (the number of controls). */
 const FORM_OBJECTS = new Set(['controls', 'activecontrol', 'count']);
 let loadCounter = 0;
@@ -254,7 +256,8 @@ export class FormInstance implements VBObject {
   private async open(modal: boolean): Promise<void> {
     this.s.queue.flush();   // what was queued before is in the snapshot (drawings too: GfxOps must not be drawn twice)
     this.early = [];
-    const w = await this.s.formHost.openForm(this.snapshot(), { modal });
+    const cursor = this.s.screenCursor();
+    const w = await this.s.formHost.openForm({ ...this.snapshot(), ...(cursor ? { cursor } : {}) }, { modal });
     const early = this.early;
     this.early = null;
     this.opening = null;
@@ -381,7 +384,8 @@ export class FormInstance implements VBObject {
         const done = m.id === 'form' ? this.s.fire(this.name, `Form_${m.event}`, args) : this.fireControl(target, m.event, args);
         if (m.requestId !== undefined) {
           const requestId = m.requestId, ref = args[args.length - 1];
-          void done.then(() => this.deliver({ t: 'keyResult', requestId, keyAscii: Number(coerce(ref.value, 'Long')) }));
+          void done.then(() => this.deliver(m.event === 'Validate' ? { t: 'validated', requestId, cancel: toBool(ref.value) }
+            : { t: 'keyResult', requestId, keyAscii: Number(coerce(ref.value, 'Long')) }));
         }
         break;
       }
@@ -505,6 +509,7 @@ export class FormInstance implements VBObject {
       return c;
     }
     if (l === 'visible') return this.visible;
+    if (l === 'validatecontrols') return this.validateControls(args) as unknown as VBValue;   // awaited by the interpreter
     if (FORM_METHODS.has(l)) return this.callSync(l, args);
     if (FORM_OBJECTS.has(l) && !getPropDef('Form', name)) {
       if (l === 'controls') return args.length ? this.controlList.getMember('Item', args) : this.controlList;
@@ -551,6 +556,7 @@ export class FormInstance implements VBObject {
       case 'load': return this.load().then(() => Empty);
       case 'unload': return this.unload(1).then(() => Empty);
       case 'refresh': this.autoLoad(); return this.paint(this.state().form, true).then(() => Empty);
+      case 'validatecontrols': return this.validateControls(args);
       case 'printform':
         if (args.length) throw new VBRuntimeError(450);
         this.autoLoad();
@@ -559,6 +565,19 @@ export class FormInstance implements VBObject {
     }
     if (this.codeMember(name) === 'proc') return this.callPublic(name, args);
     return this.callSync(l, args);
+  }
+
+  /** ValidateControls: the Validate event of the control with the focus; Cancel = True in it is run-time error 380 (as in VB6). */
+  private async validateControls(args: VBValue[]): Promise<VBValue> {
+    if (args.length) throw new VBRuntimeError(450);
+    this.autoLoad();
+    const c = this.activeId !== null ? this.st?.byId.get(this.activeId) : undefined;
+    if (c && this.s.program.hasProcedure(this.name, `${c.name}_Validate`)) {
+      const cancel = new VBRef(0);
+      await this.fireControl(c, 'Validate', [cancel]);
+      if (toBool(cancel.value)) throw new VBRuntimeError(380);
+    }
+    return Empty;
   }
 
   /** Print, PSet, Line, Circle, Scale on the form. */

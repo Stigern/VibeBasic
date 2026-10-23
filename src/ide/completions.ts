@@ -24,7 +24,7 @@ const membersOf = (type: ControlType): string[] =>
 /** The members of the run session's global objects (src/run/objects/appObjects.ts, globalObjects.ts). */
 const GLOBAL_OBJECTS: Record<string, string[]> = {
   app: ['EXEName', 'Path', 'PrevInstance', 'Title'],
-  screen: ['ActiveControl', 'ActiveForm', 'Height', 'MousePointer', 'Width'],
+  screen: ['ActiveControl', 'ActiveForm', 'Height', 'MouseIcon', 'MousePointer', 'Width'],
   clipboard: ['Clear', 'GetFormat', 'GetText', 'SetText'],
   forms: ['Count', 'Item'],
   printer: ['ColorMode', 'Copies', 'CurrentX', 'CurrentY', 'DeviceName', 'DrawMode', 'DrawStyle', 'DrawWidth', 'DriverName', 'EndDoc',

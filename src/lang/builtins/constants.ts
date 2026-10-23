@@ -65,6 +65,12 @@ group({
   vbTextCompare: 1, vbBinaryCompare: 0, vbUseCompareOption: -1,
 });
 
+// MousePointer
+group({
+  vbDefault: 0, vbArrow: 1, vbCrosshair: 2, vbIbeam: 3, vbIconPointer: 4, vbSizePointer: 5, vbSizeNESW: 6, vbSizeNS: 7, vbSizeNWSE: 8, vbSizeWE: 9,
+  vbUpArrow: 10, vbHourglass: 11, vbNoDrop: 12, vbArrowHourglass: 13, vbArrowQuestion: 14, vbSizeAll: 15, vbCustom: 99,
+});
+
 // Misc
 group({ vbTrue: -1, vbFalse: 0, vbUseDefault: -2, vbObjectError: -2147221504 });   // vbTrue/vbFalse/vbUseDefault: Tristate
 
