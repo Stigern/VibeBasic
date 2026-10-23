@@ -1,7 +1,7 @@
 // What the AI server can do: its kind (GET /models, owned_by "vllm") and whether the model sees pictures (one tiny picture).
 // Test Connection finds both; for settings without them, the first AI request of a session finds them on the side (detectServer).
 import type { Backend } from '../backend/backend';
-import { loadAiSettings, saveAiSettings, type AiSettings } from './settings';
+import { updateAiSettings, type AiSettings } from './settings';
 import { AI_CUT_OFF } from './sse';
 import type { AiModel } from './types';
 
@@ -39,8 +39,8 @@ export interface Detecting { listed: Promise<Partial<AiSettings>>; done: Promise
 async function saveFound(backend: Pick<Backend, 'loadSettings' | 'saveSettings'>, s: AiSettings, found: Partial<AiSettings>): Promise<void> {
   if (!Object.keys(found).length) return;
   try {
-    const cur = await loadAiSettings(backend);
-    if (cur.baseUrl.trim() === s.baseUrl.trim() && cur.model.trim() === s.model.trim()) await saveAiSettings(backend, { ...cur, ...found });
+    await updateAiSettings(backend, cur =>
+      (cur.baseUrl.trim() === s.baseUrl.trim() && cur.model.trim() === s.model.trim() ? { ...cur, ...found } : null));
   } catch { /* not saved: found again next session */ }
 }
 

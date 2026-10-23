@@ -393,7 +393,7 @@ pub fn local_ip() -> String {
 
 fn emitter(app: tauri::AppHandle) -> Emit {
   Arc::new(move |e: SockEvent| {
-    let _ = app.emit("vb:socket", e);
+    let _ = app.emit_to("main", "vb:socket", e);
   })
 }
 

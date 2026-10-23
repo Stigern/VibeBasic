@@ -8,6 +8,19 @@ export const AI_SETTINGS_KEY = 'ai';
 /** Where older versions kept it. */
 export const LEGACY_AI_KEY = 'vibebasic.settings:ai';
 
+/** The read-merge-write runs of the AI settings in this window, one after the other (see aiSettingsTurn). */
+let turn: Promise<unknown> = Promise.resolve();
+
+/**
+ * Runs `fn` after every earlier turn has finished. The server detection saves what it found (a read-merge-write) in the
+ * background, possibly while Tools > Options saves: run in turn, neither overwrites what the other just wrote.
+ */
+export function aiSettingsTurn<T>(fn: () => Promise<T>): Promise<T> {
+  const r = turn.then(fn, fn);
+  turn = r.catch(() => {});
+  return r;
+}
+
 export interface AiSettingsIo {
   /** Null when nothing is saved. */
   get(): Promise<unknown>;

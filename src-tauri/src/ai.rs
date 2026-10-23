@@ -580,11 +580,11 @@ pub async fn ai_chat(
   let app2 = app.clone();
   let task = tokio::spawn(async move {
     let on_delta = move |kind: &str, text: &str| {
-      let _ = app.emit("ai:delta", json!({ "id": emit_id, "kind": kind, "text": text }));
+      let _ = app.emit_to("main", "ai:delta", json!({ "id": emit_id, "kind": kind, "text": text }));
     };
     let emit_id = id_for_usage;
     let on_usage = move |u: Usage| {
-      let _ = app2.emit("ai:usage", json!({ "id": emit_id, "prompt_tokens": u.prompt_tokens, "completion_tokens": u.completion_tokens, "cached_tokens": u.cached_tokens }));
+      let _ = app2.emit_to("main", "ai:usage", json!({ "id": emit_id, "prompt_tokens": u.prompt_tokens, "completion_tokens": u.completion_tokens, "cached_tokens": u.cached_tokens }));
     };
     chat_stream(&base_url, &api_key, &model, &messages, &reasoning_effort, &extra, &on_delta, &on_usage).await
   });

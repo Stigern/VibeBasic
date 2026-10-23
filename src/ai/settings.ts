@@ -1,4 +1,5 @@
 import type { Backend } from '../backend/backend';
+import { aiSettingsTurn } from '../backend/aiSettingsStore';
 import type { AiSettings, FormPicture, ServerKind, Thinking } from './types';
 
 export type { AiSettings, FormPicture, ServerKind, Thinking };
@@ -23,4 +24,15 @@ export async function saveAiSettings(b: Pick<Backend, 'saveSettings'>, s: AiSett
   await b.saveSettings('ai', { baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey, thinking: s.thinking, ...(s.contextTokens ? { contextTokens: s.contextTokens } : {}),
     ...(s.fastFollowUp === false ? { fastFollowUp: false } : {}), ...(s.serverKind ? { serverKind: s.serverKind } : {}),
     ...(typeof s.vision === 'boolean' ? { vision: s.vision } : {}), ...(s.formPicture === 'off' ? { formPicture: 'off' } : {}) });
+}
+
+/**
+ * Read-merge-write of the settings, in turn with every other update (aiSettingsTurn): `change` gets the stored settings and
+ * returns what to store, or null to store nothing.
+ */
+export function updateAiSettings(b: Pick<Backend, 'loadSettings' | 'saveSettings'>, change: (cur: AiSettings) => AiSettings | null): Promise<void> {
+  return aiSettingsTurn(async () => {
+    const next = change(await loadAiSettings(b));
+    if (next) await saveAiSettings(b, next);
+  });
 }

@@ -150,4 +150,29 @@ mod acl_tests {
     let files: BTreeSet<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
     assert_eq!(files, BTreeSet::from(["default.json".to_string(), "run-windows.json".to_string()]));
   }
+
+  /// Review 08 final #6: events with data (AI replies, Winsock and serial data) go to the main window only, never to every
+  /// window: run-windows.json grants core:event:default, so a form window could listen to a broadcast. The IDE's main window
+  /// and a made app's are both labelled "main" (tauri.conf.json).
+  #[test]
+  fn events_go_to_the_main_window_only() {
+    let conf: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+    assert_eq!(conf["app"]["windows"][0]["label"], "main");
+    let broadcast = concat!(".", "emit(");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut targeted = 0;
+    for e in std::fs::read_dir(dir).unwrap() {
+      let path = e.unwrap().path();
+      let text = std::fs::read_to_string(&path).unwrap();
+      for line in text.lines().filter(|l| l.contains(broadcast)) {
+        // the runtime menu's Quit carries no data
+        assert!(line.contains("emit(QUIT_EVENT, ())"), "{}: broadcast event: {}", path.display(), line.trim());
+      }
+      for line in text.lines().filter(|l| l.contains(concat!(".", "emit_to("))) {
+        assert!(line.contains(r#"emit_to("main", "#), "{}: {}", path.display(), line.trim());
+        targeted += 1;
+      }
+    }
+    assert_eq!(targeted, 4);   // ai:delta, ai:usage, vb:socket, vb:comm
+  }
 }

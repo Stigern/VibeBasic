@@ -7,7 +7,7 @@ import { messageBox98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
 import { addAiLogEntry } from './aiLog';
 import { probeVision } from './detect';
-import { THINKING_LEVELS, defaultAiSettings, loadAiSettings, saveAiSettings } from './settings';
+import { THINKING_LEVELS, defaultAiSettings, loadAiSettings, updateAiSettings } from './settings';
 import type { AiModel, FormPicture, ServerKind, Thinking } from './types';
 
 const THINKING_LABELS: Record<Thinking, string> = { server: 'Server default', low: 'Low (fast)', medium: 'Medium', high: 'High (thorough)' };
@@ -97,8 +97,8 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
       void loading
         .then(() => {
           const url = baseUrl.value.trim(), m = model.getValue().trim();
-          return saveAiSettings(backend, { baseUrl: url, model: m, apiKey: apiKey.value, thinking: thinkingOf(thinking.getValue()), ...testedFor(url, m), fastFollowUp: fast.input.checked,
-            ...(picture.getValue() === PICTURE_LABELS.off ? { formPicture: 'off' as const } : {}) });
+          return updateAiSettings(backend, () => ({ baseUrl: url, model: m, apiKey: apiKey.value, thinking: thinkingOf(thinking.getValue()), ...testedFor(url, m), fastFollowUp: fast.input.checked,
+            ...(picture.getValue() === PICTURE_LABELS.off ? { formPicture: 'off' as const } : {}) }));
         })
         .catch(e => messageBox98(doc, { prompt: `Could not save the AI settings: ${e instanceof Error ? e.message : String(e)}`, title: 'VibeBasic', buttons: 48 }));
     },
