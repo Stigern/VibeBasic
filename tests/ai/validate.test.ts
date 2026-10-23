@@ -102,11 +102,40 @@ test('Option Explicit: undeclared variables', () => {
 });
 
 test('unsupported functions and statements', () => {
+  expect(inForm1(sub('    Shell "notepad.exe"'))).toEqual(['Shell is not supported in VibeBasic. Programs cannot be started.']);
+  expect(inForm1(sub('    Label1.Caption = StrConv("a b", vbProperCase) & Environ("HOME")\n    Beep'))).toEqual([]);
   expect(validateCode('Sub Main()\n    Dim o\n    Set o = CreateObject("Scripting.Dictionary")\nEnd Sub', { moduleName: 'Module2', form: null }))
     .toEqual(['CreateObject is not supported in VibeBasic.']);
   // file I/O and the settings are supported
   expect(inForm1(sub('    SaveSetting "App", "S", "K", Text1(0).Text'))).toEqual([]);
   expect(validateCode('Sub Main()\n    Open "x" For Output As #1\n    Print #1, "x"\n    Close #1\nEnd Sub', { moduleName: 'Module2', form: null })).toEqual([]);
+});
+
+test('file I/O and the settings functions are fine under Option Explicit (0.8 file I/O)', () => {
+  const body = [
+    '    Dim f As Integer, s As String, n As Long',
+    '    f = FreeFile',
+    '    Open App.Path & "\\data.txt" For Output As #f',
+    '    Print #f, "a"; 1',
+    '    Write #f, "b", 2',
+    '    Close #f',
+    '    Open App.Path & "\\data.txt" For Input As #f',
+    '    Do While Not EOF(f)',
+    '        Line Input #f, s',
+    '    Loop',
+    '    Close',
+    '    Open "x.bin" For Binary As #1',
+    '    Get #1, 1, n',
+    '    Put #1, , n',
+    '    Seek #1, 1',
+    '    Close #1',
+    '    Name "x.bin" As "y.bin"',
+    '    If Dir("y.bin") <> "" Then Kill "y.bin"',
+    '    SaveSetting "App", "S", "K", Text1(0).Text',
+    '    Text1(1).Text = GetSetting("App", "S", "K", "")',
+    '    DeleteSetting "App", "S"',
+  ].join('\n');
+  expect(inForm1(sub(body))).toEqual([]);
 });
 
 test('a large valid program has no problems', () => {
@@ -187,7 +216,20 @@ End Sub
 
 Private Sub Timer1_Timer()
     Label1.Caption = Time
-End Sub`;
+End Sub
+
+Private Sub Form_KeyPress(KeyAscii As Integer)
+    If KeyAscii = 27 Then KeyAscii = 0
+End Sub
+
+Private Sub Text1_Click(Index As Integer)
+    Label1.Caption = Greet("x") & Greet("y", True) & Greet("z", , "!")
+    Label1.Tag = Choose(Index + 1, "a", "b", "c", "d") & UBound(Array(1, 2, 3, 4, 5))
+End Sub
+
+Private Function Greet(ByVal who As String, Optional ByVal loud As Boolean = False, Optional ByVal tail As String = ".") As String
+    Greet = IIf(loud, UCase(who), who) & tail
+End Function`;
   expect(inForm1(code)).toEqual([]);
 });
 
@@ -198,4 +240,33 @@ test('run-time objects: Controls, Forms, Screen.ActiveControl and Clipboard are 
     '    Debug.Print Me.Controls.Count, Forms.Count, Me.ActiveControl.Name, Screen.ActiveForm.Caption, Screen.ActiveControl.Name',
     '    Clipboard.SetText Clipboard.GetText & "x"',
   ].join('\n')))).toEqual([]);
+});
+
+test('event signatures: count and declared types must match what the event passes', () => {
+  expect(inForm1('Private Sub Form_KeyPress()\nEnd Sub')).toEqual(['Form_KeyPress needs (KeyAscii As Integer).']);
+  expect(inForm1('Private Sub Text1_Change()\nEnd Sub')).toEqual(['Text1_Change needs (Index As Integer).']);
+  expect(inForm1('Private Sub Command1_MouseDown(Button As Integer, Shift As Integer, X As Single)\nEnd Sub'))
+    .toEqual(['Command1_MouseDown needs (Button As Integer, Shift As Integer, X As Single, Y As Single).']);
+  expect(inForm1('Private Sub Form_QueryUnload(Cancel As Integer, UnloadMode As String)\nEnd Sub'))
+    .toEqual(['Form_QueryUnload needs (Cancel As Integer, UnloadMode As Integer).']);
+  // names may differ, undeclared types are not checked; without a project the rule still runs
+  expect(inForm1('Private Sub Form_KeyDown(k As Integer, s As Integer)\nEnd Sub\nPrivate Sub Form_Unload(Cancel)\nEnd Sub')).toEqual([]);
+  expect(validateCode('Private Sub Form_Load(x As Integer)\nEnd Sub', { moduleName: 'Form1', form: form() })).toEqual(['Form_Load needs ().']);
+});
+
+test('calls: procedures that exist nowhere and wrong argument counts', () => {
+  expect(inForm1(sub('    DoWork 1\n    Label1.Caption = Missing(2)'))).toEqual(['Sub or Function not defined: DoWork', 'Sub or Function not defined: Missing']);
+  expect(inForm1(sub('    Label1.Caption = Twice(1, 2)'))).toEqual(['Twice takes 1 argument, not 2.']);
+  const opt = 'Private Sub Show2(ByVal a As Long, Optional ByVal b As Long)\nEnd Sub\n';
+  expect(inForm1(opt + sub('    Show2 1\n    Show2 1, 2\n    Show2'))).toEqual(['Show2 takes 1 to 2 arguments, not 0.']);
+  expect(inForm1(sub('    Label1.Caption = Left("abc") & Mid("abc", 1, 2, 3) & Choose(1)')))
+    .toEqual(['Left takes 2 arguments, not 1.', 'Mid takes 2 to 3 arguments, not 4.', 'Choose takes at least 2 arguments, not 1.']);
+  // without a project the other modules' names are unknown: no report
+  const p = project();
+  expect(validateCode(sub('    DoWork 1'), { moduleName: 'Form1', form: p.forms[0] })).toEqual([]);
+});
+
+test('a procedure defined twice in the proposal', () => {
+  expect(validateCode('Sub Main()\nEnd Sub\nSub Helper()\nEnd Sub\nSub main()\nEnd Sub', { moduleName: 'Module2', form: null }))
+    .toEqual(['main is defined more than once; keep one.']);
 });

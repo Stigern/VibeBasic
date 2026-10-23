@@ -1,7 +1,7 @@
 //! OpenAI-compatible AI proxy. Calls go through Rust (reqwest) to avoid CORS and mixed-content
 //! limits in the webview. Works with Ollama (`http://<ip>:11434/v1`) and similar servers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -17,11 +17,16 @@ const STREAM_IDLE_SECS: u64 = 90;
 const STREAM_TOTAL_SECS: u64 = 20 * 60;
 const LIST_TIMEOUT_SECS: u64 = 15;
 const CONNECT_TIMEOUT_SECS: u64 = 10;
+/// Size caps: a plain (non-streamed) body, one SSE line, and all bytes of one streamed answer.
+const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SSE_LINE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_STREAM_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ChatMessage {
   pub role: String,
-  pub content: String,
+  /// A string, or an array of OpenAI-style parts (text and image_url) for a message with a picture.
+  pub content: Value,
 }
 
 /// "http://h:11434/v1/" + "chat/completions" -> "http://h:11434/v1/chat/completions"
@@ -33,17 +38,109 @@ fn unreadable() -> String {
   "The AI server sent an answer VibeBasic could not read.".to_string()
 }
 
+/// The server stopped at max_tokens (finish_reason "length"). Same text as AI_CUT_OFF in src/ai/sse.ts.
+fn cut_off() -> String {
+  "The AI answer was cut off before it was finished (finish_reason = length). Choose a lower Thinking level in Tools > Options > AI, or ask for less at a time.".to_string()
+}
+
+/// Optional request fields the frontend may add: `response_format` (OpenAI structured output), `structured_outputs`
+/// (vLLM's own field; the frontend sends one or the other, never both) and `max_tokens`.
+#[derive(Default, Clone)]
+pub struct ChatExtra {
+  pub response_format: Option<Value>,
+  pub structured_outputs: Option<Value>,
+  pub max_tokens: Option<u64>,
+}
+
+/// The chat/completions body. vLLM/Qwen servers honour chat_template_kwargs.reasoning_effort; other servers get nothing extra.
+fn chat_body(model: &str, messages: &[ChatMessage], reasoning_effort: &Option<String>, extra: &ChatExtra, stream: bool) -> Value {
+  let mut body = json!({ "model": model, "messages": messages, "temperature": 0.2, "stream": stream });
+  if stream {
+    body["stream_options"] = json!({ "include_usage": true });
+  }
+  if let Some(e) = reasoning_effort.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
+    body["chat_template_kwargs"] = json!({ "reasoning_effort": e });
+  }
+  if let Some(n) = extra.max_tokens.filter(|n| *n > 0) {
+    body["max_tokens"] = json!(n);
+  }
+  if let Some(f) = extra.response_format.as_ref().filter(|f| !f.is_null()) {
+    body["response_format"] = f.clone();
+  }
+  if let Some(f) = extra.structured_outputs.as_ref().filter(|f| !f.is_null()) {
+    body["structured_outputs"] = f.clone();
+  }
+  body
+}
+
 /// The innermost cause of a request error (e.g. "No route to host (os error 65)"), for the error text.
+/// Never the reqwest error's own text when it has no cause: that text can carry the request URL.
 fn root_cause(e: &reqwest::Error) -> String {
   let mut cur: &dyn std::error::Error = e;
+  let mut deeper = false;
   while let Some(next) = cur.source() {
     cur = next;
+    deeper = true;
   }
-  cur.to_string()
+  if deeper {
+    cur.to_string()
+  } else if e.is_timeout() {
+    "timed out".to_string()
+  } else if e.is_connect() {
+    "connection failed".to_string()
+  } else {
+    "request failed".to_string()
+  }
+}
+
+/// `url` without userinfo, query and fragment, so a key in the base URL never reaches the log or the UI.
+/// An unparsable value is cut at the first `@`, `?` or `#`.
+fn redact_url(url: &str) -> String {
+  let url = url.trim();
+  if let Ok(mut u) = reqwest::Url::parse(url) {
+    if u.cannot_be_a_base() {
+      return "the base URL".to_string();
+    }
+    let _ = u.set_username("");
+    let _ = u.set_password(None);
+    u.set_query(None);
+    u.set_fragment(None);
+    return u.to_string();
+  }
+  let end = url.find(['?', '#']).unwrap_or(url.len());
+  let head = &url[..end];
+  match (head.find("://"), head.rfind('@')) {
+    (Some(i), Some(at)) if at > i => format!("{}{}", &head[..i + 3], &head[at + 1..]),
+    (None, Some(at)) => head[at + 1..].to_string(),
+    _ => head.to_string(),
+  }
+}
+
+fn too_large() -> String {
+  "The AI server sent a much larger answer than expected, so VibeBasic stopped reading it.".to_string()
+}
+
+/// Reads a response body in chunks, at most `cap` bytes. The bool is true when the body was longer (then the
+/// text is only its start).
+async fn read_limited(resp: &mut reqwest::Response, cap: usize, base_url: &str, timeout_secs: u64) -> Result<(String, bool), String> {
+  if resp.content_length().is_some_and(|n| n > cap as u64) {
+    return Ok((String::new(), true));
+  }
+  let mut buf = Vec::<u8>::new();
+  while let Some(chunk) = resp.chunk().await.map_err(|e| map_send_error(&e, base_url, timeout_secs))? {
+    if buf.len() + chunk.len() > cap {
+      buf.extend_from_slice(&chunk[..cap - buf.len()]);
+      return Ok((String::from_utf8_lossy(&buf).into_owned(), true));
+    }
+    buf.extend_from_slice(&chunk);
+  }
+  Ok((String::from_utf8_lossy(&buf).into_owned(), false))
 }
 
 fn map_send_error(e: &reqwest::Error, base_url: &str, timeout_secs: u64) -> String {
-  eprintln!("ai request failed: {e:?}");
+  eprintln!("ai request failed: {}", root_cause(e));
+  let base_url = redact_url(base_url);
+  let base_url = base_url.as_str();
   if e.is_connect() {
     format!(
       "Could not connect to {base_url}. Check that the AI server is running and can be reached from this Mac. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0. (Details: {})",
@@ -72,6 +169,7 @@ fn body_message(body: &str) -> Option<String> {
 }
 
 fn status_error(status: reqwest::StatusCode, url: &str, body: &str) -> String {
+  let url = redact_url(url);
   let code = status.as_u16();
   if code == 401 || code == 403 {
     return format!("The AI server refused the request ({code}). Check the API key.");
@@ -98,11 +196,14 @@ async fn send_json(
     Some(k) if !k.is_empty() => req.bearer_auth(k),
     _ => req,
   };
-  let resp = req.send().await.map_err(|e| map_send_error(&e, base_url, timeout_secs))?;
+  let mut resp = req.send().await.map_err(|e| map_send_error(&e, base_url, timeout_secs))?;
   let status = resp.status();
-  let text = resp.text().await.map_err(|e| map_send_error(&e, base_url, timeout_secs))?;
+  let (text, truncated) = read_limited(&mut resp, MAX_BODY_BYTES, base_url, timeout_secs).await?;
   if !status.is_success() {
     return Err(status_error(status, url, &text));
+  }
+  if truncated {
+    return Err(too_large());
   }
   serde_json::from_str::<Value>(&text).map_err(|_| unreadable())
 }
@@ -116,13 +217,15 @@ fn client(timeout_secs: u64) -> Result<reqwest::Client, String> {
 }
 
 /// A model from `GET /models`: its id and, when the server reports it, its context size in tokens
-/// (vLLM `max_model_len`, some other servers `context_length`).
+/// (vLLM `max_model_len`, some other servers `context_length`), and `owned_by` ("vllm" on vLLM).
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
   pub id: String,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub context_tokens: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub owned_by: Option<String>,
 }
 
 pub async fn list_models(base_url: &str, api_key: &Option<String>) -> Result<Vec<ModelInfo>, String> {
@@ -133,7 +236,8 @@ pub async fn list_models(base_url: &str, api_key: &Option<String>) -> Result<Vec
   Ok(data.iter().filter_map(|m| {
     let id = m.get("id").and_then(Value::as_str)?.to_string();
     let context_tokens = ["max_model_len", "context_length"].iter().find_map(|k| m.get(*k).and_then(Value::as_u64)).filter(|n| *n > 0);
-    Some(ModelInfo { id, context_tokens })
+    let owned_by = m.get("owned_by").and_then(Value::as_str).map(str::to_string);
+    Some(ModelInfo { id, context_tokens, owned_by })
   }).collect())
 }
 
@@ -143,14 +247,11 @@ pub async fn chat(
   model: &str,
   messages: &[ChatMessage],
   reasoning_effort: &Option<String>,
+  extra: &ChatExtra,
 ) -> Result<String, String> {
   let url = endpoint(base_url, "chat/completions");
   let c = client(CHAT_TIMEOUT_SECS)?;
-  let mut body = json!({ "model": model, "messages": messages, "temperature": 0.2, "stream": false });
-  // vLLM/Qwen servers honour chat_template_kwargs.reasoning_effort; other servers get nothing extra.
-  if let Some(e) = reasoning_effort.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
-    body["chat_template_kwargs"] = json!({ "reasoning_effort": e });
-  }
+  let body = chat_body(model, messages, reasoning_effort, extra, false);
   let v = send_json(c.post(&url).json(&body), base_url, &url, api_key, CHAT_TIMEOUT_SECS).await?;
   reply_text(&v)
 }
@@ -160,6 +261,10 @@ pub async fn chat(
 #[derive(Default)]
 pub struct SseParser {
   buf: Vec<u8>,
+  /// How much of `buf` is already known to hold no newline (so a long line is not rescanned on every chunk).
+  scanned: usize,
+  /// A line grew past MAX_SSE_LINE_BYTES without a newline.
+  overflow: bool,
   data: Vec<String>,
 }
 
@@ -180,11 +285,23 @@ impl SseParser {
   pub fn push(&mut self, bytes: &[u8]) -> Vec<String> {
     self.buf.extend_from_slice(bytes);
     let mut out = Vec::new();
-    while let Some(i) = self.buf.iter().position(|&b| b == b'\n') {
-      let raw: Vec<u8> = self.buf.drain(..=i).collect();
+    while let Some(i) = self.buf[self.scanned..].iter().position(|&b| b == b'\n') {
+      let raw: Vec<u8> = self.buf.drain(..=self.scanned + i).collect();
+      self.scanned = 0;
       self.line(&raw[..raw.len() - 1], &mut out);
     }
+    self.scanned = self.buf.len();
+    if self.buf.len() > MAX_SSE_LINE_BYTES {
+      self.overflow = true;
+      self.buf.clear();
+      self.scanned = 0;
+    }
     out
+  }
+
+  /// True once a single line exceeded the cap; the caller should stop reading.
+  pub fn overflowed(&self) -> bool {
+    self.overflow
   }
 
   /// The stream ended: a last event without its closing blank line still counts.
@@ -226,12 +343,13 @@ pub async fn chat_stream(
   model: &str,
   messages: &[ChatMessage],
   reasoning_effort: &Option<String>,
+  extra: &ChatExtra,
   on_delta: &(dyn Fn(&str, &str) + Send + Sync),
   on_usage: &(dyn Fn(Usage) + Send + Sync),
 ) -> Result<String, String> {
   let idle = Duration::from_secs(STREAM_IDLE_SECS);
   let total = Duration::from_secs(STREAM_TOTAL_SECS);
-  chat_stream_with(base_url, api_key, model, messages, reasoning_effort, on_delta, on_usage, idle, total).await
+  chat_stream_with(base_url, api_key, model, messages, reasoning_effort, extra, on_delta, on_usage, idle, total).await
 }
 
 fn idle_error(idle: Duration) -> String {
@@ -245,6 +363,7 @@ async fn chat_stream_with(
   model: &str,
   messages: &[ChatMessage],
   reasoning_effort: &Option<String>,
+  extra: &ChatExtra,
   on_delta: &(dyn Fn(&str, &str) + Send + Sync),
   on_usage: &(dyn Fn(Usage) + Send + Sync),
   idle: Duration,
@@ -257,10 +376,7 @@ async fn chat_stream_with(
     .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
     .build()
     .map_err(|e| format!("Could not start the AI request: {e}"))?;
-  let mut body = json!({ "model": model, "messages": messages, "temperature": 0.2, "stream": true, "stream_options": { "include_usage": true } });
-  if let Some(e) = reasoning_effort.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
-    body["chat_template_kwargs"] = json!({ "reasoning_effort": e });
-  }
+  let body = chat_body(model, messages, reasoning_effort, extra, true);
   let mut req = c.post(&url).json(&body);
   if let Some(k) = api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
     req = req.bearer_auth(k);
@@ -271,7 +387,7 @@ async fn chat_stream_with(
     .map_err(|e| map_send_error(&e, base_url, CHAT_TIMEOUT_SECS))?;
   let status = resp.status();
   if !status.is_success() {
-    let text = resp.text().await.map_err(|e| map_send_error(&e, base_url, CHAT_TIMEOUT_SECS))?;
+    let (text, _) = read_limited(&mut resp, MAX_BODY_BYTES, base_url, CHAT_TIMEOUT_SECS).await?;
     return Err(status_error(status, &url, &text));
   }
   let is_json = resp
@@ -280,7 +396,10 @@ async fn chat_stream_with(
     .and_then(|v| v.to_str().ok())
     .is_some_and(|t| t.to_ascii_lowercase().contains("json"));
   if is_json {
-    let text = resp.text().await.map_err(|e| map_send_error(&e, base_url, CHAT_TIMEOUT_SECS))?;
+    let (text, truncated) = read_limited(&mut resp, MAX_BODY_BYTES, base_url, CHAT_TIMEOUT_SECS).await?;
+    if truncated {
+      return Err(too_large());
+    }
     let v = serde_json::from_str::<Value>(&text).map_err(|_| unreadable())?;
     return reply_text(&v);
   }
@@ -289,6 +408,7 @@ async fn chat_stream_with(
   let (mut content, mut reasoning) = (String::new(), String::new());
   let mut finish: Option<String> = None;
   let mut done = false;
+  let mut total_bytes = 0usize;
   // A server that ignores `stream` and answers with plain JSON but no JSON content-type: sniffed below.
   let (mut raw, mut seen_event) = (Vec::<u8>::new(), false);
   let mut handle = |payload: &str| -> Result<bool, String> {
@@ -324,7 +444,11 @@ async fn chat_stream_with(
       .map_err(|_| idle_error(idle))?
       .map_err(|e| map_send_error(&e, base_url, CHAT_TIMEOUT_SECS))?
     {
+      total_bytes += chunk.len();
       let events = parser.push(&chunk);
+      if total_bytes > MAX_STREAM_BYTES || parser.overflowed() {
+        return Err(too_large());
+      }
       if !seen_event {
         if events.is_empty() && raw.len() < 4_000_000 {
           raw.extend_from_slice(&chunk);
@@ -364,6 +488,10 @@ async fn chat_stream_with(
 /// sometimes put the whole answer in `reasoning`/`reasoning_content` and leave `content` null; then that text is
 /// used, since the code/JSON extractors find the answer inside it.
 fn reply_text(v: &Value) -> Result<String, String> {
+  let finish = v.pointer("/choices/0/finish_reason").and_then(Value::as_str);
+  if finish == Some("length") {
+    return Err(cut_off());
+  }
   let msg = v.pointer("/choices/0/message");
   let field = |name: &str| {
     msg.and_then(|m| m.get(name)).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
@@ -374,7 +502,7 @@ fn reply_text(v: &Value) -> Result<String, String> {
   if let Some(r) = field("reasoning").or_else(|| field("reasoning_content")) {
     return Ok(r);
   }
-  let finish = v.pointer("/choices/0/finish_reason").and_then(Value::as_str).unwrap_or("none");
+  let finish = finish.unwrap_or("none");
   Err(format!("{} (Details: the reply had no text; finish_reason = {finish}.)", unreadable()))
 }
 
@@ -385,7 +513,49 @@ pub async fn ai_list_models(base_url: String, api_key: Option<String>) -> Result
 
 /// In-flight streaming requests by the id the frontend chose, so `ai_cancel` can abort them.
 #[derive(Default)]
-pub struct AiStreams(Mutex<HashMap<String, AbortHandle>>);
+pub struct AiStreams(Mutex<StreamTable>);
+
+#[derive(Default)]
+struct StreamTable {
+  handles: HashMap<String, AbortHandle>,
+  /// Ids whose cancel arrived before their request was registered.
+  cancelled: HashSet<String>,
+}
+
+/// Bounds the cancelled-before-start set (a cancel for a finished request is never consumed).
+const MAX_PENDING_CANCELS: usize = 256;
+
+impl AiStreams {
+  /// Registers a running request. Returns false (and aborts it) when a cancel for `id` already arrived.
+  fn register(&self, id: &str, handle: AbortHandle) -> bool {
+    let mut t = self.0.lock().unwrap();
+    if t.cancelled.remove(id) {
+      handle.abort();
+      return false;
+    }
+    t.handles.insert(id.to_string(), handle);
+    true
+  }
+
+  fn finish(&self, id: &str) {
+    let mut t = self.0.lock().unwrap();
+    t.handles.remove(id);
+    t.cancelled.remove(id);
+  }
+
+  /// Aborts a running request, or remembers the id so a request that registers later is aborted at once.
+  fn cancel(&self, id: &str) {
+    let mut t = self.0.lock().unwrap();
+    if let Some(h) = t.handles.remove(id) {
+      h.abort();
+    } else {
+      if t.cancelled.len() >= MAX_PENDING_CANCELS {
+        t.cancelled.clear();
+      }
+      t.cancelled.insert(id.to_string());
+    }
+  }
+}
 
 #[tauri::command]
 pub async fn ai_chat(
@@ -396,10 +566,14 @@ pub async fn ai_chat(
   model: String,
   messages: Vec<ChatMessage>,
   reasoning_effort: Option<String>,
+  response_format: Option<Value>,
+  structured_outputs: Option<Value>,
+  max_tokens: Option<u64>,
   stream_id: Option<String>,
 ) -> Result<String, String> {
+  let extra = ChatExtra { response_format, structured_outputs, max_tokens };
   let Some(id) = stream_id else {
-    return chat(&base_url, &api_key, &model, &messages, &reasoning_effort).await;
+    return chat(&base_url, &api_key, &model, &messages, &reasoning_effort, &extra).await;
   };
   let emit_id = id.clone();
   let id_for_usage = id.clone();
@@ -412,11 +586,11 @@ pub async fn ai_chat(
     let on_usage = move |u: Usage| {
       let _ = app2.emit("ai:usage", json!({ "id": emit_id, "prompt_tokens": u.prompt_tokens, "completion_tokens": u.completion_tokens, "cached_tokens": u.cached_tokens }));
     };
-    chat_stream(&base_url, &api_key, &model, &messages, &reasoning_effort, &on_delta, &on_usage).await
+    chat_stream(&base_url, &api_key, &model, &messages, &reasoning_effort, &extra, &on_delta, &on_usage).await
   });
-  streams.0.lock().unwrap().insert(id.clone(), task.abort_handle());
+  streams.register(&id, task.abort_handle());
   let res = task.await;
-  streams.0.lock().unwrap().remove(&id);
+  streams.finish(&id);
   match res {
     Ok(r) => r,
     Err(e) if e.is_cancelled() => Err("cancelled".to_string()),
@@ -427,15 +601,15 @@ pub async fn ai_chat(
 /// Aborts the in-flight `ai_chat` with this stream id (its invoke then rejects with "cancelled").
 #[tauri::command]
 pub fn ai_cancel(streams: State<'_, AiStreams>, stream_id: String) {
-  if let Some(h) = streams.0.lock().unwrap().remove(&stream_id) {
-    h.abort();
-  }
+  streams.cancel(&stream_id);
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use httpmock::prelude::*;
+
+  const NONE: ChatExtra = ChatExtra { response_format: None, structured_outputs: None, max_tokens: None };
 
   fn msgs() -> Vec<ChatMessage> {
     vec![ChatMessage { role: "user".into(), content: "hi".into() }]
@@ -454,7 +628,7 @@ mod tests {
       when.method(POST).path("/v1/chat/completions").json_body_partial(r#"{"model":"qwen","stream":false}"#);
       then.status(200).json_body(json!({"choices":[{"message":{"content":"hei"}}]}));
     });
-    let r = chat(&server.url("/v1"), &None, "qwen", &msgs(), &None).await;
+    let r = chat(&server.url("/v1"), &None, "qwen", &msgs(), &None, &NONE).await;
     assert_eq!(r.unwrap(), "hei");
     m.assert();
   }
@@ -466,7 +640,7 @@ mod tests {
       when.method(POST).path("/v1/chat/completions").json_body_partial(r#"{"chat_template_kwargs":{"reasoning_effort":"low"}}"#);
       then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"}}]}));
     });
-    assert_eq!(chat(&server.url("/v1"), &None, "m", &msgs(), &Some("low".into())).await.unwrap(), "ok");
+    assert_eq!(chat(&server.url("/v1"), &None, "m", &msgs(), &Some("low".into()), &NONE).await.unwrap(), "ok");
     with.assert();
 
     let server2 = MockServer::start();
@@ -478,8 +652,8 @@ mod tests {
       when.method(POST).path("/v1/chat/completions");
       then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"}}]}));
     });
-    assert_eq!(chat(&server2.url("/v1"), &None, "m", &msgs(), &None).await.unwrap(), "ok");
-    assert_eq!(chat(&server2.url("/v1"), &None, "m", &msgs(), &Some("  ".into())).await.unwrap(), "ok");
+    assert_eq!(chat(&server2.url("/v1"), &None, "m", &msgs(), &None, &NONE).await.unwrap(), "ok");
+    assert_eq!(chat(&server2.url("/v1"), &None, "m", &msgs(), &Some("  ".into()), &NONE).await.unwrap(), "ok");
     without.assert_hits(0);
     any.assert_hits(2);
   }
@@ -496,10 +670,47 @@ mod tests {
 
   #[test]
   fn reply_text_reports_finish_reason() {
-    let v = json!({"choices":[{"message":{"content":null},"finish_reason":"length"}]});
+    let v = json!({"choices":[{"message":{"content":null},"finish_reason":"stop"}]});
     let e = reply_text(&v).unwrap_err();
     assert!(e.starts_with("The AI server sent an answer VibeBasic could not read."));
-    assert!(e.contains("finish_reason = length"));
+    assert!(e.contains("finish_reason = stop"));
+    // cut off at max_tokens, even with some text: the cut-off message
+    let v = json!({"choices":[{"message":{"content":"{\"ops\":["},"finish_reason":"length"}]});
+    let e = reply_text(&v).unwrap_err();
+    assert!(e.starts_with("The AI answer was cut off") && e.contains("lower Thinking level"), "{e}");
+  }
+
+  #[tokio::test]
+  async fn response_format_and_max_tokens_passed_through() {
+    let rf = json!({"type":"json_schema","json_schema":{"name":"form_ops","schema":{"type":"object"}}});
+    let extra = ChatExtra { response_format: Some(rf.clone()), max_tokens: Some(8192), ..Default::default() };
+    let want = json!({"response_format": rf, "max_tokens": 8192}).to_string();
+    let server = MockServer::start();
+    let plain = server.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions").json_body_partial(want.clone()).json_body_partial(r#"{"stream":false}"#);
+      then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"}}]}));
+    });
+    let streamed = server.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions").json_body_partial(want.clone()).json_body_partial(r#"{"stream":true}"#);
+      then.status(200).header("content-type", "text/event-stream").body(sse(&[&delta("content", "ok"), "data: [DONE]\n\n"]));
+    });
+    assert_eq!(chat(&server.url("/v1"), &None, "m", &msgs(), &None, &extra).await.unwrap(), "ok");
+    let (_, cb) = collect();
+    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &extra, &cb, &no_usage).await.unwrap(), "ok");
+    plain.assert();
+    streamed.assert();
+    // without them the body has neither field
+    let body = chat_body("m", &msgs(), &None, &NONE, false);
+    assert!(body.get("response_format").is_none() && body.get("max_tokens").is_none() && body.get("structured_outputs").is_none());
+    // vLLM's structured_outputs goes in as given
+    let so = json!({"json":{"type":"object"},"disable_any_whitespace":true});
+    let body = chat_body("m", &msgs(), &None, &ChatExtra { structured_outputs: Some(so.clone()), ..Default::default() }, true);
+    assert_eq!(body["structured_outputs"], so);
+    assert!(body.get("response_format").is_none());
+    // a message with a picture keeps its parts array
+    let parts = json!([{"type":"text","text":"hi"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]);
+    let m: ChatMessage = serde_json::from_value(json!({"role":"user","content":parts.clone()})).unwrap();
+    assert_eq!(chat_body("m", &[m], &None, &NONE, false)["messages"][0]["content"], parts);
   }
 
   #[tokio::test]
@@ -509,7 +720,7 @@ mod tests {
       when.method(POST).path("/v1/chat/completions").header("authorization", "Bearer k");
       then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"}}]}));
     });
-    assert_eq!(chat(&server.url("/v1"), &Some("k".into()), "m", &msgs(), &None).await.unwrap(), "ok");
+    assert_eq!(chat(&server.url("/v1"), &Some("k".into()), "m", &msgs(), &None, &NONE).await.unwrap(), "ok");
     with.assert();
 
     let server2 = MockServer::start();
@@ -521,7 +732,7 @@ mod tests {
       when.header_exists("authorization");
       then.status(200).body("x");
     });
-    assert_eq!(chat(&server2.url("/v1"), &Some(String::new()), "m", &msgs(), &None).await.unwrap(), "ok");
+    assert_eq!(chat(&server2.url("/v1"), &Some(String::new()), "m", &msgs(), &None, &NONE).await.unwrap(), "ok");
     any.assert();
     auth.assert_hits(0);
   }
@@ -531,10 +742,10 @@ mod tests {
     let server = MockServer::start();
     server.mock(|when, then| {
       when.method(GET).path("/v1/models");
-      then.status(200).json_body(json!({"data":[{"id":"a","max_model_len":262144},{"id":"b","context_length":8192},{"id":"c"}]}));
+      then.status(200).json_body(json!({"data":[{"id":"a","max_model_len":262144,"owned_by":"vllm"},{"id":"b","context_length":8192},{"id":"c"}]}));
     });
-    let info = |id: &str, n: Option<u64>| ModelInfo { id: id.to_string(), context_tokens: n };
-    assert_eq!(list_models(&server.url("/v1/"), &None).await.unwrap(), vec![info("a", Some(262144)), info("b", Some(8192)), info("c", None)]);
+    let info = |id: &str, n: Option<u64>, o: Option<&str>| ModelInfo { id: id.to_string(), context_tokens: n, owned_by: o.map(str::to_string) };
+    assert_eq!(list_models(&server.url("/v1/"), &None).await.unwrap(), vec![info("a", Some(262144), Some("vllm")), info("b", Some(8192), None), info("c", None, None)]);
   }
 
   #[tokio::test]
@@ -544,7 +755,7 @@ mod tests {
       when.any_request();
       then.status(404);
     });
-    let e = chat(&server.url("/v1"), &None, "m", &msgs(), &None).await.unwrap_err();
+    let e = chat(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE).await.unwrap_err();
     assert!(e.starts_with("The AI server answered 404 Not Found"), "{e}");
   }
 
@@ -559,7 +770,7 @@ mod tests {
       when.method(GET).path("/v1/models");
       then.status(500).json_body(json!({"error":"out of memory"}));
     });
-    let e = chat(&server.url("/v1"), &None, "x", &msgs(), &None).await.unwrap_err();
+    let e = chat(&server.url("/v1"), &None, "x", &msgs(), &None, &NONE).await.unwrap_err();
     assert_eq!(e, "The AI server answered 404 Not Found: model \"x\" not found, try pulling it first");
     let e = list_models(&server.url("/v1"), &None).await.unwrap_err();
     assert_eq!(e, "The AI server answered 500 Internal Server Error: out of memory");
@@ -578,14 +789,14 @@ mod tests {
     });
     let e = list_models(&server.url("/v1"), &None).await.unwrap_err();
     assert_eq!(e, "The AI server refused the request (401). Check the API key.");
-    let e = chat(&server.url("/v1"), &None, "m", &msgs(), &None).await.unwrap_err();
+    let e = chat(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE).await.unwrap_err();
     assert!(e.starts_with("The AI server answered 500 Internal Server Error: boom"), "{e}");
   }
 
   #[tokio::test]
   async fn connection_refused_message() {
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let e = chat(&format!("http://127.0.0.1:{port}/v1"), &None, "m", &msgs(), &None).await.unwrap_err();
+    let e = chat(&format!("http://127.0.0.1:{port}/v1"), &None, "m", &msgs(), &None, &NONE).await.unwrap_err();
     assert!(e.starts_with("Could not connect to"), "{e}");
   }
 
@@ -596,7 +807,7 @@ mod tests {
       when.any_request();
       then.status(200).body("hei");
     });
-    let e = chat(&server.url("/v1"), &None, "m", &msgs(), &None).await.unwrap_err();
+    let e = chat(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE).await.unwrap_err();
     assert_eq!(e, "The AI server sent an answer VibeBasic could not read.");
     let e = list_models(&server.url("/v1"), &None).await.unwrap_err();
     assert_eq!(e, "The AI server sent an answer VibeBasic could not read.");
@@ -650,7 +861,7 @@ mod tests {
       then.status(200).header("content-type", "text/event-stream").body(body);
     });
     let (got, cb) = collect();
-    let r = chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage).await;
+    let r = chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await;
     assert_eq!(r.unwrap(), "Hello");
     m.assert();
     let got = got.lock().unwrap().clone();
@@ -675,7 +886,7 @@ mod tests {
     let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
     let s2 = seen.clone();
     let on_usage = move |u: Usage| s2.lock().unwrap().push(u);
-    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, &on_usage).await.unwrap(), "ok");
+    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &on_usage).await.unwrap(), "ok");
     m.assert();
     assert_eq!(seen.lock().unwrap().clone(), vec![Usage { prompt_tokens: 3210, completion_tokens: 41, cached_tokens: Some(2900) }]);
   }
@@ -688,7 +899,7 @@ mod tests {
       then.status(200).header("content-type", "text/event-stream").body(sse(&[&delta("reasoning", "only thoughts"), "data: [DONE]\n\n"]));
     });
     let (_, cb) = collect();
-    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage).await.unwrap(), "only thoughts");
+    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap(), "only thoughts");
 
     let server2 = MockServer::start();
     server2.mock(|when, then| {
@@ -696,9 +907,8 @@ mod tests {
       then.status(200).header("content-type", "text/event-stream")
         .body(format!("data: {}\n\n", json!({"choices":[{"delta":{},"finish_reason":"length"}]})));
     });
-    let e = chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage).await.unwrap_err();
-    assert!(e.starts_with("The AI server sent an answer VibeBasic could not read."), "{e}");
-    assert!(e.contains("finish_reason = length"), "{e}");
+    let e = chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap_err();
+    assert!(e.starts_with("The AI answer was cut off"), "{e}");
   }
 
   #[tokio::test]
@@ -709,7 +919,7 @@ mod tests {
       then.status(200).header("content-type", "text/event-stream").body(delta("content", "abc").trim_end());
     });
     let (got, cb) = collect();
-    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage).await.unwrap(), "abc");
+    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap(), "abc");
     assert_eq!(got.lock().unwrap().len(), 1);
 
     let server2 = MockServer::start();
@@ -718,7 +928,7 @@ mod tests {
       then.status(200).json_body(json!({"choices":[{"message":{"content":"plain"}}]}));
     });
     let (got2, cb2) = collect();
-    assert_eq!(chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &cb2, &no_usage).await.unwrap(), "plain");
+    assert_eq!(chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb2, &no_usage).await.unwrap(), "plain");
     m.assert();
     assert!(got2.lock().unwrap().is_empty());
   }
@@ -731,12 +941,12 @@ mod tests {
       then.status(200).header("content-type", "text/event-stream").delay(Duration::from_millis(1500)).body(delta("content", "late"));
     });
     let (_, cb) = collect();
-    let e = chat_stream_with(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage, Duration::from_millis(200), Duration::from_secs(60))
+    let e = chat_stream_with(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage, Duration::from_millis(200), Duration::from_secs(60))
       .await
       .unwrap_err();
     assert!(e.starts_with("The AI server stopped sending for"), "{e}");
     // a patient idle limit gets the answer
-    let r = chat_stream_with(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage, Duration::from_secs(10), Duration::from_secs(60)).await;
+    let r = chat_stream_with(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage, Duration::from_secs(10), Duration::from_secs(60)).await;
     assert_eq!(r.unwrap(), "late");
     // the real limits
     assert_eq!(idle_error(Duration::from_secs(STREAM_IDLE_SECS)), "The AI server stopped sending for 90 seconds.");
@@ -752,13 +962,92 @@ mod tests {
       then.status(404).json_body(json!({"error":{"message":"no such model"}}));
     });
     let (_, cb) = collect();
-    let e = chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage).await.unwrap_err();
+    let e = chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap_err();
     assert_eq!(e, "The AI server answered 404 Not Found: no such model");
     let server2 = MockServer::start();
     server2.mock(|when, then| {
       when.any_request();
       then.status(200).header("content-type", "text/event-stream").body("data: {\"error\":{\"message\":\"boom\"}}\n\n");
     });
-    assert_eq!(chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &cb, &no_usage).await.unwrap_err(), "boom");
+    assert_eq!(chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap_err(), "boom");
+  }
+
+  #[test]
+  fn redact_url_drops_credentials_and_query() {
+    assert_eq!(redact_url("https://user:sekret@host:8000/v1?api-key=sekret#x"), "https://host:8000/v1");
+    assert_eq!(redact_url("http://h:11434/v1"), "http://h:11434/v1");
+    // unparsable input is still cut at userinfo and query
+    let r = redact_url("ht tp://user:sekret@host/v1?key=sekret");
+    assert!(!r.contains("sekret"), "{r}");
+  }
+
+  #[tokio::test]
+  async fn errors_never_contain_url_credentials() {
+    // connection refused on a port nothing listens on
+    let base = "http://user:sekret@127.0.0.1:1/v1?api-key=sekret";
+    let e = chat(base, &None, "m", &msgs(), &None, &NONE).await.unwrap_err();
+    assert!(!e.contains("sekret"), "{e}");
+    assert!(e.contains("127.0.0.1:1"), "{e}");
+    // 404 text echoes the url
+    let server = MockServer::start();
+    server.mock(|when, then| {
+      when.any_request();
+      then.status(404).body("nope");
+    });
+    let base = format!("http://user:sekret@{}/v1?key=sekret", server.address());
+    let e = chat(&base, &None, "m", &msgs(), &None, &NONE).await.unwrap_err();
+    assert!(!e.contains("sekret"), "{e}");
+  }
+
+  #[tokio::test]
+  async fn oversized_body_is_refused() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions");
+      then.status(200).header("content-type", "application/json").body("x".repeat(MAX_BODY_BYTES + 1024));
+    });
+    let e = chat(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE).await.unwrap_err();
+    assert_eq!(e, too_large());
+    let (_, cb) = collect();
+    let e = chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap_err();
+    assert_eq!(e, too_large());
+  }
+
+  #[tokio::test]
+  async fn stream_line_without_newline_is_capped() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions");
+      then.status(200).header("content-type", "text/event-stream").body("data: ".to_string() + &"x".repeat(MAX_SSE_LINE_BYTES + 1024));
+    });
+    let (_, cb) = collect();
+    let e = chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap_err();
+    assert_eq!(e, too_large());
+  }
+
+  #[test]
+  fn sse_parser_flags_overlong_line() {
+    let mut p = SseParser::default();
+    p.push(&vec![b'a'; MAX_SSE_LINE_BYTES]);
+    assert!(!p.overflowed());
+    p.push(b"a");
+    assert!(p.overflowed());
+  }
+
+  #[tokio::test]
+  async fn cancel_before_register_aborts_the_request() {
+    let streams = AiStreams::default();
+    streams.cancel("s1"); // arrives while ai_chat is still setting up
+    let task = tokio::spawn(async { tokio::time::sleep(Duration::from_secs(60)).await });
+    assert!(!streams.register("s1", task.abort_handle()));
+    assert!(task.await.unwrap_err().is_cancelled());
+    streams.finish("s1");
+    // a normal run: register first, cancel later
+    let task = tokio::spawn(async { tokio::time::sleep(Duration::from_secs(60)).await });
+    assert!(streams.register("s2", task.abort_handle()));
+    streams.cancel("s2");
+    assert!(task.await.unwrap_err().is_cancelled());
+    // the cancel did not leave a stale entry behind
+    assert!(streams.0.lock().unwrap().cancelled.is_empty());
   }
 }

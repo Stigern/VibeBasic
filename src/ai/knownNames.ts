@@ -3,7 +3,7 @@
 // session resolve (src/lang/interp/eval.ts `lookup`, src/run/session.ts `resolveName`, the run-time objects'
 // `hasMember`), so the checker and F5 agree. Where the answer is uncertain the name counts as known.
 import { BUILTINS, CONSTANTS } from '../lang/builtins';
-import type { ModuleAst } from '../lang/ast';
+import type { ModuleAst, ProcDecl } from '../lang/ast';
 import { parseModuleLenient } from '../lang/parser';
 import { CONTROL_TYPES, getPropDef } from '../model/controls';
 import type { ControlType, FormDef, Project } from '../model/types';
@@ -74,11 +74,14 @@ export interface ProjectNames {
   complete: boolean;
   /** Members of the project's forms by lower-case form name; null when that form's code has syntax errors. */
   forms: Map<string, Set<string> | null>;
+  /** Public procedures of the other standard modules by lower-case name; null when two modules define the name. */
+  procs: Map<string, ProcDecl | null>;
 }
 
 /** `current` (lower case) is the module being checked: its own code is supplied separately, so it is skipped here. */
 export function projectNames(project: Project, current: string): ProjectNames {
   const globals = new Set<string>();
+  const procs = new Map<string, ProcDecl | null>();
   let complete = true;
   for (const m of project.modules) {
     globals.add(m.name.toLowerCase());
@@ -86,6 +89,11 @@ export function projectNames(project: Project, current: string): ProjectNames {
     const ast = parseClean(m.code, m.name);
     if (!ast) { complete = false; continue; }
     for (const n of moduleNames(ast, true)) globals.add(n);
+    for (const p of ast.procedures) {
+      if (p.visibility !== 'public') continue;
+      const k = p.name.toLowerCase();
+      procs.set(k, procs.has(k) ? null : p);
+    }
   }
   const forms = new Map<string, Set<string> | null>();
   for (const f of project.forms) {
@@ -94,5 +102,5 @@ export function projectNames(project: Project, current: string): ProjectNames {
     const ast = parseClean(f.code, f.name);
     forms.set(f.name.toLowerCase(), ast ? formMembers(f, moduleNames(ast)) : null);
   }
-  return { globals, complete, forms };
+  return { globals, complete, forms, procs };
 }

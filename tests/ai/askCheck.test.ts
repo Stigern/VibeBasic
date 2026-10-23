@@ -116,7 +116,7 @@ test('unknown control event triggers a retry (form mode)', async () => {
 
 test('controls added by the ops are known to the validator', async () => {
   const s = ide('designer');
-  const reply = '{"ops":[{"op":"add","type":"Label","name":"lblHi"}],"code":"Private Sub lblHi_Click()\\nEnd Sub"}';
+  const reply = '{"ops":[{"op":"add","type":"Label","name":"lblHi","props":{"Left":2400,"Top":2400}}],"code":"Private Sub lblHi_Click()\\nEnd Sub"}';
   const b = fakeBackend([reply]);
   const p = askAi(s, b, { codeWindowFor: () => null });
   await enterPrompt('x');
@@ -151,7 +151,7 @@ test('retry reply that cannot be understood keeps the first answer', async () =>
   await p;
 });
 
-test('cancel during the retry discards everything', async () => {
+test('cancel during the check round keeps the first proposal: it is previewed, and nothing is applied without OK', async () => {
   const w = codeWin('Private Sub Command1_Click()\nEnd Sub');
   let done!: (v: string) => void;
   const b = fakeBackend([BAD_SYNTAX, new Promise<string>(r => { done = r; })]);
@@ -159,9 +159,12 @@ test('cancel during the retry discards everything', async () => {
   await enterPrompt('x');
   await vi.waitFor(() => expect(text()).toContain('Checking and fixing...'));
   click('Cancel');
-  await p;
-  done(GOOD);
+  await vi.waitFor(() => expect(document.querySelector('.ai-after')?.textContent).toContain('If x Then'));
+  done(GOOD);   // the late answer of the cancelled round is discarded
   await new Promise(r => setTimeout(r, 20));
+  expect(document.querySelector('.ai-after')?.textContent).not.toContain('MsgBox');
+  click('Cancel');
+  await p;
   expect(document.querySelector('.dlg98')).toBeNull();
   expect(w.applyChange).not.toHaveBeenCalled();
   expect(b.aiChat).toHaveBeenCalledTimes(2);

@@ -62,6 +62,17 @@ def('Mid', 2, 3, a => {
 
 def('UCase', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).toUpperCase()));
 def('LCase', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).toLowerCase()));
+
+/** StrConv: vbUpperCase 1, vbLowerCase 2, vbProperCase 3; the others (vbWide, vbNarrow, vbUnicode, vbFromUnicode) leave the text as it is. */
+def('StrConv', 2, 3, a => {
+  if (isNullV(a[0])) return Null;
+  const s = toStr(a[0]);
+  const conv = intArg(a[1]);
+  if (conv === 1) return s.toUpperCase();
+  if (conv === 2) return s.toLowerCase();
+  if (conv === 3) return s.toLowerCase().replace(/(^|[^\p{L}\p{N}'])(\p{L})/gu, (_m, pre: string, ch: string) => pre + ch.toUpperCase());
+  return s;
+});
 def('Trim', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).replace(/^ +| +$/g, '')));
 def('LTrim', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).replace(/^ +/, '')));
 def('RTrim', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).replace(/ +$/, '')));

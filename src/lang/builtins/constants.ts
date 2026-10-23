@@ -48,6 +48,7 @@ group({ vbShiftMask: 1, vbCtrlMask: 2, vbAltMask: 4, vbLeftButton: 1, vbRightBut
 group({
   vbUnchecked: 0, vbChecked: 1, vbGrayed: 2,
   vbModal: 1, vbModeless: 0,
+  vbUpperCase: 1, vbLowerCase: 2, vbProperCase: 3, vbWide: 4, vbNarrow: 8, vbUnicode: 64, vbFromUnicode: 128,
   vbTextCompare: 1, vbBinaryCompare: 0, vbUseCompareOption: -1,
 });
 

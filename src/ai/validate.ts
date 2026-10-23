@@ -1,8 +1,10 @@
 // Checks the code the AI proposed: cheap automatic fixes plus a list of problems that is fed back to the model once.
 // The checks only report; none of them changes the code. A false report costs a slow extra model round, so every
 // rule stays silent when it is not sure (a name whose status is uncertain counts as known).
-import type { Expr, MissingArg, ModuleAst, ProcDecl, Stmt } from '../lang/ast';
+import type { Expr, MissingArg, ModuleAst, Param, ProcDecl, Stmt, VBTypeName } from '../lang/ast';
+import { BUILTINS, CANONICAL_NAMES } from '../lang/builtins';
 import { parseModuleLenient } from '../lang/parser';
+import { TYPE_KEYWORDS } from '../lang/parseStatements';
 import { CONTROL_TYPES } from '../model/controls';
 import { listProcedures } from '../model/procedures';
 import type { ControlType, FormDef, Project } from '../model/types';
@@ -20,6 +22,41 @@ export interface ValidateContext {
 
 const KNOWN_EVENTS = new Set<string>();
 for (const td of Object.values(CONTROL_TYPES)) for (const e of td.events) KNOWN_EVENTS.add(e.name.toLowerCase());
+
+// ---------------------------------------------------------------------------------------------------------------
+// Event signatures
+
+interface SigParam { text: string; type?: VBTypeName }
+const INDEX_PARAM: SigParam = { text: 'Index As Integer', type: 'Integer' };
+
+/** 'KeyCode As Integer, Shift As Integer' (the registry's parameter list) -> the parameters, with the type when it is a plain type. */
+function signature(params: string): SigParam[] {
+  return params.split(',').map(t => t.trim()).filter(Boolean).map(text => {
+    const m = /\bAs\s+(\w+)$/i.exec(text);
+    return { text, type: m ? TYPE_KEYWORDS[lc(m[1])] : undefined };
+  });
+}
+
+/** The last line of a procedure header (a header may continue over lines with ` _`). */
+function headerEnd(lines: string[], line: number): number {
+  let end = line;
+  while (/\s_\s*$/.test(lines[end - 1] ?? '')) end++;
+  return end;
+}
+
+/**
+ * "Form_KeyPress needs (KeyAscii As Integer)." when the declared parameters differ from what the event passes in
+ * number, or in a type that is declared; names may differ. `array` is undefined when it is not known whether the
+ * control is an array: both forms are then accepted.
+ */
+function signatureProblem(procName: string, declared: Param[], params: string, array: boolean | undefined): string | null {
+  const base = signature(params);
+  const fits = (expected: SigParam[]) => declared.length === expected.length && declared.every((p, i) =>
+    typeof p.type !== 'string' || expected[i].type === undefined || p.type === expected[i].type);
+  const options = array === undefined ? [base, [INDEX_PARAM, ...base]] : [array ? [INDEX_PARAM, ...base] : base];
+  if (options.some(fits)) return null;
+  return `${procName} needs (${options[options.length - 1].map(p => p.text).join(', ')}).`;
+}
 
 const eventsOf = (type: ControlType): Set<string> => new Set(CONTROL_TYPES[type].events.map(e => e.name.toLowerCase()));
 const FORM_EVENTS = (): Map<string, string> => new Map(CONTROL_TYPES.Form.events.map(e => [e.name.toLowerCase(), e.name]));
@@ -50,11 +87,12 @@ const BARE_PROC = 'AiBody__';
 
 /** Alternatives offered with "X is not supported in VibeBasic." (keys lower case). */
 const ALTERNATIVES: Record<string, string> = {
+  shell: 'Programs cannot be started.',
   print: 'Use a Label, a TextBox or Debug.Print instead.',
 };
 /** Functions that parse fine but do not exist in VibeBasic, with the name as written in VB6. */
 const UNSUPPORTED_CALLS: Record<string, string> = {
-  createobject: 'CreateObject', getobject: 'GetObject',
+  createobject: 'CreateObject', getobject: 'GetObject', shell: 'Shell',
 };
 const unsupported = (name: string): string => {
   const alt = ALTERNATIVES[name.toLowerCase()];
@@ -111,6 +149,30 @@ const noMember = (type: ControlType, member: string, method: boolean) =>
 
 const lc = (s: string) => s.toLowerCase();
 
+// ---------------------------------------------------------------------------------------------------------------
+// Argument counts
+
+interface Arity { name: string; min: number; max: number }
+/** A built-in with this many or more maximum arguments takes any number (Choose, Array). */
+const ANY_COUNT = 100;
+const procArity = (p: ProcDecl): Arity => ({
+  name: p.name, min: p.params.filter(x => !x.optional && !x.paramArray).length,
+  max: p.params.some(x => x.paramArray) ? ANY_COUNT : p.params.length,
+});
+
+/** "Twice takes 1 argument, not 2." */
+function arityMessage(a: Arity, given: number): string {
+  const n = a.max >= ANY_COUNT ? `at least ${a.min}` : a.max === 0 ? 'no' : a.min === a.max ? `${a.min}` : `${a.min} to ${a.max}`;
+  return `${a.name} takes ${n} argument${a.max === 1 && a.min === 1 ? '' : 's'}, not ${given}.`;
+}
+
+/** The arguments a call passes, as the interpreter counts them (trailing omitted ones dropped); null when one in the middle is omitted. */
+function argCount(args: (Expr | MissingArg)[]): number | null {
+  let n = args.length;
+  while (n > 0 && args[n - 1].kind === 'missing') n--;
+  return args.slice(0, n).some(a => a.kind === 'missing') ? null : n;
+}
+
 /** Names a procedure declares (parameters, Dim, Static, Const, ReDim) and names it may create implicitly. */
 function procNames(p: ProcDecl): { declared: Set<string>; implicit: Set<string> } {
   const declared = new Set<string>(p.params.map(x => lc(x.name)));
@@ -147,7 +209,7 @@ function procNames(p: ProcDecl): { declared: Set<string>; implicit: Set<string> 
 
 interface Checker {
   report(msg: string): void;
-  /** Rule 2/3 may run: the project is known and every module parsed. */
+  /** The name rules may run (unknown names, undeclared variables, calls): the project is known and every module parsed. */
   namesKnown: boolean;
   optionExplicit: boolean;
   /** Module-level names of this module (proposal and existing code), lower case. */
@@ -160,6 +222,10 @@ interface Checker {
   forms: Map<string, Set<string> | null>;
   /** Extra names every procedure counts as declared (a bare body: everything the module's procedures declare). */
   bareExtra: Set<string>;
+  /** Procedures of this module (the proposal's replace the existing ones), lower case. */
+  procs: Map<string, ProcDecl>;
+  /** Public procedures of the other standard modules; null when the name is ambiguous. */
+  globalProcs: Map<string, ProcDecl | null>;
 }
 
 function checkProc(c: Checker, p: ProcDecl): void {
@@ -179,6 +245,35 @@ function checkProc(c: Checker, p: ProcDecl): void {
     if (UNSUPPORTED_CALLS[k] && !shadowed(k) && !c.globals.has(k)) c.report(unsupported(UNSUPPORTED_CALLS[k]));
   };
   const control = (k: string) => (shadowed(k) ? undefined : c.controls.get(k));
+
+  /** What `name(args)` / `name args` calls, in the interpreter's lookup order; null when it is not a known procedure or built-in. */
+  const arityOf = (k: string, name: string, withArgs: boolean): Arity | null => {
+    if (declared.has(k)) return null;
+    const mp = c.procs.get(k);
+    if (mp) return procArity(mp);
+    if (c.module.has(k)) return null;
+    // in a form a control or a property of Me comes first; with arguments a built-in wins over the property
+    if (c.controls.has(k) || (c.me?.has(k) && !(withArgs && BUILTINS.has(k)))) return null;
+    const gp = c.globalProcs.get(k);
+    if (gp !== undefined) return gp && procArity(gp);
+    if (c.globals.has(k)) return null;
+    const b = BUILTINS.get(k);
+    return b ? { name: CANONICAL_NAMES.get(k) ?? name, min: b.minArgs, max: b.maxArgs } : null;
+  };
+  /** A call by name: Sub or Function not defined, and a wrong argument count (the arity is known for the project's procedures and the built-ins). */
+  const callTarget = (name: string, args: (Expr | MissingArg)[], expression: boolean) => {
+    callName(name);
+    const k = lc(name);
+    if (!c.namesKnown || UNSUPPORTED_CALLS[k]) return;
+    if (!known(k) && !implicit.has(k)) {
+      if (!reportedNames.has(k)) c.report(`Sub or Function not defined: ${name}`);
+      reportedNames.add(k);
+      return;
+    }
+    const a = arityOf(k, name, expression || args.length > 0);
+    const given = argCount(args);
+    if (a && given !== null && (given < a.min || (given > a.max && a.max < ANY_COUNT))) c.report(arityMessage(a, given));
+  };
 
   /** `obj.member`: rules 1 (unknown member of a control or form) and 2 (unknown name before the dot). */
   const member = (obj: Expr, name: string, method: boolean) => {
@@ -221,7 +316,7 @@ function checkProc(c: Checker, p: ProcDecl): void {
       case 'name': undefinedName(e.name); callName(e.name); return;
       case 'member': member(e.object, e.name, false); return;
       case 'call':
-        if (e.target.kind === 'name') callName(e.target.name);
+        if (e.target.kind === 'name') callTarget(e.target.name, e.args, true);
         else if (e.target.kind === 'member') member(e.target.object, e.target.name, false);
         else expr(e.target);
         e.args.forEach(expr);
@@ -247,7 +342,7 @@ function checkProc(c: Checker, p: ProcDecl): void {
           expr(s.value);
           break;
         case 'call':
-          if (s.target.kind === 'name') callName(s.target.name);
+          if (s.target.kind === 'name') callTarget(s.target.name, s.args, false);
           else if (s.target.kind === 'member') member(s.target.object, s.target.name, true);
           s.args.forEach(expr);
           break;
@@ -273,7 +368,7 @@ function checkProc(c: Checker, p: ProcDecl): void {
   stmts(p.body);
 }
 
-/** Rules 1-4 on a parsed proposal. The module's current code counts too: its declarations are known names. */
+/** The name and call rules on a parsed proposal. The module's current code counts too: its declarations are known names. */
 function checkNames(ast: ModuleAst, syntaxOk: boolean, ctx: ValidateContext, report: (m: string) => void): void {
   const name = lc(ctx.moduleName);
   const form = ctx.form ?? ctx.project?.forms.find(f => lc(f.name) === name) ?? null;
@@ -292,6 +387,9 @@ function checkNames(ast: ModuleAst, syntaxOk: boolean, ctx: ValidateContext, rep
   const forms = new Map(proj?.forms ?? []);
   if (form) forms.set(lc(form.name), me);
 
+  const procs = new Map<string, ProcDecl>();
+  for (const p of [...existing.ast?.procedures ?? [], ...ast.procedures]) if (p.name !== BARE_PROC) procs.set(lc(p.name), p);
+
   const bareExtra = new Set<string>();
   for (const p of existing.ast?.procedures ?? []) { const n = procNames(p); for (const k of [...n.declared, ...n.implicit]) bareExtra.add(k); }
 
@@ -299,15 +397,16 @@ function checkNames(ast: ModuleAst, syntaxOk: boolean, ctx: ValidateContext, rep
     report,
     namesKnown: !!proj && proj.complete && syntaxOk && existing.errors.length === 0,
     optionExplicit: ast.optionExplicit || (existing.ast?.optionExplicit ?? false),
-    module, globals: proj?.globals ?? new Set(), me, controls, forms, bareExtra,
+    module, globals: proj?.globals ?? new Set(), me, controls, forms, bareExtra, procs, globalProcs: proj?.procs ?? new Map(),
   };
   for (const p of ast.procedures) checkProc(c, p);
 }
 
 /**
  * Problems in AI code: syntax errors, event procedures for controls/events that do not exist, unknown members of
- * controls and forms, unknown names before a dot, undeclared variables under Option Explicit, and functions and
- * statements VibeBasic does not have.
+ * controls and forms, unknown names before a dot, undeclared variables under Option Explicit, functions and
+ * statements VibeBasic does not have, event procedures whose parameters do not match the event, calls to procedures
+ * that exist nowhere or with the wrong number of arguments, and procedures the proposal defines twice.
  */
 export function validateCode(code: string, ctx: ValidateContext): string[] {
   const problems: string[] = [];
@@ -316,6 +415,7 @@ export function validateCode(code: string, ctx: ValidateContext): string[] {
   const bare = listProcedures(code).length === 0 && code.split(/\r?\n/).some(l => !DECL_OR_COMMENT.test(l));
   const source = bare ? `Sub ${BARE_PROC}()\n${code}\nEnd Sub` : code;
   const parsed = parseModuleLenient(source, ctx.moduleName);
+  const sourceLines = source.split(/\r?\n/);
   const count = code.split(/\r?\n/).length;
   for (const e of parsed.errors) {
     const line = bare ? e.line - 1 : e.line;
@@ -325,11 +425,22 @@ export function validateCode(code: string, ctx: ValidateContext): string[] {
     else report(`Line ${line}: ${e.message}`);
   }
 
+  const procs = listProcedures(code);
+  const seen = new Set<string>();
+  for (const p of procs) {
+    const k = lc(p.name);
+    if (seen.has(k)) report(`${p.name} is defined more than once; keep one.`);
+    seen.add(k);
+  }
+
   if (ctx.form) {
     const controls = new Map<string, ControlType>();
-    for (const c of ctx.form.controls) controls.set(c.name.toLowerCase(), c.type);
-    for (const c of ctx.extraControls ?? []) controls.set(c.name.toLowerCase(), c.type);
-    for (const p of listProcedures(code)) {
+    /** Whether a control is an array: known for the form's controls, unknown (undefined) for the ones the proposal adds. */
+    const isArray = new Map<string, boolean>();
+    for (const c of ctx.form.controls) { controls.set(lc(c.name), c.type); isArray.set(lc(c.name), c.index !== null); }
+    for (const c of ctx.extraControls ?? []) controls.set(lc(c.name), c.type);
+    const decls = new Map((bare ? [] : parsed.ast?.procedures ?? []).map(d => [lc(d.name), d] as const));
+    for (const p of procs) {
       if (p.kind !== 'sub') continue;
       const us = p.name.lastIndexOf('_');
       if (us <= 0 || us === p.name.length - 1) continue;
@@ -338,6 +449,13 @@ export function validateCode(code: string, ctx: ValidateContext): string[] {
       const type: ControlType | undefined = obj.toLowerCase() === 'form' ? 'Form' : controls.get(obj.toLowerCase());
       if (!type) report(`There is no control named ${obj}, so ${p.name} would never run.`);
       else if (!eventsOf(type).has(ev.toLowerCase())) report(`A ${type} has no ${ev} event.`);
+      else {
+        const decl = decls.get(lc(p.name));
+        const headerOk = decl && !parsed.errors.some(e => e.line >= decl.line && e.line <= headerEnd(sourceLines, decl.line));
+        const def = CONTROL_TYPES[type].events.find(e => lc(e.name) === lc(ev))!;
+        const wrong = headerOk ? signatureProblem(p.name, decl.params, def.params, type === 'Form' ? false : isArray.get(lc(obj))) : null;
+        if (wrong) report(wrong);
+      }
     }
   }
 

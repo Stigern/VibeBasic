@@ -38,7 +38,7 @@ const SUFFIX_TYPES: Record<TypeSuffix, VBTypeName> = { '%': 'Integer', '&': 'Lon
 export const UNSUPPORTED_KEYWORDS: Record<string, string> = {
   declare: 'Declare', property: 'Property', implements: 'Implements',
   event: 'Event', raiseevent: 'RaiseEvent', withevents: 'WithEvents', friend: 'Friend', global: 'Global',
-  lib: 'Lib', alias: 'Alias', paramarray: 'ParamArray', gosub: 'GoSub', return: 'Return',
+  lib: 'Lib', alias: 'Alias', gosub: 'GoSub', return: 'Return',
 };
 /** Unsupported statements that are plain identifiers; only unsupported when they start a statement and are not assigned to / member-accessed. */
 export const UNSUPPORTED_IDENTS: Record<string, string> = { print: 'Print', line: 'Line', circle: 'Circle', pset: 'PSet' };
@@ -1114,16 +1114,23 @@ export class StatementParser extends Parser {
       if (this.isKeyword('byval')) { this.advance(); byRef = false; }
       else if (this.isKeyword('byref')) this.advance();
       if (this.isKeyword('optional')) { this.advance(); optional = true; }
-      if (this.isKeyword('paramarray')) this.unsupported('ParamArray');
+      const paramArray = this.isKeyword('paramarray');
+      if (paramArray) { this.advance(); byRef = false; }
       const nameTok = this.expectIdent();
       let isArray = false;
       if (this.isOp('(')) { this.advance(); this.expectOp(')'); isArray = true; }
       let type: VBTypeName | undefined = nameTok.suffix ? SUFFIX_TYPES[nameTok.suffix] : undefined;
       if (this.isKeyword('as')) type = this.parseAsClause().type;
       const p: Param = { name: baseName(nameTok), byRef, optional, isArray };
+      if (paramArray) {
+        if (!isArray) this.fail('ParamArray must be an array: ParamArray args() As Variant', nameTok);
+        p.paramArray = true;
+        p.type ??= 'Variant';
+      }
       if (type !== undefined) p.type = type;
       if (this.isOp('=')) { this.advance(); p.defaultValue = this.parseExpression(); }
       params.push(p);
+      if (paramArray && !this.isOp(')')) this.fail('ParamArray must be the last parameter', this.peek());
       if (this.isOp(',')) { this.advance(); continue; }
       this.expectOp(')');
       return params;

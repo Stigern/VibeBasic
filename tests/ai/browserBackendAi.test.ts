@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, test, vi } from 'vitest';
+import { AI_CUT_OFF } from '../../src/ai/sse';
 import { BrowserBackend } from '../../src/backend/browserBackend';
 
 afterEach(() => { vi.unstubAllGlobals(); });
@@ -24,4 +25,20 @@ test('reasoning effort goes into chat_template_kwargs only when given', async ()
   expect(JSON.parse((f.mock.calls[0] as any)[1].body).chat_template_kwargs).toEqual({ reasoning_effort: 'low' });
   await b.aiChat('http://h/v1', '', 'x', []);
   expect(JSON.parse((f.mock.calls[1] as any)[1].body)).not.toHaveProperty('chat_template_kwargs');
+});
+
+test('response_format and max_tokens are sent when given; a reply cut off at max_tokens gives the cut-off message', async () => {
+  const b = new BrowserBackend();
+  const f = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"ops":[' }, finish_reason: 'length' }] }), { status: 200 }));
+  vi.stubGlobal('fetch', f);
+  const rf = { type: 'json_schema', json_schema: { name: 'form_ops', schema: { type: 'object' } } };
+  await expect(b.aiChat('http://h/v1', '', 'x', [], undefined, { responseFormat: rf, maxTokens: 8192 })).rejects.toThrow(AI_CUT_OFF);
+  const body = JSON.parse((f.mock.calls[0] as any)[1].body);
+  expect(body.response_format).toEqual(rf);
+  expect(body.max_tokens).toBe(8192);
+  expect(AI_CUT_OFF).toContain('lower Thinking level');
+  // streamed
+  const sse = `data: ${JSON.stringify({ choices: [{ delta: { content: 'Private Sub' }, finish_reason: 'length' }] })}\n\ndata: [DONE]\n\n`;
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })));
+  await expect(b.aiChat('http://h/v1', '', 'x', [], undefined, { onDelta: () => {} })).rejects.toThrow(AI_CUT_OFF);
 });

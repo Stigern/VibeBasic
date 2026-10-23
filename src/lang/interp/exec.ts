@@ -394,10 +394,12 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBVal
   if (run.frames.length >= MAX_CALL_DEPTH) throw new VBRuntimeError(28);
   const { module, proc } = ref;
   const f = new Frame(run, module, proc, proc.line);
-  if (args.length > proc.params.length) throw compileError('Wrong number of arguments or invalid property assignment');
+  const hasRest = proc.params.length > 0 && proc.params[proc.params.length - 1].paramArray === true;
+  if (args.length > proc.params.length && !hasRest) throw compileError('Wrong number of arguments or invalid property assignment');
   for (let i = 0; i < proc.params.length; i++) {
     const p = proc.params[i];
     let a = args[i];
+    if (p.paramArray && (a === undefined || a === MISSING)) a = { value: new VBArray('Variant', [[0, -1]]) };   // no extra arguments: an empty array
     if ((a === undefined || a === MISSING) && !p.optional) throw compileError('Argument not optional');
     if (a !== undefined && a !== MISSING && 'slot' in a && !p.byRef) a = { value: a.slot.value };
     const type = rt.resolveType(p.type, module);

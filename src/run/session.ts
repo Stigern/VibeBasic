@@ -78,6 +78,7 @@ export class RunSession implements Host, FormSession {
   private readonly clipboard = new ClipboardObject(() => this.formHost.clipboard?.());
   private readonly title: string;
   private modalStack: FormInstance[] = [];
+  private audio?: AudioContext;
   private timers = new Map<ControlObject, ReturnType<typeof setInterval>>();
   private timerBusy = new Set<ControlObject>();
   private lastYield = -Infinity;   // performance.now() of the last real DoEvents yield
@@ -294,6 +295,22 @@ export class RunSession implements Host, FormSession {
     this.queue.flush();
     await macrotask();
     this.lastYield = performance.now();
+  }
+
+  /** Beep: a short tone through Web Audio; silent when there is no audio (never throws). */
+  beep(): void {
+    try {
+      const Ctx = (globalThis as { AudioContext?: typeof AudioContext }).AudioContext;
+      if (!Ctx) return;
+      this.audio ??= new Ctx();
+      const osc = this.audio.createOscillator();
+      const gain = this.audio.createGain();
+      osc.frequency.value = 800;
+      gain.gain.value = 0.1;
+      osc.connect(gain).connect(this.audio.destination);
+      osc.start();
+      osc.stop(this.audio.currentTime + 0.15);
+    } catch { /* no sound */ }
   }
 
   /** A file of the program, found as Open finds it (relative paths are from CurDir, which starts as App.Path; `\` separators and
