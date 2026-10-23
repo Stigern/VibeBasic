@@ -655,6 +655,52 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     ],
   }),
 
+  // MSCOMM32.OCX. Invisible at run time. The serial ports of the Rust side (serialport crate). CommPort n is the n-th of the sorted
+  // /dev/cu.* devices; PortName (a VibeBasic extension) names the device itself ("/dev/cu.usbmodem1101") and wins when it is set.
+  // Settings "baud,parity,data,stop". OnComm sets CommEvent (comEvReceive once InBufferCount reaches RThreshold, comEvSend, comEvCTS ...).
+  MSComm: def({
+    type: 'MSComm', component: 'MSCOMM32.OCX', namePrefix: 'MSComm', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true, toolboxTooltip: 'MSComm',
+    defaultEvent: 'OnComm', defaultMember: null, methods: [],
+    props: [
+      int('Left', 0), int('Top', 0), str('Tag'),
+      int('CommPort', 1, { min: 1, max: 255 }), str('PortName'), str('Settings', '9600,n,8,1'),
+      en('Handshaking', 0, ['comNone', 'comXOnXoff', 'comRTS', 'comRTSXOnXOff']),
+      bool('DTREnable', true), bool('RTSEnable', false), bool('EOFEnable', false), bool('NullDiscard', false),
+      int('InBufferSize', 1024, { min: 1, max: 32767 }), int('OutBufferSize', 512, { min: 1, max: 32767 }),
+      int('InputLen', 0, { min: 0 }), en('InputMode', 0, ['comInputModeText', 'comInputModeBinary']), str('ParityReplace', '?'),
+      int('RThreshold', 0, { min: 0 }), int('SThreshold', 0, { min: 0 }),
+      rt('PortOpen', 'bool', false), rt('Input', 'string', '', 'ro'), rt('Output', 'string', ''),
+      rt('InBufferCount', 'int', 0), rt('OutBufferCount', 'int', 0), rt('CommEvent', 'int', 0, 'ro'), rt('CommID', 'int', 0, 'ro'),
+      rt('CDHolding', 'bool', false, 'ro'), rt('CTSHolding', 'bool', false, 'ro'), rt('DSRHolding', 'bool', false, 'ro'), rt('Break', 'bool', false),
+    ],
+    events: [ev('OnComm')],
+  }),
+
+  // SYSINFO.OCX. Invisible at run time. OSPlatform 2 (the NT family), OSVersion / OSBuild the macOS version, WorkArea* the main screen's
+  // visible frame in twips, the power state from the Rust side (pmset; 255 / -1 when unknown). Only DisplayChanged is raised.
+  SysInfo: def({
+    type: 'SysInfo', component: 'SYSINFO.OCX', namePrefix: 'SysInfo', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true, toolboxTooltip: 'SysInfo',
+    defaultEvent: 'DisplayChanged', defaultMember: null, methods: [],
+    props: [
+      int('Left', 0), int('Top', 0), str('Tag'),
+      rt('OSPlatform', 'int', 2, 'ro'), rt('OSVersion', 'string', '', 'ro'), rt('OSBuild', 'string', '', 'ro'), rt('ScrollBarSize', 'int', 240, 'ro'),
+      rt('WorkAreaLeft', 'int', 0, 'ro'), rt('WorkAreaTop', 'int', 0, 'ro'), rt('WorkAreaWidth', 'int', 0, 'ro'), rt('WorkAreaHeight', 'int', 0, 'ro'),
+      rt('ACStatus', 'int', 255, 'ro'), rt('BatteryFullTime', 'int', -1, 'ro'), rt('BatteryLifePercent', 'int', 255, 'ro'),
+      rt('BatteryLifeTime', 'int', -1, 'ro'), rt('BatteryStatus', 'int', 255, 'ro'),
+    ],
+    events: [
+      ev('ConfigChangeCancelled'), ev('ConfigChanged', 'ByVal OldConfigNum As Long, ByVal NewConfigNum As Long'),
+      ev('DeviceArrival', 'ByVal DeviceType As Long, ByVal DeviceID As Long, ByVal DeviceName As String, ByVal DeviceData As Long'),
+      ev('DeviceOtherEvent', 'ByVal DeviceType As Long, ByVal EventName As String, ByVal DataPointer As Long'),
+      ev('DeviceQueryRemove', 'ByVal DeviceType As Long, ByVal DeviceID As Long, ByVal DeviceName As String, ByVal DeviceData As Long, Cancel As Boolean'),
+      ev('DeviceQueryRemoveFailed', 'ByVal DeviceType As Long, ByVal DeviceID As Long, ByVal DeviceName As String, ByVal DeviceData As Long'),
+      ev('DeviceRemoveComplete', 'ByVal DeviceType As Long, ByVal DeviceID As Long, ByVal DeviceName As String, ByVal DeviceData As Long'),
+      ev('DeviceRemovePending', 'ByVal DeviceType As Long, ByVal DeviceID As Long, ByVal DeviceName As String, ByVal DeviceData As Long'),
+      ev('DevModeChanged'), ev('DisplayChanged'), ev('PowerQuerySuspend', 'Cancel As Boolean'), ev('PowerResume'), ev('PowerStatusChanged'),
+      ev('PowerSuspend'), ev('QueryChangeConfig', 'Cancel As Boolean'), ev('SettingChanged', 'ByVal Item As Integer'), ev('SysColorsChanged'), ev('TimeChanged'),
+    ],
+  }),
+
   // The Data control (intrinsic, DAO): the arrow bar |< < Caption > >|. DatabaseName is a SQLite file (.db), relative to App.Path;
   // RecordSource a table name or a SELECT. Recordset and Database are objects at run time (run/data/). The controls whose
   // DataSource names it show the current record.
@@ -927,7 +973,7 @@ export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
   'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'Data', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar',
   'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit',
-  'WebBrowser', 'Inet', 'Winsock', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Adodc', 'DataGrid', 'DataList', 'DataCombo',
+  'WebBrowser', 'Inet', 'Winsock', 'MSComm', 'SysInfo', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Adodc', 'DataGrid', 'DataList', 'DataCombo',
   'SSPanel', 'SSCommand', 'SSCheck', 'SSOption', 'SSFrame', 'SSRibbon',
 ];
 

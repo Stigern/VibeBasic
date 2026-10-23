@@ -13,7 +13,7 @@
 
 import { emitTo, listen } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { getBackend, type DatabaseApi, type DirListing, type NetApi, type Volume } from '../backend/backend';
+import { getBackend, type DatabaseApi, type DirListing, type NetApi, type SerialApi, type SystemApi, type Volume } from '../backend/backend';
 import type { FileSystemApi } from '../lang/fileio/fsApi';
 import type { FontValue } from '../model/types';
 import { VBRuntimeError } from '../lang/errors';
@@ -247,6 +247,9 @@ export class TauriFormHost implements FormHost {
   fileSystem(): FileSystemApi { return getBackend(); }
   /** Databases: the connections belong to this (main) window, which runs the program. */
   database(): DatabaseApi { return getBackend(); }
+  /** MSComm: the serial ports belong to this (main) window, which runs the program; SysInfo reads from here too. */
+  serial(): SerialApi { return getBackend(); }
+  system(): SystemApi { return getBackend(); }
   /** Clipboard: from this (main) window, through the backend (pbcopy / pbpaste). */
   clipboard(): ClipboardApi {
     const b = getBackend();

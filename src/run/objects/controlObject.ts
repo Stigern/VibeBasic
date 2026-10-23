@@ -36,6 +36,9 @@ import { DataControl, type DataConsumer, type DataHost } from '../data/dataContr
 import type { DbSession } from '../data/dbSession';
 import { DataGridControl } from '../data/dataGrid';
 import { DataListControl } from '../data/dataList';
+import { MSCommControl, SysInfoControl } from './commControl';
+import type { CommSession } from '../comm';
+import type { SystemApi } from '../../backend/backend';
 
 export interface RunContext {
   resolveAsset(ref: PictureRef): string | null;
@@ -69,6 +72,10 @@ export interface RunContext {
   /** Every control of the form (data binding). */
   controls?(): ControlObject[];
   msgBox?(prompt: string, buttons: number, title: string): Promise<number>;
+  /** MSComm: the run's serial ports (made on first use). Throws 8002 when there are none. */
+  comm?(): CommSession;
+  /** SysInfo: the system's state; null (or absent) when the host cannot tell. */
+  system?(): SystemApi | null;
 }
 
 /** The property a control shows a bound field in (DataSource / DataField). */
@@ -186,7 +193,23 @@ export class ControlObject implements VBObject, DataConsumer {
     if (def.type === 'MMControl') this.rich = new MciControl(this.richHost());
     else if (def.type === 'MediaPlayer') this.rich = new MediaPlayerControl(this.richHost());
     else if (def.type === 'Agent') this.rich = new AgentControl(this.richHost());
-    else if (def.type === 'Data' || def.type === 'Adodc') this.rich = new DataControl(this.dataHost(), def.type === 'Data' ? 'dao' : 'ado');
+    else if (def.type === 'MSComm') {
+      this.rich = new MSCommControl({
+        props: this.props, name: this.def.name,
+        raise: (event, args) => this.ctx.raise?.(this, event, args) ?? Promise.resolve(),
+        comm: () => {
+          const c = this.ctx.comm?.();
+          if (!c) throw new VBRuntimeError(8002, 'Invalid port number');
+          return c;
+        },
+      });
+    } else if (def.type === 'SysInfo') {
+      this.rich = new SysInfoControl({
+        props: this.props,
+        raise: (event, args) => this.ctx.raise?.(this, event, args) ?? Promise.resolve(),
+        system: () => this.ctx.system?.() ?? null,
+      });
+    } else if (def.type === 'Data' || def.type === 'Adodc') this.rich = new DataControl(this.dataHost(), def.type === 'Data' ? 'dao' : 'ado');
     else if (def.type === 'DataGrid') {
       const h = this.dataHost();
       this.rich = new DataGridControl({ ...h, source: () => this.dataControlNamed(this.props.DataSource) });
@@ -1128,7 +1151,8 @@ export class ControlObject implements VBObject, DataConsumer {
   }
 
   private send(props: Record<string, PropValue>): void {
-    if (this.def.type === 'Timer' || this.def.type === 'CommonDialog' || this.def.type === 'Inet' || this.def.type === 'Winsock') return;   // no view
+    if (this.def.type === 'Timer' || this.def.type === 'CommonDialog' || this.def.type === 'Inet' || this.def.type === 'Winsock'
+      || this.def.type === 'MSComm' || this.def.type === 'SysInfo') return;   // no view
     if (this.def.type === 'RichTextBox') {
       // a RichTextBox applies each change at the selection as it is then (SelStart = 3: SelBold = True: SelStart = 9 must not merge
       // into one patch): the text and selection changes queue as an ordered list (RtfOps) that the window replays, so a loop that

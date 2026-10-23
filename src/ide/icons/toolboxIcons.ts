@@ -51,6 +51,10 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
     + '<path d="M12 9v4M10 11.500l2 2.500 2-2.500" stroke="#008000" fill="none" stroke-width="1.500"/>'),
   Winsock: svg(box(0, 2, 6, 5, '#c0c0c0') + '<rect x="1" y="3" width="4" height="3" fill="#008080"/>' + box(10, 9, 6, 5, '#c0c0c0') + '<rect x="11" y="10" width="4" height="3" fill="#008080"/>'
     + '<path d="M3 7v4h7M6 4.500h4v4.500" stroke="#000" fill="none"/><path d="M1 8h4M11 15h4" stroke="#000"/>'),
+  MSComm: svg('<path d="M1.500 6.500c0-2.500 2.500-4 6.500-4s6.500 1.500 6.500 4v1h-3v-1.500h-7v1.500h-3z" fill="#000" stroke="#000"/>'
+    + '<path d="M4.500 7.500h7l2 6h-11z" fill="#c0c0c0" stroke="#000"/><path d="M6 9h1M8 9h1M10 9h1M6 11h1M8 11h1M10 11h1" stroke="#000"/>'),
+  SysInfo: svg(box(1, 1, 14, 10, '#c0c0c0') + '<rect x="2" y="2" width="12" height="8" fill="#008080"/><path d="M8 3v1M8 5v4" stroke="#fff"/>'
+    + '<path d="M5.500 13.500h5" stroke="#000"/><rect x="6" y="11" width="4" height="2" fill="#808080"/>'),
   MSChart: svg(box(1, 1, 14, 14) + '<rect x="2" y="2" width="12" height="12" fill="#c0c0c0"/><rect x="3" y="8" width="2" height="5" fill="#000080" stroke="#000"/><rect x="6" y="4" width="2" height="9" fill="#800000" stroke="#000"/>'
     + '<rect x="9" y="6" width="2" height="7" fill="#ffff00" stroke="#000"/><rect x="12" y="9" width="1" height="4" fill="#008080" stroke="#000"/>'),
   MMControl: svg(box(0, 4, 6, 8, '#c0c0c0') + box(5, 4, 6, 8, '#c0c0c0') + box(10, 4, 6, 8, '#c0c0c0')

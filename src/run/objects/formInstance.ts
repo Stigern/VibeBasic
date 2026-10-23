@@ -12,6 +12,8 @@ import type { FormHost, FormWindow } from '../formHost';
 import { localMedia } from '../mediaSource';
 import type { PatchQueue } from '../patchQueue';
 import type { NetSession } from '../net';
+import type { CommSession } from '../comm';
+import type { SystemApi } from '../../backend/backend';
 import type { DbSession } from '../data/dbSession';
 import type { FormSnapshot, FromWindow, ToWindow } from '../protocol';
 import { ControlArrayObject, ControlObject, type ElementFactory, type RunContext } from './controlObject';
@@ -46,6 +48,10 @@ export interface FormSession {
   resolvePath(path: string): string;
   /** Data control, Adodc: the run's databases (made on first use; throws when the host has none). */
   db(): DbSession;
+  /** MSComm: the run's serial ports (made on first use; throws 8002 when the host has none). */
+  comm(): CommSession;
+  /** SysInfo: the system's state, or null when the host cannot tell. */
+  system(): SystemApi | null;
   msgBox(prompt: string, buttons: number, title: string): Promise<number>;
 }
 
@@ -113,6 +119,8 @@ export class FormInstance implements VBObject {
       raise: (c, event, args) => (this.st?.byId.get(c.def.id) === c && !this.s.ended ? this.fireControl(c, event, args) : Promise.resolve()),
       focused: c => this.setActive(c.def.id),
       db: () => this.s.db(),
+      comm: () => this.s.comm(),
+      system: () => this.s.system(),
       resolveDbPath: p => this.s.program.resolvePath(p),
       controls: () => this.controls(),
       msgBox: (p, b, t) => this.s.msgBox(p, b, t),

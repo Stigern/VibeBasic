@@ -14,6 +14,7 @@ A Visual Basic 6 clone for macOS, with the authentic Windows 98 look and a built
   - Common Controls: TreeView, ListView, Toolbar, StatusBar, ImageList, DTPicker and others.
   - Media and data: MSFlexGrid, MSChart, RichTextBox, MaskedEdit, MMControl and MediaPlayer.
   - Networking: WebBrowser, Inet and Winsock.
+  - Serial ports and system information: MSComm (for an Arduino or a 3D printer over USB) and SysInfo. `CommPort` n opens the n-th `/dev/cu.*` device in name order; the extra property `PortName` takes the device path itself, e.g. `MSComm1.PortName = "/dev/cu.usbmodem1101"`.
   - Databases: the Data control, the ADO Data Control, DataGrid, DataList and DataCombo, with data binding. They use SQLite files (`.db`) instead of Jet `.mdb` files.
   - Sheridan 3D controls: SSPanel (with the flood bar), SSFrame, SSCommand, SSCheck, SSOption and SSRibbon.
   - Microsoft Agent, with characters of its own.

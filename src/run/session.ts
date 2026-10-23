@@ -10,6 +10,8 @@ import type { PictureRef, Project } from '../model/types';
 import type { FormHost } from './formHost';
 import { NetSession } from './net';
 import { DbSession } from './data/dbSession';
+import { CommSession } from './comm';
+import type { SystemApi } from '../backend/backend';
 import { PatchQueue } from './patchQueue';
 import { AppObject, PictureObject, ScreenObject } from './objects/appObjects';
 import { ClipboardObject, ObjectList } from './objects/globalObjects';
@@ -80,6 +82,7 @@ export class RunSession implements Host, FormSession {
   private askAiOnBreak = false;    // the error dialog answered 'ai': the next onBreak (on that error) starts the AI flow
   private netSession: NetSession | null = null;
   private dbSession: DbSession | null = null;
+  private commSession: CommSession | null = null;
 
   constructor(private project: Project, readonly formHost: FormHost, private cb: SessionCallbacks, readonly mode: 'ide' | 'app') {
     for (const [k, a] of Object.entries(project.assets)) this.assets[k] = `data:${a.mime};base64,${a.dataBase64}`;
@@ -151,6 +154,17 @@ export class RunSession implements Host, FormSession {
     if (!api) throw new VBRuntimeError(429, 'ActiveX component can\'t create object');
     return this.dbSession = new DbSession(api);
   }
+
+  /** MSComm: made when the first port opens; every port is closed at the end of the program. */
+  comm(): CommSession {
+    if (this.commSession) return this.commSession;
+    const api = this.formHost.serial?.();
+    if (!api) throw new VBRuntimeError(8002, 'Invalid port number');
+    return this.commSession = new CommSession(api);
+  }
+
+  /** SysInfo: the OS version, work area and power state (null: none here, the values are unknown). */
+  system(): SystemApi | null { return this.formHost.system?.() ?? null; }
 
   resolveAsset(ref: PictureRef): string | null {
     return this.assets[ref.asset] ?? (ref.asset.startsWith('data:') ? ref.asset : null);
@@ -308,6 +322,7 @@ export class RunSession implements Host, FormSession {
     for (const f of this.forms.values()) if (f.loaded || f.hasWindow()) f.teardown();
     this.netSession?.shutdown();   // every socket closed, every Inet request aborted
     this.dbSession?.shutdown();    // every database connection closed
+    this.commSession?.shutdown();  // every serial port closed
     this.cb.onEnded();
   }
 }

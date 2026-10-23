@@ -9,7 +9,7 @@ export type ControlType = 'Form' | 'CommandButton' | 'Label' | 'TextBox' | 'Chec
   | 'SSTab'
   | 'ImageList' | 'Toolbar'
   | 'DTPicker' | 'MonthView' | 'MaskedEdit'
-  | 'WebBrowser' | 'Inet' | 'Winsock'
+  | 'WebBrowser' | 'Inet' | 'Winsock' | 'MSComm' | 'SysInfo'
   | 'MSChart'
   | 'MMControl' | 'MediaPlayer' | 'Agent'
   | 'Data' | 'Adodc' | 'DataGrid' | 'DataList' | 'DataCombo'

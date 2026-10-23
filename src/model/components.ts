@@ -21,6 +21,8 @@ export const COMPONENTS: readonly ComponentDef[] = [
   { file: 'SHDOCVW.DLL', name: 'Microsoft Internet Controls' },
   { file: 'MSINET.OCX', name: 'Microsoft Internet Transfer Control 6.0' },
   { file: 'MSWINSCK.OCX', name: 'Microsoft Winsock Control 6.0' },
+  { file: 'MSCOMM32.OCX', name: 'Microsoft Comm Control 6.0' },
+  { file: 'SYSINFO.OCX', name: 'Microsoft SysInfo Control 6.0' },
   { file: 'MSCHRT20.OCX', name: 'Microsoft Chart Control 6.0' },
   { file: 'MSMASK32.OCX', name: 'Microsoft Masked Edit Control 6.0' },
   { file: 'MCI32.OCX', name: 'Microsoft Multimedia Control 6.0' },

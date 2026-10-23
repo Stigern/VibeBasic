@@ -21,6 +21,7 @@ import { mediaPlayer, mmControl } from './media';
 import { agentControl } from './agent';
 import { dtPicker, maskedEdit, monthView } from './calendar';
 import { inetIcon, webBrowser, winsockIcon } from './webBrowser';
+import { msCommIcon, sysInfoIcon } from './systemIcons';
 import { dataBar, dataGrid } from './dataControls';
 import { ssCommand, ssFrame, ssPanel, ssRibbon } from './sheridan';
 import { font3dShadow } from '../model/sheridan';
@@ -1472,6 +1473,8 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   WebBrowser: webBrowser,
   Inet: inetIcon,
   Winsock: winsockIcon,
+  MSComm: msCommIcon,
+  SysInfo: sysInfoIcon,
   MSChart: msChart,
   MMControl: mmControl,
   MediaPlayer: mediaPlayer,

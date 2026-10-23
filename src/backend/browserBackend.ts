@@ -1,4 +1,4 @@
-import type { Backend, DbExecResult, DbQueryResult, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
+import type { Backend, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import { readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
 import { MemoryFs } from '../lang/fileio/memoryFs';
@@ -157,6 +157,24 @@ export class BrowserBackend implements Backend {
   async dbExecute(): Promise<DbExecResult> { throw new Error('3420|Object invalid or no longer set.'); }
   async dbClose(): Promise<void> { /* nothing is open */ }
   async dbReset(): Promise<void> { /* nothing is open */ }
+
+  // MSComm: no serial ports in a browser (so every CommPort is 8002); SysInfo: the browser's screen, power unknown
+  async commList(): Promise<string[]> { return []; }
+  async commOpen(): Promise<CommLines> { throw new Error('8002|Invalid port number'); }
+  async commConfigure(): Promise<void> { throw new Error('8018|Operation valid only when the port is open'); }
+  async commWrite(): Promise<void> { throw new Error('8018|Operation valid only when the port is open'); }
+  async commSetLines(): Promise<void> { throw new Error('8018|Operation valid only when the port is open'); }
+  async commClose(): Promise<void> { /* nothing is open */ }
+  async commReset(): Promise<void> { /* nothing is open */ }
+  async onCommEvent(_handler: (e: CommEvent) => void): Promise<() => void> { return () => {}; }
+  async sysInfo(): Promise<SysInfoData> {
+    const s = globalThis.screen as (Screen & { availLeft?: number; availTop?: number }) | undefined;
+    return {
+      osVersion: '', osBuild: '',
+      workLeft: s?.availLeft ?? 0, workTop: s?.availTop ?? 0, workWidth: s?.availWidth ?? 0, workHeight: s?.availHeight ?? 0,
+      acStatus: 255, batteryLifePercent: 255, batteryLifeTime: -1, batteryFullTime: -1, batteryStatus: 255,
+    };
+  }
 
   async showMainWindow(): Promise<void> {
     // Ingenting å gjøre i nettleseren.

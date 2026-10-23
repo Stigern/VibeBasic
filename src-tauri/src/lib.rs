@@ -1,5 +1,6 @@
 mod ai;
 mod clipboard;
+mod comm;
 mod db;
 mod embedded;
 mod files;
@@ -7,6 +8,7 @@ mod fileio;
 mod inet;
 mod make_app;
 mod media;
+mod sysinfo;
 mod winsock;
 mod app_commands;
 
@@ -19,6 +21,7 @@ pub fn run() {
     .manage(media::MediaFiles::default())
     .manage(fileio::OpenFiles::default())
     .manage(db::Databases::default())
+    .manage(comm::Ports::default())
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       ai::ai_list_models,
@@ -61,6 +64,14 @@ pub fn run() {
       winsock::sock_close,
       winsock::net_reset,
       winsock::net_local_ip,
+      comm::comm_list,
+      comm::comm_open,
+      comm::comm_configure,
+      comm::comm_write,
+      comm::comm_set_lines,
+      comm::comm_close,
+      comm::comm_reset,
+      sysinfo::sys_info,
       media::media_open,
       media::media_read,
       media::media_close,

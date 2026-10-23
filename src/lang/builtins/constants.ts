@@ -137,6 +137,17 @@ group({
   sckNotInitialized: 10093, sckHostNotFound: 11001, sckHostNotFoundTryAgain: 11002, sckNonRecoverableError: 11003, sckNoData: 11004,
 });
 
+// MSComm (MSCOMM32.OCX): OnComm's CommEvent values, handshaking, input modes and error numbers
+group({
+  comEvSend: 1, comEvReceive: 2, comEvCTS: 3, comEvDSR: 4, comEvCD: 5, comEvRing: 6, comEvEOF: 7,
+  comEventBreak: 1001, comEventCTSTO: 1002, comEventDSRTO: 1003, comEventFrame: 1004, comEventOverrun: 1006, comEventCDTO: 1007,
+  comEventRxOver: 1008, comEventRxParity: 1009, comEventTxFull: 1010, comEventDCB: 1011,
+  comNone: 0, comXOnXoff: 1, comRTS: 2, comRTSXOnXOff: 3,
+  comInputModeText: 0, comInputModeBinary: 1,
+  comInvalidPropertyValue: 380, comSetNotSupported: 383, comGetNotSupported: 394, comPortOpen: 8000, comPortInvalid: 8002,
+  comPortAlreadyOpen: 8005, comNoOpen: 8012, comSetCommStateFailed: 8015, comPortNotOpen: 8018, comReadError: 8020, comDCBError: 8021,
+});
+
 // WebBrowser (SHDOCVW.DLL): Navigate flags
 group({ navOpenInNewWindow: 1, navNoHistory: 2, navNoReadFromCache: 4, navNoWriteToCache: 8 });
 

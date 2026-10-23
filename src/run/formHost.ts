@@ -1,6 +1,6 @@
 // What the run session needs from the environment that shows form windows and dialogs.
 
-import type { DatabaseApi, DirListing, NetApi, Volume } from '../backend/backend';
+import type { DatabaseApi, DirListing, NetApi, SerialApi, SystemApi, Volume } from '../backend/backend';
 import type { FileSystemApi } from '../lang/fileio/fsApi';
 import type { FontValue } from '../model/types';
 import type { FileDialogRequest } from './commonDialog';
@@ -36,6 +36,10 @@ export interface FormHost {
   fileSystem?(): FileSystemApi;
   /** Data control, Adodc, Recordset: the SQLite databases, used by the main window. Absent: opening a database raises 429. */
   database?(): DatabaseApi;
+  /** MSComm: the serial ports, opened by the main window. Absent: opening a port raises 8002. */
+  serial?(): SerialApi;
+  /** SysInfo: the OS version, work area and power state, read by the main window. Absent: unknown values. */
+  system?(): SystemApi;
   /** Clipboard: the system clipboard (text). Absent: the program keeps its own copy. */
   clipboard?(): ClipboardApi;
   /** 'ai' only in the IDE: break mode on the line, then the Ask AI flow. */

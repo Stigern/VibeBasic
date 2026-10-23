@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import type { Backend, DbExecResult, DbQueryResult, DbValue, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
+import type { Backend, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DbValue, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import { dialogFilters } from './dialogFilters';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
@@ -30,6 +30,7 @@ function fromBase64(b64: string): Uint8Array {
   return out;
 }
 
+type RawCommEvent = Exclude<CommEvent, { kind: 'data' }> | { kind: 'data'; id: number; data: string };
 type RawSocketEvent = Exclude<SocketEvent, { kind: 'data' }> | { kind: 'data'; id: number; data: string; remoteIp: string; remotePort: number };
 
 export class TauriBackend implements Backend {
@@ -150,6 +151,24 @@ export class TauriBackend implements Backend {
   dbExecute(id: number, sql: string, params: DbValue[]): Promise<DbExecResult> { return call('db_execute', { id, sql, params }); }
   async dbClose(id: number): Promise<void> { await call<void>('db_close', { id }); }
   async dbReset(): Promise<void> { await call<void>('db_reset', {}); }
+
+  // -- MSComm and SysInfo (comm.rs, sysinfo.rs) --
+  commList(): Promise<string[]> { return call('comm_list', {}); }
+  commOpen(id: number, path: string, settings: string, handshaking: number, dtr: boolean, rts: boolean): Promise<CommLines> {
+    return call('comm_open', { id, path, settings, handshaking, dtr, rts });
+  }
+  async commConfigure(id: number, settings: string, handshaking: number): Promise<void> { await call<void>('comm_configure', { id, settings, handshaking }); }
+  async commWrite(id: number, data: Uint8Array): Promise<void> { await call<void>('comm_write', { id, data: toBase64(data) }); }
+  async commSetLines(id: number, dtr: boolean | null, rts: boolean | null, brk: boolean | null): Promise<void> { await call<void>('comm_set_lines', { id, dtr, rts, brk }); }
+  async commClose(id: number): Promise<void> { await call<void>('comm_close', { id }); }
+  async commReset(): Promise<void> { await call<void>('comm_reset', {}); }
+  onCommEvent(handler: (e: CommEvent) => void): Promise<() => void> {
+    return listen<RawCommEvent>('vb:comm', e => {
+      const p = e.payload;
+      handler(p.kind === 'data' ? { ...p, data: fromBase64(p.data) } : p);
+    });
+  }
+  sysInfo(): Promise<SysInfoData> { return call('sys_info', {}); }
 
   mediaOpen(path: string): Promise<string> { return call<string>('media_open', { path }); }
   async mediaRead(token: string): Promise<Uint8Array> {
