@@ -182,22 +182,27 @@ export class TauriBackend implements Backend {
     if (!opts?.onDelta && !opts?.signal) return call<string>('ai_chat', args);
     if (opts.signal?.aborted) throw new Error('cancelled');
     const streamId = `ai-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-    const unlisten = await listen<{ id: string; kind: AiDeltaKind; text: string }>('ai:delta', e => {
-      if (e.payload.id === streamId) opts.onDelta?.(e.payload.kind, e.payload.text);
-    });
-    const unlistenUsage = await listen<{ id: string; prompt_tokens: number; completion_tokens: number; cached_tokens?: number | null }>('ai:usage', e => {
-      const p = e.payload;
-      if (p.id !== streamId) return;
-      opts.onUsage?.({ promptTokens: p.prompt_tokens, completionTokens: p.completion_tokens, ...(typeof p.cached_tokens === 'number' ? { cachedTokens: p.cached_tokens } : {}) });
-    });
+    // Attach the abort listener first: an abort during the listen() round trips below must still reach Rust
+    // (it remembers a cancel that arrives before the request starts).
     const onAbort = () => { void invoke('ai_cancel', { streamId }).catch(() => {}); };
     opts.signal?.addEventListener('abort', onAbort);
+    let unlisten: (() => void) | undefined;
+    let unlistenUsage: (() => void) | undefined;
     try {
+      unlisten = await listen<{ id: string; kind: AiDeltaKind; text: string }>('ai:delta', e => {
+        if (e.payload.id === streamId) opts.onDelta?.(e.payload.kind, e.payload.text);
+      });
+      unlistenUsage = await listen<{ id: string; prompt_tokens: number; completion_tokens: number; cached_tokens?: number | null }>('ai:usage', e => {
+        const p = e.payload;
+        if (p.id !== streamId) return;
+        opts.onUsage?.({ promptTokens: p.prompt_tokens, completionTokens: p.completion_tokens, ...(typeof p.cached_tokens === 'number' ? { cachedTokens: p.cached_tokens } : {}) });
+      });
+      if (opts.signal?.aborted) throw new Error('cancelled');
       return await call<string>('ai_chat', { ...args, streamId });
     } finally {
       opts.signal?.removeEventListener('abort', onAbort);
-      unlisten();
-      unlistenUsage();
+      unlisten?.();
+      unlistenUsage?.();
     }
   }
 

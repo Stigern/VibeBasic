@@ -1,7 +1,7 @@
 //! OpenAI-compatible AI proxy. Calls go through Rust (reqwest) to avoid CORS and mixed-content
 //! limits in the webview. Works with Ollama (`http://<ip>:11434/v1`) and similar servers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -17,6 +17,10 @@ const STREAM_IDLE_SECS: u64 = 90;
 const STREAM_TOTAL_SECS: u64 = 20 * 60;
 const LIST_TIMEOUT_SECS: u64 = 15;
 const CONNECT_TIMEOUT_SECS: u64 = 10;
+/// Size caps: a plain (non-streamed) body, one SSE line, and all bytes of one streamed answer.
+const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SSE_LINE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_STREAM_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ChatMessage {
@@ -70,16 +74,73 @@ fn chat_body(model: &str, messages: &[ChatMessage], reasoning_effort: &Option<St
 }
 
 /// The innermost cause of a request error (e.g. "No route to host (os error 65)"), for the error text.
+/// Never the reqwest error's own text when it has no cause: that text can carry the request URL.
 fn root_cause(e: &reqwest::Error) -> String {
   let mut cur: &dyn std::error::Error = e;
+  let mut deeper = false;
   while let Some(next) = cur.source() {
     cur = next;
+    deeper = true;
   }
-  cur.to_string()
+  if deeper {
+    cur.to_string()
+  } else if e.is_timeout() {
+    "timed out".to_string()
+  } else if e.is_connect() {
+    "connection failed".to_string()
+  } else {
+    "request failed".to_string()
+  }
+}
+
+/// `url` without userinfo, query and fragment, so a key in the base URL never reaches the log or the UI.
+/// An unparsable value is cut at the first `@`, `?` or `#`.
+fn redact_url(url: &str) -> String {
+  let url = url.trim();
+  if let Ok(mut u) = reqwest::Url::parse(url) {
+    if u.cannot_be_a_base() {
+      return "the base URL".to_string();
+    }
+    let _ = u.set_username("");
+    let _ = u.set_password(None);
+    u.set_query(None);
+    u.set_fragment(None);
+    return u.to_string();
+  }
+  let end = url.find(['?', '#']).unwrap_or(url.len());
+  let head = &url[..end];
+  match (head.find("://"), head.rfind('@')) {
+    (Some(i), Some(at)) if at > i => format!("{}{}", &head[..i + 3], &head[at + 1..]),
+    (None, Some(at)) => head[at + 1..].to_string(),
+    _ => head.to_string(),
+  }
+}
+
+fn too_large() -> String {
+  "The AI server sent a much larger answer than expected, so VibeBasic stopped reading it.".to_string()
+}
+
+/// Reads a response body in chunks, at most `cap` bytes. The bool is true when the body was longer (then the
+/// text is only its start).
+async fn read_limited(resp: &mut reqwest::Response, cap: usize, base_url: &str, timeout_secs: u64) -> Result<(String, bool), String> {
+  if resp.content_length().is_some_and(|n| n > cap as u64) {
+    return Ok((String::new(), true));
+  }
+  let mut buf = Vec::<u8>::new();
+  while let Some(chunk) = resp.chunk().await.map_err(|e| map_send_error(&e, base_url, timeout_secs))? {
+    if buf.len() + chunk.len() > cap {
+      buf.extend_from_slice(&chunk[..cap - buf.len()]);
+      return Ok((String::from_utf8_lossy(&buf).into_owned(), true));
+    }
+    buf.extend_from_slice(&chunk);
+  }
+  Ok((String::from_utf8_lossy(&buf).into_owned(), false))
 }
 
 fn map_send_error(e: &reqwest::Error, base_url: &str, timeout_secs: u64) -> String {
-  eprintln!("ai request failed: {e:?}");
+  eprintln!("ai request failed: {}", root_cause(e));
+  let base_url = redact_url(base_url);
+  let base_url = base_url.as_str();
   if e.is_connect() {
     format!(
       "Could not connect to {base_url}. Check that the AI server is running and can be reached from this Mac. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0. (Details: {})",
@@ -108,6 +169,7 @@ fn body_message(body: &str) -> Option<String> {
 }
 
 fn status_error(status: reqwest::StatusCode, url: &str, body: &str) -> String {
+  let url = redact_url(url);
   let code = status.as_u16();
   if code == 401 || code == 403 {
     return format!("The AI server refused the request ({code}). Check the API key.");
@@ -134,11 +196,14 @@ async fn send_json(
     Some(k) if !k.is_empty() => req.bearer_auth(k),
     _ => req,
   };
-  let resp = req.send().await.map_err(|e| map_send_error(&e, base_url, timeout_secs))?;
+  let mut resp = req.send().await.map_err(|e| map_send_error(&e, base_url, timeout_secs))?;
   let status = resp.status();
-  let text = resp.text().await.map_err(|e| map_send_error(&e, base_url, timeout_secs))?;
+  let (text, truncated) = read_limited(&mut resp, MAX_BODY_BYTES, base_url, timeout_secs).await?;
   if !status.is_success() {
     return Err(status_error(status, url, &text));
+  }
+  if truncated {
+    return Err(too_large());
   }
   serde_json::from_str::<Value>(&text).map_err(|_| unreadable())
 }
@@ -196,6 +261,10 @@ pub async fn chat(
 #[derive(Default)]
 pub struct SseParser {
   buf: Vec<u8>,
+  /// How much of `buf` is already known to hold no newline (so a long line is not rescanned on every chunk).
+  scanned: usize,
+  /// A line grew past MAX_SSE_LINE_BYTES without a newline.
+  overflow: bool,
   data: Vec<String>,
 }
 
@@ -216,11 +285,23 @@ impl SseParser {
   pub fn push(&mut self, bytes: &[u8]) -> Vec<String> {
     self.buf.extend_from_slice(bytes);
     let mut out = Vec::new();
-    while let Some(i) = self.buf.iter().position(|&b| b == b'\n') {
-      let raw: Vec<u8> = self.buf.drain(..=i).collect();
+    while let Some(i) = self.buf[self.scanned..].iter().position(|&b| b == b'\n') {
+      let raw: Vec<u8> = self.buf.drain(..=self.scanned + i).collect();
+      self.scanned = 0;
       self.line(&raw[..raw.len() - 1], &mut out);
     }
+    self.scanned = self.buf.len();
+    if self.buf.len() > MAX_SSE_LINE_BYTES {
+      self.overflow = true;
+      self.buf.clear();
+      self.scanned = 0;
+    }
     out
+  }
+
+  /// True once a single line exceeded the cap; the caller should stop reading.
+  pub fn overflowed(&self) -> bool {
+    self.overflow
   }
 
   /// The stream ended: a last event without its closing blank line still counts.
@@ -306,7 +387,7 @@ async fn chat_stream_with(
     .map_err(|e| map_send_error(&e, base_url, CHAT_TIMEOUT_SECS))?;
   let status = resp.status();
   if !status.is_success() {
-    let text = resp.text().await.map_err(|e| map_send_error(&e, base_url, CHAT_TIMEOUT_SECS))?;
+    let (text, _) = read_limited(&mut resp, MAX_BODY_BYTES, base_url, CHAT_TIMEOUT_SECS).await?;
     return Err(status_error(status, &url, &text));
   }
   let is_json = resp
@@ -315,7 +396,10 @@ async fn chat_stream_with(
     .and_then(|v| v.to_str().ok())
     .is_some_and(|t| t.to_ascii_lowercase().contains("json"));
   if is_json {
-    let text = resp.text().await.map_err(|e| map_send_error(&e, base_url, CHAT_TIMEOUT_SECS))?;
+    let (text, truncated) = read_limited(&mut resp, MAX_BODY_BYTES, base_url, CHAT_TIMEOUT_SECS).await?;
+    if truncated {
+      return Err(too_large());
+    }
     let v = serde_json::from_str::<Value>(&text).map_err(|_| unreadable())?;
     return reply_text(&v);
   }
@@ -324,6 +408,7 @@ async fn chat_stream_with(
   let (mut content, mut reasoning) = (String::new(), String::new());
   let mut finish: Option<String> = None;
   let mut done = false;
+  let mut total_bytes = 0usize;
   // A server that ignores `stream` and answers with plain JSON but no JSON content-type: sniffed below.
   let (mut raw, mut seen_event) = (Vec::<u8>::new(), false);
   let mut handle = |payload: &str| -> Result<bool, String> {
@@ -359,7 +444,11 @@ async fn chat_stream_with(
       .map_err(|_| idle_error(idle))?
       .map_err(|e| map_send_error(&e, base_url, CHAT_TIMEOUT_SECS))?
     {
+      total_bytes += chunk.len();
       let events = parser.push(&chunk);
+      if total_bytes > MAX_STREAM_BYTES || parser.overflowed() {
+        return Err(too_large());
+      }
       if !seen_event {
         if events.is_empty() && raw.len() < 4_000_000 {
           raw.extend_from_slice(&chunk);
@@ -424,7 +513,49 @@ pub async fn ai_list_models(base_url: String, api_key: Option<String>) -> Result
 
 /// In-flight streaming requests by the id the frontend chose, so `ai_cancel` can abort them.
 #[derive(Default)]
-pub struct AiStreams(Mutex<HashMap<String, AbortHandle>>);
+pub struct AiStreams(Mutex<StreamTable>);
+
+#[derive(Default)]
+struct StreamTable {
+  handles: HashMap<String, AbortHandle>,
+  /// Ids whose cancel arrived before their request was registered.
+  cancelled: HashSet<String>,
+}
+
+/// Bounds the cancelled-before-start set (a cancel for a finished request is never consumed).
+const MAX_PENDING_CANCELS: usize = 256;
+
+impl AiStreams {
+  /// Registers a running request. Returns false (and aborts it) when a cancel for `id` already arrived.
+  fn register(&self, id: &str, handle: AbortHandle) -> bool {
+    let mut t = self.0.lock().unwrap();
+    if t.cancelled.remove(id) {
+      handle.abort();
+      return false;
+    }
+    t.handles.insert(id.to_string(), handle);
+    true
+  }
+
+  fn finish(&self, id: &str) {
+    let mut t = self.0.lock().unwrap();
+    t.handles.remove(id);
+    t.cancelled.remove(id);
+  }
+
+  /// Aborts a running request, or remembers the id so a request that registers later is aborted at once.
+  fn cancel(&self, id: &str) {
+    let mut t = self.0.lock().unwrap();
+    if let Some(h) = t.handles.remove(id) {
+      h.abort();
+    } else {
+      if t.cancelled.len() >= MAX_PENDING_CANCELS {
+        t.cancelled.clear();
+      }
+      t.cancelled.insert(id.to_string());
+    }
+  }
+}
 
 #[tauri::command]
 pub async fn ai_chat(
@@ -457,9 +588,9 @@ pub async fn ai_chat(
     };
     chat_stream(&base_url, &api_key, &model, &messages, &reasoning_effort, &extra, &on_delta, &on_usage).await
   });
-  streams.0.lock().unwrap().insert(id.clone(), task.abort_handle());
+  streams.register(&id, task.abort_handle());
   let res = task.await;
-  streams.0.lock().unwrap().remove(&id);
+  streams.finish(&id);
   match res {
     Ok(r) => r,
     Err(e) if e.is_cancelled() => Err("cancelled".to_string()),
@@ -470,9 +601,7 @@ pub async fn ai_chat(
 /// Aborts the in-flight `ai_chat` with this stream id (its invoke then rejects with "cancelled").
 #[tauri::command]
 pub fn ai_cancel(streams: State<'_, AiStreams>, stream_id: String) {
-  if let Some(h) = streams.0.lock().unwrap().remove(&stream_id) {
-    h.abort();
-  }
+  streams.cancel(&stream_id);
 }
 
 #[cfg(test)]
@@ -841,5 +970,84 @@ mod tests {
       then.status(200).header("content-type", "text/event-stream").body("data: {\"error\":{\"message\":\"boom\"}}\n\n");
     });
     assert_eq!(chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap_err(), "boom");
+  }
+
+  #[test]
+  fn redact_url_drops_credentials_and_query() {
+    assert_eq!(redact_url("https://user:sekret@host:8000/v1?api-key=sekret#x"), "https://host:8000/v1");
+    assert_eq!(redact_url("http://h:11434/v1"), "http://h:11434/v1");
+    // unparsable input is still cut at userinfo and query
+    let r = redact_url("ht tp://user:sekret@host/v1?key=sekret");
+    assert!(!r.contains("sekret"), "{r}");
+  }
+
+  #[tokio::test]
+  async fn errors_never_contain_url_credentials() {
+    // connection refused on a port nothing listens on
+    let base = "http://user:sekret@127.0.0.1:1/v1?api-key=sekret";
+    let e = chat(base, &None, "m", &msgs(), &None, &NONE).await.unwrap_err();
+    assert!(!e.contains("sekret"), "{e}");
+    assert!(e.contains("127.0.0.1:1"), "{e}");
+    // 404 text echoes the url
+    let server = MockServer::start();
+    server.mock(|when, then| {
+      when.any_request();
+      then.status(404).body("nope");
+    });
+    let base = format!("http://user:sekret@{}/v1?key=sekret", server.address());
+    let e = chat(&base, &None, "m", &msgs(), &None, &NONE).await.unwrap_err();
+    assert!(!e.contains("sekret"), "{e}");
+  }
+
+  #[tokio::test]
+  async fn oversized_body_is_refused() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions");
+      then.status(200).header("content-type", "application/json").body("x".repeat(MAX_BODY_BYTES + 1024));
+    });
+    let e = chat(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE).await.unwrap_err();
+    assert_eq!(e, too_large());
+    let (_, cb) = collect();
+    let e = chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap_err();
+    assert_eq!(e, too_large());
+  }
+
+  #[tokio::test]
+  async fn stream_line_without_newline_is_capped() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions");
+      then.status(200).header("content-type", "text/event-stream").body("data: ".to_string() + &"x".repeat(MAX_SSE_LINE_BYTES + 1024));
+    });
+    let (_, cb) = collect();
+    let e = chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap_err();
+    assert_eq!(e, too_large());
+  }
+
+  #[test]
+  fn sse_parser_flags_overlong_line() {
+    let mut p = SseParser::default();
+    p.push(&vec![b'a'; MAX_SSE_LINE_BYTES]);
+    assert!(!p.overflowed());
+    p.push(b"a");
+    assert!(p.overflowed());
+  }
+
+  #[tokio::test]
+  async fn cancel_before_register_aborts_the_request() {
+    let streams = AiStreams::default();
+    streams.cancel("s1"); // arrives while ai_chat is still setting up
+    let task = tokio::spawn(async { tokio::time::sleep(Duration::from_secs(60)).await });
+    assert!(!streams.register("s1", task.abort_handle()));
+    assert!(task.await.unwrap_err().is_cancelled());
+    streams.finish("s1");
+    // a normal run: register first, cancel later
+    let task = tokio::spawn(async { tokio::time::sleep(Duration::from_secs(60)).await });
+    assert!(streams.register("s2", task.abort_handle()));
+    streams.cancel("s2");
+    assert!(task.await.unwrap_err().is_cancelled());
+    // the cancel did not leave a stale entry behind
+    assert!(streams.0.lock().unwrap().cancelled.is_empty());
   }
 }
