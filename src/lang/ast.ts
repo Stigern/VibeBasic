@@ -95,6 +95,8 @@ export interface VarDecl {
   bounds?: ArrayBound[];
   isNew: boolean;
   fixedLength?: number;
+  /** `Private WithEvents x As Class1`: its events run the module's `x_EventName` procedures. */
+  withEvents?: boolean;
   line: number;
 }
 
@@ -121,8 +123,13 @@ export interface TypeDecl { name: string; visibility: 'public' | 'private'; fiel
 export interface EnumMember { name: string; value: number }
 export interface EnumDecl { name: string; visibility: 'public' | 'private'; members: EnumMember[]; line: number }
 
+/**
+ * A Sub, Function or Property procedure. `Property Get` is a `function` (its name is the result variable) and
+ * `Property Let` / `Property Set` are `sub`s, with `property` set; the last parameter of a Let/Set is the value.
+ */
 export interface ProcDecl {
   kind: 'sub' | 'function';
+  property?: 'get' | 'let' | 'set';
   name: string;
   visibility: 'public' | 'private';
   /** `Static Sub`: all locals are static. */
@@ -134,9 +141,12 @@ export interface ProcDecl {
   returnsArray?: boolean;
   body: Stmt[];
   line: number;
-  /** Line of `End Sub` / `End Function`. */
+  /** Line of `End Sub` / `End Function` / `End Property`. */
   endLine: number;
 }
+
+/** `[Public] Event Name(params)` in a class module. */
+export interface EventDecl { name: string; params: Param[]; line: number }
 
 export interface ModuleAst {
   name: string;
@@ -146,6 +156,10 @@ export interface ModuleAst {
   types: TypeDecl[];
   enums: EnumDecl[];
   procedures: ProcDecl[];
+  /** `Event` declarations (class modules). Optional: older code builds a ModuleAst without them. */
+  events?: EventDecl[];
+  /** `Implements IFoo`: the interface classes (by name, as written). */
+  implements?: string[];
 }
 
 export interface DimStmt { kind: 'dim'; decls: VarDecl[]; line: number }
@@ -181,7 +195,9 @@ export interface DoStmt {
   line: number;
 }
 export interface WhileStmt { kind: 'while'; cond: Expr; body: Stmt[]; line: number }
-export interface ExitStmt { kind: 'exit'; what: 'for' | 'do' | 'sub' | 'function'; line: number }
+export interface ExitStmt { kind: 'exit'; what: 'for' | 'do' | 'sub' | 'function' | 'property'; line: number }
+/** `RaiseEvent Name[(args)]` in a class module. */
+export interface RaiseEventStmt { kind: 'raiseEvent'; name: string; args: (Expr | MissingArg)[]; line: number }
 export interface WithStmt { kind: 'with'; object: Expr; body: Stmt[]; line: number }
 /** `label` is the label name or line number as text; `goto0` is `On Error GoTo 0`. */
 export interface OnErrorStmt { kind: 'onError'; mode: 'resumeNext' | 'goto' | 'goto0'; label?: string; line: number }
@@ -230,4 +246,4 @@ export type Stmt =
   | DimStmt | ConstStmt | ReDimStmt | EraseStmt | AssignStmt | CallStmt | IfStmt | SelectStmt
   | ForStmt | ForEachStmt | DoStmt | WhileStmt | ExitStmt | WithStmt | OnErrorStmt | ResumeStmt
   | GotoStmt | LabelStmt | EndStmt | StopStmt | UnloadStmt | LoadStmt | DebugPrintStmt | ErrorStmt | MidStmt | AlignStmt
-  | OpenStmt | CloseStmt | FilePrintStmt | FileInputStmt | GetPutStmt | SeekStmt | NameStmt;
+  | OpenStmt | CloseStmt | FilePrintStmt | FileInputStmt | GetPutStmt | SeekStmt | NameStmt | RaiseEventStmt;

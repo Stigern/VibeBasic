@@ -163,7 +163,7 @@ export function binaryOp(op: BinaryOp, a: VBValue, b: VBValue): VBValue {
     const okA = a instanceof NothingT || isObject(a);
     const okB = b instanceof NothingT || isObject(b);
     if (!okA || !okB) throw new VBRuntimeError(424);
-    return a === b;
+    return (isObject(a) ? a.identity ?? a : a) === (isObject(b) ? b.identity ?? b : b);
   }
   a = plain(a);
   b = plain(b);

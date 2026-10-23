@@ -50,7 +50,9 @@ const STATEMENTS = 'Option Explicit; Dim / Private / Public / Static x As Type, 
   + ' Files: Open path For Input|Output|Append|Binary|Random As #n [Len = n]; Close [#n]; Print #n, a; b; Write #n, a, b; Input #n, a, b;'
   + ' Line Input #n, s; Get / Put #n, [pos], var; Seek #n, pos; Name old As new (paths may use \\ or /, relative to CurDir = App.Path at start).'
   + ' Also: Mid(s, i, n) = x; LSet / RSet s = x; Error n (Erl gives the last line number); Dim c As New Collection / Set c = New Collection (Add, Item, Count, Remove);'
-  + ' Function F() As Long() returns an array; IsMissing(v) for an Optional Variant; !Name also works inside With rs.';
+  + ' Function F() As Long() returns an array; IsMissing(v) for an Optional Variant; !Name also works inside With rs.'
+  + ' Classes: Set x = New Class1 / Dim x As New Class1; Class_Initialize, Class_Terminate; Public vars, Sub, Function,'
+  + ' Property Get/Let/Set, Exit Property, Me; Event E(a) + RaiseEvent E(a) -> Private WithEvents x As Class1, Sub x_E(a); Implements IFoo, Sub IFoo_M().';
 
 /** Builds the card from the language's tables (exported for the stability test). */
 export function buildLanguageReference(): string {
@@ -67,7 +69,7 @@ export function buildLanguageReference(): string {
     ...functionLines(),
     'Constant groups (prefix, count, examples):',
     ...constantGroups(),
-    `Not available: ${words.join(', ')}; ${drawing.join(' / ')} on forms; class modules;`
+    `Not available: ${words.join(', ')}; ${drawing.join(' / ')} on forms;`
       + ' CreateObject / GetObject (no COM automation); Shell (programs cannot be started); named arguments (x:=1).',
   ].join('\n');
 }

@@ -6,7 +6,7 @@
 import type { BinaryExpr, CallOrIndex, Expr, MemberExpr, MissingArg, NameExpr, Param, TypeSuffix, UnaryExpr, VBTypeName } from '../ast';
 import { VBRuntimeError } from '../errors';
 import { BUILTINS, CONSTANTS } from '../builtins';
-import { VBCollection } from '../builtins/collection';
+import { BUILTIN_CLASSES } from '../builtins/collection';
 import {
   Empty, Missing, Null, Nothing, NothingT, VBArray, VBRecord, VBRef, isObject, parseDate, single7, toCurrency, toNumber, toSingle,
   type VBValue,
@@ -14,8 +14,8 @@ import {
 import { localeDateParser } from '../builtins/format';
 import { EndSignal, SubCall, runSync, type Gen } from './driver';
 import {
-  BuiltinRef, ConstSlot, ElementSlot, EnumRef, FieldSlot, Frame, MemberRef, ModuleRef, ModuleScope, ObjectRef, ProcRef,
-  ValueRef, Variable, getField, lc, setField, storeValue, type Binding,
+  BuiltinRef, ClassInstance, ClassValue, ConstSlot, ElementSlot, EnumRef, FieldSlot, Frame, MemberRef, ModuleRef, ModuleScope, ObjectRef,
+  ProcRef, PropRef, ValueRef, Variable, classesInUse, escape, getField, lc, setField, storeValue, type Binding,
 } from './scope';
 import { binaryOp, plain, unaryOp } from './operators';
 import { isNumericType, noteSubtype, operatorType, reportedType, shown, staticType, type StaticType } from './staticTypes';
@@ -91,11 +91,11 @@ export function lookup(f: Frame, key: string, name: string, call = false): Bindi
   const m = f.module;
   const rt = f.run.rt;
   const g = rt.globals;
-  const mv = m.vars.get(key);
+  const mv = f.vars.get(key);
   if (mv) return mv;
   const mc = m.consts.get(key);
   if (mc) return constVariable(rt, mc);
-  const mp = m.procs.get(key);
+  const mp = m.procs.get(key) ?? m.props.get(key);
   if (mp) return mp;
   const me = m.enumMembers.get(key) ?? m.enums.get(key);
   if (me) return me;
@@ -108,7 +108,7 @@ export function lookup(f: Frame, key: string, name: string, call = false): Bindi
   if (gv) return gv;
   const gc = g.consts.get(key);
   if (gc) return constVariable(rt, gc);
-  const gp = g.procs.get(key);
+  const gp = g.procs.get(key) ?? g.props.get(key);
   if (gp) return gp;
   const en = g.enumMembers.get(key) ?? g.enums.get(key) ?? constantFor(key);
   if (en) return en;
@@ -171,7 +171,8 @@ export function implicitVariable(f: Frame, e: NameExpr): Variable {
 }
 
 function meObject(f: Frame): ObjectRef {
-  const o = f.rt.host.resolveName(f.module.name, 'Me');
+  if (f.instance) return new ObjectRef(f.instance);
+  const o = f.module.kind === 'class' ? undefined : f.rt.host.resolveName(f.module.name, 'Me');
   if (!o) throw compileError('Invalid use of Me keyword');
   return new ObjectRef(o);
 }
@@ -341,7 +342,11 @@ export function* evalExpr(f: Frame, e: Expr): Gen<VBValue> {
     case 'name': {
       const key = lc(e.name);
       const local = f.locals.get(key);
-      if (local) return local.value;
+      if (local) {
+        const v = local.value;
+        if (v instanceof ClassInstance && v.initPending) yield* ready(f, v);   // `Dim x As New Class1`: made on first use
+        return v;
+      }
       if (key === 'empty') return Empty;
       if (key === 'null') return Null;
       return yield* bindingValue(f, bindingOf(f, e), e);
@@ -355,32 +360,57 @@ export function* evalExpr(f: Frame, e: Expr): Gen<VBValue> {
       const a = yield* evalExpr(f, e.left);
       return binaryResult(f, e, a, yield* evalExpr(f, e.right));
     }
-    case 'new': return objectFactory(f.rt, { objectType: e.typeName }, f.module)();
+    case 'new': {
+      const o = objectFactory(f.rt, { objectType: e.typeName }, f.module)();
+      if (o instanceof ClassInstance) {
+        yield* ready(f, o);
+        // a temporary until it is stored: it terminates at the end of the statement if nothing keeps it
+        if (o.refs === 0 && !o.dying && !o.dead) { o.dying = true; f.rt.queueDying(o); }
+      }
+      return o;
+    }
   }
 }
 
 /**
- * How `New T` makes an object (`Set c = New Collection`, `Dim c As New Collection`): a Collection. VB6 does not allow
- * New with a user-defined type or a plain type (compile error "Invalid use of New keyword"); any other class would be
- * a class module or a COM class, which VibeBasic does not have (compile error).
+ * How `New T` makes an object (`Set c = New Class1`, `Dim c As New Collection`): an object of a class module of the
+ * project, else a built-in class (Collection, see BUILTIN_CLASSES). VB6 does not allow New with a user-defined type or a
+ * plain type (compile error "Invalid use of New keyword"); a name that is no class is "User-defined type not defined".
+ * A class module's object comes back before Class_Initialize has run (`ready` runs it).
  */
 export function objectFactory(rt: Runtime, type: VBTypeName, module: ModuleScope): () => VBObject {
   const t = typeof type === 'object' && 'objectType' in type ? rt.resolveType(type, module) : type;
   if (typeof t !== 'object' || 'userType' in t) throw compileError('Invalid use of New keyword');
   const name = lc(t.objectType);
-  if (name === 'collection' || name === 'vba.collection') return () => new VBCollection();
-  throw compileError(`Not supported in VibeBasic: New ${t.objectType} (there are no class modules; New can create a Collection)`);
+  const cls = rt.classes.get(name);
+  if (cls) return () => rt.newInstance(cls);
+  const b = BUILTIN_CLASSES.get(name);
+  if (b) return () => b.create(rt.builtinCtx);
+  throw compileError('User-defined type not defined');
+}
+
+/** Runs Class_Initialize of a new object (once; a `Dim x As New T` object when it is first used). */
+export function* ready(f: Frame, inst: ClassInstance): Gen<void> {
+  if (!inst.initPending) return;
+  inst.initPending = false;
+  const init = inst.module.procs.get('class_initialize');
+  if (init) yield new SubCall(invokeProc(f.run, init, [], inst));
 }
 
 /** The value of a name's binding (calls a parameterless Function or built-in). */
 function* bindingValue(f: Frame, b: Binding | undefined, e: NameExpr): Gen<VBValue> {
-  if (b instanceof Variable) return b.value;
+  if (b instanceof Variable) {
+    const v = b.value;
+    if (v instanceof ClassInstance && v.initPending) yield* ready(f, v);
+    return v;
+  }
   if (b === undefined) return implicitVariable(f, e).value;
   if (b instanceof ValueRef) return b.value;
   if (b instanceof ProcRef) {
     if (b.proc.kind === 'sub') throw compileError('Expected Function or variable');
     return yield* callProc(f, b, []);
   }
+  if (b instanceof PropRef) return yield* propGet(f, b, []);
   if (b instanceof BuiltinRef) return yield* callBuiltin(f, b, []);
   if (b instanceof ObjectRef) return b.obj;
   if (b instanceof MemberRef) return yield* memberGet(f, b.obj, b.name, null);
@@ -442,6 +472,7 @@ export function shownArgs(f: Frame, args: (Expr | MissingArg)[], argv: VBValue[]
  * Form as owner, a Picture) and Nothing are passed as they are.
  */
 export function methodArgs(argv: VBValue[], obj?: VBObject): VBValue[] {
+  if (classesInUse) for (const a of argv) escape(a);   // a host object may keep it (Collection.Add): no counted reference
   if (obj?.rawArgs) return argv;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -517,6 +548,7 @@ export function* memberGet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: 
     return args ? yield* indexValue(f, v, args) : v;
   }
   if (base instanceof NothingT) throw new VBRuntimeError(91);
+  if (base instanceof ClassValue) return yield* classGet(f, base, name, args);
   if (isObject(base)) {
     let r: VBValue | Promise<VBValue>;
     if (args === null) r = base.getMember(name, []);
@@ -539,7 +571,112 @@ function* moduleMember(f: Frame, m: ModuleScope, name: string, args: (Expr | Mis
   if (v) return args ? yield* indexValue(f, v.value, args) : v.value;
   const p = m.procs.get(key);
   if (p && (p.proc.visibility === 'public' || m === f.module)) return yield* callProc(f, p, args ?? []);
+  const pr = m.props.get(key);
+  if (pr?.get && (pr.get.proc.visibility === 'public' || m === f.module)) return yield* propGet(f, pr, args ?? []);
   throw compileError('Method or data member not found');
+}
+
+// ---------------------------------------------------------------------------
+// Properties and objects of class modules
+// ---------------------------------------------------------------------------
+
+/** A Property Get (`Total`, `Item(2)`); a property with only Let/Set is "Invalid use of property". */
+function* propGet(f: Frame, p: PropRef, args: (Expr | MissingArg)[], inst?: ClassInstance): Gen<VBValue> {
+  if (!p.get) throw compileError('Invalid use of property');
+  return yield* callIndexed(f, p.get, args, inst);
+}
+
+/**
+ * Calls a Function or Property Get; arguments given to one that takes none index its result (`obj.Items(2)` where
+ * Items returns an array).
+ */
+function* callIndexed(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[], inst?: ClassInstance): Gen<VBValue> {
+  const params = ref.proc.params;
+  if (args.length > 0 && params.length === 0) return yield* indexValue(f, yield* callProc(f, ref, [], inst), args);
+  return yield* callProc(f, ref, args, inst);
+}
+
+/** `Total = v` / `Set Item(2) = obj`: the Property Let (or Set) with the index arguments and the value last (by value). */
+function* propSet(f: Frame, p: PropRef, args: VBValue[], value: VBValue, isSet: boolean): Gen<void> {
+  const ref = isSet ? p.set : p.let;
+  if (!ref) throw compileError('Invalid use of property');
+  yield* callLetSet(f, ref, args, value, isSet);
+}
+
+function* callLetSet(f: Frame, ref: ProcRef, args: VBValue[], value: VBValue, isSet: boolean, inst?: ClassInstance): Gen<void> {
+  const bound: BoundArg[] = args.map(a => ({ value: a }));
+  bound.push({ value: isSet ? value : plain(value) });
+  const self = inst ?? (ref.module.kind === 'class' ? f.instance : undefined);
+  yield new SubCall(invokeProc(f.run, ref, bound, self));
+}
+
+/**
+ * The member of a class object a name means: a Public variable, Sub/Function or property of the class; through an
+ * interface (`Dim x As IFoo`) the class's `IFoo_Name` procedure or property, Private or not. Undefined: error 438.
+ */
+function classMember(obj: ClassValue, name: string): Variable | ProcRef | PropRef | undefined {
+  const m = obj.inst.module;
+  if (obj.iface !== undefined) {
+    const k = `${obj.iface}_${lc(name)}`;
+    return m.procs.get(k) ?? m.props.get(k);
+  }
+  const k = lc(name);
+  const v = obj.inst.publicVar(k);
+  if (v) return v;
+  const p = m.procs.get(k);
+  if (p) return p.proc.visibility === 'public' ? p : undefined;
+  const pr = m.props.get(k);
+  return pr?.isPublic ? pr : undefined;
+}
+
+/** A Property procedure of the member that the caller may use (Private ones only through an interface). */
+const usable = (obj: ClassValue, ref: ProcRef | undefined): ProcRef | undefined =>
+  ref && (obj.iface !== undefined || ref.proc.visibility === 'public') ? ref : undefined;
+
+/** `obj.name` / `obj.name(args)` as a value. */
+function* classGet(f: Frame, obj: ClassValue, name: string, args: (Expr | MissingArg)[] | null): Gen<VBValue> {
+  const inst = obj.inst;
+  if (inst.initPending) yield* ready(f, inst);
+  const m = classMember(obj, name);
+  if (m === undefined) throw new VBRuntimeError(438);
+  if (m instanceof Variable) return args ? yield* indexValue(f, m.value, args) : m.value;
+  if (m instanceof ProcRef) {
+    if (m.proc.kind === 'sub') throw compileError('Expected Function or variable');
+    return yield* callIndexed(f, m, args ?? [], inst);
+  }
+  const get = usable(obj, m.get);
+  if (!get) throw compileError('Invalid use of property');
+  return yield* callIndexed(f, get, args ?? [], inst);
+}
+
+/** `obj.name args` as a statement: a Sub or Function of the class (its result is dropped). */
+export function* classCall(f: Frame, obj: ClassValue, name: string, args: (Expr | MissingArg)[]): Gen<void> {
+  const inst = obj.inst;
+  if (inst.initPending) yield* ready(f, inst);
+  const m = classMember(obj, name);
+  if (m === undefined) throw new VBRuntimeError(438);
+  if (!(m instanceof ProcRef)) throw compileError('Invalid use of property');
+  yield* callProc(f, m, args, inst);
+}
+
+/** `obj.name(args) = value` / `Set obj.name = value`: a Public variable (or its element), or a Property Let / Set. */
+function* classSet(f: Frame, obj: ClassValue, name: string, args: VBValue[], value: VBValue, isSet: boolean): Gen<void> {
+  const inst = obj.inst;
+  if (inst.initPending) yield* ready(f, inst);
+  const m = classMember(obj, name);
+  if (m === undefined) throw new VBRuntimeError(438);
+  if (m instanceof Variable) {
+    if (args.length === 0) { assignVariable(m, value, isSet); return; }
+    const arr = m.value;
+    if (!(arr instanceof VBArray)) throw new VBRuntimeError(13);
+    escape(value);
+    arr.set(args.map(toNumber), isSet ? value : plain(value));
+    return;
+  }
+  if (m instanceof ProcRef) throw compileError('Function call on left-hand side of assignment must return Variant or Object');
+  const ref = usable(obj, isSet ? m.set : m.let);
+  if (!ref) throw compileError('Invalid use of property');
+  yield* callLetSet(f, ref, args, value, isSet, inst);
 }
 
 function* evalCall(f: Frame, e: CallOrIndex): Gen<VBValue> {
@@ -554,6 +691,7 @@ function* evalCall(f: Frame, e: CallOrIndex): Gen<VBValue> {
       if (b.proc.kind === 'sub') throw compileError('Expected Function or variable');
       return yield* callProc(f, b, e.args);
     }
+    if (b instanceof PropRef) return yield* propGet(f, b, e.args);
     if (b instanceof BuiltinRef) return yield* callBuiltin(f, b, e.args);
     if (b instanceof ObjectRef) return yield* indexValue(f, b.obj, e.args);
     if (b instanceof ValueRef) return yield* indexValue(f, b.value, e.args);
@@ -619,6 +757,7 @@ export function* callBuiltin(f: Frame, b: BuiltinRef, args: (Expr | MissingArg)[
 function builtinCall(f: Frame, b: BuiltinRef, args: (Expr | MissingArg)[], argv: VBValue[]): VBValue | Promise<VBValue> {
   const { minArgs, maxArgs, fn, raw, types, num } = b.builtin;
   if (argv.length < minArgs || argv.length > maxArgs) throw new VBRuntimeError(450);
+  if (classesInUse && b.name === 'array') argv.forEach(escape);   // Array(obj1, obj2): the array keeps them
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     // a missing Optional argument passed on (`MsgBox s, , title` with title missing) counts as omitted
@@ -632,10 +771,14 @@ function builtinCall(f: Frame, b: BuiltinRef, args: (Expr | MissingArg)[], argv:
     : fn(argv, f.rt.builtinCtx);
 }
 
-/** Calls a user Sub/Function: binds arguments in the caller, then runs the body as a SubCall. */
-export function* callProc(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[]): Gen<VBValue> {
+/**
+ * Calls a user Sub/Function: binds arguments in the caller, then runs the body as a SubCall. A class module's
+ * procedure runs for `inst`, by default the caller's own object (`DoWork` inside the class).
+ */
+export function* callProc(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[], inst?: ClassInstance): Gen<VBValue> {
   const bound = yield* bindArgs(f, ref, args);
-  return (yield new SubCall(invokeProc(f.run, ref, bound))) as VBValue;
+  const self = inst ?? (ref.module.kind === 'class' ? f.instance : undefined);
+  return (yield new SubCall(invokeProc(f.run, ref, bound, self))) as VBValue;
 }
 
 function* bindArgs(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[]): Gen<BoundArg[]> {
@@ -653,6 +796,7 @@ function* bindArgs(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[]): Gen<Bou
         const e = extra[k];
         if (e.kind === 'missing') { arr.set([k], Empty); continue; }
         const v = yield* evalExpr(f, e);
+        escape(v);
         arr.set([k], isSingleFrac(v) ? shown(f, e, v) : v);   // a Variant item: a Single keeps its 7 digits
         // and a number keeps the type the code gives it, as in a Variant variable (TypeName(a(0)) of `5&` is Long)
         const t = typeof v === 'number' ? reportedType(f, e) : undefined;
@@ -794,6 +938,7 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean, 
         yield* memberSet(f, b.obj, b.name, [], src === undefined ? value : into(f, src, value, undefined), isSet);
         return;
       }
+      if (b instanceof PropRef) { yield* propSet(f, b, [], value, isSet); return; }
       if (b instanceof ProcRef) throw compileError('Function call on left-hand side of assignment must return Variant or Object');
       throw compileError('Assignment to constant not permitted');
     }
@@ -807,14 +952,16 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean, 
           yield* memberSet(f, b.obj, b.name, yield* evalArgValues(f, target.args), src === undefined ? value : into(f, src, value, undefined), isSet);
           return;
         }
+        if (b instanceof PropRef) { yield* propSet(f, b, yield* evalArgValues(f, target.args), value, isSet); return; }
         if (b instanceof Variable) container = b.value;
         else if (b instanceof ObjectRef) container = b.obj;
         else if (b === undefined) throw compileError('Sub or Function not defined');
         else throw compileError('Function call on left-hand side of assignment must return Variant or Object');
       } else if (t.kind === 'member' || t.kind === 'withMember') {
         const base = t.kind === 'member' ? yield* memberBase(f, t.object) : withObject(f);
-        if (!(base instanceof ModuleRef) && !(base instanceof EnumRef) && isObject(base)) {
-          // `List1.List(2) = "x"`
+        const moduleProp = base instanceof ModuleRef && !base.module.vars.has(lc(t.name)) && base.module.props.has(lc(t.name));
+        if (moduleProp || (!(base instanceof ModuleRef) && !(base instanceof EnumRef) && isObject(base))) {
+          // `List1.List(2) = "x"`, `Module1.Item(2) = "x"`
           yield* memberSet(f, base, t.name, yield* evalArgValues(f, target.args), src === undefined ? value : into(f, src, value, undefined), isSet);
           return;
         }
@@ -826,6 +973,7 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean, 
         const idx = yield* evalIndices(f, target.args);
         if (src !== undefined) value = into(f, src, value, container.elemType);
         if (!isSet) value = plain(value);
+        if (classesInUse) escape(value);
         container.set(idx, value instanceof VBRecord || value instanceof VBArray ? value.clone() : value);
         return;
       }
@@ -877,10 +1025,13 @@ function into(f: Frame, src: Expr, value: VBValue, t: VBTypeName | undefined | V
  */
 function* memberSet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: string, args: VBValue[], value: VBValue, isSet: boolean): Gen<void> {
   if (base instanceof NothingT) throw new VBRuntimeError(91);
+  if (base instanceof ClassValue) { yield* classSet(f, base, name, args, value, isSet); return; }
   if (!(base instanceof ModuleRef) && !(base instanceof EnumRef) && isObject(base)) {
     if (!base.hasMember(name)) throw new VBRuntimeError(438);
+    if (classesInUse) escape(value);
     let wait: void | Promise<void> = undefined;   // a host may finish a property write later (MMControl1.Command = "Play" with Wait)
     if (isSet) wait = base.setMember(name, args, value);
+    else if (base.codeProperty?.(name)) wait = base.setMember(name, args, isObjectValue(value) ? value : plain(value));
     else {
       let current: VBValue | undefined;
       try {
@@ -899,12 +1050,14 @@ function* memberSet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: string,
     yield* afterHostCall(f);
     return;
   }
-  if (args.length > 0) throw new VBRuntimeError(424);
+  if (args.length > 0 && !(base instanceof ModuleRef)) throw new VBRuntimeError(424);
   if (base instanceof VBRecord) { setField(f.rt, base, lc(name), isSet ? value : plain(value)); return; }
   if (base instanceof ModuleRef) {
     const v = base.module.vars.get(lc(name));
-    if (!v) throw compileError('Method or data member not found');
-    assignVariable(v, value, isSet);
+    if (v) { assignVariable(v, value, isSet); return; }
+    const p = base.module.props.get(lc(name));
+    if (!p) throw compileError('Method or data member not found');
+    yield* propSet(f, p, args, value, isSet);
     return;
   }
   if (base instanceof EnumRef) throw compileError('Assignment to constant not permitted');

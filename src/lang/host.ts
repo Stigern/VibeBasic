@@ -34,6 +34,15 @@ export interface VBObject {
   item?(index: number): VBObject;         // control arrays: Command1(2)
   /** The elements for `For Each` (a control array's controls in index order, a collection's items). */
   items?(): VBObject[];
+  /** The object `Is` compares (an object seen through an interface is the object itself); default: this object. */
+  readonly identity?: VBObject;
+  /**
+   * The object as the value of a variable declared `As <typeName>` (or `As Object`): itself, another view of it (an
+   * interface it implements), or undefined when it is not of that type (error 13). Without it any object fits.
+   */
+  asType?(typeName: string): VBObject | undefined;
+  /** A property written by code (a form's Property Let/Set): an assignment does not read it first. */
+  codeProperty?(name: string): boolean;
 }
 
 /** A by-reference argument of a host method: assigning `value` stores into the caller's variable (converted to its type). */

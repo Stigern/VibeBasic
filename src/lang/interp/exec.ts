@@ -19,12 +19,15 @@ import { PrintLine } from '../printFormat';
 import {
   Empty, Missing, NothingT, NullT, VBArray, VBRecord, VBRef, bankers, compare, isObject, maybeSingle, single7, toNumber, toStr, type VBValue,
 } from '../values';
-import { EndSignal, nextTick, type Gen } from './driver';
+import { EndSignal, SubCall, nextTick, type Gen } from './driver';
 import { execFileStmt, printItems } from './fileStmts';
-import { AutoNewSlot, Frame, ProcRef, Run, Variable, lc, storeValue, type Slot } from './scope';
 import {
-  afterHostCall, assign, awaitHost, callBuiltin, callProc, constExpr, evalArgValues, evalExpr, formMethod, hostRefs, lookup, memberGet,
-  methodArgs, objectFactory, shownArgs, variableOf, withObject,
+  AutoNewSlot, ClassInstance, ClassValue, Frame, ProcRef, PropRef, Run, Variable, classesInUse, lc, rawValue, release, retain, storeValue,
+  type Slot,
+} from './scope';
+import {
+  afterHostCall, assign, awaitHost, callBuiltin, callProc, classCall, constExpr, evalArgValues, evalExpr, formMethod, hostRefs, lookup,
+  memberGet, methodArgs, objectFactory, shownArgs, variableOf, withObject,
 } from './eval';
 import { compareResult, plain, truthy } from './operators';
 import { shown, type StaticType } from './staticTypes';
@@ -191,7 +194,11 @@ export function* execStmt(f: Frame, s: Stmt): Gen<Completion> {
   if (atBoundary(f, s.line)) yield* boundary(f, !notStoppable(s));
   for (;;) {
     try {
-      return yield* execInner(f, s);
+      const c = yield* execInner(f, s);
+      // objects whose last reference went away in this statement terminate now (Class_Terminate)
+      const rt = f.run.rt;
+      if (rt.dying !== null) yield* reap(f.run, rt.callDepth);
+      return c;
     } catch (e) {
       if (e instanceof Unwind) return e.completion;
       const r = yield* handleError(f, e);
@@ -388,6 +395,45 @@ function* pauseHere(f: Frame): Gen<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Objects of class modules: Class_Terminate
+// ---------------------------------------------------------------------------
+
+/**
+ * Terminates the objects in `Runtime.dying` that were let go at call depth `depth` or deeper and still have no counted
+ * reference (a Function's result is stored by the statement that called it before this runs): Class_Terminate runs,
+ * then the object's variables let go of what they hold (which may terminate more objects).
+ */
+export function* reap(run: Run, depth: number): Gen<void> {
+  const rt = run.rt;
+  for (;;) {
+    const list = rt.dying;
+    if (list === null) return;
+    const i = list.findIndex(e => e.depth >= depth);
+    if (i < 0) return;
+    const { inst } = list[i];
+    list.splice(i, 1);
+    if (list.length === 0) rt.dying = null;
+    inst.dying = false;
+    if (inst.refs > 0 || inst.escaped || inst.dead) continue;
+    const t = inst.initPending ? undefined : inst.module.procs.get('class_terminate');
+    if (t) {
+      inst.dead = true;
+      yield new SubCall(invokeProc(run, t, [], inst));
+    }
+    rt.dropInstance(inst);
+  }
+}
+
+/** Leaving a procedure: its own variables let go of the class objects they hold. */
+function releaseLocals(f: Frame): void {
+  for (const v of f.locals.values()) {
+    if (v.opts.shared) continue;
+    const x = rawValue(v.ref);
+    if (x instanceof ClassValue) x.inst.release();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Procedures
 // ---------------------------------------------------------------------------
 
@@ -431,15 +477,16 @@ function bindParams(f: Frame, args: BoundArg[]): void {
     } else if ('slot' in a) {
       if (p.isArray) {
         if (!(a.slot.value instanceof VBArray)) throw new VBRuntimeError(13);
-        v = new Variable(p.name, type, a.slot, { isArray: true });
+        v = new Variable(p.name, type, a.slot, { isArray: true, shared: true });
       } else if (a.type === undefined) {
         // untyped reference from the host (event arguments): convert in place and share
         a.slot.value = storeValue(a.slot.value, type);
-        v = new Variable(p.name, type, a.slot);
+        v = new Variable(p.name, type, a.slot, { shared: true });
       } else if (sameType(a.type, type) || type === 'Variant') {
         // shared: assignments convert to the caller's declared type (an array stays an array, a String * n keeps n)
-        v = new Variable(p.name, a.type, a.slot, { isArray: a.isArray, fixedLength: a.fixedLength, variantAlias: !sameType(a.type, type) });
+        v = new Variable(p.name, a.type, a.slot, { isArray: a.isArray, fixedLength: a.fixedLength, variantAlias: !sameType(a.type, type), shared: true });
       } else if (isObjectType(a.type) && isObjectType(type)) {
+        // another object type (an interface of the object): a reference of the parameter's own type
         v = new Variable(p.name, type, new VBRef(storeValue(a.slot.value, type)));
       } else {
         // VB6 does not compile a variable of another type passed to a typed ByRef parameter (`Foo (x)` passes a copy)
@@ -452,6 +499,7 @@ function bindParams(f: Frame, args: BoundArg[]): void {
       v = new Variable(p.name, type, new VBRef(storeValue(a.value, type)));
       if (a.sub !== undefined) { v.sub = a.sub; v.subOf = v.value; }
     }
+    if (classesInUse && !v.opts.shared) retain(v.value);
     f.locals.set(lc(p.name), v);
   }
   if (proc.kind === 'function') {
@@ -463,12 +511,12 @@ function bindParams(f: Frame, args: BoundArg[]): void {
   }
 }
 
-/** Runs a Sub/Function body in a new frame (run by the driver as a SubCall). */
-export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBValue> {
+/** Runs a Sub/Function body in a new frame (run by the driver as a SubCall); `inst` is `Me` of a class module's procedure. */
+export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[], inst?: ClassInstance): Gen<VBValue> {
   const rt = run.rt;
   if (run.frames.length >= MAX_CALL_DEPTH) throw new VBRuntimeError(28);
   const { module, proc } = ref;
-  const f = new Frame(run, module, proc, proc.line);
+  const f = new Frame(run, module, proc, proc.line, inst);
   const hasRest = proc.params.length > 0 && proc.params[proc.params.length - 1].paramArray === true;
   if (args.length > proc.params.length && !hasRest) throw compileError('Wrong number of arguments or invalid property assignment');
   bindParams(f, args);
@@ -484,6 +532,7 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBVal
   } finally {
     rt.callDepth--;
     run.frames.pop();
+    if (rt.instances.size > 0) releaseLocals(f);
   }
   return f.returnVar ? f.returnVar.value : Empty;
 }
@@ -509,7 +558,7 @@ export function* declareVariable(f: Frame, d: VarDecl): Gen<Variable> {
 }
 
 /** The variable of a declaration, with the bounds of a fixed array. */
-function newVariable(f: Frame, d: VarDecl, bounds: [number, number][] | null): Variable {
+export function newVariable(f: Frame, d: VarDecl, bounds: [number, number][] | null): Variable {
   const rt = f.run.rt;
   const type = rt.resolveType(d.type, f.module);
   // `As New T`: each element / the variable makes its object when it is first used
@@ -580,10 +629,11 @@ function* declareLocals(f: Frame): Gen<void> {
           const type = rt.resolveType(item.decl.type, f.module);
           f.locals.set(key, new Variable(d.name, type, new VBRef(storeValue(value, type)), { isConst: true }));
         } else if (item.decl.scope === 'static' || proc.isStatic) {
-          const store = rt.staticStore(proc);
+          const store = f.instance ? f.instance.staticStore(proc) : rt.staticStore(proc);
           let v = store.get(key);
           if (!v) {
             v = yield* declareVariable(f, item.decl);
+            v.opts.shared = true;   // it outlives the call
             store.set(key, v);
           }
           f.locals.set(key, v);
@@ -697,12 +747,15 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
       const obj = yield* evalExpr(f, s.object);
       if (obj instanceof NothingT) throw new VBRuntimeError(91);
       f.withStack.push(obj);
+      retain(obj);   // `With New Class1`: the object lives until End With
       try {
         return yield* execBlock(f, s.body);
       } finally {
         f.withStack.pop();
+        release(obj);
       }
     }
+    case 'raiseEvent': return yield* raiseEvent(f, s.name, s.args);
     case 'label':
       if (isLineNumber(s.name)) f.lastLine = +s.name;
       return;
@@ -768,6 +821,24 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
   }
 }
 
+/**
+ * `RaiseEvent Name(args)`: runs `x_Name(args)` in each module (and object) whose WithEvents variable `x` holds this
+ * object, in the order they were set. Arguments are passed like a call's (a ByRef parameter of the handler changes the
+ * raiser's variable). An event the module does not declare is a compile error; outside a class object nothing listens.
+ */
+function* raiseEvent(f: Frame, name: string, args: (Expr | MissingArg)[]): Gen<Completion> {
+  if (!f.module.events.has(lc(name))) throw compileError('Event not found');
+  const sinks = f.instance?.sinks;
+  if (!sinks) return;
+  for (const sink of [...sinks]) {
+    const v = rawValue(sink.ref);
+    const ev = sink.opts.events;
+    if (!(v instanceof ClassValue) || v.inst !== f.instance || !ev || ev.instance?.dead) continue;
+    const handler = ev.module.procs.get(`${lc(sink.name)}_${lc(name)}`);
+    if (handler) yield* callProc(f, handler, args, ev.instance);
+  }
+}
+
 /** `Error n`, the Mid statement, LSet and RSet (kept out of execInner, which stays small for the hot statements). */
 function* execStringStmt(f: Frame, s: ErrorStmt | MidStmt | AlignStmt): Gen<Completion> {
   switch (s.kind) {
@@ -807,6 +878,7 @@ function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Com
     if (f.returnVar && key === lc(f.proc!.name)) { yield* callProc(f, f.module.procs.get(key)!, args); return; }
     const b = key === 'me' ? undefined : lookup(f, key, target.name, args.length > 0);
     if (b instanceof ProcRef) { yield* callProc(f, b, args); return; }
+    if (b instanceof PropRef) throw compileError('Invalid use of property');
     if (b instanceof BuiltinRef) { yield* callBuiltin(f, b, args); return; }
     // a property of the form used as a statement: a method call, like `Me.name args`
     if (b instanceof MemberRef) { yield* callObjectMethod(f, b.obj, b.name, args); return; }
@@ -831,6 +903,10 @@ function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Com
     }
     if (base instanceof EnumRef) throw new VBRuntimeError(438);
     if (base instanceof NothingT) throw new VBRuntimeError(91);
+    if (base instanceof ClassValue) {
+      yield* classCall(f, base, target.name, args);
+      return;
+    }
     if (isObject(base)) {
       yield* callObjectMethod(f, base, target.name, args);
       return;

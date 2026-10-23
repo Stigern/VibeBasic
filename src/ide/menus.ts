@@ -13,7 +13,7 @@ export const ACTION_NAMES = [
   'undo', 'redo', 'cut', 'copy', 'paste', 'delete', 'selectAll', 'find',
   'toggleOutlining', 'toggleAllOutlining', 'collapseToDefinitions',
   'viewCode', 'viewObject', 'viewImmediate', 'viewProjectExplorer', 'viewProperties', 'viewToolbox',
-  'addForm', 'addModule', 'removeItem', 'components', 'projectProperties',
+  'addForm', 'addModule', 'addClassModule', 'removeItem', 'components', 'projectProperties',
   'alignLefts', 'alignCenters', 'alignRights', 'alignTops', 'alignMiddles', 'alignBottoms',
   'sameWidth', 'sameHeight', 'sameBoth', 'bringToFront', 'sendToBack', 'lockControls',
   'stepInto', 'stepOver', 'stepOut', 'runToCursor', 'toggleBreakpoint', 'clearAllBreakpoints',
@@ -127,6 +127,7 @@ export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?
     { label: 'Project', items: [
       mk('Add Form', 'addForm', undefined, design),
       mk('Add Module', 'addModule', undefined, design),
+      mk('Add Class Module', 'addClassModule', undefined, design),
       sep(),
       mk(() => `Remove ${activeItemName()}`, 'removeItem', undefined, design),
       sep(),

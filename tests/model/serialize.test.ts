@@ -41,3 +41,10 @@ test('rejects files that would crash the IDE', () => {
   bad(p => { p.forms[0].controls.push(ctl('Form')); });
   bad(p => { p.forms[0].controls.push(ctl('toString')); });
 });
+test('a class module saves and loads (kind and Instancing are optional fields)', () => {
+  const p = newProject();
+  p.modules.push({ id: 'c1', name: 'Class1', code: 'Public Value As Long', kind: 'class', instancing: 1 }, { id: 'm1', name: 'Module1', code: '' });
+  const back = parseProject(serializeProject(p));
+  expect(back.modules).toEqual(p.modules);
+  expect(() => parseProject(serializeProject(p).replace('"kind": "class"', '"kind": "form"'))).toThrow(ProjectFormatError);
+});

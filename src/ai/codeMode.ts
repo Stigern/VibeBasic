@@ -31,9 +31,9 @@ export function extractCode(reply: string): string | null {
  *  was shown, echoed back); the module keeps its own procedure. */
 export interface CodeApplyResult { source: string; changes: { name: string; kind: 'replaced' | 'added' | 'body' | 'selection' | 'declarations' }[]; skipped?: string[] }
 
-const DECL = /^\s*(Option\s|Dim\s|Const\s|Public\s|Private\s|Global\s|Static\s|Type\s|Enum\s)/i;
+const DECL = /^\s*(Option\s|Dim\s|Const\s|Public\s|Private\s|Global\s|Static\s|Type\s|Enum\s|Event\s|Implements\s)/i;
 const DECL_ONLY = /^\s*(Dim|Const|Public|Private|Global|Static)\s/i;
-const TAIL = /^\s*End\s+(Sub|Function)\b/i;
+const TAIL = /^\s*End\s+(Sub|Function|Property)\b/i;
 const DECLARE = /^\s*((Public|Private)\s+)?Declare\s/i;
 const BLOCK_START = /^\s*((Public|Private)\s+)?(Type|Enum)\s/i;
 const BLOCK_END = /^\s*End\s+(Type|Enum)\b/i;
@@ -140,7 +140,7 @@ export function applyCodeProposal(source: string, code: string, currentProc: str
     const text = codeLines.slice(p.line - 1, p.endLine);
     while (text.length > 1 && text[text.length - 1].trim() === '') text.pop();
     const cur = lines.join('\n');
-    const r = findProcedureRange(cur, p.name);
+    const r = findProcedureRange(cur, p.name, p.property ?? null);   // a Property Let does not replace its Get
     // A heading with only "' ... (body omitted)" (or only comments such as "' ... unchanged", where the module's procedure has code) is
     // the shortened code the model was shown, not a change: replacing would empty the real procedure. An empty body is a real change.
     const body = inner(text);

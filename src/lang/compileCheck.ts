@@ -1,14 +1,15 @@
 // The compile errors VB6 finds in a whole program before it runs, beyond syntax: a variable of another type passed to a
-// typed ByRef parameter, an array or record passed in its own parentheses, New of anything but a Collection, and LSet /
-// RSet of a record. The interpreter raises the same errors when the statement runs (exec.ts bindParams, eval.ts bindArgs
+// typed ByRef parameter, an array or record passed in its own parentheses, New of anything but a class (a class module
+// or a built-in class such as Collection), LSet / RSet of a record, and RaiseEvent of an event the module does not declare. The interpreter raises the same errors when the statement runs (exec.ts bindParams, eval.ts bindArgs
 // and objectFactory, exec.ts execStringStmt); this pass finds them all at once, before the program starts (Program) and in
 // AI code (src/ai/validate.ts).
 //
 // Every rule stays silent when it is not sure: a name it cannot resolve to a declared variable, a callee that may be
 // something else than a procedure, a type it does not know.
 import type { Expr, MissingArg, ModuleAst, Param, PrintItem, ProcDecl, Stmt, VarDecl, VBTypeName } from './ast';
+import { BUILTIN_CLASSES } from './builtins/collection';
 
-export interface CheckModule { name: string; kind: 'form' | 'module'; ast: ModuleAst }
+export interface CheckModule { name: string; kind: 'form' | 'module' | 'class'; ast: ModuleAst }
 
 export interface CompileProblem {
   module: string;
@@ -46,17 +47,18 @@ function sameType(a: VBTypeName, b: VBTypeName): boolean {
   return false;
 }
 
-/** The newObject message for `New T`, null when T can be made (a Collection). Matches eval.ts objectFactory. */
-function newProblem(t: VBTypeName): string | null {
-  if (typeof t === 'string' || 'userType' in t) return 'Invalid use of New keyword';
+/** The message for `New T`, null when T can be made (a class module, a built-in class). Matches eval.ts objectFactory. */
+export function newProblem(t: VBTypeName, classes: ReadonlySet<string>): { message: string; hint: string } | null {
+  if (typeof t === 'string' || 'userType' in t) return { message: 'Invalid use of New keyword', hint: 'Invalid use of New keyword' };
   const n = lc(t.objectType);
-  if (n === 'collection' || n === 'vba.collection') return null;
-  return `Not supported in VibeBasic: New ${t.objectType} (there are no class modules; New can create a Collection)`;
+  if (classes.has(n) || BUILTIN_CLASSES.has(n)) return null;
+  return { message: 'User-defined type not defined', hint: `User-defined type not defined: New ${t.objectType}. New makes an object of a class module of the project or a Collection.` };
 }
 
 export function compileProblems(modules: CheckModule[], opts: CompileCheckOptions = {}): CompileProblem[] {
   const out: CompileProblem[] = [];
   const std = modules.filter(m => m.kind === 'module');
+  const classes = new Set(modules.filter(m => m.kind === 'class').map(m => lc(m.name)));
 
   /** A type as the interpreter resolves it: a name of a Type is a record, of an Enum a Long (program.ts resolveType). */
   const resolveType = (t: VBTypeName | undefined, m: CheckModule): VBTypeName => {
@@ -101,11 +103,16 @@ export function compileProblems(modules: CheckModule[], opts: CompileCheckOption
     const report = (line: number, message: string, hint = message) => out.push({ module: m.name, line, message, hint });
     const newDecl = (d: VarDecl) => {
       if (!d.isNew) return;
-      const msg = newProblem(resolveType(d.type, m));
-      if (msg) report(d.line, msg);
+      const p = newProblem(resolveType(d.type, m), classes);
+      if (p) report(d.line, p.message, p.hint);
     };
+    const events = new Set((m.ast.events ?? []).map(e => lc(e.name)));
     const declOk = opts.onlyDecls ?? (() => !opts.only);
-    for (const d of m.ast.variables) if (declOk(m, d)) newDecl(d);
+    for (const d of m.ast.variables) {
+      if (!declOk(m, d)) continue;
+      newDecl(d);
+      if (d.withEvents && m.kind === 'module') report(d.line, 'Only valid in object module', 'Only valid in object module: WithEvents variables belong in a form or class module.');
+    }
     for (const t of m.ast.types) for (const d of t.fields) if (declOk(m, d)) newDecl(d);
 
     for (const proc of m.ast.procedures) {
@@ -170,12 +177,13 @@ export function compileProblems(modules: CheckModule[], opts: CompileCheckOption
       const expr = (e: Expr | MissingArg, line: number): void => {
         walkExpr(e, x => {
           if (x.kind === 'call') call(x.target, x.args, line);
-          else if (x.kind === 'new') { const msg = newProblem(resolveType({ objectType: x.typeName }, m)); if (msg) report(line, msg); }
+          else if (x.kind === 'new') { const p = newProblem(resolveType({ objectType: x.typeName }, m), classes); if (p) report(line, p.message, p.hint); }
         });
       };
       walkStmts(proc.body, s => {
         if (s.kind === 'call') call(s.target, s.args, s.line);
         else if (s.kind === 'dim') for (const d of s.decls) newDecl(d);
+        else if (s.kind === 'raiseEvent' && !events.has(lc(s.name))) report(s.line, 'Event not found', `Event not found: declare it first (Public Event ${s.name}(...)).`);
         else if ((s.kind === 'lset' || s.kind === 'rset') && s.target.kind === 'name') {
           const r = resolve(s.target.name);
           const t = r && 'var' in r && !r.var.isArray ? r.var.type : null;
@@ -227,6 +235,7 @@ function walkStmts(body: Stmt[], stmt: (s: Stmt) => void, expr: (e: Expr | Missi
       case 'getFile': case 'putFile': x(s.file); x(s.rec); x(s.target); break;
       case 'seekFile': x(s.file); x(s.pos); break;
       case 'name': x(s.from); x(s.to); break;
+      case 'raiseEvent': s.args.forEach(x); break;
       case 'exit': case 'onError': case 'resume': case 'goto': case 'label': case 'end': case 'stop': break;
       default: { const never: never = s; void never; }
     }

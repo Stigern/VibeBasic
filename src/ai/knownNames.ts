@@ -68,7 +68,7 @@ export function memberNamesOf(type: ControlType): string[] {
 
 /** What the project contributes: names visible from every module, and the members of each form. */
 export interface ProjectNames {
-  /** Public names of standard modules, module names and form names (lower case). */
+  /** Public names of standard modules, module, class module and form names (lower case). */
   globals: Set<string>;
   /** False when another module has syntax errors: its names are then unknown. */
   complete: boolean;
@@ -85,12 +85,13 @@ export function projectNames(project: Project, current: string): ProjectNames {
   let complete = true;
   for (const m of project.modules) {
     globals.add(m.name.toLowerCase());
-    if (m.name.toLowerCase() === current) continue;
+    // a class module's Public members belong to its objects (`x.Member`), not to every module
+    if (m.name.toLowerCase() === current || m.kind === 'class') continue;
     const ast = parseClean(m.code, m.name);
     if (!ast) { complete = false; continue; }
     for (const n of moduleNames(ast, true)) globals.add(n);
     for (const p of ast.procedures) {
-      if (p.visibility !== 'public') continue;
+      if (p.visibility !== 'public' || p.property) continue;
       const k = p.name.toLowerCase();
       procs.set(k, procs.has(k) ? null : p);
     }

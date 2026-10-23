@@ -3,7 +3,7 @@ import { tokenize } from './lexer';
 import { Parser, parenthesised } from './exprParser';
 import type { Token } from './tokens';
 import type {
-  ArrayBound, CaseTest, CompareOp, ConstDecl, DebugPrintStmt, EnumDecl, Expr, IfBranch, MissingArg,
+  ArrayBound, CaseTest, CompareOp, ConstDecl, DebugPrintStmt, EnumDecl, EventDecl, Expr, IfBranch, MissingArg,
   ModuleAst, NameExpr, OpenMode, OpenStmt, Param, PrintItem, ProcDecl, ReDimDecl, Stmt, TypeDecl, TypeSuffix, VarDecl, VBTypeName,
 } from './ast';
 
@@ -25,7 +25,7 @@ import type {
  */
 
 type Closer =
-  | 'end if' | 'end select' | 'end with' | 'end sub' | 'end function' | 'end type' | 'end enum'
+  | 'end if' | 'end select' | 'end with' | 'end sub' | 'end function' | 'end property' | 'end type' | 'end enum'
   | 'next' | 'loop' | 'wend' | 'else' | 'elseif' | 'case';
 
 export const TYPE_KEYWORDS: Record<string, VBTypeName> = {
@@ -36,9 +36,7 @@ const SUFFIX_TYPES: Record<TypeSuffix, VBTypeName> = { '%': 'Integer', '&': 'Lon
 
 /** Unsupported VB6 keywords (see KEYWORDS in tokens.ts), with the name shown in the error. */
 export const UNSUPPORTED_KEYWORDS: Record<string, string> = {
-  declare: 'Declare', property: 'Property', implements: 'Implements',
-  event: 'Event', raiseevent: 'RaiseEvent', withevents: 'WithEvents', friend: 'Friend', global: 'Global',
-  lib: 'Lib', alias: 'Alias', gosub: 'GoSub', return: 'Return',
+  declare: 'Declare', global: 'Global', lib: 'Lib', alias: 'Alias', gosub: 'GoSub', return: 'Return',
 };
 /** Unsupported statements that are plain identifiers; only unsupported when they start a statement and are not assigned to / member-accessed. */
 export const UNSUPPORTED_IDENTS: Record<string, string> = { print: 'Print', line: 'Line', circle: 'Circle', pset: 'PSet' };
@@ -51,6 +49,7 @@ const STRAY_MESSAGES: Record<Closer, string> = {
   'end with': 'End With without With',
   'end sub': 'Invalid outside procedure',
   'end function': 'Invalid outside procedure',
+  'end property': 'Invalid outside procedure',
   'end type': 'Invalid outside procedure',
   'end enum': 'Invalid outside procedure',
   next: 'Next without For',
@@ -61,7 +60,8 @@ const STRAY_MESSAGES: Record<Closer, string> = {
   case: 'Case without Select Case',
 };
 const END_WORDS: Record<string, Closer> = {
-  if: 'end if', select: 'end select', with: 'end with', sub: 'end sub', function: 'end function', type: 'end type', enum: 'end enum',
+  if: 'end if', select: 'end select', with: 'end with', sub: 'end sub', function: 'end function', property: 'end property',
+  type: 'end type', enum: 'end enum',
 };
 /** Keywords that can start an argument of a paren-less call. */
 const ARG_START_KEYWORDS = new Set(['true', 'false', 'nothing', 'new', 'not', 'me', 'date', 'string', 'error', 'empty', 'null']);
@@ -71,6 +71,10 @@ const OPEN_MODES = new Set<string>(['input', 'output', 'append', 'binary', 'rand
 const lower = (t: Token) => t.text.toLowerCase();
 const baseName = (t: Token) => (t.suffix ? t.text.slice(0, -1) : t.text);
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+type ProcKind = 'sub' | 'function' | 'property';
+const END_NAMES: Record<ProcKind, string> = { sub: 'End Sub', function: 'End Function', property: 'End Property' };
+const END_CLOSERS: Record<ProcKind, Closer> = { sub: 'end sub', function: 'end function', property: 'end property' };
+const isProcCloser = (c: Closer) => c === 'end sub' || c === 'end function' || c === 'end property';
 
 export class StatementParser extends Parser {
   /** When set, errors are recorded here and parsing continues. */
@@ -191,7 +195,7 @@ export class StatementParser extends Parser {
   // ---- blocks and statements ----
 
   private inProc = false;
-  private procKind: 'sub' | 'function' = 'sub';
+  private procKind: ProcKind = 'sub';
   /** Number of `For` loops whose body is being parsed; queued `Next j, i` names are only drained while one is open. */
   private forDepth = 0;
 
@@ -436,6 +440,7 @@ export class StatementParser extends Parser {
       case 'open': return this.openStatement();
       case 'close': return this.closeStatement();
       case 'stop': this.advance(); return { kind: 'stop', line: t.line };
+      case 'raiseevent': return this.raiseEventStatement();
       case 'unload': case 'load': {
         this.advance();
         const target = this.parseExpression();
@@ -444,11 +449,13 @@ export class StatementParser extends Parser {
       case 'option':
         if (this.lineMode) { this.parseOption(); return { kind: 'end', line: t.line }; }
         return this.fail('Invalid inside procedure');
-      case 'private': case 'public': case 'sub': case 'function': case 'type': case 'enum':
+      case 'private': case 'public': case 'friend': case 'sub': case 'function': case 'property': case 'type': case 'enum':
+      case 'event': case 'implements':
         if (this.lineMode) { this.moduleItem(null); return { kind: 'end', line: t.line }; }
         // a procedure header inside a procedure: the open one is missing its End
-        if (w === 'sub' || w === 'function' || ((w === 'private' || w === 'public') && (this.isKeyword('sub', 1) || this.isKeyword('function', 1)))) {
-          return this.fail(this.procKind === 'sub' ? 'Expected: End Sub' : 'Expected: End Function');
+        if (w === 'sub' || w === 'function' || w === 'property'
+          || ((w === 'private' || w === 'public' || w === 'friend') && (this.isKeyword('sub', 1) || this.isKeyword('function', 1) || this.isKeyword('property', 1)))) {
+          return this.fail(`Expected: ${END_NAMES[this.procKind]}`);
         }
         return this.fail('Invalid inside procedure');
       case 'error':
@@ -631,7 +638,11 @@ export class StatementParser extends Parser {
   }
 
   private varDecl(scope: VarDecl['scope'], requireAs: boolean): VarDecl {
-    if (this.isKeyword('withevents')) this.unsupported('WithEvents');
+    const withEvents = this.isKeyword('withevents');
+    if (withEvents) {
+      if (!this.inModuleDecls) this.fail('Only valid in object module');
+      this.advance();
+    }
     const nameTok = this.expectIdent();
     let isArray = false;
     let bounds: ArrayBound[] | undefined;
@@ -646,6 +657,11 @@ export class StatementParser extends Parser {
       this.fail('Expected: As');
     }
     const d: VarDecl = { name: baseName(nameTok), scope, isArray, isNew, line: nameTok.line };
+    if (withEvents) {
+      // VB6: `WithEvents x As Class1`, a single object variable with a class type, no New
+      if (isArray || isNew || type === undefined || typeof type !== 'object' || !('objectType' in type)) this.fail('Expected: identifier', nameTok);
+      d.withEvents = true;
+    }
     if (type !== undefined) d.type = type;
     if (bounds !== undefined) d.bounds = bounds;
     if (fixedLength !== undefined) d.fixedLength = fixedLength;
@@ -960,13 +976,20 @@ export class StatementParser extends Parser {
     const n = this.peek();
     if (n.kind === 'keyword') {
       const w = lower(n);
-      if (w === 'for' || w === 'do' || w === 'sub' || w === 'function') {
+      if (w === 'for' || w === 'do' || w === 'sub' || w === 'function' || w === 'property') {
         this.advance();
         return { kind: 'exit', what: w, line: t.line };
       }
-      if (w === 'property') this.unsupported('Property');
     }
-    return this.fail('Expected: For, Do, Sub or Function');
+    return this.fail('Expected: For, Do, Sub, Function or Property');
+  }
+
+  /** `RaiseEvent Name[(args)]`. */
+  private raiseEventStatement(): Stmt {
+    const t = this.advance();
+    const name = this.expectIdent();
+    const args = this.isOp('(') ? this.parseParenArgs() : [];
+    return { kind: 'raiseEvent', name: baseName(name), args, line: t.line };
   }
 
   private labelTarget(): string {
@@ -1065,7 +1088,7 @@ export class StatementParser extends Parser {
   }
 
   parseModuleAst(name: string): ModuleAst {
-    const ast: ModuleAst = { name, optionExplicit: false, variables: [], consts: [], types: [], enums: [], procedures: [] };
+    const ast: ModuleAst = { name, optionExplicit: false, variables: [], consts: [], types: [], enums: [], procedures: [], events: [], implements: [] };
     for (;;) {
       this.skipSeparators();
       if (this.peek().kind === 'eof') return ast;
@@ -1085,20 +1108,39 @@ export class StatementParser extends Parser {
     }
     let visibility: 'public' | 'private' | undefined;
     let isStatic = false;
-    if (w === 'private' || w === 'public') {
-      visibility = w;
+    const procNext = (o: number) => this.isKeyword('sub', o) || this.isKeyword('function', o) || this.isKeyword('property', o);
+    if (w === 'private' || w === 'public' || w === 'friend') {
+      // `Friend` (visible to the project, not to other programs): Public in VibeBasic
+      visibility = w === 'friend' ? 'public' : w;
       this.advance();
-    } else if (w === 'static' && (this.isKeyword('sub', 1) || this.isKeyword('function', 1))) {
+      if (this.isKeyword('static') && procNext(1)) { isStatic = true; this.advance(); }
+    } else if (w === 'static' && procNext(1)) {
       isStatic = true;
       this.advance();
     }
     const t = this.peek();
     const k = t.kind === 'keyword' ? lower(t) : '';
-    if (UNSUPPORTED_KEYWORDS[k] && k !== 'withevents') this.unsupported(UNSUPPORTED_KEYWORDS[k]);
+    if (UNSUPPORTED_KEYWORDS[k]) this.unsupported(UNSUPPORTED_KEYWORDS[k]);
     switch (k) {
-      case 'sub': case 'function': {
+      case 'sub': case 'function': case 'property': {
         const p = this.procedure(visibility ?? 'public', isStatic, first);
         if (ast) ast.procedures.push(p);
+        return;
+      }
+      case 'event': {
+        this.advance();
+        const nameTok = this.expectIdent();
+        const d: EventDecl = { name: baseName(nameTok), params: this.params(), line: nameTok.line };
+        if (ast) ast.events!.push(d);
+        return;
+      }
+      case 'implements': {
+        if (visibility) break;
+        this.advance();
+        const nameTok = this.expectIdent();
+        let name = nameTok.text;
+        while (this.isOp('.') && this.peek(1).kind === 'ident') { this.advance(); name += '.' + this.advance().text; }
+        if (ast) ast.implements!.push(name);
         return;
       }
       case 'type': { const d = this.typeDecl(visibility ?? 'public'); if (ast) ast.types.push(d); return; }
@@ -1112,14 +1154,13 @@ export class StatementParser extends Parser {
       case 'dim': {
         if (visibility) break;
         this.advance();
-        const decls = this.varDecls('dim');
+        const decls = this.moduleVarDecls('dim');
         if (ast) ast.variables.push(...decls);
         return;
       }
-      case 'withevents': this.unsupported('WithEvents');
     }
-    if (visibility && t.kind === 'ident') {
-      const decls = this.varDecls(visibility);
+    if (visibility && (t.kind === 'ident' || k === 'withevents')) {
+      const decls = this.moduleVarDecls(visibility);
       if (ast) ast.variables.push(...decls);
       return;
     }
@@ -1128,6 +1169,14 @@ export class StatementParser extends Parser {
       this.unsupported(UNSUPPORTED_IDENTS[lower(first)]);
     }
     this.fail('Invalid outside procedure');
+  }
+
+  /** Set while module-level variables are declared: `WithEvents` is allowed there only. */
+  private inModuleDecls = false;
+
+  private moduleVarDecls(scope: VarDecl['scope']): VarDecl[] {
+    this.inModuleDecls = true;
+    try { return this.varDecls(scope); } finally { this.inModuleDecls = false; }
   }
 
   private params(): Param[] {
@@ -1167,13 +1216,27 @@ export class StatementParser extends Parser {
 
   private procedure(visibility: 'public' | 'private', isStatic: boolean, first: Token): ProcDecl {
     const kwTok = this.advance();
-    const kind = lower(kwTok) as 'sub' | 'function';
+    const word = lower(kwTok) as ProcKind;
+    let property: ProcDecl['property'];
+    if (word === 'property') {
+      // `Property Get|Let|Set Name(...)`: Get and Let/Set are a word and keywords
+      const g = this.peek();
+      const gw = g.kind === 'ident' || g.kind === 'keyword' ? lower(g) : '';
+      if (gw !== 'get' && gw !== 'let' && gw !== 'set') this.fail('Expected: Get or Let or Set');
+      this.advance();
+      property = gw;
+    }
+    const kind: 'sub' | 'function' = word === 'property' ? (property === 'get' ? 'function' : 'sub') : word;
     const p: ProcDecl = { kind, name: '?', visibility, isStatic, params: [], body: [], line: first.line, endLine: first.line };
+    if (property) p.property = property;
     try {
       const nameTok = this.expectIdent();
       p.name = baseName(nameTok);
       if (kind === 'function' && nameTok.suffix) p.returnType = SUFFIX_TYPES[nameTok.suffix];
       p.params = this.params();
+      if ((property === 'let' || property === 'set') && (p.params.length === 0 || p.params[p.params.length - 1].optional || p.params.some(x => x.paramArray))) {
+        this.fail('Definitions of property procedures for the same property are inconsistent, or property procedure has an optional parameter, a ParamArray, or an invalid Set final parameter', nameTok);
+      }
       if (kind === 'function' && this.isKeyword('as')) {
         p.returnType = this.parseAsClause().type;
         // `Function Nums() As Integer()`: returns an array
@@ -1190,11 +1253,11 @@ export class StatementParser extends Parser {
 
     const savedInProc = this.inProc;
     this.inProc = true;
-    this.procKind = kind;
+    this.procKind = word;
     this.forDepth = 0;
     this.nextQueue = [];
-    const endCloser: Closer = kind === 'sub' ? 'end sub' : 'end function';
-    const endName = kind === 'sub' ? 'End Sub' : 'End Function';
+    const endCloser = END_CLOSERS[word];
+    const endName = END_NAMES[word];
     for (;;) {
       const { body, closer } = this.block();
       p.body.push(...body);
@@ -1204,7 +1267,7 @@ export class StatementParser extends Parser {
         this.advance(); this.advance();
         break;
       }
-      const bad = closer === 'end sub' || closer === 'end function'
+      const bad = isProcCloser(closer)
         ? new VBSyntaxError(`Expected: ${endName}`, this.peek().line, this.peek().col)
         : new VBSyntaxError(STRAY_MESSAGES[closer], this.peek().line, this.peek().col);
       if (!this.collect) throw bad;

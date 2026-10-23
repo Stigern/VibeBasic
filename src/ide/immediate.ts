@@ -4,7 +4,7 @@
 import { VBSyntaxError } from '../lang/errors';
 import type { Host } from '../lang/host';
 import { Program } from '../lang/interp/program';
-import type { Project } from '../model/types';
+import { moduleKind, type Project } from '../model/types';
 import type { RunSession } from '../run/session';
 import { h } from '../ui98/dom';
 
@@ -48,7 +48,7 @@ export function createImmediateWindow(host: HTMLElement, run: () => RunSession |
     try {
       prog = new Program([
         ...p.forms.map(f => ({ name: f.name, kind: 'form' as const, source: f.code })),
-        ...p.modules.map(m => ({ name: m.name, kind: 'module' as const, source: m.code })),
+        ...p.modules.map(m => ({ name: m.name, kind: moduleKind(m), source: m.code })),
       ], designHost((t, nl) => print(t, nl)), { appTitle: p.title || p.name });
     } catch (e) {
       if (e instanceof VBSyntaxError) return `Compile error: ${e.message}`;

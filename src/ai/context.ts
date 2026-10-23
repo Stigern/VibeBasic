@@ -223,8 +223,9 @@ const literal = (e: Expr): string | null =>
     : e.kind === 'unary' && e.op === 'neg' && e.operand.kind === 'number' ? `-${e.operand.value}` : null;
 const asType = (t: VBTypeName | undefined): string => t === undefined ? '' : ` As ${typeof t === 'string' ? t : 'userType' in t ? t.userType : t.objectType}`;
 const param = (p: Param): string => `${p.paramArray ? 'ParamArray ' : p.optional ? 'Optional ' : ''}${p.byRef || p.paramArray ? '' : 'ByVal '}${p.name}${p.isArray ? '()' : ''}${asType(p.type)}`;
+const procWord = (p: ProcDecl): string => (p.property ? `Property ${p.property.charAt(0).toUpperCase()}${p.property.slice(1)}` : p.kind === 'sub' ? 'Sub' : 'Function');
 const signature = (p: ProcDecl): string =>
-  `Public ${p.kind === 'sub' ? 'Sub' : 'Function'} ${p.name}(${p.params.map(param).join(', ')})${p.kind !== 'function' ? '' : p.returnsArray ? `${asType(p.returnType ?? 'Variant')}()` : asType(p.returnType)}`;
+  `Public ${procWord(p)} ${p.name}(${p.params.map(param).join(', ')})${p.kind !== 'function' ? '' : p.returnsArray ? `${asType(p.returnType ?? 'Variant')}()` : asType(p.returnType)}`;
 /** "Name As String * 20", "Items As New Collection", "a() As Long". */
 const variable = (v: VarDecl): string =>
   `${v.name}${v.isArray ? '()' : ''}${v.isNew && v.type !== undefined ? asType(v.type).replace(' As ', ' As New ') : asType(v.type)}${v.fixedLength !== undefined ? ` * ${v.fixedLength}` : ''}`;
@@ -242,6 +243,7 @@ function publicItems(ast: ModuleAst): string[] {
   }
   for (const v of ast.variables) if (v.scope === 'public') items.push({ line: v.line, text: `Public ${variable(v)}` });
   for (const p of ast.procedures) if (p.visibility === 'public') items.push({ line: p.line, text: signature(p) });
+  for (const e of ast.events ?? []) items.push({ line: e.line, text: `Public Event ${e.name}(${e.params.map(param).join(', ')})` });
   return items.sort((a, b) => a.line - b.line).map(i => i.text);
 }
 
@@ -250,14 +252,20 @@ export const SYMBOLS_MAX_CHARS = 3000;
 
 /**
  * One line per public item of the project's other modules and forms ("Module1: Public Function Add(a As Integer) As Integer"),
- * nearest first: the standard modules (their Public names are visible everywhere), then the other forms, each led by its
- * controls ("Form2: Text1 (TextBox), cmdOK (CommandButton)") unless `formControls` is false. `currentId` (its code is in the
+ * nearest first: the standard modules (their Public names are visible everywhere), then the class modules (the members of
+ * their objects: "Class1 (class): Public Property Get Count() As Long"), then the other forms, each led by its controls
+ * ("Form2: Text1 (TextBox), cmdOK (CommandButton)") unless `formControls` is false. `currentId` (its code is in the
  * message) is skipped. Capped at about `max` characters; the rest is counted in a last line.
  */
 export function describeProjectSymbols(p: Project, currentId: string, formControls = true, max = SYMBOLS_MAX_CHARS): string {
   const lines: string[] = [];
   const itemsOf = (code: string, name: string) => { const ast = parseModuleLenient(code, name).ast; return ast ? publicItems(ast) : []; };
-  for (const m of p.modules) if (m.id !== currentId) lines.push(...itemsOf(m.code, m.name).map(t => `${m.name}: ${t}`));
+  for (const m of p.modules) if (m.id !== currentId && m.kind !== 'class') lines.push(...itemsOf(m.code, m.name).map(t => `${m.name}: ${t}`));
+  for (const m of p.modules) {
+    if (m.id === currentId || m.kind !== 'class') continue;
+    const items = itemsOf(m.code, m.name);
+    lines.push(...(items.length ? items : ['(no Public members)']).map(t => `${m.name} (class): ${t}`));
+  }
   for (const f of p.forms) {
     if (f.id === currentId) continue;
     if (formControls) lines.push(describeFormControls(f));
@@ -272,6 +280,10 @@ export function describeProjectSymbols(p: Project, currentId: string, formContro
   }
   return out.join('\n');
 }
+
+/** "form Form1", "module Module1", "class module Class1". */
+const codeOf = (form: FormDef | undefined, module: ModuleDef | undefined): string =>
+  form ? `form ${form.name}` : `${module?.kind === 'class' ? 'class module' : 'module'} ${module?.name ?? ''}`;
 
 function findItem(p: Project, id: string): { form?: FormDef; module?: ModuleDef } {
   const form = p.forms.find(f => f.id === id);
@@ -339,7 +351,7 @@ export function buildCodeRequest(p: Project, itemId: string, cursorLine: number,
   const proc = listProcedures(code).find(pr => cursorLine >= pr.line && cursorLine <= pr.endLine);
   const parts = [
     projectContext(p, itemId, form),
-    `Code of ${form ? `form ${form.name}` : `module ${module?.name ?? ''}`}:\n${codeForPrompt(code, { procName: proc?.name ?? null, mention: userPrompt }, codeBudget(opts.contextTokens))}`,
+    `Code of ${codeOf(form, module)}:\n${codeForPrompt(code, { procName: proc?.name ?? null, mention: userPrompt }, codeBudget(opts.contextTokens))}`,
   ];
   if (opts.selection?.trim()) {
     parts.push(`Selected code (the request is about this):\n${opts.selection}\n`
@@ -367,7 +379,7 @@ export function buildFixRequest(p: Project, itemId: string, err: FixError, vars:
   const lineText = (lines[err.line - 1] ?? '').trim();
   const parts = [
     projectContext(p, itemId, form),
-    `Code of ${form ? `form ${form.name}` : `module ${module?.name ?? ''}`}:\n${codeForPrompt(code, { procName: proc?.name ?? null, mention: callers.join(' ') }, codeBudget(opts.contextTokens))}`,
+    `Code of ${codeOf(form, module)}:\n${codeForPrompt(code, { procName: proc?.name ?? null, mention: callers.join(' ') }, codeBudget(opts.contextTokens))}`,
     `Error: ${what}`,
     `Line ${err.line} in ${proc?.name ?? '(declarations)'}: ${lineText}`,
   ];

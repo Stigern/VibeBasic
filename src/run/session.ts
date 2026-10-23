@@ -6,7 +6,7 @@ import { VBRuntimeError } from '../lang/errors';
 import { macrotask } from '../lang/interp/driver';
 import { Program, type SourceModule } from '../lang/interp/program';
 import { Nothing, type VBRef, type VBValue } from '../lang/values';
-import type { PictureRef, Project } from '../model/types';
+import { moduleKind, type PictureRef, type Project } from '../model/types';
 import type { FormHost } from './formHost';
 import { NetSession } from './net';
 import { DbSession } from './data/dbSession';
@@ -95,7 +95,7 @@ export class RunSession implements Host, FormSession {
     this.app = new AppObject(this.title, cb.appPath, cb.appName || project.name);
     const modules: SourceModule[] = [
       ...project.forms.map(f => ({ name: f.name, kind: 'form' as const, source: f.code })),
-      ...project.modules.map(m => ({ name: m.name, kind: 'module' as const, source: m.code })),
+      ...project.modules.map(m => ({ name: m.name, kind: moduleKind(m), source: m.code })),
     ];
     this.program = new Program(modules, this, { appTitle: this.title, appPath: cb.appPath });
   }
@@ -151,12 +151,21 @@ export class RunSession implements Host, FormSession {
     this.maybeEnd();
   }
 
-  /** The program ends when no form is loaded and no code runs. */
+  /**
+   * The program ends when no form is loaded and no code runs. Objects of class modules still alive then (kept in a
+   * Collection, an array or a module-level variable) get their Class_Terminate first, as VB6 releases them.
+   */
   private maybeEnd(): void {
     if (this.ended || this.program.state === 'running' || this.program.state === 'break') return;
     for (const f of this.forms.values()) if (f.loaded) return;
+    if (this.program.liveObjects > 0 && !this.terminating) {
+      this.terminating = true;
+      void this.program.terminateObjects().finally(() => { this.queue.flush(); this.maybeEnd(); });
+      return;
+    }
     this.program.end();
   }
+  private terminating = false;
 
   /** Inet, Winsock, WebBrowser: made when the first such control is created; closed at the end of the program. */
   net(): NetSession {

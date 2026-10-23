@@ -124,11 +124,22 @@ describe('module structure', () => {
   test('unsupported at module level', () => {
     expect(err('Declare Function F Lib "x" () As Long')).toBe('Not supported in VibeBasic: Declare');
     expect(err('Public Declare Function F Lib "x" () As Long')).toBe('Not supported in VibeBasic: Declare');
-    expect(err('Property Get X()\nEnd Property')).toBe('Not supported in VibeBasic: Property');
-    expect(err('Public Property Get X()\nEnd Property')).toBe('Not supported in VibeBasic: Property');
-    expect(err('Implements Foo')).toBe('Not supported in VibeBasic: Implements');
-    expect(err('Public Event Foo()')).toBe('Not supported in VibeBasic: Event');
-    expect(err('Dim WithEvents x As Foo')).toBe('Not supported in VibeBasic: WithEvents');
+  });
+  test('class module syntax: Property, Event, Implements, WithEvents, Friend', () => {
+    const m = parseModule([
+      'Implements IFoo', 'Public Event Changed(ByVal n As Long)', 'Private WithEvents w As Worker',
+      'Friend Property Get X(ByVal i As Integer) As Long', '  Exit Property', 'End Property',
+      'Public Property Let X(ByVal i As Integer, ByVal v As Long)', '  RaiseEvent Changed(v)', 'End Property',
+    ].join('\n'), 'C');
+    expect(m.implements).toEqual(['IFoo']);
+    expect(m.events!.map(e => [e.name, e.params.length])).toEqual([['Changed', 1]]);
+    expect(m.variables[0]).toMatchObject({ name: 'w', withEvents: true });
+    expect(m.procedures.map(p => [p.name, p.kind, p.property, p.visibility, p.params.length])).toEqual([
+      ['X', 'function', 'get', 'public', 1], ['X', 'sub', 'let', 'public', 2]]);
+    expect(m.procedures[1].body[0]).toMatchObject({ kind: 'raiseEvent', name: 'Changed' });
+    expect(err('Property Let X()\nEnd Property')).toMatch(/^Definitions of property procedures/);
+    expect(err('Property Get X()\nEnd Sub')).toBe('Expected: End Property');
+    expect(err('Sub A()\n  Dim WithEvents w As Worker\nEnd Sub')).toBe('Only valid in object module');
   });
   test('Dim with Static/array bounds and As New', () => {
     const d = one('Static a(1 To 5, 3) As Integer, b() As String, c As New Collection') as any;
@@ -424,7 +435,6 @@ describe('syntax errors', () => {
     expect(berr('Line (0, 0)-(10, 10)')).toBe('Not supported in VibeBasic: Line');
     expect(berr('Circle (5, 5), 3')).toBe('Not supported in VibeBasic: Circle');
     expect(berr('PSet (5, 5)')).toBe('Not supported in VibeBasic: PSet');
-    expect(berr('RaiseEvent Foo')).toBe('Not supported in VibeBasic: RaiseEvent');
     expect(berr('GoSub Foo')).toBe('Not supported in VibeBasic: GoSub');
   });
   test('file I/O statements', () => {

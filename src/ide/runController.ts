@@ -8,6 +8,7 @@ import { VBSyntaxError } from '../lang/errors';
 import type { BreakInfo } from '../lang/host';
 import { findSyntaxErrors } from '../lang/parser';
 import { listProcedures } from '../model/procedures';
+import { moduleKind } from '../model/types';
 import { RunSession } from '../run/session';
 import type { FormHost } from '../run/formHost';
 import { compileErrorBox, messageBox98 } from '../ui98/dialogs';
@@ -123,7 +124,7 @@ export class RunController {
     const p = this.ide.project;
     const modules = [
       ...p.forms.map(f => ({ name: f.name, kind: 'form' as const, source: f.code })),
-      ...p.modules.map(m => ({ name: m.name, kind: 'module' as const, source: m.code })),
+      ...p.modules.map(m => ({ name: m.name, kind: moduleKind(m), source: m.code })),
     ];
     if (fullCompile) {
       for (const m of modules) {

@@ -286,3 +286,19 @@ test('in break mode neither the event dropdown nor leaving a line changes the co
   cw.gotoProcedure('Form', 'Load');            // an existing procedure is still shown
   expect(cw.getCursorLine()).toBe(2);
 });
+
+test('a class module: (General) / Class in the Object box, Initialize stub, Property procedures in the Procedure box', () => {
+  ide.project.modules.push({ id: 'c1', name: 'Class1', kind: 'class', code: 'Public Property Get Count() As Long\nEnd Property\nPublic Property Let Count(v As Long)\nEnd Property' });
+  const w = openCodeWindow(ide, 'c1', { mdiHost: host });
+  const items = (i: number) => {
+    (w.win.el.querySelectorAll('.cb98 .cb98-arrow')[i] as HTMLElement).click();
+    const r = [...document.querySelectorAll('.popup98-layer .cb98-item')].map(e => e.textContent);
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    return r;
+  };
+  expect(items(0)).toEqual(['(General)', 'Class']);
+  w.gotoLine(1);
+  expect(items(1)).toEqual(['(Declarations)', 'Count [PropertyGet]', 'Count [PropertyLet]']);
+  w.gotoProcedure('Class', 'Initialize');
+  expect(w.getSource()).toMatch(/\n\nPrivate Sub Class_Initialize\(\)\n\nEnd Sub$/);
+});

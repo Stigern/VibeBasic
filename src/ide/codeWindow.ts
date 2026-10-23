@@ -9,8 +9,8 @@ import { openSearchPanel, search, searchKeymap } from '@codemirror/search';
 import { tokenize } from '../lang/lexer';
 import { checkLineSyntax } from '../lang/parser';
 import { collectIdentifiers, prettifyLine } from '../lang/prettify';
-import { CONTROL_TYPES, getPropDef } from '../model/controls';
-import { buildEventStub, findProcedureRange, insertProcedure, listProcedures } from '../model/procedures';
+import { CONTROL_TYPES, getPropDef, type EventDef } from '../model/controls';
+import { buildEventStub, findProcedureRange, insertProcedure, listProcedures, procLabel } from '../model/procedures';
 import type { ControlType, FormDef, Project } from '../model/types';
 import { compileErrorBox } from '../ui98/dialogs';
 import { createCombo, type Combo } from '../ui98/combo';
@@ -47,6 +47,25 @@ export interface CodeWindow {
 export interface CodeEnv { mdiHost: HTMLElement; actions?: IdeActions }
 
 const GENERAL = '(General)', DECLS = '(Declarations)';
+/** The events of the Class object in a class module's code window. */
+const CLASS_EVENTS: EventDef[] = [{ name: 'Initialize', params: '' }, { name: 'Terminate', params: '' }];
+
+/** An entry of the Object box: its events and the one the box jumps to. */
+interface ObjInfo { name: string; events: EventDef[]; defaultEvent: string; isArray: boolean }
+
+/** `Private WithEvents w As Worker` lines of a module: variable name and class name. */
+function withEventsVars(code: string): { name: string; cls: string }[] {
+  const out: { name: string; cls: string }[] = [];
+  for (const m of code.matchAll(/^[ \t]*(?:Private|Public|Dim)[ \t]+WithEvents[ \t]+([A-Za-z_]\w*)[ \t]+As[ \t]+([A-Za-z_][\w.]*)/gim)) out.push({ name: m[1], cls: m[2] });
+  return out;
+}
+
+/** The `Event Name(params)` declarations of a class module's code. */
+export function classEvents(code: string): EventDef[] {
+  const out: EventDef[] = [];
+  for (const m of code.matchAll(/^[ \t]*(?:Public[ \t]+)?Event[ \t]+([A-Za-z_]\w*)[ \t]*(?:\(([^)]*)\))?/gim)) out.push({ name: m[1], params: (m[2] ?? '').trim() });
+  return out;
+}
 const INTERNAL = Annotation.define<boolean>();   // prettify edits (no leave-line handling)
 const EXTERNAL = Annotation.define<boolean>();   // reload from the model (not written back)
 
@@ -262,26 +281,44 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
 
   // ---- model helpers -------------------------------------------------------------------------------------------
   const controls = () => form()?.controls ?? [];
+  const isClass = () => ide.project.modules.find(m => m.id === itemId)?.kind === 'class';
+  const byName = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base' });
+  /** The module's WithEvents variables (forms and classes), with the events their class declares. */
+  const eventVars = (): ObjInfo[] => {
+    if (!form() && !isClass()) return [];
+    return withEventsVars(src()).map(v => {
+      const cls = ide.project.modules.find(m => m.kind === 'class' && m.name.toLowerCase() === v.cls.toLowerCase());
+      const events = cls ? classEvents(cls.code) : [];
+      return { name: v.name, events, defaultEvent: events[0]?.name ?? '', isArray: false };
+    });
+  };
   const objectNames = (): string[] => {
+    const evs = eventVars().map(v => v.name);
+    if (isClass()) return [GENERAL, 'Class', ...evs.sort(byName)];
     if (!form()) return [GENERAL];
     const seen = new Map<string, string>();
     for (const c of controls()) if (!seen.has(c.name.toLowerCase())) seen.set(c.name.toLowerCase(), c.name);
-    return [GENERAL, 'Form', ...[...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))];
+    for (const n of evs) if (!seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
+    return [GENERAL, 'Form', ...[...seen.values()].sort(byName)];
   };
-  const typeOf = (obj: string): { type: ControlType; name: string; isArray: boolean } | null => {
-    const f = form();
-    if (!f) return null;
+  const objInfo = (obj: string): ObjInfo | null => {
     const low = obj.toLowerCase();
-    if (low === 'form' || low === f.name.toLowerCase()) return { type: 'Form', name: 'Form', isArray: false };
+    if (isClass() && low === 'class') return { name: 'Class', events: CLASS_EVENTS, defaultEvent: 'Initialize', isArray: false };
+    const f = form();
+    if (f && (low === 'form' || low === f.name.toLowerCase())) return { name: 'Form', events: CONTROL_TYPES.Form.events, defaultEvent: CONTROL_TYPES.Form.defaultEvent, isArray: false };
     const cs = controls().filter(c => c.name.toLowerCase() === low);
-    return cs.length ? { type: cs[0].type, name: cs[0].name, isArray: cs.some(c => c.index !== null) } : null;
+    if (cs.length) {
+      const d = CONTROL_TYPES[cs[0].type];
+      return { name: cs[0].name, events: d.events, defaultEvent: d.defaultEvent, isArray: cs.some(c => c.index !== null) };
+    }
+    return eventVars().find(v => v.name.toLowerCase() === low) ?? null;
   };
   /** (object, event) a procedure name stands for, else null (a general procedure). */
   const resolveProc = (name: string): { obj: string; ev: string } | null => {
     for (const o of objectNames().slice(1)) {
       if (!name.toLowerCase().startsWith(`${o.toLowerCase()}_`)) continue;
-      const rest = name.slice(o.length + 1), t = typeOf(o)!;
-      const ev = CONTROL_TYPES[t.type].events.find(e => e.name.toLowerCase() === rest.toLowerCase());
+      const rest = name.slice(o.length + 1), t = objInfo(o)!;
+      const ev = t.events.find(e => e.name.toLowerCase() === rest.toLowerCase());
       if (ev) return { obj: o, ev: ev.name };
     }
     return null;
@@ -294,21 +331,21 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   const objCombo: Combo = createCombo({ items: [GENERAL], value: GENERAL, onChange: o => {
     if (o === GENERAL) {
       curObj = o; fillProcs(); api.gotoLine(listProcedures(src())[0]?.line ?? 1);
-    } else api.gotoProcedure(o, CONTROL_TYPES[typeOf(o)?.type ?? 'Form'].defaultEvent);
+    } else api.gotoProcedure(o, objInfo(o)?.defaultEvent ?? '');
   } });
   const procCombo: Combo = createCombo({ items: [DECLS], value: DECLS, onChange: p => {
     if (curObj === GENERAL) {
-      const r = p === DECLS ? null : findProcedureRange(src(), p);
+      const r = p === DECLS ? null : listProcedures(src()).find(x => procLabel(x) === p) ?? null;
       api.gotoLine(r ? Math.min(r.line + 1, r.endLine) : 1);
     } else api.gotoProcedure(curObj, p);
   } });
   const src = () => view.state.doc.toString();
   function fillProcs(procs = listProcedures(src())): void {
-    if (curObj === GENERAL) procCombo.setItems([DECLS, ...procs.filter(p => !resolveProc(p.name)).map(p => p.name)], () => false);
+    if (curObj === GENERAL) procCombo.setItems([DECLS, ...procs.filter(p => p.property || !resolveProc(p.name)).map(procLabel)], () => false);
     else {
-      const t = typeOf(curObj);
+      const t = objInfo(curObj);
       const have = new Set(procs.map(p => p.name.toLowerCase()));
-      procCombo.setItems((t ? CONTROL_TYPES[t.type].events : []).map(e => e.name), e => have.has(`${curObj}_${e}`.toLowerCase()));
+      procCombo.setItems((t?.events ?? []).map(e => e.name), e => have.has(`${curObj}_${e}`.toLowerCase()));
     }
   }
   function syncCombos(): void {
@@ -316,11 +353,11 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     const line = view.state.doc.lineAt(view.state.selection.main.head).number;
     const procs = listProcedures(src());
     const p = procs.find(x => line >= x.line && line <= x.endLine);
-    const r = p ? resolveProc(p.name) : null;
+    const r = p && !p.property ? resolveProc(p.name) : null;
     curObj = r ? r.obj : GENERAL;
     objCombo.setValue(curObj);
     fillProcs(procs);
-    procCombo.setValue(r ? r.ev : p ? p.name : DECLS);
+    procCombo.setValue(r ? r.ev : p ? procLabel(p) : DECLS);
   }
 
   const known = (): Map<string, string> => {
@@ -400,7 +437,10 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     extensions: [
       lock.of(lockExt()),
       history(), search({ top: true }),
-      autocompletion({ override: [memberCompletion(() => form() ?? null)], icons: false }),
+      autocompletion({ override: [memberCompletion(() => form() ?? null, () => ({
+        classes: new Map(ide.project.modules.filter(m => m.kind === 'class').map(m => [m.name.toLowerCase(), m.code])),
+        self: isClass() ? item()?.name.toLowerCase() ?? null : null,
+      }))], icons: false }),
       vbHighlight(spans), vbTheme, look.of(lookExt()), errField, breakExt, outlining, separator.of(sepExt()), indentGuides, editingHelpers(spans),
       keymap.of([
         { key: 'Enter', run: vbEnter }, { key: 'Tab', run: c => acceptCompletion(c) || vbTab(c) }, { key: 'Shift-Tab', run: indentLess },
@@ -488,8 +528,8 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
       if (closed) return;
       let name = eventName;
       if (objectName !== GENERAL) {
-        const t = typeOf(objectName);
-        const ev = t && CONTROL_TYPES[t.type].events.find(e => e.name.toLowerCase() === eventName.toLowerCase());
+        const t = objInfo(objectName);
+        const ev = t && t.events.find(e => e.name.toLowerCase() === eventName.toLowerCase());
         if (!t || !ev) return;
         name = `${t.name}_${ev.name}`;
         if (!findProcedureRange(src(), name)) {

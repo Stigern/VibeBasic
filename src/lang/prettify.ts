@@ -50,7 +50,7 @@ const OPEN_WORDS = new Set(['input', 'output', 'append', 'binary', 'random', 'ac
 /**
  * Indexes of the identifier tokens that act as keywords in a file statement: `Print #`, `Line Input #`, `Get #`, ...,
  * `Name ... As`, and in `Open ... For Input Access Read Lock Write As #1 Len = 8` the mode and clause words; also the
- * `LSet` / `RSet` of `LSet s = value` (identifiers to the lexer too).
+ * `LSet` / `RSet` of `LSet s = value` (identifiers to the lexer too), and the `Get` of `Property Get`.
  */
 export function fileStatementWords(tokens: Token[]): Set<number> {
   const out = new Set<number>();
@@ -68,6 +68,7 @@ export function fileStatementWords(tokens: Token[]): Set<number> {
       else if (l === 'name' && tokens.slice(i + 1).some(x => x.kind === 'keyword' && x.text.toLowerCase() === 'as')) out.add(i);
       else if ((l === 'lset' || l === 'rset') && next?.kind === 'ident') out.add(i);
     }
+    if (t.kind === 'ident' && !t.suffix && l === 'get' && tokens[i - 1]?.kind === 'keyword' && tokens[i - 1].text.toLowerCase() === 'property') out.add(i);
     if (t.kind === 'keyword' && l === 'open' && start) open = 'path';
     else if (open && t.kind === 'keyword' && (l === 'for' || l === 'as')) open = l === 'for' ? 'for' : 'as';
     // the mode and Access / Lock words after `For`, `Len` after `As #n`

@@ -166,3 +166,13 @@ test('LSet and RSet are coloured as keywords; a variable named LSet is not (revi
   expect(cls('LSet a = "x"')).toEqual(['LSet:kw', '"x":str']);
   expect(cls('If b Then rset t = s')).toEqual(['If:kw', 'Then:kw', 'rset:kw']);
 });
+
+test('Property blocks fold, Enter after Property Get adds End Property, Get is a keyword (class modules)', () => {
+  expect(ranges('Public Property Get Count() As Long\n  Count = n\nEnd Property\nProperty Let Count(v As Long)\n  n = v\nEnd Property'))
+    .toEqual(['proc 1-3', 'proc 4-6']);
+  set('Public Property Get Count() As Long', 35);
+  vbEnter(view);
+  expect(cw.getSource()).toBe('Public Property Get Count() As Long\n    \nEnd Property');
+  const cls = (line: string) => vbSpans(line).map(s => `${line.slice(s.from, s.to)}:${s.cls.slice(6)}`);
+  expect(cls('Property Get X()')).toEqual(['Property:kwb', 'Get:kw', 'X:proc']);
+});

@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import { autoFixEventNames, validateCode } from '../../src/ai/validate';
+import { describeProjectSymbols } from '../../src/ai/context';
 import { newControl, newForm, newProject } from '../../src/model/controls';
 
 const form = () => {
@@ -349,7 +350,7 @@ test('the compile errors the run would raise at the call are found (review 08 fi
   expect(mod('Sub Main()\n    Dim i As Integer\n    Debug.Print Twice(i)\nEnd Sub')).toEqual([]);
   expect(mod('Private Sub Fill(a() As Long)\nEnd Sub\nSub Main()\n    Dim a(2) As Long\n    Fill (a)\nEnd Sub')[0]).toMatch(/^Type mismatch: array or user-defined type expected/);
   expect(mod('Private Type P\n    X As Integer\nEnd Type\nSub Main()\n    Dim q As New P\nEnd Sub')).toEqual(['Invalid use of New keyword']);
-  expect(mod('Sub Main()\n    Dim d As Object\n    Set d = New Dictionary\nEnd Sub')[0]).toMatch(/^Not supported in VibeBasic: New Dictionary/);
+  expect(mod('Sub Main()\n    Dim d As Object\n    Set d = New Dictionary\nEnd Sub')[0]).toMatch(/^User-defined type not defined: New Dictionary/);
   expect(mod('Private Type P\n    X As Integer\nEnd Type\nSub Main()\n    Dim a As P, b As P\n    LSet a = b\nEnd Sub')).toEqual(['Not supported in VibeBasic: LSet of a user-defined type']);
   // in a form, against the form's existing procedure; and a bare body is checked too
   const p2 = project();
@@ -362,4 +363,21 @@ test('the compile errors the run would raise at the call are found (review 08 fi
 
 test('vbUseDefault and the FirstWeekOfYear constants are known names (review 08 final #10)', () => {
   expect(inForm1(sub('    Debug.Print FormatNumber(0.5, 2, vbUseDefault), DatePart("ww", Now, vbMonday, vbFirstFourDays)'))).toEqual([]);
+});
+
+test('class modules: the validator accepts class code and the project symbols list a class\'s Public members', () => {
+  const p = project();
+  p.modules.push({ id: 'c1', name: 'Worker', kind: 'class', instancing: 1, code: [
+    'Public Event Done(ByVal n As Long)', 'Private mN As Long',
+    'Public Property Get N() As Long', '    N = mN', 'End Property', 'Public Property Let N(ByVal v As Long)', '    mN = v', 'End Property',
+    'Public Sub Go()', '    RaiseEvent Done(mN)', 'End Sub'].join('\n') });
+  // a Get / Let pair, RaiseEvent of the module's event, New and members of a class variable, a WithEvents handler
+  expect(validateCode('Public Property Get Twice() As Long\n    Twice = 2 * mN\nEnd Property\nPublic Sub Again()\n    RaiseEvent Done(1)\nEnd Sub',
+    { moduleName: 'Worker', form: null, project: p })).toEqual([]);
+  expect(validateCode('Private WithEvents w As Worker\nPrivate Sub Form_Load()\n    Set w = New Worker\n    w.N = 3\n    w.Go\n    Debug.Print w.N\nEnd Sub\nPrivate Sub w_Done(ByVal n As Long)\nEnd Sub',
+    { moduleName: 'Form1', form: p.forms[0], project: p })).toEqual([]);
+  const symbols = describeProjectSymbols(p, p.forms[0].id);
+  expect(symbols).toContain('Worker (class): Public Event Done(ByVal n As Long)');
+  expect(symbols).toContain('Worker (class): Public Property Get N() As Long');
+  expect(symbols).not.toMatch(/mN/);
 });

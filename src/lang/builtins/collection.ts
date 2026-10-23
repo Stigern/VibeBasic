@@ -10,6 +10,7 @@
 
 import { VBRuntimeError } from '../errors';
 import type { VBObject } from '../host';
+import type { BuiltinCtx } from './util';
 import { Empty, EmptyT, VBArray, VBRecord, isObject, toNumber, type VBValue } from '../values';
 
 interface Entry { value: VBValue; key: string | null }
@@ -93,3 +94,24 @@ export class VBCollection implements VBObject {
     throw new VBRuntimeError(438);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Classes New can make without a class module
+// ---------------------------------------------------------------------------
+
+/**
+ * A class `New T` (and `Dim x As New T`) can make that is not a class module of the project. `create` gets the program's
+ * built-in context (its host, for classes that need native services). Register more with `defClass`.
+ */
+export interface BuiltinClass { name: string; create(ctx: BuiltinCtx): VBObject }
+
+/** Built-in classes by lower-case name; a library-qualified name (`vba.collection`) is a key of its own. */
+export const BUILTIN_CLASSES = new Map<string, BuiltinClass>();
+
+/** Registers a built-in class under each of `names` (the first is its display name). */
+export function defClass(names: string[], create: (ctx: BuiltinCtx) => VBObject): void {
+  const c: BuiltinClass = { name: names[0], create };
+  for (const n of names) BUILTIN_CLASSES.set(n.toLowerCase(), c);
+}
+
+defClass(['Collection', 'VBA.Collection'], () => new VBCollection());

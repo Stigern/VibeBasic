@@ -36,7 +36,8 @@ function isForm(f: unknown): boolean {
 }
 
 function isModule(m: unknown): boolean {
-  return isObject(m) && typeof m.id === 'string' && typeof m.name === 'string' && typeof m.code === 'string';
+  return isObject(m) && typeof m.id === 'string' && typeof m.name === 'string' && typeof m.code === 'string'
+    && (m.kind === undefined || m.kind === 'class') && (m.instancing === undefined || typeof m.instancing === 'number');
 }
 
 function isAsset(a: unknown): boolean {

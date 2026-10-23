@@ -537,11 +537,11 @@ export function coerce(v: VBValue, t: VBTypeName): VBValue {
       if (v instanceof VBRecord && v.typeName.toLowerCase() === t.userType.toLowerCase()) return v;
       throw new VBRuntimeError(13);
     }
-    return coerceObject(v);
+    return coerceObject(v, t.objectType);
   }
   switch (t) {
     case 'Variant': return v;
-    case 'Object': return coerceObject(v);
+    case 'Object': return coerceObject(v, 'Object');
     case 'Integer': return intInRange(v, -32768, 32767);
     case 'Long': return intInRange(v, -2147483648, 2147483647);
     case 'Byte': return intInRange(v, 0, 255);
@@ -562,8 +562,15 @@ export function coerce(v: VBValue, t: VBTypeName): VBValue {
   }
 }
 
-function coerceObject(v: VBValue): VBValue {
-  if (v instanceof NothingT || isObject(v)) return v;
+/** An object (or Nothing) for a variable of type `typeName`; an object that knows its types may become a view of itself (`asType`). */
+function coerceObject(v: VBValue, typeName: string): VBValue {
+  if (v instanceof NothingT) return v;
+  if (isObject(v)) {
+    if (!v.asType) return v;
+    const r = v.asType(typeName);
+    if (r === undefined) throw new VBRuntimeError(13);
+    return r;
+  }
   throw new VBRuntimeError(13);
 }
 

@@ -381,6 +381,21 @@ export function renameModuleCmd(moduleId: string, newName: string): Command {
   };
 }
 
+/** A class module's Instancing property (VB6 values; stored only). */
+export function setInstancingCmd(moduleId: string, value: number): Command {
+  let old: number | undefined;
+  const mod = (p: Project): ModuleDef => {
+    const m = p.modules.find(x => x.id === moduleId);
+    if (!m) throw new Error(`Module not found: ${moduleId}`);
+    return m;
+  };
+  return {
+    label: 'Change Instancing',
+    do(p) { const m = mod(p); old = m.instancing; m.instancing = value; },
+    undo(p) { const m = mod(p); if (old === undefined) delete m.instancing; else m.instancing = old; },
+  };
+}
+
 export function zOrderCmd(formId: string, idList: string[], where: 'front' | 'back'): Command {
   const ids = [...idList];
   let oldOrder: string[] = [];

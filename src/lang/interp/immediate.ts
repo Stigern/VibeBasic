@@ -66,7 +66,7 @@ function commandFrame(rt: Runtime, run: Run, proc: ProcDecl): Frame {
   if (!bf) return new Frame(run, globalModule(rt), proc, 0);
   // Shares the paused frame's Variables (so assignments reach it) but not its
   // error-handler state: an error here never runs the paused procedure's handler.
-  const f = new Frame(run, bf.module, bf.proc, bf.line);
+  const f = new Frame(run, bf.module, bf.proc, bf.line, bf.instance);
   for (const [k, v] of bf.locals) f.locals.set(k, v);
   f.returnVar = bf.returnVar;
   f.withStack.push(...bf.withStack);

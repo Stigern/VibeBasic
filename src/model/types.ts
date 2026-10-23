@@ -24,7 +24,14 @@ export interface ControlDef { id: string; type: Exclude<ControlType, 'Form'>; na
   parentId: string | null; props: Record<string, PropValue>; tab?: number }
 /** `controls` is in z-order (back first). `props` never contains `Name` or `Index`; they live in their own fields. */
 export interface FormDef { id: string; name: string; props: Record<string, PropValue>; controls: ControlDef[]; code: string }
-export interface ModuleDef { id: string; name: string; code: string }
+/**
+ * A standard module, or with `kind: 'class'` a class module (VB6 .cls). `instancing`: the class's Instancing property
+ * (VB6 values, 1 Private ... 6 GlobalMultiUse; stored only, every class is Private to the project). Both are optional:
+ * older projects have neither.
+ */
+export interface ModuleDef { id: string; name: string; code: string; kind?: 'class'; instancing?: number }
+/** What a module is to the interpreter. */
+export const moduleKind = (m: ModuleDef): 'module' | 'class' => (m.kind === 'class' ? 'class' : 'module');
 export interface Asset { mime: string; dataBase64: string }
 /** `components`: the OCX file names checked in Project > Components (see components.ts); their controls are in the Toolbox. */
 export interface Project { name: string; title: string; startupForm: string; forms: FormDef[]; modules: ModuleDef[];

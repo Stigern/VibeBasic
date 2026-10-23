@@ -168,3 +168,16 @@ test('a module selected in the Project Explorer shows its (Name) in the Properti
   ide.setSelection({ formId: ide.project.forms[0].id, ids: [] });   // a form selection shows the form again
   expect(props.querySelector('.cb98-input')).toHaveProperty('value', 'Form1 Form');
 });
+
+test('Add Class Module makes Class1 (Instancing 1) in a Class Modules folder; the Properties window shows Instancing', () => {
+  createProjectExplorer(host, ide);
+  addModule(ide, undefined, 'class');
+  expect(ide.project.modules[0]).toMatchObject({ name: 'Class1', kind: 'class', instancing: 1 });
+  expect(labels().slice(-2)).toEqual(['Class Modules', 'Class1 (Class1)']);
+  const props = document.createElement('div');
+  document.body.appendChild(props);
+  createPropertiesWindow(props, ide);
+  ide.explorerItemId = ide.project.modules[0].id;
+  ide.setSelection(null);
+  expect([...props.querySelectorAll('.pw98-row')].map(r => r.textContent)).toEqual(['(Name)Class1', 'Instancing1 - Private']);
+});

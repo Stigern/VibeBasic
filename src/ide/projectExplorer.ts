@@ -2,6 +2,7 @@
 // Selection lives in `ide.explorerItemId` so the Project menu ("Remove <name>") can follow it.
 import { addFormCmd, addModuleCmd, removeItemCmd } from '../model/commands';
 import { newForm, newId } from '../model/controls';
+import type { ModuleDef } from '../model/types';
 import { h } from '../ui98/dom';
 import { messageBox98 } from '../ui98/dialogs';
 import { popupMenu } from '../ui98/popup';
@@ -20,7 +21,7 @@ export interface ProjectExplorer {
   focus(): void;
 }
 
-function nextFreeName(ide: IdeState, prefix: 'Form' | 'Module'): string {
+function nextFreeName(ide: IdeState, prefix: 'Form' | 'Module' | 'Class'): string {
   const taken = new Set([...ide.project.forms, ...ide.project.modules].map(i => i.name.toLowerCase()));
   let n = 1;
   while (taken.has(`${prefix}${n}`.toLowerCase())) n++;
@@ -36,9 +37,13 @@ export function addForm(ide: IdeState, env?: DesignerEnv): void {
   if (env) openDesigner(ide, form.id, env);
 }
 
-export function addModule(ide: IdeState, env?: DesignerEnv): void {
+/** Adds a standard module, or with `kind: 'class'` a class module (Class1, Instancing 1 - Private, as in VB6). */
+export function addModule(ide: IdeState, env?: DesignerEnv, kind?: 'class'): void {
   if (ide.mode !== 'design') return;
-  const m = { id: newId(), name: nextFreeName(ide, 'Module'), code: ide.options.requireVariableDeclaration ? OPTION_EXPLICIT : '' };
+  const code = ide.options.requireVariableDeclaration ? OPTION_EXPLICIT : '';
+  const m: ModuleDef = kind === 'class'
+    ? { id: newId(), name: nextFreeName(ide, 'Class'), code, kind: 'class', instancing: 1 }
+    : { id: newId(), name: nextFreeName(ide, 'Module'), code };
   ide.stack.execute(addModuleCmd(m));
   ide.explorerItemId = m.id;
   ide.setSelection(null);   // the Properties window shows the module
@@ -69,6 +74,7 @@ export function removeItem(ide: IdeState, id: string): void {
 export function registerProjectActions(ide: IdeState, actions: IdeActions, env: DesignerEnv): void {
   actions.addForm = () => addForm(ide, env);
   actions.addModule = () => addModule(ide, env);
+  actions.addClassModule = () => addModule(ide, env, 'class');
   actions.removeItem = (id?: string) => { const t = id ?? ide.currentItemId(); if (t) removeItem(ide, t); };
 }
 
@@ -104,7 +110,7 @@ export function createProjectExplorer(host: HTMLElement, ide: IdeState, env?: De
     return `${ide.project.name} (${base || `${ide.project.name}.vbb`})`;
   };
 
-  function row(text: string, level: number, kind: 'project' | 'folder' | 'form' | 'module', id?: string): HTMLElement {
+  function row(text: string, level: number, kind: 'project' | 'folder' | 'form' | 'module' | 'class', id?: string): HTMLElement {
     const r = h('div', { class: `pe98-row pe98-${kind}${id && id === ide.explorerItemId ? ' selected' : ''}`, dataset: { kind, ...(id ? { id } : {}) }, style: `padding-left:${4 + level * 14}px` }, text);
     if (id) {
       r.addEventListener('mousedown', () => select(id));
@@ -127,11 +133,13 @@ export function createProjectExplorer(host: HTMLElement, ide: IdeState, env?: De
     const p = ide.project;
     const rows: HTMLElement[] = [row(fileLabel(), 0, 'project')];
     const forms = p.forms.map(f => row(`${f.name} (${f.name})`, flat ? 1 : 2, 'form', f.id));
-    const mods = p.modules.map(m => row(`${m.name} (${m.name})`, flat ? 1 : 2, 'module', m.id));
-    if (flat) rows.push(...forms, ...mods);
+    const mods = p.modules.filter(m => m.kind !== 'class').map(m => row(`${m.name} (${m.name})`, flat ? 1 : 2, 'module', m.id));
+    const classes = p.modules.filter(m => m.kind === 'class').map(m => row(`${m.name} (${m.name})`, flat ? 1 : 2, 'class', m.id));
+    if (flat) rows.push(...forms, ...mods, ...classes);
     else {
       rows.push(row('Forms', 1, 'folder'), ...forms);
       if (mods.length) rows.push(row('Modules', 1, 'folder'), ...mods);
+      if (classes.length) rows.push(row('Class Modules', 1, 'folder'), ...classes);
     }
     tree.replaceChildren(...rows);
   }

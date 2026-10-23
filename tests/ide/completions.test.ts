@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { completionsFor } from '../../src/ide/completions';
+import { classMemberNames, classOfVariable, completionsFor } from '../../src/ide/completions';
 import { newControl, newForm } from '../../src/model/controls';
 
 const form = newForm('Form1');
@@ -38,4 +38,12 @@ test('global objects: Screen, Clipboard, Forms, App; Controls and ActiveControl 
   expect(completionsFor('Controls.', form)!.options).toEqual(['Count', 'Item']);
   expect(completionsFor('Me.Contr', form)!.options).toEqual(['ControlBox', 'Controls']);
   expect(completionsFor('Controls.', null)).toBeNull();
+});
+test('members of a class variable (class modules)', () => {
+  const classes = new Map([['worker', 'Public Name As String, Count As Long\nPublic Sub Go()\nEnd Sub\nPrivate Sub Hidden()\nEnd Sub\nPublic Property Get Total() As Long\nEnd Property']]);
+  const code = 'Private w As Worker\nSub X()\n  w.\nEnd Sub';
+  const members = (name: string) => { const k = name === 'me' ? 'worker' : classOfVariable(code, name, classes); return k ? classMemberNames(classes.get(k)!) : null; };
+  expect(completionsFor('  w.', null, members)!.options).toEqual(['Count', 'Go', 'Name', 'Total']);
+  expect(completionsFor('  Me.T', null, members)!.options).toEqual(['Total']);
+  expect(completionsFor('  q.', null, members)).toBeNull();
 });

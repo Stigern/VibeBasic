@@ -451,18 +451,22 @@ export class FormInstance implements VBObject {
     if (this.controlNames.has(l) || l === 'scalewidth' || l === 'scaleheight' || l === 'name' || FORM_METHODS.has(l) || FORM_OBJECTS.has(l)) return true;
     const pd = getPropDef('Form', name);
     if (pd) return pd.runtime !== 'none';
-    // Public variables are properties; Public Subs/Functions go through callMethod (they may wait)
-    return this.publicMember(name) === 'var';
+    // Public variables and Property procedures are properties; Public Subs/Functions go through callMethod (they may wait)
+    const pm = this.publicMember(name);
+    return pm === 'var' || pm === 'prop';
   }
 
-  /** A Public variable or procedure of the form's code (not hiding the form's own properties and controls). */
-  private publicMember(name: string): 'proc' | 'var' | null {
+  /** A Public Property Let/Set of the form's code: an assignment calls it without reading the property first. */
+  codeProperty(name: string): boolean { return this.codeMember(name) === 'prop'; }
+
+  /** A Public variable, procedure or property of the form's code (not hiding the form's own properties and controls). */
+  private publicMember(name: string): 'proc' | 'var' | 'prop' | null {
     return this.s.program.hasPublicMember(this.name, name);
   }
 
   /** A Public member of the form's code that no property, control or built-in member of the form hides. Using one does not
    *  load the form (its module-level values live on after Unload, as in VB6): `frmLogin.OK` after the dialog has closed. */
-  private codeMember(name: string): 'proc' | 'var' | null {
+  private codeMember(name: string): 'proc' | 'var' | 'prop' | null {
     const l = lc(name);
     if (this.controlNames.has(l) || l === 'scalewidth' || l === 'scaleheight' || l === 'visible' || FORM_METHODS.has(l) || FORM_OBJECTS.has(l)
       || getPropDef('Form', name)) return null;
@@ -481,6 +485,7 @@ export class FormInstance implements VBObject {
     }
     // `x = Form2.GetCount` (no parentheses): the interpreter awaits a Promise from getMember
     if (pm === 'proc') return this.callPublic(name, args) as unknown as VBValue;
+    if (pm === 'prop') return this.s.program.callProperty(this.name, name, args) as unknown as VBValue;
     this.autoLoad();
     const st = this.state();
     const l = lc(name);
@@ -506,8 +511,10 @@ export class FormInstance implements VBObject {
     return st.form.getMember(name, args);
   }
 
-  setMember(name: string, args: VBValue[], value: VBValue): void {
-    if (this.codeMember(name) === 'var') {
+  setMember(name: string, args: VBValue[], value: VBValue): void | Promise<void> {
+    const pm = this.codeMember(name);
+    if (pm === 'prop') return this.s.program.callProperty(this.name, name, args, value).then(() => {});
+    if (pm === 'var') {
       if (args.length) {
         const arr = this.s.program.getPublicVar(this.name, name);
         if (!(arr instanceof VBArray)) throw new VBRuntimeError(13);
