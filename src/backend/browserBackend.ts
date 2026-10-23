@@ -1,6 +1,6 @@
 import type { Backend, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { AiModel, ChatMessage } from '../ai/types';
-import { readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
+import { AI_CUT_OFF, readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
 
 const AI_CONNECT_ERROR = (baseUrl: string) =>
   `Could not connect to ${baseUrl}. Check that the AI server is running and can be reached from this Mac. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0.`;
@@ -53,8 +53,9 @@ function httpError(res: Response, text: string, url: string): Error {
 const STREAM_IDLE_SECS = 90;
 const STREAM_TOTAL_SECS = 20 * 60;
 
-/** The answer text from the parts of a reply: content, else the thinking, else the "unreadable" error. */
+/** The answer text from the parts of a reply: content, else the thinking, else the "unreadable" error. Cut off at max_tokens: the error. */
 function answerText(content: string, reasoning: string, finish: string | undefined): string {
+  if (finish === 'length') throw new Error(AI_CUT_OFF);
   if (content.trim()) return content.trim();
   if (reasoning.trim()) return reasoning.trim();
   throw new Error(`${AI_UNREADABLE} (Details: the reply had no text; finish_reason = ${finish ?? 'none'}.)`);
@@ -117,7 +118,7 @@ async function aiStream(baseUrl: string, apiKey: string, body: string, opts: AiC
     if (reason === 'cancel') throw new Error('cancelled');
     if (reason === 'idle') throw new Error(`The AI server stopped sending for ${STREAM_IDLE_SECS} seconds.`);
     if (reason === 'total') throw new Error(`The AI server did not finish within ${STREAM_TOTAL_SECS / 60} minutes.`);
-    if (e instanceof Error && e.message.startsWith('The AI server')) throw e;
+    if (e instanceof Error && (e.message.startsWith('The AI server') || e.message === AI_CUT_OFF)) throw e;
     throw new Error(AI_CONNECT_ERROR(baseUrl));
   } finally {
     clearTimeout(idleTimer);
@@ -304,10 +305,15 @@ export class BrowserBackend implements Backend {
   async aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string, opts?: AiChatOptions): Promise<string> {
     const effort = reasoningEffort?.trim();
     const streaming = !!opts?.onDelta;
-    const body = JSON.stringify({ model, messages, temperature: 0.2, stream: streaming, ...(streaming ? { stream_options: { include_usage: true } } : {}), ...(effort ? { chat_template_kwargs: { reasoning_effort: effort } } : {}) });
+    const body = JSON.stringify({
+      model, messages, temperature: 0.2, stream: streaming, ...(streaming ? { stream_options: { include_usage: true } } : {}),
+      ...(effort ? { chat_template_kwargs: { reasoning_effort: effort } } : {}),
+      ...(opts?.maxTokens ? { max_tokens: opts.maxTokens } : {}), ...(opts?.responseFormat !== undefined ? { response_format: opts.responseFormat } : {}),
+    });
     if (streaming) return aiStream(baseUrl, apiKey, body, opts!);
     const v = (await aiRequest(baseUrl, apiKey, 'chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, 600)) as
-      { choices?: { message?: { content?: unknown } }[] } | null;
+      { choices?: { message?: { content?: unknown }; finish_reason?: unknown }[] } | null;
+    if (v?.choices?.[0]?.finish_reason === 'length') throw new Error(AI_CUT_OFF);
     const content = v?.choices?.[0]?.message?.content;
     if (typeof content !== 'string') throw new Error(AI_UNREADABLE);
     return content;

@@ -12,7 +12,14 @@ export interface AiChatOptions {
   signal?: AbortSignal;
   /** Called once when the server reports token counts (streaming requests only). Never called if it sends none. */
   onUsage?: (u: AiUsage) => void;
+  /** Sent as `response_format` (structured output, e.g. a json_schema). */
+  responseFormat?: unknown;
+  /** Sent as `max_tokens` (on vLLM the thinking counts too). */
+  maxTokens?: number;
 }
+
+/** The error text when the server stopped at max_tokens (finish_reason "length"); same text as src-tauri/src/ai.rs. */
+export const AI_CUT_OFF = 'The AI answer was cut off before it was finished (finish_reason = length). Choose a lower Thinking level in Tools > Options > AI, or ask for less at a time.';
 
 /** The `usage` object of a response or chunk, if it has a prompt token count. */
 export function readUsage(v: any): AiUsage | undefined {

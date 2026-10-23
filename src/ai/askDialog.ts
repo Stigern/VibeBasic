@@ -10,9 +10,9 @@ import { h } from '../ui98/dom';
 import { createAiAnimation } from './aiAnimation';
 import { type CodeSelection, applyCodeProposal, extractCode, skippedProblem } from './codeMode';
 import { buildCodeRequest, buildFixRequest, buildFormRequest, type FixError } from './context';
-import { NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
+import { FORM_RESPONSE_FORMAT, NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
 import { type PreviewResult, showCodePreview, showFormPreview } from './previewDialogs';
-import { type AiSettings, loadAiSettings } from './settings';
+import { type AiSettings, type Thinking, loadAiSettings } from './settings';
 import type { AiChatOptions, AiUsage } from './sse';
 import { StreamLog } from './streamLog';
 import type { ChatMessage } from './types';
@@ -180,6 +180,26 @@ export function trimConversation(messages: ChatMessage[], max = MAX_CONVERSATION
   return out;
 }
 
+/**
+ * max_tokens for a request. On vLLM the thinking counts as well, so the cap is room for the answer (8,192) plus room for the
+ * thinking at the level sent: Low 4,096, Medium 8,192, High 16,384, and 16,384 for Server default (the level is unknown).
+ * With a known context size it is lowered so that prompt + answer fit (vLLM rejects more); when not even 1,024 tokens
+ * are left over, no cap is sent and the server decides.
+ */
+export const ANSWER_TOKENS = 8192;
+const THINKING_TOKENS: Record<Thinking, number> = { server: 16384, low: 4096, medium: 8192, high: 16384 };
+export function maxTokensFor(thinking: Thinking, contextTokens: number | undefined, promptChars: number): number | undefined {
+  const cap = ANSWER_TOKENS + THINKING_TOKENS[thinking];
+  if (!contextTokens) return cap;
+  const room = contextTokens - Math.ceil(promptChars / 3) - 256;   // about 3 characters per token errs on the safe side
+  return room < 1024 ? undefined : Math.min(cap, room);
+}
+
+/** "baseUrl|model" of servers that rejected `response_format` in this session: their later requests go without it. */
+const noStructuredOutput = new Set<string>();
+/** An HTTP 400/422 about response_format / json_schema (the server does not support structured output). */
+const rejectsResponseFormat = (message: string): boolean => /\b(400|422)\b/.test(message) && /response_format|json_schema/i.test(message);
+
 const changeRequest = (wish: string): ChatMessage => ({ role: 'user', content: `Change your last answer: ${wish}\nAnswer with the complete result again, in exactly the same format.` });
 
 /** One answer, understood (or `result` null), the conversation up to and including it, and the measurement line. */
@@ -193,18 +213,30 @@ type Understood<A> = { result: A | null; jsonReason: string | null };
 async function converse<A extends { notes: string[]; problems: string[] }>(
   s: AiSession, first: ChatMessage[], analyse: (text: string) => Understood<A>,
   preview: (a: A, reply: string, metrics: string) => Promise<PreviewResult>, apply: (a: A) => void | Promise<void>,
+  responseFormat?: unknown,
 ): Promise<boolean> {
   const { ide, backend, settings, doc } = s;
   const project = ide.project;
   const effort = settings.thinking === 'server' ? undefined : settings.thinking;
   const log = new StreamLog();
-  const send = (messages: ChatMessage[]) => (o: AiChatOptions): Promise<string> => {
-    try { return backend.aiChat(settings.baseUrl, settings.apiKey, settings.model, messages, effort, o); }
-    catch (e) { return Promise.reject(e); }
+  const server = `${settings.baseUrl.trim()}|${settings.model.trim()}`;
+  /** Follow-up rounds (the check-and-fix retry, Change...) think 'low' with "Fast follow-up rounds"; Server default stays unsent. */
+  const send = (messages: ChatMessage[], followUp: boolean) => async (o: AiChatOptions): Promise<string> => {
+    const level = effort && followUp && settings.fastFollowUp !== false ? 'low' : effort;
+    const opts: AiChatOptions = { ...o, maxTokens: maxTokensFor(level ?? 'server', settings.contextTokens, messages.reduce((n, m) => n + m.content.length, 0)) };
+    const chat = (x: AiChatOptions) => backend.aiChat(settings.baseUrl, settings.apiKey, settings.model, messages, level, x);
+    if (responseFormat === undefined || noStructuredOutput.has(server)) return chat(opts);
+    try { return await chat({ ...opts, responseFormat }); }
+    catch (e) {
+      // A server without structured output: once more at once without it, and never again for this server and model.
+      if (o.signal?.aborted || !rejectsResponseFormat(e instanceof Error ? e.message : String(e))) throw e;
+      noStructuredOutput.add(server);
+      return chat(opts);
+    }
   };
 
-  const round = async (messages: ChatMessage[]): Promise<Round<A>> => {
-    const res = await waitForReply(doc, settings.model, send(messages), log);
+  const round = async (messages: ChatMessage[], later: boolean): Promise<Round<A>> => {
+    const res = await waitForReply(doc, settings.model, send(messages, later), log);
     if (res.kind !== 'reply') return res;
     if (ide.project !== project) return { kind: 'cancel' };   // a different project was opened meanwhile
     let reply = res.text, metrics = res.metrics;
@@ -218,7 +250,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
       // Keep the first answer if the second is no better understood.
       const followUp: ChatMessage[] = [...convo, { role: 'user', content: complaint }];
       log.separator();
-      const again = await waitForReply(doc, settings.model, send(followUp), log, 'Checking and fixing...');
+      const again = await waitForReply(doc, settings.model, send(followUp, true), log, 'Checking and fixing...');
       if (again.kind === 'cancel' || ide.project !== project) return { kind: 'cancel' };
       if (again.kind === 'reply') {
         const second = analyse(again.text);
@@ -229,7 +261,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     return { kind: 'done', result: got.result, reply, metrics, messages: convo };
   };
 
-  let cur = await round(first);
+  let cur = await round(first, false);
   if (cur.kind === 'cancel') return false;
   if (cur.kind === 'error') { await warn(doc, cur.message); return false; }
   if (!cur.result) { await showNotUnderstood(doc, cur.reply); return false; }
@@ -240,7 +272,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     if (out === 'cancel') return false;
     if (out === 'ok') { await apply(cur.result!); return true; }
     // Change...: a new answer to the whole conversation. If it is not understood, the last proposal stays.
-    const next = await round(trimConversation([...cur.messages, changeRequest(out.change)]));
+    const next = await round(trimConversation([...cur.messages, changeRequest(out.change)]), true);
     if (ide.project !== project) return false;
     if (next.kind === 'error') await warn(doc, next.message);
     else if (next.kind === 'done' && !next.result) await showNotUnderstood(doc, next.reply);
@@ -307,7 +339,7 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
     async a => {
       try { ide.stack.execute(formOpsToCommand(ide.project, o.itemId, a.parsed, 'AI changes')); }
       catch (e) { await warn(doc, e instanceof Error ? e.message : String(e)); }
-    });
+    }, FORM_RESPONSE_FORMAT);
 }
 
 /** Fixes wrong event-procedure names in AI code (Form1_Load etc.) and records what it did in `notes`. */

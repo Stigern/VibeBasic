@@ -9,7 +9,7 @@ export const optionsTabs: DialogTabBuilder[] = [];
 // 98.css hides the native box and draws it with `input + label[for]::before`, so the label must follow the input
 // as a sibling (as in the font dialog's .pw98-fontchk); a box wrapped inside its label is invisible.
 let checkIds = 0;
-const check = (label: string, on: boolean): { el: HTMLElement; input: HTMLInputElement } => {
+export const check = (label: string, on: boolean): { el: HTMLElement; input: HTMLInputElement } => {
   const id = `opt98-check-${++checkIds}`;
   const input = h('input', { type: 'checkbox', checked: on, id });
   return { input, el: h('div', { class: 'dlgform98-check' }, input, h('label', { for: id }, label)) };

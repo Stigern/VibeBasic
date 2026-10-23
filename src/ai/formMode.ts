@@ -21,6 +21,40 @@ export type ParsedFormOps =
   | { ok: false; error: string; raw: string; /** Why the reply was not usable JSON (sent back to the model). */ reason: string };
 type Ok = Extract<ParsedFormOps, { ok: true }>;
 
+/** A property value as parseProps reads it: text, a number, True/False, or a List's items. */
+const PROP_VALUE = { anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }, { type: 'array', items: { type: 'string' } }] };
+const PROPS = { type: 'object', additionalProperties: PROP_VALUE };
+const opSchema = (op: string, properties: Record<string, unknown>, required: string[]) =>
+  ({ type: 'object', properties: { op: { type: 'string', enum: [op] }, ...properties }, required: ['op', ...required], additionalProperties: false });
+const NAME = { type: 'string' }, INDEX = { type: 'integer', minimum: 0 };
+
+/**
+ * The JSON schema of a form-mode answer, `{ops:[...], code?}`, sent as `response_format` (json_schema "form_ops").
+ * It matches what parseFormOps reads; the parser stays tolerant for servers that ignore it. Extend the op list here.
+ */
+export const FORM_OPS_SCHEMA = {
+  type: 'object',
+  properties: {
+    ops: {
+      type: 'array',
+      items: {
+        anyOf: [
+          opSchema('add', { type: { type: 'string' }, name: NAME, index: INDEX, container: { anyOf: [{ type: 'string' }, { type: 'null' }] }, tab: INDEX, props: PROPS }, ['type', 'name']),
+          opSchema('set', { name: NAME, index: INDEX, props: PROPS }, ['name', 'props']),
+          opSchema('delete', { name: NAME, index: INDEX }, ['name']),
+          opSchema('form', { props: PROPS }, ['props']),
+        ],
+      },
+    },
+    code: { type: 'string' },
+  },
+  required: ['ops'],
+  additionalProperties: false,
+} as const;
+
+/** `response_format` for a form-mode request. */
+export const FORM_RESPONSE_FORMAT = { type: 'json_schema', json_schema: { name: 'form_ops', schema: FORM_OPS_SCHEMA } } as const;
+
 export const NOT_UNDERSTOOD = 'The AI answer could not be understood. Try again or rephrase.';
 
 const ALIASES: Record<string, Exclude<ControlType, 'Form'>> = {

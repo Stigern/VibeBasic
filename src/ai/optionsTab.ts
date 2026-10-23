@@ -1,6 +1,6 @@
 // The "AI" tab in Tools > Options.
 import type { Backend } from '../backend/backend';
-import { optionsTabs } from '../ide/optionsDialog';
+import { check, optionsTabs } from '../ide/optionsDialog';
 import { field } from '../ide/projectDialogs';
 import { createCombo } from '../ui98/combo';
 import { messageBox98 } from '../ui98/dialogs';
@@ -19,9 +19,11 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
   const model = createCombo({ items: [], value: d.model, editable: true, onChange: () => { dirty.model = true; } });
   const thinking = createCombo({ items: THINKING_LEVELS.map(t => THINKING_LABELS[t]), value: THINKING_LABELS[d.thinking], editable: false, onChange: () => { dirty.thinking = true; } });
   const apiKey = h('input', { type: 'password', value: '', autocomplete: 'off' });
+  const fast = check('Fast follow-up rounds', true);
   const test = h('button', { type: 'button' }, 'Test Connection');
-  const dirty = { baseUrl: false, apiKey: false, model: false, thinking: false };
+  const dirty = { baseUrl: false, apiKey: false, model: false, thinking: false, fast: false };
   baseUrl.addEventListener('input', () => { dirty.baseUrl = true; });
+  fast.input.addEventListener('change', () => { dirty.fast = true; });
   apiKey.addEventListener('input', () => { dirty.apiKey = true; });
   // Context sizes by lower-case model id from the last Test Connection, and the stored settings (to keep their contextTokens).
   let tested: Map<string, number | undefined> | null = null;
@@ -31,6 +33,7 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
     if (!dirty.baseUrl) baseUrl.value = s.baseUrl;
     if (!dirty.apiKey) apiKey.value = s.apiKey;
     if (!dirty.thinking) thinking.setValue(THINKING_LABELS[s.thinking]);
+    if (!dirty.fast) fast.input.checked = s.fastFollowUp !== false;
     if (!dirty.model) { model.setValue(s.model); if (s.model) model.setItems([s.model]); }
   }).catch(() => {});
 
@@ -59,19 +62,20 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
   return {
     label: 'AI',
     content: h('div', { class: 'dlgform98' },
-      field('Base URL:', baseUrl), field('Model:', model.el), field('API Key (optional):', apiKey), field('Thinking:', thinking.el), test,
+      field('Base URL:', baseUrl), field('Model:', model.el), field('API Key (optional):', apiKey), field('Thinking:', thinking.el), fast.el, test,
       h('div', {}, 'For Ollama on another PC use http://<its IP>:11434/v1'),
-      h('div', {}, 'Thinking level is sent to vLLM/Qwen servers. Use Server default for other servers.')),
+      h('div', {}, 'Thinking level is sent to vLLM/Qwen servers. Use Server default for other servers.'),
+      h('div', {}, 'Fast follow-up rounds: the check-and-fix retry and Change... think Low.')),
     apply() {
       void loading
         .then(() => {
           const url = baseUrl.value.trim(), m = model.getValue().trim();
-          return saveAiSettings(backend, { baseUrl: url, model: m, apiKey: apiKey.value, thinking: thinkingOf(thinking.getValue()), contextTokens: contextFor(url, m) });
+          return saveAiSettings(backend, { baseUrl: url, model: m, apiKey: apiKey.value, thinking: thinkingOf(thinking.getValue()), contextTokens: contextFor(url, m), fastFollowUp: fast.input.checked });
         })
         .catch(e => messageBox98(doc, { prompt: `Could not save the AI settings: ${e instanceof Error ? e.message : String(e)}`, title: 'VibeBasic', buttons: 48 }));
     },
     // exposed for tests
-    controls: { baseUrl, model, apiKey, thinking, test, testConnection },
+    controls: { baseUrl, model, apiKey, thinking, fast: fast.input, test, testConnection },
   };
 }
 

@@ -12,9 +12,11 @@ export async function loadAiSettings(b: Pick<Backend, 'loadSettings'>): Promise<
   const r = { ...defaultAiSettings(), ...(s ?? {}) };
   if (!THINKING_LEVELS.includes(r.thinking)) r.thinking = 'server';
   if (!(typeof r.contextTokens === 'number' && r.contextTokens > 0)) delete r.contextTokens;
+  if (typeof r.fastFollowUp !== 'boolean') delete r.fastFollowUp;
   return r;
 }
 
 export async function saveAiSettings(b: Pick<Backend, 'saveSettings'>, s: AiSettings): Promise<void> {
-  await b.saveSettings('ai', { baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey, thinking: s.thinking, ...(s.contextTokens ? { contextTokens: s.contextTokens } : {}) });
+  await b.saveSettings('ai', { baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey, thinking: s.thinking, ...(s.contextTokens ? { contextTokens: s.contextTokens } : {}),
+    ...(s.fastFollowUp === false ? { fastFollowUp: false } : {}) });
 }

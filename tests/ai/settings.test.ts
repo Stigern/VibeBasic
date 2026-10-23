@@ -132,3 +132,18 @@ test('test connection stores the context size; old settings without it load as u
   await flush();
   expect((await loadAiSettings(b)).contextTokens).toBe(262144);
 });
+
+test('Fast follow-up rounds: on for old settings, saved only when turned off', async () => {
+  const b = fakeBackend();
+  b.store.set('ai', { baseUrl: 'http://x/v1', model: 'm', apiKey: '', thinking: 'low' });
+  expect((await loadAiSettings(b)).fastFollowUp).toBeUndefined();
+  const tab = buildAiTab(b, document);
+  await flush();
+  expect(tab.controls.fast.checked).toBe(true);
+  expect(tab.content.textContent).toContain('Fast follow-up rounds');
+  tab.controls.fast.checked = false;
+  tab.controls.fast.dispatchEvent(new Event('change'));
+  tab.apply();
+  await flush();
+  expect((await loadAiSettings(b)).fastFollowUp).toBe(false);
+});
