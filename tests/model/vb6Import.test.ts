@@ -89,6 +89,36 @@ test('a .frm value with a long run of digits is parsed in linear time', () => {
   expect(['1.5', '.5', '12.', '-3E2'].map(v => parseValue(v))).toEqual([1.5, 0.5, 12, -300].map(n => ({ kind: 'num', n })));
 });
 
+test('a .vbp follows the name rules: invalid and taken names, controls sharing a name, a second MDI form', async () => {
+  const frm = (cls: string, name: string, body = '') => `VERSION 5.00\r\nBegin VB.${cls} ${name}\r\n${body}End\r\nAttribute VB_Name = "${name}"\r\n`;
+  const button = (caption: string) => `   Begin VB.CommandButton Command1\r\n      Caption = "${caption}"\r\n   End\r\n`;
+  const files: Record<string, string> = {
+    'P.vbp': 'Type=Exe\r\nForm=A.frm\r\nForm=B.frm\r\nForm=M1.frm\r\nForm=M2.frm\r\nModule=Module1; Mod.bas\r\nClass=Bad; Bad.cls\r\nName="Proj"\r\n',
+    'A.frm': frm('Form', 'Form1', button('a') + button('b')),
+    'B.frm': frm('Form', 'Form1'),
+    'M1.frm': frm('MDIForm', 'MDIForm1'),
+    'M2.frm': frm('MDIForm', 'MDIForm2'),
+    'Mod.bas': 'Attribute VB_Name = "Form1"\r\n',
+    'Bad.cls': 'VERSION 1.0 CLASS\r\nBEGIN\r\n  MultiUse = -1\r\nEND\r\nAttribute VB_Name = "Bad Name"\r\n',
+  };
+  const readMem = async (path: string) => {
+    const t = files[path.split('/').pop()!];
+    if (t === undefined) throw new Error('ENOENT');
+    return new TextEncoder().encode(t);
+  };
+  const { project: p, warnings } = await importVbp('/p/P.vbp', readMem);
+  expect(p.forms.map(f => f.name)).toEqual(['Form1', 'Form1_2', 'MDIForm1']);
+  expect(p.modules.map(m => m.name)).toEqual(['Form1_3', 'Class1']);
+  expect(p.forms[0].controls.map(c => [c.name, c.index, c.props.Caption])).toEqual([['Command1', 0, 'b'], ['Command1', 1, 'a']]);
+  expect(warnings).toEqual(expect.arrayContaining([
+    'A.frm: more than one control is named Command1; they became the control array Command1.',
+    'M2.frm: a project can have only one MDI form; it was left out.',
+    'The name Form1 is already used; the form was renamed Form1_2.',
+    'The name Form1 is already used; the module was renamed Form1_3.',
+    '"Bad Name" is not a valid name; the class module was renamed Class1.',
+  ]));
+});
+
 test('a .cls becomes a class module with its Instancing', async () => {
   const { modules: [m] } = await importVb6File(`${DIR}/Class1.cls`, read);
   expect(m).toMatchObject({ name: 'Konto', kind: 'class', instancing: 1 });
