@@ -7,6 +7,7 @@ import {
 } from '../model/commands';
 import { addComponentsCmd } from '../model/components';
 import { CONTROL_TYPES, newControl, nextDefaultName, newId } from '../model/controls';
+import { hasMenuBar, isMenu } from '../model/menus';
 import { ssTabAt, ssTabLayout } from '../model/ssTab';
 import { controlPos, isLine, setControlPos } from '../model/geometry';
 import { pxToTwips, twipsToPx } from '../model/twips';
@@ -82,7 +83,14 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     return a ? `data:${a.mime};base64,${a.dataBase64}` : null;
   };
   const grid = () => ({ showGrid: ide.options.showGrid, gridX: ide.options.gridWidth, gridY: ide.options.gridHeight });
-  const surface: FormSurface = renderFormSurface(structuredClone(form0), 'design', assets, grid());
+  /** Window geometry; a form with a menu bar has a lower client area. */
+  const metricsOf = (f: FormDef | undefined) => formMetrics(f?.props ?? {}, hasMenuBar(f?.controls));
+  // VB6: a click on a menu item (or on a top-level menu without items) opens the code window at its Click procedure
+  const menu = { choose: (id: string) => {
+    const f = getForm(), c = f?.controls.find(x => x.id === id);
+    if (f && c && ide.mode === 'design') env.actions?.viewCode?.(f.id, c.name, 'Click');
+  } };
+  const surface: FormSurface = renderFormSurface(structuredClone(form0), 'design', assets, { ...grid(), menu });
   const stage = h('div', { class: 'dsg-stage', tabindex: '0' });
   const overlay = h('div', { class: 'dsg-overlay' });
   stage.append(surface.el, overlay);
@@ -93,13 +101,13 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
   let closed = false;
 
   const layoutStage = () => {
-    const m = formMetrics(getForm()?.props ?? {});
+    const m = metricsOf(getForm());
     stage.style.width = `${m.outerWidth + STAGE_PAD}px`;
     stage.style.height = `${m.outerHeight + STAGE_PAD}px`;
   };
   layoutStage();
   {
-    const m = formMetrics(form0.props);
+    const m = metricsOf(form0);
     win.el.style.width = `${m.outerWidth + STAGE_PAD + MDI_CHROME_W}px`;
     win.el.style.height = `${m.outerHeight + STAGE_PAD + MDI_CHROME_H}px`;
   }
@@ -158,8 +166,8 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     if (ide.selection?.formId !== formId) select([]);
   };
   const origin = () => {
-    const m = formMetrics(getForm()?.props ?? {});
-    return { x: m.border, y: m.border + m.titleHeight, m };
+    const m = metricsOf(getForm());
+    return { x: m.border, y: m.border + m.titleHeight + m.menuHeight, m };
   };
 
   // ---- overlay ------------------------------------------------------------------------------------------------
@@ -196,7 +204,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     const primary = ids[ids.length - 1];
     for (const id of ids) {
       const c = form.controls.find(x => x.id === id);
-      if (!c || !shownInDesign(form, id)) continue;   // on another SSTab tab
+      if (!c || isMenu(c) || !shownInDesign(form, id)) continue;   // on another SSTab tab; a menu has no box
       const r = absoluteRect(form, id);
       if (isLine(c)) {   // a Line has two end point handles instead of a box and eight resize handles
         const right = Number(c.props.X2) >= Number(c.props.X1), down = Number(c.props.Y2) >= Number(c.props.Y1);
@@ -409,6 +417,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     stage.focus({ preventScroll: true });
     activate();
     const tgt = e.target as Element;
+    if (tgt.closest?.('.vb-menubar, .vb-menudrop')) return;   // the menu bar opens its menus itself
     const hEl = tgt.closest?.('[data-handle]') as HTMLElement | null;
     if (hEl) {
       e.preventDefault();
@@ -443,7 +452,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
 
   stage.addEventListener('dblclick', ev => {
     const form = getForm();
-    if (!form || ide.mode !== 'design' || (ev.target as Element).closest?.('[data-handle]')) return;
+    if (!form || ide.mode !== 'design' || (ev.target as Element).closest?.('[data-handle], .vb-menubar, .vb-menudrop')) return;
     const p = toTwips(ev as MouseEvent), hit = hitTest(form, p.x, p.y);
     const c = hit ? form.controls.find(x => x.id === hit) : undefined;
     if (hit) select([hit]);
@@ -480,7 +489,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
   const placeCentered = (tool: ControlType) => {
     const form = getForm();
     if (!form || tool === 'Form') return;
-    const td = CONTROL_TYPES[tool], m = formMetrics(form.props), so = snapOpts(ide);
+    const td = CONTROL_TYPES[tool], m = metricsOf(form), so = snapOpts(ide);
     const sel = selectedIds(), host = sel.length === 1 ? form.controls.find(c => c.id === sel[0]) : undefined;
     const parent = host?.type === 'SSTab' ? host : undefined;
     const area = parent ? sizeOf(parent) : { width: pxToTwips(m.clientWidth), height: pxToTwips(m.clientHeight) };
@@ -513,6 +522,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
   win.el.addEventListener('mousedown', activate, true);
   win.onClose = () => {
     cancel?.();
+    surface.menuBar.dispose();   // an open menu goes with the window
     closed = true;
     unsubs.forEach(u => u());
     reg.delete(formId);
@@ -612,7 +622,7 @@ export function registerDesignerActions(ide: IdeState, actions: IdeActions, refr
     if (ide.mode !== 'design' || ide.activeView.kind !== 'designer') return null;
     const form = formOf(ide, ide.activeView.formId);
     if (!form || ide.selection?.formId !== form.id) return null;
-    return { form, ids: ide.selection.ids.filter(i => form.controls.some(c => c.id === i)) };
+    return { form, ids: ide.selection.ids.filter(i => form.controls.some(c => c.id === i && !isMenu(c))) };   // menus: the Menu Editor
   };
   const withIds = (min: number, f: (form: FormDef, ids: string[]) => void) => () => {
     const c = ctx();
@@ -650,7 +660,7 @@ export function registerDesignerActions(ide: IdeState, actions: IdeActions, refr
     const c = ctx();
     if (!c) return;
     const parent = c.ids.length ? c.form.controls.find(x => x.id === c.ids[0])?.parentId ?? null : null;
-    ide.setSelection({ formId: c.form.id, ids: c.form.controls.filter(x => x.parentId === parent && shownInDesign(c.form, x.id)).map(x => x.id) });
+    ide.setSelection({ formId: c.form.id, ids: c.form.controls.filter(x => x.parentId === parent && !isMenu(x) && shownInDesign(c.form, x.id)).map(x => x.id) });
   };
   const absOf = (form: FormDef, ids: string[]) => ids.map(id => absoluteRect(form, id));
   const align = (how: AlignHow) => withIds(2, (form, ids) => {

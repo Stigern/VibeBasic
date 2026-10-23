@@ -17,6 +17,7 @@ import { attachToolboxWindow, createToolbox, type ToolboxLayout } from './toolbo
 import { createProjectExplorer, registerProjectActions, type ProjectExplorer } from './projectExplorer';
 import { showComponents, showProjectProperties } from './projectDialogs';
 import { showOptions } from './optionsDialog';
+import { showMenuEditor } from './menuEditor';
 import { makeAppFlow } from '../build/makeApp';
 import { FileController } from './fileController';
 import { RunController, type ErrorToFix } from './runController';
@@ -55,6 +56,10 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   actions.projectProperties = () => { if (state.mode === 'design') void showProjectProperties(state, doc); };
   actions.components = () => { if (state.mode === 'design') void showComponents(state, doc); };
   actions.options = () => { void showOptions(state, backend, doc); };
+  actions.menuEditor = () => {
+    const v = state.activeView;
+    if (state.mode === 'design' && v.kind === 'designer' && committed()) void showMenuEditor(state, v.formId, doc);
+  };
   actions.askAi = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc); };
   actions.aiLog = () => { void showAiLog(doc, text => backend.clipboardSetText(text)); };
   const fc = new FileController(state, backend, doc);

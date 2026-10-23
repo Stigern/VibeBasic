@@ -5,6 +5,7 @@
 // If `root.dataset.vbWindow` is set, root fills a native window: size changes of root resize the form and send `resized`.
 
 import { renderFormSurface, type ControlView } from '../controls/render';
+import type { MenuBarHost } from '../controls/menuBar';
 import { encodeRuns, readRuns } from '../controls/richText';
 import { ribbonClick } from '../model/sheridan';
 import { userClickButton } from '../model/toolbar';
@@ -56,7 +57,17 @@ function isTextField(el: EventTarget | null): el is HTMLInputElement | HTMLTextA
 }
 
 export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: FromWindow) => void): { receive(m: ToWindow): void; dispose(): void } {
-  const surface = renderFormSurface(s.form, 'run', ref => s.assets[ref.asset] ?? (ref.asset.startsWith('data:') ? ref.asset : null));
+  // menus: a menu with items raises its Click (when it has code) and opens once that has run; a chosen item raises its Click
+  const menuWaits = new Map<number, () => void>();
+  const menu: MenuBarHost = {
+    beforeOpen: id => {
+      if (blocked || !handles(id, 'Click')) return;
+      const requestId = ++reqSeq;
+      return new Promise<void>(r => { menuWaits.set(requestId, r); send({ t: 'event', id, event: 'Click', args: [], requestId }); });
+    },
+    choose: id => { if (!blocked) emit(id, 'Click'); },
+  };
+  const surface = renderFormSurface(s.form, 'run', ref => s.assets[ref.asset] ?? (ref.asset.startsWith('data:') ? ref.asset : null), { menu });
   surface.el.tabIndex = -1;   // so keys reach the form's listeners when no control has focus
   surface.el.style.outline = 'none';
   root.appendChild(surface.el);
@@ -219,6 +230,8 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   // VB6 mouse capture: the control that got MouseDown gets MouseMove and MouseUp until the button is released, also outside its
   // area (X / Y relative to it, maybe negative). The document's listeners see the pointer anywhere while a button is down.
   let captured: string | null = null;
+  /** Where the mouse was last seen (viewport px): PopupMenu without X and Y shows the menu there. */
+  let lastMouse: { x: number; y: number } | null = null;
   function mouseTo(id: string, event: string, e: MouseEvent): void {
     const v = id === 'form' ? surface.clientEl : viewOf(id)?.el;
     if (!v) return;
@@ -227,6 +240,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
     emit(id, event, [button, shiftBits(e), Math.round((e.clientX - box.left) * 15), Math.round((e.clientY - box.top) * 15)]);
   }
   on<MouseEvent>('mousedown', e => {
+    lastMouse = { x: e.clientX, y: e.clientY };
     const tg = targetOf(e.target);
     if (blocked || !tg || !usable(tg.id)) return;   // a disabled control gets no mouse events
     captured = tg.id;
@@ -234,6 +248,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   });
   for (const [type, event] of [['mousemove', 'MouseMove'], ['mouseup', 'MouseUp']] as const) {
     root.ownerDocument.addEventListener(type, (e: MouseEvent) => {
+      if (surface.el.contains(e.target as Node)) lastMouse = { x: e.clientX, y: e.clientY };
       const id = captured;
       if (type === 'mouseup') captured = null;
       if (blocked) { captured = null; return; }
@@ -444,6 +459,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   on<KeyboardEvent>('keydown', e => {
     const tg = targetOf(e.target) ?? { id: 'form', def: null };
     if (blocked) { e.preventDefault(); return; }
+    if (surface.menuBar.keyDown(e)) return;   // Alt, F10, Alt+letter, a menu's Shortcut
     const prevented = e.defaultPrevented;   // e.g. an open combo list closing on Escape
     const chain = chainOf(tg.id);
     const code = vbKeyCode(e), shift = shiftBits(e);
@@ -459,12 +475,14 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   on<KeyboardEvent>('keyup', e => {
     const tg = targetOf(e.target) ?? { id: 'form', def: null };
     if (blocked) return;
+    if (surface.menuBar.keyUp(e)) return;
     for (const id of chainOf(tg.id)) emit(id, 'KeyUp', [vbKeyCode(e), shiftBits(e)]);
   });
 
   // --- blocked overlay ---
   function setBlocked(b: boolean): void {
     blocked = b;
+    if (b) surface.menuBar.close();
     if (b && !overlay) {
       overlay = document.createElement('div');
       overlay.className = 'vb-blocked';
@@ -526,6 +544,15 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
           break;
         case 'hide': surface.el.style.display = 'none'; break;
         case 'blocked': setBlocked(m.blocked); break;
+        case 'eventDone': { const w = menuWaits.get(m.requestId); menuWaits.delete(m.requestId); w?.(); break; }
+        case 'popup': {
+          // X and Y are client twips; without them the menu shows at the mouse (or the client area's corner)
+          const c = surface.clientEl.getBoundingClientRect();
+          const x = m.x !== null ? c.left + m.x / 15 : lastMouse?.x ?? c.left, y = m.y !== null ? c.top + m.y / 15 : lastMouse?.y ?? c.top;
+          const requestId = m.requestId;
+          void surface.menuBar.popup(m.id, x, y, { flags: m.flags, bold: m.bold }).then(id => { if (!disposed) send({ t: 'popupDone', requestId, id }); });
+          break;
+        }
         case 'keyResult': {
           const p = pending.get(m.requestId);
           pending.delete(m.requestId);

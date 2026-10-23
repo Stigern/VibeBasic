@@ -7,6 +7,7 @@ import { CONTROL_TYPES, getPropDef, newControl, nextDefaultName, validateName } 
 import type { ControlDef, ControlType, FormDef, Project, PropValue } from '../model/types';
 import { absoluteRect, sizeOf } from '../ide/designerLogic';
 import { isDocked, isLine } from '../model/geometry';
+import { SHORTCUT_LABELS, isMenu, shortcutValue } from '../model/menus';
 import { parsePropertyInput } from '../ide/propertyEditors';
 import { applyCodeProposal, extractCode, type CodeApplyResult } from './codeMode';
 import { stripThinking } from './clean';
@@ -32,7 +33,7 @@ const PROP_VALUE = { anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'bo
 const PROPS = { type: 'object', additionalProperties: PROP_VALUE };
 const opSchema = (op: string, properties: Record<string, unknown>, required: string[]) =>
   ({ type: 'object', properties: { op: { type: 'string', enum: [op] }, ...properties }, required: ['op', ...required], additionalProperties: false });
-const NAME = { type: 'string' }, INDEX = { type: 'integer', minimum: 0 }, INT = { type: 'integer' }, NAMES = { type: 'array', items: NAME };
+const NAME = { type: 'string' }, INDEX = { type: 'integer', minimum: 0 }, INT = { type: 'integer' }, NAMES = { type: 'array', items: NAME }, BOOL = { type: 'boolean' };
 /** "place": next to another control, `gap` twips away (default 120). */
 const PLACE = {
   type: 'object',
@@ -62,6 +63,8 @@ export const FORM_OPS_SCHEMA = {
           opSchema('form', { props: PROPS }, ['props']),
           opSchema('arrange', { names: NAMES, as: { type: 'string', enum: ['row', 'column', 'grid'] }, columns: { type: 'integer', minimum: 1 }, gap: INT, left: INT, top: INT }, ['names', 'as']),
           opSchema('autosize', { names: NAMES }, ['names']),
+          opSchema('menu', { name: NAME, caption: { type: 'string' }, parent: { anyOf: [{ type: 'string' }, { type: 'null' }] }, index: INDEX,
+            shortcut: { type: 'string' }, checked: BOOL, enabled: BOOL, visible: BOOL, windowList: BOOL }, ['name']),
         ],
       },
     },
@@ -135,6 +138,8 @@ const OP_ALIASES: Record<string, string> = {
   remove: 'delete', update: 'set', modify: 'set', change: 'set', move: 'set', edit: 'set', create: 'add', insert: 'add',
 };
 const OP_KEYS = new Set(['op', 'type', 'name', 'container', 'index', 'props', 'tab', 'place']);
+/** The keys of a "menu" op and the Menu properties they set. */
+const MENU_KEYS: Record<string, string> = { caption: 'Caption', checked: 'Checked', enabled: 'Enabled', visible: 'Visible', windowlist: 'WindowList' };
 /** The op's props; without a `props` object, loose top-level keys (e.g. {"op":"set","name":"X","Caption":"y"}) count. */
 function propsOf(raw: Record<string, unknown>): Record<string, unknown> {
   if (isObj(raw.props)) return raw.props;
@@ -236,6 +241,32 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
     if (kind === 'form') {
       const props = parseProps('Form', propsOf(raw), 'Form', warnings);
       if (Object.keys(props).length) ops.push({ op: 'form', props });
+    } else if (kind === 'menu') {
+      // {"op":"menu","name":"mnuOpen","caption":"&Open...","parent":"mnuFile","shortcut":"Ctrl+O"}: an add of a Menu, after the others
+      const rawProps: Record<string, unknown> = isObj(raw.props) ? { ...raw.props } : {};
+      for (const [k, v] of Object.entries(raw)) { const pn = MENU_KEYS[k.toLowerCase()]; if (pn && v !== undefined && v !== null) rawProps[pn] = v; }
+      if (typeof raw.shortcut === 'string' && raw.shortcut.trim()) {
+        const sc = shortcutValue(raw.shortcut);
+        if (sc === null) warnings.push(`Ignored unknown shortcut ${raw.shortcut} for ${String(raw.name)}.`); else rawProps.Shortcut = SHORTCUT_LABELS[sc];
+      }
+      let parent: ControlDef | undefined;
+      if (typeof raw.parent === 'string' && raw.parent.trim()) {
+        const want = splitName(raw.parent);
+        const plain = (c: ControlDef) => String(c.props.Caption ?? '').replace(/&(?!&)/g, '').toLowerCase();
+        parent = find(want.name, want.index).find(isMenu) ?? work.controls.find(c => isMenu(c) && plain(c) === want.name.replace(/&(?!&)/g, '').toLowerCase());
+        if (!parent) { warnings.push(`Ignored menu ${String(raw.name)}: there is no menu ${raw.parent}.`); continue; }
+      }
+      if (typeof raw.name !== 'string' || !raw.name.trim()) { warnings.push('Ignored a menu without a name.'); continue; }
+      let { name, index } = splitName(raw.name);
+      if (index === null && typeof raw.index === 'number' && raw.index >= 0) index = Math.floor(raw.index);
+      if (!validateName(name) || clashes(name, index, 'Menu')) { warnings.push(`Ignored menu ${label(name, index)}: the name is not valid or taken.`); continue; }
+      const props = parseProps('Menu', rawProps, label(name, index), warnings);
+      if (props.Caption === undefined) props.Caption = name;
+      const added = newControl(work, 'Menu', { left: 0, top: 0 }, parent?.id ?? null);
+      Object.assign(added, { name, index });
+      Object.assign(added.props, props);
+      work.controls.push(added);
+      ops.push({ op: 'add', type: 'Menu', name, index, container: parent ? label(parent.name, parent.index) : null, props });
     } else if (kind === 'add') {
       const typeName = typeof raw.type === 'string' ? raw.type : '';
       const type = resolveType(typeName);
@@ -267,7 +298,8 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
       let container: string | null = null;
       if (typeof raw.container === 'string' && raw.container.trim()) {
         const parent = find(splitName(raw.container).name, splitName(raw.container).index)[0];
-        if (parent && CONTROL_TYPES[parent.type].isContainer) container = label(parent.name, parent.index);
+        // a Menu goes in a menu, any other control in a container
+        if (parent && (type === 'Menu' ? isMenu(parent) : CONTROL_TYPES[parent.type].isContainer)) container = label(parent.name, parent.index);
         else warnings.push(`Ignored unknown container ${raw.container} for ${name}.`);
       }
       const parent = container ? find(splitName(container).name, splitName(container).index)[0] : undefined;
@@ -387,6 +419,7 @@ function resolvePlace(work: FormDef, target: ControlDef, place: unknown, byName:
 
 /** Whether place/arrange can move `c` by Left/Top: not a Line (X1..Y2) and not a docked control (its edge decides); else a warning. */
 function movable(c: ControlDef, what: string, warnings: string[]): boolean {
+  if (isMenu(c)) { warnings.push(`Ignored ${what} of ${label(c.name, c.index)}: a menu has no position.`); return false; }
   if (isLine(c)) { warnings.push(`Ignored ${what} of ${label(c.name, c.index)}: a Line is placed by X1, Y1, X2 and Y2.`); return false; }
   if (isDocked(c)) { warnings.push(`Ignored ${what} of ${label(c.name, c.index)}: it is docked (Align), so it sits at its edge.`); return false; }
   return true;

@@ -65,7 +65,7 @@ interface FormState {
 }
 
 const lc = (s: string): string => s.toLowerCase();
-const FORM_METHODS = new Set(['show', 'hide', 'refresh', 'move', 'setfocus', 'zorder']);
+const FORM_METHODS = new Set(['show', 'hide', 'refresh', 'move', 'setfocus', 'zorder', 'popupmenu']);
 /** Members every form has besides its registry properties: Controls, ActiveControl and Count (the number of controls). */
 const FORM_OBJECTS = new Set(['controls', 'activecontrol', 'count']);
 let loadCounter = 0;
@@ -86,6 +86,9 @@ export class FormInstance implements VBObject {
   private loadDone: Promise<void> | null = null;
   private unloading = false;
   private modalWaiters: (() => void)[] = [];
+  /** PopupMenu calls waiting for the window's answer (by request id). */
+  private popups = new Map<number, (id: string | null) => void>();
+  private popupSeq = 0;
   private readonly controlNames: Set<string>;
   /** The control with the focus (Me.ActiveControl), by id. */
   private activeId: string | null = null;
@@ -136,7 +139,7 @@ export class FormInstance implements VBObject {
       spawn: (t, index) => {
         const invisible = CONTROL_TYPES[t.def.type].invisibleAtRuntime;
         const props = copyProps(invisible ? t.def.props : t.props);
-        if (!invisible) {
+        if (!invisible && t.def.type !== 'Menu') {   // a menu element keeps the lowest one's Visible (the MRU list shows at once)
           props.Visible = false;
           if ('TabIndex' in props) props.TabIndex = Math.max(-1, ...[...this.state().byId.values()].map(o => Number(o.props.TabIndex ?? -1))) + 1;
         }
@@ -303,6 +306,8 @@ export class FormInstance implements VBObject {
     for (const t of timers) this.s.syncTimer(this, t);
     for (const c of this.st?.byId.values() ?? []) c.dispose();   // sockets close, requests stop
     this.st = null;
+    for (const done of [...this.popups.values()]) done(null);   // a PopupMenu of the closed window returns
+    this.popups.clear();
     const w = this.window;
     this.window = null;
     if (w) void w.close();
@@ -369,8 +374,16 @@ export class FormInstance implements VBObject {
         const done = m.id === 'form' ? this.s.fire(this.name, `Form_${m.event}`, args) : this.fireControl(target, m.event, args);
         if (m.requestId !== undefined) {
           const requestId = m.requestId, ref = args[args.length - 1];
-          void done.then(() => this.deliver({ t: 'keyResult', requestId, keyAscii: Number(coerce(ref.value, 'Long')) }));
+          // KeyPress answers with the KeyAscii the code left; a menu's Click before it opens just says it has run
+          void done.then(() => (m.event === 'KeyPress' && ref ? this.deliver({ t: 'keyResult', requestId, keyAscii: Number(coerce(ref.value, 'Long')) })
+            : this.s.queue.send(this.key, { t: 'eventDone', requestId })));
         }
+        break;
+      }
+      case 'popupDone': {
+        const done = this.popups.get(m.requestId);
+        this.popups.delete(m.requestId);
+        done?.(m.id);
         break;
       }
     }
@@ -493,7 +506,7 @@ export class FormInstance implements VBObject {
       return c;
     }
     if (l === 'scalewidth' || l === 'scaleheight') {
-      const sz = formScaleSize(st.form.props);
+      const sz = formScaleSize(st.form.props, [...st.byId.values()].some(c => c.def.type === 'Menu' && c.def.parentId === null && c.props.Visible !== false));
       return l === 'scalewidth' ? sz.width : sz.height;
     }
     if (l === 'visible') return this.visible;
@@ -542,9 +555,36 @@ export class FormInstance implements VBObject {
       }
       case 'load': return this.load().then(() => Empty);
       case 'unload': return this.unload(1).then(() => Empty);
+      case 'popupmenu': return this.popupMenu(args);
     }
     if (this.codeMember(name) === 'proc') return this.callPublic(name, args);
     return this.callSync(l, args);
+  }
+
+  /** PopupMenu menu, [flags], [x], [y], [boldcommand]: the menu's items as a context menu at the mouse (or at x, y in the client
+   *  area, twips). The menu's Click runs first (VB6: its items are initialised); PopupMenu returns once an item was chosen and its
+   *  Click has run, or the menu was closed. Flags: vbPopupMenuCenterAlign 4 / RightAlign 8 (x is the centre / right edge),
+   *  vbPopupMenuRightButton 2 (the right button chooses too). */
+  private async popupMenu(args: VBValue[]): Promise<VBValue> {
+    this.autoLoad();
+    const st = this.state();
+    const isOwnMenu = (v: VBValue | undefined): v is ControlObject => v instanceof ControlObject && v.def.type === 'Menu' && st.byId.get(v.def.id) === v;
+    const menu = args[0];
+    if (!isOwnMenu(menu)) throw new VBRuntimeError(menu instanceof ControlObject ? 5 : 13);
+    const opt = (v: VBValue | undefined): number | null => (v === undefined || v === Empty ? null : Number(coerce(v, 'Double')));
+    const flags = opt(args[1]) ?? 0, x = opt(args[2]), y = opt(args[3]);
+    const bold = isOwnMenu(args[4]) ? args[4].def.id : null;
+    if (!this.visible || !this.window) return Empty;
+    await this.fireControl(menu, 'Click', []);
+    if (!this.loaded || this.s.ended || !this.window || this.st !== st) return Empty;
+    const requestId = ++this.popupSeq;
+    const chosen = await new Promise<string | null>(resolve => {
+      this.popups.set(requestId, resolve);
+      this.s.queue.send(this.key, { t: 'popup', requestId, id: menu.def.id, flags, x, y, bold });
+    });
+    const item = chosen !== null && this.st === st ? st.byId.get(chosen) : undefined;
+    if (item && item.props.Enabled !== false && !this.s.ended) await this.fireControl(item, 'Click', []);
+    return Empty;
   }
 
   private callSync(l: string, args: VBValue[]): VBValue {
@@ -553,6 +593,7 @@ export class FormInstance implements VBObject {
       case 'hide': this.hide(); return Empty;
       case 'setfocus': case 'zorder': case 'refresh': return Empty;
       case 'show': void this.show(false); return Empty;
+      case 'popupmenu': void this.popupMenu(args); return Empty;
     }
     return this.state().form.callMethod(l, args) as VBValue;   // the form's own object has no async methods
   }

@@ -1,4 +1,5 @@
 // Position helpers for controls whose geometry is not Left/Top/Width/Height: a Line is X1, Y1, X2, Y2.
+import { MENU_BAR_HEIGHT, hasMenuBar } from './menus';
 import type { ControlDef, PropValue } from './types';
 
 const n = (v: unknown): number => (typeof v === 'number' ? v : Number(v) || 0);
@@ -30,18 +31,19 @@ export function dockEdge(c: Pick<ControlDef, 'type' | 'parentId' | 'props'>): 't
 }
 export const isDocked = (c: Pick<ControlDef, 'type' | 'parentId' | 'props'>): boolean => dockEdge(c) !== null;
 
-/** The client area of a form in twips (Width/Height are the outer size; see formMetrics in controls/render.ts). */
-export function formClientTwips(props: Record<string, PropValue>): { width: number; height: number } {
+/** The client area of a form in twips (Width/Height are the outer size; see formMetrics in controls/render.ts). `menuBar`: the form
+ *  shows a menu bar (menus.ts hasMenuBar), which takes MENU_BAR_HEIGHT pixels off the top. */
+export function formClientTwips(props: Record<string, PropValue>, menuBar = false): { width: number; height: number } {
   const num = (k: string, d: number): number => (typeof props[k] === 'number' ? (props[k] as number) : d);
   const bs = num('BorderStyle', 2);
   const border = bs === 0 ? 0 : bs === 2 || bs === 5 ? 4 : 3, title = bs === 0 ? 0 : 18;
   const w = Math.round(num('Width', 4800) / 15), h = Math.round(num('Height', 3600) / 15);
-  return { width: Math.max(0, w - 2 * border) * 15, height: Math.max(0, h - 2 * border - title) * 15 };
+  return { width: Math.max(0, w - 2 * border) * 15, height: Math.max(0, h - 2 * border - title - (menuBar ? MENU_BAR_HEIGHT : 0)) * 15 };
 }
 
 /** The rectangle a docked control really occupies, in client twips. */
-export function dockedRect(form: { props: Record<string, PropValue> }, c: ControlDef): { left: number; top: number; width: number; height: number } {
-  const cl = formClientTwips(form.props);
+export function dockedRect(form: { props: Record<string, PropValue>; controls?: ControlDef[] }, c: ControlDef): { left: number; top: number; width: number; height: number } {
+  const cl = formClientTwips(form.props, hasMenuBar(form.controls));
   const height = typeof c.props.Height === 'number' ? c.props.Height : 315;
   return { left: 0, top: dockEdge(c) === 'top' ? 0 : Math.max(0, cl.height - height), width: cl.width, height };
 }

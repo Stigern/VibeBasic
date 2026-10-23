@@ -44,6 +44,9 @@ for (let i = 1; i <= 12; i++) c('vbKeyF' + i, 111 + i);
 // Shift masks and mouse buttons (event arguments)
 group({ vbShiftMask: 1, vbCtrlMask: 2, vbAltMask: 4, vbLeftButton: 1, vbRightButton: 2, vbMiddleButton: 4 });
 
+// PopupMenu flags
+group({ vbPopupMenuLeftAlign: 0, vbPopupMenuCenterAlign: 4, vbPopupMenuRightAlign: 8, vbPopupMenuLeftButton: 0, vbPopupMenuRightButton: 2 });
+
 // CheckBox / forms / comparison
 group({
   vbUnchecked: 0, vbChecked: 1, vbGrayed: 2,

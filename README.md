@@ -9,6 +9,7 @@ A Visual Basic 6 clone for macOS, with the authentic Windows 98 look and a built
 ## What it does
 
 - **Form designer:** drag controls onto a form, set their properties and double-click to write event code.
+- **Menus:** Tools > Menu Editor (Ctrl+E) builds a form's menus as in VB6: `&` access keys, separators, submenus, Checked, Enabled and Visible, Shortcut keys, menu control arrays (`Load mnuMRU(i)` for a recent-files list) and `PopupMenu` for context menus. Each form window draws its own Win98 menu bar under its title bar; a program's menus never go into the Mac's menu bar at the top of the screen. A Ctrl shortcut also answers to Cmd, except Cmd+C, X, V, A, Z, W and Q, which stay with the Mac.
 - **The VB6 language:** subs, functions, control arrays, `On Error`, `MsgBox`, `InputBox` and the familiar run-time error dialog. It also covers file I/O (`Open`, `Print #`, `Line Input`, `Get`/`Put`, `Dir`…), `SaveSetting`/`GetSetting`, `ParamArray`, `New Collection` and VB6's own number and date rules.
 - **Code window:** Visual Studio-style colours (or classic VB6), folding of procedures and blocks (Edit > Outlining, Ctrl+M), indentation guides, procedure separators, matching `If`/`End If` highlighting, and automatic `End` lines.
 - **Run and debug:** F5 runs the program in real windows. Breakpoints (F9), stepping (F8) and the Immediate window work as in VB6.

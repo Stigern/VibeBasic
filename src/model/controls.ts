@@ -7,6 +7,7 @@ import { syncSSTab } from './ssTab';
 import { MAX_DATE, MIN_DATE, nowSerial, systemStartOfWeek } from './dateControls';
 import { fitText } from './mask';
 import { CHART_TYPE_NAMES } from './chart';
+import { SHORTCUT_LABELS } from './menuShortcuts';
 import type { ControlDef, ControlType, FontValue, FormDef, PropValue, Project } from './types';
 
 export type PropKind = 'string' | 'text' | 'int' | 'bool' | 'color' | 'enum' | 'font' | 'picture' | 'list'
@@ -142,6 +143,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     methods: [
       { name: 'Show', params: '[Modal], [OwnerForm]' }, { name: 'Hide', params: '' },
       { name: 'Refresh', params: '' }, { name: 'Move', params: MOVE },
+      { name: 'PopupMenu', params: 'Menu As Object, [Flags], [X], [Y], [DefaultMenu]' },
     ],
   }),
 
@@ -1056,6 +1058,23 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     methods: [...baseMethods(), ...['Next', 'Previous'].flatMap(d => ['Day', 'Week', 'Month', 'Year'].map(u => ({ name: `${d}${u}`, params: '' }))),
       { name: 'Today', params: '' }],
   }),
+
+  // A menu of the form's menu bar (made in Tools > Menu Editor, not in the Toolbox): a top-level menu (parentId null) or an
+  // item / submenu of the menu its parentId names (see menus.ts). No position or size. Caption "-" is a separator line.
+  // Shortcut (the position in SHORTCUT_LABELS) and NegotiatePosition exist at design time only; WindowList is read-only at run time.
+  Menu: def({
+    type: 'Menu', namePrefix: 'Menu', defaultWidth: 0, defaultHeight: 0, toolboxTooltip: 'Menu',
+    defaultEvent: 'Click', defaultMember: null,
+    props: [
+      str('Caption'), bool('Checked', false), bool('Enabled', true), bool('Visible', true), bool('WindowList', false, { runtime: 'ro' }),
+      p('Shortcut', 'enum', 0, { runtime: 'none', enumValues: SHORTCUT_LABELS.map((label, value) => ({ value, label })) }),
+      int('HelpContextID', 0, { min: 0 }),
+      en('NegotiatePosition', 0, ['None', 'Left', 'Middle', 'Right'], { runtime: 'none' }),
+      str('Tag'),
+    ],
+    events: [evClick()],
+    methods: [],
+  }),
 };
 
 /** VB6 toolbox order: every control type. The Toolbox shows the intrinsic ones, then the checked components' ones
@@ -1115,7 +1134,7 @@ export function newControl(form: FormDef, type: Exclude<ControlType, 'Form'>,
   if (type === 'Line') {
     props.X1 = rect.left; props.Y1 = rect.top;
     props.X2 = rect.left + (rect.width ?? td.defaultWidth); props.Y2 = rect.top + (rect.height ?? td.defaultHeight);
-  } else { props.Left = rect.left; props.Top = rect.top; }
+  } else if ('Left' in props) { props.Left = rect.left; props.Top = rect.top; }   // a Menu has no position
   if ('Width' in props) {
     props.Width = rect.width ?? td.defaultWidth;
     props.Height = rect.height ?? td.defaultHeight;

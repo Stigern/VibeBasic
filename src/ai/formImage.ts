@@ -3,6 +3,7 @@
 import { absoluteRect, shownInDesign } from '../ide/designerLogic';
 import { CONTROL_TYPES } from '../model/controls';
 import { dockedRect, formClientTwips, isDocked, isLine } from '../model/geometry';
+import { hasMenuBar } from '../model/menus';
 import type { ControlDef, FormDef, PropValue } from '../model/types';
 import { cssFont } from './layoutCheck';
 
@@ -32,7 +33,7 @@ const nameOf = (c: ControlDef) => (c.index === null ? c.name : `${c.name}(${c.in
 
 /** Where everything goes in the picture (pure; the tests check this rather than pixels). */
 export function layoutFormImage(form: FormDef, opts: FormImageOptions = {}): FormImageLayout {
-  const cl = formClientTwips(form.props);
+  const cl = formClientTwips(form.props, hasMenuBar(form.controls));
   const pw = Math.max(1, cl.width / TW), ph = Math.max(1, cl.height / TW);
   const scale = Math.max(0.25, Math.min(3, ((opts.maxWidth ?? 800) - RULER_LEFT) / pw, ((opts.maxHeight ?? 800) - RULER_TOP) / ph));
   const px = (twips: number) => (twips / TW) * scale;
@@ -43,7 +44,7 @@ export function layoutFormImage(form: FormDef, opts: FormImageOptions = {}): For
   const controls: PlacedControl[] = [];
   const visit = (parentId: string | null, depth: number) => {
     for (const c of form.controls) {
-      if (c.parentId !== parentId) continue;
+      if (c.parentId !== parentId || c.type === 'Menu') continue;   // the menu bar is above the client area
       if (shownInDesign(form, c.id)) {
         const r = isDocked(c) ? dockedRect(form, c) : absoluteRect(form, c.id);
         controls.push({ c, name: nameOf(c), x: RULER_LEFT + px(r.left), y: RULER_TOP + px(r.top), w: px(r.width), h: px(r.height), depth });

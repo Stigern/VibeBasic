@@ -18,7 +18,10 @@ export type ToWindow =
   | { t: 'removeControl'; id: string }                       // Unload Command1(i)
   | { t: 'show' } | { t: 'hide' }
   | { t: 'blocked'; blocked: boolean }            // modal form or break mode: ignore input
-  | { t: 'keyResult'; requestId: number; keyAscii: number };
+  | { t: 'keyResult'; requestId: number; keyAscii: number }
+  | { t: 'eventDone'; requestId: number }        // an event sent with a requestId (a menu's Click before it opens) has run
+  // PopupMenu: show menu `id`'s items at (x, y) (client twips; null: at the mouse), `bold` the default item; answer with popupDone
+  | { t: 'popup'; requestId: number; id: string; flags: number; x: number | null; y: number | null; bold: string | null };
 
 export type FromWindow =
   | { t: 'ready' }
@@ -28,4 +31,5 @@ export type FromWindow =
   | { t: 'closeRequest' }
   | { t: 'activated' }                                             // the user brought the form to the front (focus from outside it)
   | { t: 'resized'; width: number; height: number }                // twips
-  | { t: 'moved'; left: number; top: number };                     // twips: the user moved the window
+  | { t: 'moved'; left: number; top: number }                      // twips: the user moved the window
+  | { t: 'popupDone'; requestId: number; id: string | null };      // the item chosen in a PopupMenu, or null (cancelled)

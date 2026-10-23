@@ -18,7 +18,7 @@ export const ACTION_NAMES = [
   'sameWidth', 'sameHeight', 'sameBoth', 'bringToFront', 'sendToBack', 'lockControls',
   'stepInto', 'stepOver', 'stepOut', 'runToCursor', 'toggleBreakpoint', 'clearAllBreakpoints',
   'start', 'startFullCompile', 'break', 'end', 'restart',
-  'askAi', 'askAiAboutError', 'aiLog', 'options', 'about',
+  'askAi', 'askAiAboutError', 'aiLog', 'menuEditor', 'options', 'about',
 ] as const;
 export type IdeActionName = (typeof ACTION_NAMES)[number];
 
@@ -167,6 +167,8 @@ export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?
       mk('Ask AI...', 'askAi', 'Ctrl+I', design),
       mk('Ask AI about this error', 'askAiAboutError', undefined, () => state?.mode === 'break' && !!o.breakOnError?.()),
       mk('AI Log...', 'aiLog'),
+      sep(),
+      mk('Menu Editor...', 'menuEditor', 'Ctrl+E', inDesigner),
       sep(),
       mk('Options...', 'options'),
     ] },
