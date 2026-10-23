@@ -60,6 +60,12 @@ export const TOOLBOX_ICONS: Record<ControlType | 'Pointer', string> = {
   Data: svg(box(0, 5, 16, 7, '#c0c0c0') + '<rect x="5" y="6" width="6" height="5" fill="#fff"/><path d="M1 8.5l3-2.500v5zM15 8.5l-3-2.500v5z" fill="#000"/>'),
   Adodc: svg('<path d="M4.500 1.500v3.500c0 .8 1.600 1.400 3.500 1.400s3.500-.6 3.500-1.400V1.500" fill="#ffff80" stroke="#000"/><ellipse cx="8" cy="1.500" rx="3.500" ry="1" fill="#ffffc0" stroke="#000"/>'
     + box(0, 8, 16, 7, '#c0c0c0') + '<rect x="5" y="9" width="6" height="5" fill="#fff"/><path d="M1 11.500l3-2.500v5zM15 11.500l-3-2.500v5z" fill="#000"/>'),
+  DataGrid: svg(box(1, 2, 14, 12) + '<rect x="2" y="3" width="12" height="2" fill="#c0c0c0"/><rect x="2" y="5" width="2" height="8" fill="#c0c0c0"/>'
+    + '<path d="M2 5.500h12M2 8.500h12M2 11.500h12M4.500 3v10M9.500 3v10" stroke="#808080"/><path d="M2.500 6.500l1 1-1 1z" fill="#000"/>'),
+  DataList: svg(box(1, 1, 12, 14) + '<path d="M3 4h7M3 7h7M3 10h7" stroke="#000"/><rect x="3" y="6" width="7" height="2" fill="#000080" opacity=".7"/>'
+    + '<path d="M11.500 9v4c0 .6 1 1 2 1s2-.4 2-1V9" fill="#ffff80" stroke="#000"/><ellipse cx="13.500" cy="9" rx="2" ry=".8" fill="#ffffc0" stroke="#000"/>'),
+  DataCombo: svg(box(0, 2, 13, 8) + '<rect x="9" y="3" width="3" height="6" fill="#c0c0c0"/><path d="M9.500 5.500h2L10.500 7.500z" fill="#000"/>'
+    + '<path d="M2 6h5" stroke="#000"/><path d="M11.500 10v4c0 .6 1 1 2 1s2-.4 2-1v-4" fill="#ffff80" stroke="#000"/><ellipse cx="13.500" cy="10" rx="2" ry=".8" fill="#ffffc0" stroke="#000"/>'),
   Agent: svg('<rect x="1.500" y="0.500" width="9" height="6" rx="2" fill="#ffffe1" stroke="#000"/><path d="M4 6.500l-1 2.500 3-2.500" fill="#ffffe1" stroke="#000"/>'
     + box(6, 8, 9, 7, '#c0c0c0') + '<rect x="7" y="9" width="7" height="4" fill="#000080"/><rect x="8" y="10" width="1" height="1" fill="#00ffff"/><rect x="12" y="10" width="1" height="1" fill="#00ffff"/>'
     + '<rect x="10" y="6" width="1" height="2" fill="#ff0000"/>'),

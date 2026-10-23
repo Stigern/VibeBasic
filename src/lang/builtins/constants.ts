@@ -190,3 +190,10 @@ group({
   adSmallInt: 2, adInteger: 3, adSingle: 4, adDouble: 5, adCurrency: 6, adDate: 7, adBoolean: 11, adVariant: 12, adTinyInt: 16,
   adBigInt: 20, adVarWChar: 202, adLongVarWChar: 203, adLongVarBinary: 205,
 });
+
+// DataGrid (MSDATGRD.OCX), DataList / DataCombo (MSDATLST.OCX)
+group({
+  dbgLeft: 0, dbgRight: 1, dbgCenter: 2, dbgGeneral: 3, dbgNoBorder: 0, dbgFixedSingle: 1,
+  dbcAreaButton: 0, dbcAreaEdit: 1, dbcAreaList: 2, dbcDropdownCombo: 0, dbcSimpleCombo: 1, dbcDropdownList: 2,
+  dblBasicMatching: 0, dblExtendedMatching: 1,
+});

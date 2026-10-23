@@ -698,6 +698,65 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     methods: [{ name: 'Move', params: MOVE }, { name: 'Refresh', params: '' }, { name: 'ZOrder', params: '[Position]' }],
   }),
 
+  // MSDATGRD.OCX. The records of the DataSource (a Data control or Adodc) with column headers and a record selector column; the
+  // current row is the recordset's current record. Columns(i) (0-based) has Caption, Width, DataField, Visible, Alignment, Locked,
+  // NumberFormat and Value. GridCols / GridRows / GridRow / GridCol / GridEdit are what the window shows (run/data/dataGrid.ts).
+  DataGrid: def({
+    type: 'DataGrid', component: 'MSDATGRD.OCX', namePrefix: 'DataGrid', defaultWidth: 4815, defaultHeight: 2415, toolboxTooltip: 'DataGrid',
+    defaultEvent: 'Click', defaultMember: null,
+    props: [
+      ...common(), font(), str('DataSource'), str('Caption'),
+      bool('AllowUpdate', true), bool('AllowAddNew', false), bool('AllowDelete', false),
+      bool('ColumnHeaders', true), bool('RecordSelectors', true), int('HeadLines', 1, { min: 0, max: 10 }), int('DefColWidth', 0, { min: 0 }),
+      en('BorderStyle', 1, ['dbgNoBorder', 'dbgFixedSingle']), color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT),
+      rt('Row', 'int', 0), rt('Col', 'int', 0), rt('Text', 'string', ''), rt('Columns', 'string', '', 'ro'), rt('Bookmark', 'int', 0, 'ro'),
+      rt('ApproxCount', 'int', 0, 'ro'), rt('VisibleRows', 'int', 0, 'ro'), rt('VisibleCols', 'int', 0, 'ro'),
+      p('GridCols', 'list', [], { designTime: false, runtime: 'none' }), p('GridRows', 'list', [], { designTime: false, runtime: 'none' }),
+      p('GridRow', 'int', -1, { designTime: false, runtime: 'none' }), p('GridCol', 'int', 0, { designTime: false, runtime: 'none' }),
+      p('GridEdit', 'string', '', { designTime: false, runtime: 'none' }),
+    ],
+    events: [
+      ev('RowColChange', 'LastRow As Variant, ByVal LastCol As Integer'), ev('AfterColUpdate', 'ByVal ColIndex As Integer'),
+      ev('BeforeColUpdate', 'ByVal ColIndex As Integer, OldValue As Variant, Cancel As Integer'), ev('BeforeUpdate', 'Cancel As Integer'), ev('AfterUpdate'),
+      ev('AfterInsert'), ev('BeforeDelete', 'Cancel As Integer'), ev('AfterDelete'), ev('HeadClick', 'ByVal ColIndex As Integer'),
+      ev('Error', 'ByVal DataError As Integer, Response As Integer'), evClick(), evDbl(), ...evFocus(), ...evKeys(), ...evMouse(),
+    ],
+    methods: [...baseMethods(), { name: 'ReBind', params: '' }],
+  }),
+
+  // MSDATLST.OCX. The list is the ListField of the RowSource's records; BoundText is the BoundColumn of the chosen one (the ListField
+  // when BoundColumn is empty). DataSource / DataField bind BoundText to a field. List / ListIndex are what the window shows.
+  DataList: def({
+    type: 'DataList', component: 'MSDATLST.OCX', namePrefix: 'DataList', defaultWidth: 1935, defaultHeight: 1425, toolboxTooltip: 'DataList',
+    defaultEvent: 'Click', defaultMember: 'BoundText',
+    props: [
+      ...common(), font(), color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT),
+      str('RowSource'), str('ListField'), str('BoundColumn'), str('DataSource'), str('DataField'),
+      en('MatchEntry', 0, ['dblBasicMatching', 'dblExtendedMatching']), bool('Locked', false),
+      rt('BoundText', 'string', ''), rt('Text', 'string', ''), rt('SelectedItem', 'string', '', 'ro'), rt('MatchedWithList', 'bool', false, 'ro'),
+      rt('VisibleCount', 'int', 0, 'ro'), rt('DataChanged', 'bool', false),
+      p('List', 'list', [], { designTime: false, runtime: 'none' }), p('ListIndex', 'int', -1, { designTime: false, runtime: 'none' }),
+    ],
+    events: [ev('Click', 'Area As Integer'), ev('DblClick', 'Area As Integer'), ...evFocus(), ...evKeys(), ...evMouse()],
+    methods: [...baseMethods(), { name: 'ReFill', params: '' }],
+  }),
+
+  DataCombo: def({
+    type: 'DataCombo', component: 'MSDATLST.OCX', namePrefix: 'DataCombo', defaultWidth: 1935, defaultHeight: 315, toolboxTooltip: 'DataCombo',
+    defaultEvent: 'Click', defaultMember: 'Text',
+    props: [
+      ...common(), font(), color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), txt('Text'),
+      en('Style', 0, ['dbcDropdownCombo', 'dbcSimpleCombo', 'dbcDropdownList'], { runtime: 'ro' }),
+      str('RowSource'), str('ListField'), str('BoundColumn'), str('DataSource'), str('DataField'),
+      en('MatchEntry', 0, ['dblBasicMatching', 'dblExtendedMatching']), bool('Locked', false),
+      rt('BoundText', 'string', ''), rt('SelectedItem', 'string', '', 'ro'), rt('MatchedWithList', 'bool', false, 'ro'),
+      rt('VisibleCount', 'int', 0, 'ro'), rt('DataChanged', 'bool', false),
+      p('List', 'list', [], { designTime: false, runtime: 'none' }), p('ListIndex', 'int', -1, { designTime: false, runtime: 'none' }),
+    ],
+    events: [evChange(), ev('Click', 'Area As Integer'), ev('DblClick', 'Area As Integer'), ...evFocus(), ...evKeys(), ...evMouse()],
+    methods: [...baseMethods(), { name: 'ReFill', params: '' }],
+  }),
+
   // MSCHRT20.OCX. A table of RowCount x ColumnCount numbers: a column is a series, a row a data point (as MSChart's default). Row and Column
   // (from 1) pick the cell that Data, RowLabel and ColumnLabel work on; ChartData takes a 2-D array whose first row / column may be labels.
   // ChartLines is the data as the window gets it (see model/chart.ts); AxisTitles holds the Plot.Axis(id).AxisTitle.Text of the four axes.
@@ -791,7 +850,7 @@ export const TOOLBOX_ORDER: (ControlType | 'Pointer')[] = [
   'Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
   'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'Data', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar',
   'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit',
-  'WebBrowser', 'Inet', 'Winsock', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Adodc',
+  'WebBrowser', 'Inet', 'Winsock', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent', 'Adodc', 'DataGrid', 'DataList', 'DataCombo',
 ];
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -847,7 +906,7 @@ export function newControl(form: FormDef, type: Exclude<ControlType, 'Form'>,
     props.Height = rect.height ?? td.defaultHeight;
   }
   if ('Caption' in props && type !== 'SSTab') props.Caption = name;   // an SSTab's Caption is its first tab's
-  if (type === 'TextBox' || type === 'ComboBox') props.Text = name;
+  if (type === 'TextBox' || type === 'ComboBox' || type === 'DataCombo') props.Text = name;
   if ('TabIndex' in props) props.TabIndex = form.controls.filter(c => 'TabIndex' in c.props).length;
   return { id: newId(), type, name, index: null, parentId, props };
 }

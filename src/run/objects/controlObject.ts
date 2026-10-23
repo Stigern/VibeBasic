@@ -34,6 +34,8 @@ import { MciControl, MediaPlayerControl } from './mediaControls';
 import { AgentControl } from './agentControl';
 import { DataControl, type DataConsumer, type DataHost } from '../data/dataControl';
 import type { DbSession } from '../data/dbSession';
+import { DataGridControl } from '../data/dataGrid';
+import { DataListControl } from '../data/dataList';
 
 export interface RunContext {
   resolveAsset(ref: PictureRef): string | null;
@@ -185,6 +187,13 @@ export class ControlObject implements VBObject, DataConsumer {
     else if (def.type === 'MediaPlayer') this.rich = new MediaPlayerControl(this.richHost());
     else if (def.type === 'Agent') this.rich = new AgentControl(this.richHost());
     else if (def.type === 'Data' || def.type === 'Adodc') this.rich = new DataControl(this.dataHost(), def.type === 'Data' ? 'dao' : 'ado');
+    else if (def.type === 'DataGrid') {
+      const h = this.dataHost();
+      this.rich = new DataGridControl({ ...h, source: () => this.dataControlNamed(this.props.DataSource) });
+    } else if (def.type === 'DataList' || def.type === 'DataCombo') {
+      const h = this.dataHost();
+      this.rich = new DataListControl({ ...h, type: def.type, rowSource: () => this.dataControlNamed(this.props.RowSource) });
+    }
     if (def.type === 'MonthView') {   // the selection starts out as the Value
       const v = typeof this.props.Value === 'number' ? dayOf(this.props.Value) : dayOf(Number(CONTROL_TYPES.MonthView.props.find(p => p.name === 'Value')!.default));
       this.props.Value = v;
@@ -269,6 +278,12 @@ export class ControlObject implements VBObject, DataConsumer {
 
   /** A Data control / Adodc: its data side (recordset, binding); null for other controls. */
   dataSource(): DataControl | null { return this.rich instanceof DataControl ? this.rich : null; }
+
+  /** The data control of the form a DataSource / RowSource names. */
+  private dataControlNamed(name: PropValue | undefined): DataControl | null {
+    const c = this.ctx.controlByName?.(strProp(name));
+    return c instanceof ControlObject ? c.dataSource() : null;
+  }
 
   /** The property whose change marks a bound control's record changed (DataChanged). */
   private dirtyProp(): string | null {
@@ -643,6 +658,7 @@ export class ControlObject implements VBObject, DataConsumer {
       case 'ButtonClick': return object('buttons');
       case 'DateClick': case 'DateDblClick': return args.map(a => dateValue(Number(a)));
       case 'SelChange': if (this.def.type === 'MonthView') return args.map(a => dateValue(Number(a))); break;
+      case 'Click': case 'DblClick': if ((this.def.type === 'DataList' || this.def.type === 'DataCombo') && !args.length) return [2]; break;   // dbcAreaList
     }
     return args;
   }

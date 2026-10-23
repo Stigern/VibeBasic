@@ -53,7 +53,9 @@ export function describeControlTypes(): string {
     + ' TextBox, Label, CheckBox, ComboBox, ListBox, DTPicker and MaskedEdit bind with DataSource (the data control\'s Name) and DataField; their edits are saved when the record changes.'
     + ' Data1.Recordset: MoveFirst/MoveNext/MovePrevious/MoveLast, BOF, EOF, RecordCount, Fields("Name") or rs!Name, AddNew/Edit/Update (ADO: no Edit)/CancelUpdate/Delete, FindFirst "Name = \'x\'" (ADO: Find), Requery;'
     + ' events Data1_Validate(Action, Save) and Data1_Reposition, Adodc1_WillMove and Adodc1_MoveComplete. SQL from code: Data1.Database.Execute "CREATE TABLE IF NOT EXISTS ..."'
-    + ' (Data1.Database.OpenRecordset("SELECT ...")) or Adodc1.Recordset.ActiveConnection.Execute sql; there is no New ADODB.Connection.');
+    + ' (Data1.Database.OpenRecordset("SELECT ...")) or Adodc1.Recordset.ActiveConnection.Execute sql; there is no New ADODB.Connection.'
+    + ' A DataGrid shows the DataSource\'s records (AllowUpdate, AllowAddNew, AllowDelete; Columns(0) is the first column: Caption, Width, Value; RowColChange, AfterColUpdate).'
+    + ' DataList and DataCombo list the ListField of the RowSource\'s records; BoundText is the BoundColumn of the chosen one, bound to DataSource / DataField.');
   return lines.join('\n');
 }
 

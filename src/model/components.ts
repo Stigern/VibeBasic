@@ -26,6 +26,8 @@ export const COMPONENTS: readonly ComponentDef[] = [
   { file: 'MCI32.OCX', name: 'Microsoft Multimedia Control 6.0' },
   { file: 'MSDXM.OCX', name: 'Windows Media Player' },
   { file: 'MSADODC.OCX', name: 'Microsoft ADO Data Control 6.0 (SP6) (OLEDB)' },
+  { file: 'MSDATGRD.OCX', name: 'Microsoft DataGrid Control 6.0 (SP6) (OLEDB)' },
+  { file: 'MSDATLST.OCX', name: 'Microsoft DataList Controls 6.0 (SP6) (OLEDB)' },
   { file: 'AGENTCTL.DLL', name: 'Microsoft Agent Control 2.0', dir: 'C:\\WINDOWS\\MSAGENT' },
 ];
 

@@ -177,3 +177,72 @@ End Sub`, [['Adodc', 'Adodc1', { ConnectionString: 'Provider=Microsoft.Jet.OLEDB
   expect(out).toEqual(['moved 13 Bob', '2 0', 'moved 10 Cid', 'Cid 3', 'moved eof', 'eof True', 'deleted 1', 'count 2']);
   expect(db.db('/app/people.db').prepare('SELECT Age FROM People WHERE Name = \'Ann\'').get()).toEqual({ Age: 99 });
 });
+
+test('DataGrid shows the records under column headers; a click moves the recordset, an edited cell is saved', async () => {
+  const { out, db, el } = await run(`
+Private Sub DataGrid1_RowColChange(LastRow As Variant, ByVal LastCol As Integer)
+  Debug.Print "rowcol " & DataGrid1.Row & " " & DataGrid1.Col & " " & Adodc1.Recordset!Name
+End Sub
+Private Sub DataGrid1_AfterColUpdate(ByVal ColIndex As Integer)
+  Debug.Print "after " & ColIndex & " " & DataGrid1.Columns(ColIndex).Value
+End Sub
+Private Sub Command1_Click()
+  DataGrid1.Columns(1).Caption = "Who"
+  Debug.Print DataGrid1.Columns.Count & " " & DataGrid1.Columns(0).Caption & " " & DataGrid1.Columns("Age").ColIndex & " " & DataGrid1.ApproxCount
+End Sub`, [['Adodc', 'Adodc1', { ConnectionString: 'Data Source=people.db', RecordSource: 'People' }], ['DataGrid', 'DataGrid1', { DataSource: 'Adodc1' }], ['CommandButton', 'Command1']]);
+  const grid = el('DataGrid1');
+  const texts = (sel: string) => [...grid.querySelectorAll(sel)].map(e => e.textContent);
+  expect(texts('th')).toEqual(['', 'ID', 'Name', 'Age', 'Member']);
+  expect([...grid.querySelectorAll('tr[data-r]')].map(tr => [...tr.querySelectorAll('td[data-c]')].map(td => td.textContent).join(','))).toEqual(['1,Ann,31,True', '2,Bob,42,False', '3,Cid,25,True']);
+  expect(grid.querySelector('tr[data-r="0"] td.dg-sel')!.textContent).toBe('▶');
+  el('Command1').querySelector('button')!.click();
+  await settle();
+  expect(out).toEqual(['4 ID 2 3']);
+  expect(texts('th')[2]).toBe('Who');
+  grid.querySelector<HTMLElement>('td[data-r="1"][data-c="1"]')!.click();
+  await settle();
+  expect(out[out.length - 1]).toBe('rowcol 1 1 Bob');
+  grid.querySelector<HTMLElement>('td[data-r="2"][data-c="2"]')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  const editor = grid.querySelector<HTMLInputElement>('input.dg-editor')!;
+  editor.value = '26';
+  editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await settle();
+  expect(out).toContain('rowcol 2 2 Cid');
+  expect(out[out.length - 1]).toBe('after 2 26');
+  expect(db.db('/app/people.db').prepare('SELECT Age FROM People WHERE Name = \'Cid\'').get()).toEqual({ Age: 26 });
+  expect(grid.querySelector('td[data-r="2"][data-c="2"]')!.textContent).toBe('26');
+});
+
+test('DataCombo: the list from RowSource, BoundText from the bound field, a pick is saved to the DataField', async () => {
+  const db = peopleDb();
+  db.db('/app/people.db').exec(`CREATE TABLE Orders (ID INTEGER PRIMARY KEY, Item TEXT, PersonID INTEGER);
+    INSERT INTO Orders (Item, PersonID) VALUES ('Pen', 2), ('Cup', 3);`);
+  const { out, el } = await run(`
+Private Sub Command1_Click()
+  Debug.Print DataCombo1.BoundText & " " & DataCombo1.Text & " " & DataCombo1.MatchedWithList
+  DataCombo1.BoundText = "3"
+  Debug.Print DataCombo1.Text & " " & DataCombo1.DataChanged
+  DataCombo1.BoundText = "2"
+End Sub`, [DATA, ['Data', 'Data2', { DatabaseName: 'people.db', RecordSource: 'SELECT * FROM Orders' }],
+    ['DataCombo', 'DataCombo1', { RowSource: 'Data1', ListField: 'Name', BoundColumn: 'ID', DataSource: 'Data2', DataField: 'PersonID', Style: 2 }],
+    ['CommandButton', 'Command1']], db);
+  const combo = el('DataCombo1');
+  expect([...combo.querySelectorAll('.vb-item')].map(e => e.textContent)).toEqual(['Ann', 'Bob', 'Cid']);
+  expect(combo.querySelector('input')!.value).toBe('Bob');
+  el('Command1').querySelector('button')!.click();
+  await settle();
+  expect(out).toEqual(['2 Bob True', 'Cid True']);
+  // the user picks Ann; the next record of Data2 saves PersonID = 1 for the Pen
+  combo.querySelector<HTMLElement>('.vb-item[data-i="0"]')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  el('Data2').querySelector<HTMLElement>('[data-nav="next"]')!.click();
+  await settle();
+  expect(db.db('/app/people.db').prepare('SELECT PersonID FROM Orders ORDER BY ID').all()).toEqual([{ PersonID: 1 }, { PersonID: 3 }]);
+  expect(combo.querySelector('input')!.value).toBe('Cid');
+});
+
+test('rs!Name and rs![Field Name] parse as rs("Name")', async () => {
+  const { parseExpression } = await import('../../src/lang/exprParser');
+  const { exprToString } = await import('../../src/lang/ast');
+  expect(exprToString(parseExpression('rs!Name'))).toBe('(call rs "Name")');
+  expect(exprToString(parseExpression('Data1.Recordset![Order Date] & x!'))).toBe('(& (call (. Data1 Recordset) "Order Date") x!)');
+});

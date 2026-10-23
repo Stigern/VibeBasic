@@ -21,7 +21,7 @@ import { mediaPlayer, mmControl } from './media';
 import { agentControl } from './agent';
 import { dtPicker, maskedEdit, monthView } from './calendar';
 import { inetIcon, webBrowser, winsockIcon } from './webBrowser';
-import { dataBar } from './dataControls';
+import { dataBar, dataGrid } from './dataControls';
 import { decodeRuns, encodeRuns, formatAt, readRuns, replaceRange, selectionOffsets, setSelectionOffsets, writeRuns, type Run, type RtfFormat, type RtfPatch } from './richText';
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../model/types';
 import { h, mnemonicNodes } from '../ui98/dom';
@@ -1464,6 +1464,9 @@ const RENDERERS: Record<ConcreteType, (c: Ctx) => Renderer> = {
   Agent: agentControl,
   Data: dataBar,
   Adodc: dataBar,
+  DataGrid: dataGrid,
+  DataList: listBox,
+  DataCombo: comboBox,
 };
 
 // ---------------------------------------------------------------------------------------------------------------

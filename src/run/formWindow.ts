@@ -13,7 +13,7 @@ import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 type Props = Record<string, PropValue>;
 type Target = { id: string; def: ControlDef | null };
 
-const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'Toolbar', 'DTPicker', 'MSChart', 'TreeView', 'ListView', 'MSFlexGrid', 'RichTextBox']);
+const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'Toolbar', 'DTPicker', 'MSChart', 'TreeView', 'ListView', 'MSFlexGrid', 'RichTextBox', 'DataGrid']);
 const KEY_CODES: Record<string, number> = {
   Backspace: 8, Tab: 9, Enter: 13, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34, End: 35, Home: 36,
   ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46,
@@ -174,7 +174,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     const tg = targetOf(e.target);
     if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl) return;
     const type = tg.def.type, el = e.target as HTMLElement;
-    if (type === 'TextBox' || type === 'MaskedEdit' || (type === 'ComboBox' && !(el as HTMLInputElement).readOnly)) {
+    if (type === 'TextBox' || type === 'MaskedEdit' || ((type === 'ComboBox' || type === 'DataCombo') && !(el as HTMLInputElement).readOnly)) {
       emit(tg.id, 'Change', [], { Text: (el as HTMLInputElement).value });
     } else if (type === 'RichTextBox') {
       emit(tg.id, 'Change', [], { Text: el.textContent ?? '', Runs: encodeRuns(readRuns(el)) });
@@ -184,7 +184,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     const tg = targetOf(e.target);
     if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl) return;
     const type = tg.def.type, el = e.target as HTMLElement;
-    if (type === 'ListBox' || type === 'FileListBox') emit(tg.id, 'Click', [], { ListIndex: (el as HTMLSelectElement).selectedIndex });
+    if (type === 'ListBox' || type === 'FileListBox' || type === 'DataList') emit(tg.id, 'Click', [], { ListIndex: (el as HTMLSelectElement).selectedIndex });
     else if (type === 'HScrollBar' || type === 'VScrollBar' || type === 'Slider' || type === 'UpDown') emit(tg.id, 'Change', [], { Value: Number(el.dataset.value) || 0 });
     else if (type === 'DTPicker') emit(tg.id, 'Change', [], { Value: el.dataset.value ? Number(el.dataset.value) : null });
   });
