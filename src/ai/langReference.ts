@@ -2,6 +2,7 @@
 // tables (built-in functions and constants, the parser's type and unsupported-word tables), so a new built-in shows up
 // by itself. Everything is sorted: the card, and with it the system prompt, is byte-identical on every build (prefix caching).
 import { BUILTINS, CANONICAL_NAMES, CONSTANTS } from '../lang/builtins';
+import { FINANCIAL } from '../lang/builtins/financial';
 import { TYPE_KEYWORDS, UNSUPPORTED_IDENTS, UNSUPPORTED_KEYWORDS } from '../lang/parseStatements';
 import { BUILTIN_OBJECTS } from './knownNames';
 
@@ -12,8 +13,9 @@ const cap = (s: string): string => s[0].toUpperCase() + s.slice(1);
 /** "(1): Abs, Asc, …" per argument count; `2-3` optional arguments, `2+` any number from 2. */
 function functionLines(): string[] {
   const groups = new Map<string, { min: number; max: number; names: string[] }>();
+  const financial = new Set(FINANCIAL.map(n => n.toLowerCase()));   // on a line of their own
   for (const [key, b] of BUILTINS) {
-    if (key === 'shell') continue;   // exists only to raise a clear error; the card lists it as not available
+    if (key === 'shell' || financial.has(key)) continue;   // Shell exists only to raise a clear error; the card lists it as not available
     const sig = b.maxArgs >= 100 ? `${b.minArgs}+` : b.minArgs === b.maxArgs ? `${b.minArgs}` : `${b.minArgs}-${b.maxArgs}`;
     const g = groups.get(sig) ?? { min: b.minArgs, max: b.maxArgs, names: [] };
     g.names.push(canonical(key));
@@ -52,7 +54,10 @@ const STATEMENTS = 'Option Explicit; Dim / Private / Public / Static x As Type, 
   + ' Also: Mid(s, i, n) = x; LSet / RSet s = x; Error n (Erl gives the last line number); Dim c As New Collection / Set c = New Collection (Add, Item, Count, Remove);'
   + ' Function F() As Long() returns an array; IsMissing(v) for an Optional Variant; !Name also works inside With rs.'
   + ' Classes: Set x = New Class1 / Dim x As New Class1; Class_Initialize, Class_Terminate; Public vars, Sub, Function,'
-  + ' Property Get/Let/Set, Exit Property, Me; Event E(a) + RaiseEvent E(a) -> Private WithEvents x As Class1, Sub x_E(a); Implements IFoo, Sub IFoo_M().';
+  + ' Property Get/Let/Set, Exit Property, Me; Event E(a) + RaiseEvent E(a) -> Private WithEvents x As Class1, Sub x_E(a); Implements IFoo, Sub IFoo_M().'
+  + ' If TypeOf x Is TextBox (or Form, a class, Collection); named arguments MsgBox Prompt:="x", Title:="t" (skip Optionals);'
+  + ' Option Base 1, Option Compare Text; Global = Public; GoSub label ... Return; On n GoTo|GoSub a, b; Debug.Assert cond;'
+  + ' #Const X = 1, #If X Then ... #ElseIf ... #Else ... #End If.';
 
 /** Builds the card from the language's tables (exported for the stability test). */
 export function buildLanguageReference(): string {
@@ -67,10 +72,11 @@ export function buildLanguageReference(): string {
     `Objects: ${objects.join(', ')}.`,
     'Built-in functions by argument count (String functions also have a $ form, e.g. Left$):',
     ...functionLines(),
+    `Financial: ${FINANCIAL.join(', ')} (VB6 argument order).`,
     'Constant groups (prefix, count, examples):',
     ...constantGroups(),
     `Not available: ${words.join(', ')}; ${drawing.join(' / ')} on forms;`
-      + ' CreateObject / GetObject (no COM automation); Shell (programs cannot be started); named arguments (x:=1).',
+      + ' CreateObject / GetObject (no COM automation); Shell (programs cannot be started).',
   ].join('\n');
 }
 

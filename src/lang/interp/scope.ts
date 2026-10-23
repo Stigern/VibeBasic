@@ -186,7 +186,7 @@ export abstract class ClassValue implements VBObject {
   }
 
   /** The object as a value of type `name`: itself, a view for an interface it implements, or undefined (Type mismatch). */
-  asType(name: string): VBObject | undefined {
+  asType(name: string, _strict?: boolean): VBObject | undefined {
     const k = lc(name.slice(name.lastIndexOf('.') + 1));
     const inst = this.inst;
     if (k === 'object' || k === inst.module.key) return inst;
@@ -419,6 +419,10 @@ export class ModuleScope {
   }
 
   get optionExplicit(): boolean { return this.ast.optionExplicit; }
+  /** `Option Base`: the lower bound of `Dim a(5)` and `Array()`. */
+  get optionBase(): number { return this.ast.optionBase ?? 0; }
+  /** `Option Compare Text`. */
+  get textCompare(): boolean { return this.ast.optionCompareText === true; }
 }
 
 /** Names visible from every module: Public items of standard modules. */
@@ -464,6 +468,8 @@ export class Frame {
   inHandler = false;
   /** The last line number label (`20 x = 1`) passed, for `Erl`; 0 when there is none. */
   lastLine = 0;
+  /** `GoSub`s waiting for their `Return`. */
+  gosubDepth = 0;
   /** The module-level variables the code sees: the module's, or in a class module the object's. */
   readonly vars: Map<string, Variable>;
 

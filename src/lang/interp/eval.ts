@@ -3,7 +3,7 @@
 // Everything that can run user code is a generator (`Gen<T>`, see driver.ts):
 // a procedure call yields a SubCall, a host promise is yielded as-is.
 
-import type { BinaryExpr, CallOrIndex, Expr, MemberExpr, MissingArg, NameExpr, Param, TypeSuffix, UnaryExpr, VBTypeName } from '../ast';
+import { argNames, type BinaryExpr, type CallOrIndex, type Expr, type MemberExpr, type MissingArg, type NameExpr, type Param, type TypeSuffix, type UnaryExpr, type VBTypeName } from '../ast';
 import { VBRuntimeError } from '../errors';
 import { BUILTINS, CONSTANTS } from '../builtins';
 import { BUILTIN_CLASSES } from '../builtins/collection';
@@ -17,7 +17,7 @@ import {
   BuiltinRef, ClassInstance, ClassValue, ConstSlot, ElementSlot, EnumRef, FieldSlot, Frame, MemberRef, ModuleRef, ModuleScope, ObjectRef,
   ProcRef, PropRef, ValueRef, Variable, classesInUse, escape, getField, lc, setField, storeValue, type Binding,
 } from './scope';
-import { binaryOp, plain, unaryOp } from './operators';
+import { binaryOp, compareResult, likeMatch, plain, unaryOp } from './operators';
 import { isNumericType, noteSubtype, operatorType, reportedType, shown, staticType, type StaticType } from './staticTypes';
 import { invokeProc, type BoundArg, MISSING } from './exec';
 import type { Runtime } from './program';
@@ -236,10 +236,22 @@ function rounded(e: BinaryExpr | UnaryExpr, r: VBValue): VBValue {
 }
 
 function slowBinary(f: Frame, e: BinaryExpr, a: VBValue, b: VBValue): VBValue {
+  if (e.text) return textBinary(e.op, a, b);
   if (e.chk !== 3) learn(f, e);
   if (e.chk !== 3) return binaryResult(f, e, a, b);
   if (e.op === '&') return binaryOp('&', shown(f, e.left, a), shown(f, e.right, b));
   return rounded(e, binaryOp(e.op, a, b));
+}
+
+/** `a op b` for a comparison or Like under `Option Compare Text`: two strings compare without case. */
+export function textBinary(op: BinaryExpr['op'], a: VBValue, b: VBValue): VBValue {
+  a = plain(a);
+  b = plain(b);
+  if (typeof a !== 'string' || typeof b !== 'string') return binaryOp(op, a, b);
+  if (op === 'like') return likeMatch(a, b, true);
+  const x = a.toLowerCase();
+  const y = b.toLowerCase();
+  return compareResult(op, x < y ? -1 : x > y ? 1 : 0);
 }
 
 /** A number that may be a Single that is not whole (`maybeSingle` in values.ts; local, the checks run often). */
@@ -360,6 +372,7 @@ export function* evalExpr(f: Frame, e: Expr): Gen<VBValue> {
       const a = yield* evalExpr(f, e.left);
       return binaryResult(f, e, a, yield* evalExpr(f, e.right));
     }
+    case 'typeOf': return typeOfIs(yield* evalExpr(f, e.object), e.typeName);
     case 'new': {
       const o = objectFactory(f.rt, { objectType: e.typeName }, f.module)();
       if (o instanceof ClassInstance) {
@@ -370,6 +383,19 @@ export function* evalExpr(f: Frame, e: Expr): Gen<VBValue> {
       return o;
     }
   }
+}
+
+/**
+ * `TypeOf v Is T`: False for Nothing; an object answers by `asType(T, true)` (class objects, forms, controls), else by
+ * its type name (Collection). `Object` fits every object. A value that is not an object is error 424.
+ */
+function typeOfIs(v: VBValue, typeName: string): boolean {
+  if (v instanceof NothingT) return false;
+  if (!isObject(v)) throw new VBRuntimeError(424);
+  const k = lc(typeName.slice(typeName.lastIndexOf('.') + 1));
+  if (k === 'object') return true;
+  if (v.asType) return v.asType(typeName, true) !== undefined;
+  return lc(v.vbTypeName) === k;
 }
 
 /**
@@ -460,8 +486,12 @@ export function* awaitHost(f: Frame, p: Promise<VBValue>): Gen<VBValue> {
   return v;
 }
 
-/** Host method arguments: a Single as its 7 digits (`List1.AddItem s`, `Coll.Add s`), see `shown`. */
+/**
+ * Host method arguments: a Single as its 7 digits (`List1.AddItem s`, `Coll.Add s`), see `shown`. Host methods have no
+ * parameter names: a named argument is error 448.
+ */
 export function shownArgs(f: Frame, args: (Expr | MissingArg)[], argv: VBValue[]): VBValue[] {
+  if (argNames(args)) throw new VBRuntimeError(448);
   for (let i = 0; i < argv.length; i++) if (isSingleFrac(argv[i])) argv[i] = shown(f, args[i], argv[i]);
   return argv;
 }
@@ -749,6 +779,14 @@ export function* evalArgValues(f: Frame, args: (Expr | MissingArg)[]): Gen<VBVal
 // ---------------------------------------------------------------------------
 
 export function* callBuiltin(f: Frame, b: BuiltinRef, args: (Expr | MissingArg)[]): Gen<VBValue> {
+  const names = argNames(args);
+  if (names) {
+    const params = b.builtin.params;
+    if (!params) throw new VBRuntimeError(448);
+    args = positional(args, names, params);
+    // InStr([start,] s1, s2[, compare]): no Start, the strings come first
+    if (b.name === 'instr' && args[0].kind === 'missing') args = args.slice(1);
+  }
   const r = builtinCall(f, b, args, yield* evalArgValues(f, args));
   return r instanceof Promise ? yield* awaitHost(f, r) : r;
 }
@@ -757,6 +795,10 @@ export function* callBuiltin(f: Frame, b: BuiltinRef, args: (Expr | MissingArg)[
 function builtinCall(f: Frame, b: BuiltinRef, args: (Expr | MissingArg)[], argv: VBValue[]): VBValue | Promise<VBValue> {
   const { minArgs, maxArgs, fn, raw, types, num } = b.builtin;
   if (argv.length < minArgs || argv.length > maxArgs) throw new VBRuntimeError(450);
+  // the calling module's Option Compare / Option Base (InStr, StrComp, Array)
+  const ctx = f.rt.builtinCtx;
+  ctx.textCompare = f.module.textCompare;
+  ctx.optionBase = f.module.optionBase;
   if (classesInUse && b.name === 'array') argv.forEach(escape);   // Array(obj1, obj2): the array keeps them
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
@@ -781,8 +823,28 @@ export function* callProc(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[], i
   return (yield new SubCall(invokeProc(f.run, ref, bound, self))) as VBValue;
 }
 
+/**
+ * The arguments of a call with named arguments in the order of `params` (names, any case): an omitted one is a
+ * MissingArg. A name that is no parameter is error 448; one given twice "Named argument already specified".
+ */
+export function positional(args: (Expr | MissingArg)[], names: (string | undefined)[], params: readonly string[]): (Expr | MissingArg)[] {
+  const out: (Expr | MissingArg | undefined)[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const n = names[i];
+    const at = n === undefined ? i : params.findIndex(p => lc(p) === lc(n));
+    if (at < 0) throw new VBRuntimeError(448);
+    if (out[at] !== undefined) throw compileError('Named argument already specified');
+    out[at] = args[i];
+  }
+  const line = args[0]?.line ?? 0;
+  for (let i = 0; i < out.length; i++) out[i] ??= { kind: 'missing', line };
+  return out as (Expr | MissingArg)[];
+}
+
 function* bindArgs(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[]): Gen<BoundArg[]> {
   const params = ref.proc.params;
+  const names = argNames(args);
+  if (names) args = positional(args, names, params.filter(p => !p.paramArray).map(p => p.name));
   const rest = params.length > 0 && params[params.length - 1].paramArray ? params.length - 1 : -1;
   if (args.length > params.length && rest < 0) throw compileError('Wrong number of arguments or invalid property assignment');
   const out: BoundArg[] = [];

@@ -78,8 +78,10 @@ def('Switch', 2, 100, a => {
   return Null;
 });
 
-def('Array', 0, 100, a => {
-  const arr = new VBArray('Variant', [[0, a.length - 1]]);
-  a.forEach((v, i) => arr.set([i], v === undefined ? Empty : plain(v)));
+/** Array(...): lower bound from the calling module's Option Base. */
+def('Array', 0, 100, (a, ctx) => {
+  const lo = ctx.optionBase ?? 0;
+  const arr = new VBArray('Variant', [[lo, lo + a.length - 1]]);
+  a.forEach((v, i) => arr.set([lo + i], v === undefined ? Empty : plain(v)));
   return arr as VBValue;
 });

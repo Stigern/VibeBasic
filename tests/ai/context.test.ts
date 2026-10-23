@@ -144,7 +144,12 @@ test('language reference: stable, within budget, in both system prompts', () => 
   // review 08 language additions: built-ins come from the table, statements from the card's own line
   for (const name of ['IsMissing', 'FormatNumber', 'FormatCurrency', 'FormatPercent', 'Filter', 'CDec', 'IsError', 'CVErr', 'Erl']) expect(LANGUAGE_REFERENCE).toMatch(new RegExp(`[:,] ${name}\\b`));
   for (const text of ['Mid(s, i, n) = x', 'LSet / RSet', 'Error n', 'New Collection', 'As Long() returns an array']) expect(LANGUAGE_REFERENCE).toContain(text);
-  expect(LANGUAGE_REFERENCE.length / 3.5).toBeLessThanOrEqual(1500);
+  // 0.9 A2: the new syntax is on the card, the financial functions on one line, GoSub / Global no longer "not available"
+  for (const text of ['TypeOf x Is', 'Prompt:=', 'Option Base 1', 'GoSub label', 'On n GoTo', '#If X Then', 'Debug.Assert', 'Financial: DDB,']) expect(LANGUAGE_REFERENCE).toContain(text);
+  for (const name of ['LenB', 'MidB', 'ChrB', 'Partition']) expect(LANGUAGE_REFERENCE).toMatch(new RegExp(`[:,] ${name}\\b`));
+  expect(LANGUAGE_REFERENCE).not.toMatch(/Not available: .*(GoSub|Global|named arguments)/);
+  expect(LANGUAGE_REFERENCE).not.toMatch(/\(3-5\): .*\bPmt\b/);
+  expect(LANGUAGE_REFERENCE.length / 3.5).toBeLessThanOrEqual(2000);
   const p = project();
   expect(buildCodeRequest(p, 'm1', 1, 'x')[0].content).toContain(LANGUAGE_REFERENCE);
   expect(buildFormRequest(p, p.forms[0].id, 'x')[0].content).toContain(LANGUAGE_REFERENCE);

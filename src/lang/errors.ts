@@ -58,6 +58,7 @@ const ERROR_TEXTS: Record<number, string> = {
   383: 'Property is read-only',
   424: 'Object required',
   438: "Object doesn't support this property or method",
+  448: 'Named argument not found',
   450: 'Wrong number of arguments or invalid property assignment',
   // DAO / ADO (Data control, Adodc, Recordset)
   3001: 'Invalid argument.',

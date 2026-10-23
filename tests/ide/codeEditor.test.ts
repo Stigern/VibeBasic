@@ -176,3 +176,12 @@ test('Property blocks fold, Enter after Property Get adds End Property, Get is a
   const cls = (line: string) => vbSpans(line).map(s => `${line.slice(s.from, s.to)}:${s.cls.slice(6)}`);
   expect(cls('Property Get X()')).toEqual(['Property:kwb', 'Get:kw', 'X:proc']);
 });
+
+test('#If ... #End If folds (also around whole procedures), is auto-closed and coloured as keywords', () => {
+  const src = ['#If DEBUG Then', 'Sub A()', '  #If X Then', '  y = 1', '  #Else', '  y = 2', '  #End If', 'End Sub', '#End If'].join('\n');
+  expect(ranges(src)).toEqual(['ppif 1-9', 'proc 2-8', 'ppif 3-7']);
+  expect(scan(src).keysByLine.get(5)?.[0].block.kind).toBe('ppif');
+  expect(scan('Sub A()\n#If X Then\nEnd Sub').unclosed.get(2)).toBe('#End If');
+  expect(vbSpans('#If DEBUG Then').slice(0, 1)).toEqual([{ from: 0, to: 3, cls: 'cm-vb-kw' }]);
+  expect(vbSpans('#End If')[0]).toEqual({ from: 0, to: 4, cls: 'cm-vb-kw' });
+});

@@ -184,6 +184,7 @@ function procNames(p: ProcDecl): { declared: Set<string>; implicit: Set<string> 
     else if (e.kind === 'member') expr(e.object);
     else if (e.kind === 'unary') expr(e.operand);
     else if (e.kind === 'binary') { expr(e.left); expr(e.right); }
+    else if (e.kind === 'typeOf') expr(e.object);
   };
   /** A variable the statement writes (Input #, Get #, Mid, LSet...): a bare name may be created implicitly. */
   const target = (t: Expr) => { if (t.kind === 'name') implicit.add(lc(t.name)); expr(t); };
@@ -218,7 +219,9 @@ function procNames(p: ProcDecl): { declared: Set<string>; implicit: Set<string> 
         case 'putFile': expr(s.file); if (s.rec) expr(s.rec); expr(s.target); break;
         case 'seekFile': expr(s.file); expr(s.pos); break;
         case 'name': expr(s.from); expr(s.to); break;
-        case 'exit': case 'onError': case 'resume': case 'goto': case 'label': case 'end': case 'stop': break;
+        case 'onGoto': expr(s.index); break;
+        case 'debugAssert': expr(s.cond); break;
+        case 'exit': case 'onError': case 'resume': case 'goto': case 'return': case 'label': case 'end': case 'stop': break;
         default: { const never: never = s; void never; }
       }
     }
@@ -343,6 +346,7 @@ function checkProc(c: Checker, p: ProcDecl): void {
         return;
       case 'unary': expr(e.operand); return;
       case 'binary': expr(e.left); expr(e.right); return;
+      case 'typeOf': expr(e.object); return;
     }
   }
 
@@ -397,7 +401,9 @@ function checkProc(c: Checker, p: ProcDecl): void {
         case 'seekFile': expr(s.file); expr(s.pos); break;
         case 'name': expr(s.from); expr(s.to); break;
         case 'raiseEvent': s.args.forEach(expr); break;
-        case 'exit': case 'onError': case 'resume': case 'goto': case 'label': case 'end': case 'stop': break;
+        case 'onGoto': expr(s.index); break;
+        case 'debugAssert': expr(s.cond); break;
+        case 'exit': case 'onError': case 'resume': case 'goto': case 'return': case 'label': case 'end': case 'stop': break;
         default: { const never: never = s; void never; }
       }
     }

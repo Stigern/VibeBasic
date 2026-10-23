@@ -34,6 +34,8 @@ import './misc';
 import './files';
 import './constants';
 import './err';
+import './financial';
+import './params';
 
 /**
  * Numeric built-ins get a Single argument as its exact value (Sqr(s), CDbl(s) as in VB6); the others (CStr, Left,
@@ -43,7 +45,7 @@ for (const n of [
   'abs', 'sgn', 'int', 'fix', 'sqr', 'log', 'exp', 'sin', 'cos', 'tan', 'atn', 'round', 'hex', 'oct', 'rnd', 'randomize',
   'cint', 'clng', 'cdbl', 'csng', 'ccur', 'cbyte', 'cbool', 'cdate', 'cdec', 'cverr', 'year', 'month', 'day', 'hour', 'minute',
   'second', 'weekday', 'dateserial', 'timeserial', 'dateadd', 'datediff', 'datepart', 'monthname', 'weekdayname', 'rgb', 'qbcolor',
-  'space', 'chr', 'chrw', 'lbound', 'ubound',
+  'space', 'chr', 'chrw', 'chrb', 'lbound', 'ubound',
 ]) {
   const b = BUILTINS.get(n);
   if (b) b.num = true;

@@ -236,3 +236,18 @@ test('App.EXEName is the project name in the IDE and cb.appName in a made app', 
   await start(mk(), { appName: 'Mitt Program' });
   expect(out.join('')).toContain('Mitt Program');
 });
+
+test('TypeOf on controls and forms (For Each over Me.Controls)', async () => {
+  const s = await start(project([{ name: 'Form1', controls: [['TextBox', 'Text1'], ['CommandButton', 'Command1'], ['Label', 'Label1']],
+    code: [
+      'Private Sub Form_Load()',
+      '  Dim c As Control, n As Integer',
+      '  For Each c In Me.Controls',
+      '    If TypeOf c Is TextBox Or TypeOf c Is VB.Label Then n = n + 1',
+      '  Next',
+      '  Debug.Print n; TypeOf Command1 Is CommandButton; TypeOf Command1 Is Control; TypeOf Command1 Is TextBox',
+      '  Debug.Print TypeOf Me Is Form; TypeOf Me Is Form1; TypeOf Me Is Form2; TypeOf Text1 Is Object',
+      'End Sub'].join('\n') }]));
+  await settle(s);
+  expect(out).toEqual([' 2 TrueTrueFalse', 'TrueTrueFalseTrue']);
+});

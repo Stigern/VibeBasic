@@ -1,5 +1,5 @@
 import { parseExpression, Parser } from '../../src/lang/parser';
-import { exprToString } from '../../src/lang/ast';
+import { argNames, exprToString } from '../../src/lang/ast';
 import { tokenize } from '../../src/lang/lexer';
 import { VBSyntaxError } from '../../src/lang/errors';
 
@@ -12,7 +12,11 @@ test('int div below mul', () => expect(p('a * b \\ c')).toBe('(\\ (* a b) c)'));
 test('not below compare', () => expect(p('Not a = b')).toBe('(not (= a b))'));
 test('member chain and call', () => expect(p('Form1.Command1(2).Caption')).toBe('(. (call (. Form1 Command1) 2) Caption)'));
 test('missing args', () => expect(p('MsgBox("x", , "t")')).toBe('(call MsgBox "x" <missing> "t")'));
-test('named args rejected', () => expect(() => p('f(x:=1)')).toThrow('Named arguments are not supported'));
+test('named args are kept by position; positional after named is an error', () => {
+  const e = parseExpression('f(1, Title:=2)');
+  expect(e.kind === 'call' && argNames(e.args)).toEqual([undefined, 'Title']);
+  expect(() => p('f(x:=1, 2)')).toThrow('Expected: named parameter');
+});
 
 // Extra coverage
 test('full precedence ladder', () => {
@@ -112,9 +116,9 @@ test('with member', () => {
   expect(p('x & .Text')).toBe('(& x (with. Text))');
 });
 test('new', () => expect(p('New Collection')).toBe('(new Collection)'));
-test('named args rejected in any position', () => {
-  expect(() => p('f(1, x:=2)')).toThrow('Named arguments are not supported');
-  expect(() => p('a.b(Caption:="x")')).toThrow(VBSyntaxError);
+test('TypeOf ... Is', () => {
+  expect(p('Not TypeOf x.y Is VB.TextBox And b')).toBe('(and (not (typeof (. x y) VB.TextBox)) b)');
+  expect(() => p('TypeOf x')).toThrow('Expected: Is');
 });
 test('every node carries line, also across continuations', () => {
   const e = parseExpression('a + _\n b');

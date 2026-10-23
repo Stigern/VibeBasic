@@ -33,6 +33,12 @@ export function vbSpans(line: string, names: ReadonlySet<string> = new Set()): S
       const afterAs = prevKw === 'as' || (prevKw === 'new' && toks[i - 2]?.kind === 'keyword' && toks[i - 2].text.toLowerCase() === 'as');
       const afterDot = prev?.kind === 'op' && (prev.text === '.' || prev.text === '!');
       if (fileWords.has(i)) { add(t, 'cm-vb-kw'); continue; }
+      // `#If`, `#ElseIf`, `#Else`, `#End If`, `#Const`: the `#` is part of the keyword
+      if (i === 0 && t.kind === 'op' && t.text === '#' && /^(if|elseif|else|end|const)$/i.test(toks[1]?.text ?? '')) {
+        out.push({ from: t.col - 1, to: toks[1].col - 1 + toks[1].text.length, cls: 'cm-vb-kw' });
+        i++;
+        continue;
+      }
       switch (t.kind) {
         case 'keyword':
           // `String(5, "x")` / `Date` as functions keep the keyword colour; `As String` is a type

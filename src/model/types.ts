@@ -33,6 +33,9 @@ export interface ModuleDef { id: string; name: string; code: string; kind?: 'cla
 /** What a module is to the interpreter. */
 export const moduleKind = (m: ModuleDef): 'module' | 'class' => (m.kind === 'class' ? 'class' : 'module');
 export interface Asset { mime: string; dataBase64: string }
-/** `components`: the OCX file names checked in Project > Components (see components.ts); their controls are in the Toolbox. */
+/**
+ * `components`: the OCX file names checked in Project > Components (see components.ts); their controls are in the Toolbox.
+ * `condComp`: the conditional compilation arguments for `#If` (`DEBUG = 1 : BETA = 0`); older projects have none.
+ */
 export interface Project { name: string; title: string; startupForm: string; forms: FormDef[]; modules: ModuleDef[];
-  assets: Record<string, Asset>; iconAsset: string | null; components: string[] }
+  assets: Record<string, Asset>; iconAsset: string | null; components: string[]; condComp?: string }

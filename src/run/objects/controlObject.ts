@@ -731,6 +731,12 @@ export class ControlObject implements VBObject, DataConsumer {
 
   // -- VBObject ---------------------------------------------------------------------------------------------
 
+  /** `TypeOf c Is TextBox` / `Is Control` (`strict`); a variable of any object type may hold the control, as before. */
+  asType(typeName: string, strict?: boolean): VBObject | undefined {
+    const k = typeName.slice(typeName.lastIndexOf('.') + 1).toLowerCase();
+    return !strict || k === 'object' || k === 'control' || k === this.vbTypeName.toLowerCase() ? this : undefined;
+  }
+
   hasMember(name: string): boolean {
     const l = name.toLowerCase();
     if (l === 'name') return true;

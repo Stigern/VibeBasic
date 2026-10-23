@@ -4,6 +4,11 @@ import { newProject } from '../../src/model/controls';
 const NOT_PROJECT = 'This is not a VibeBasic project file.';
 
 test('roundtrip', () => { const p = newProject(); expect(parseProject(serializeProject(p))).toEqual(p); });
+test('condComp (conditional compilation arguments) round-trips; a non-string is rejected', () => {
+  const p = { ...newProject(), condComp: 'DEBUG = 1' };
+  expect(parseProject(serializeProject(p)).condComp).toBe('DEBUG = 1');
+  expect(() => parseProject(serializeProject({ ...p, condComp: 5 as unknown as string }))).toThrow(NOT_PROJECT);
+});
 test('header first', () => expect(serializeProject(newProject()).startsWith('{\n  "format": "vibebasic-project",\n  "version": 1')).toBe(true));
 test('not a project', () => expect(() => parseProject('{"a":1}')).toThrow(NOT_PROJECT));
 test('newer version', () => expect(() => parseProject('{"format":"vibebasic-project","version":2}')).toThrow('This project was made with a newer version of VibeBasic.'));

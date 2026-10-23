@@ -18,7 +18,7 @@ test('type and enum', () => {
   const m = parseModule('Type P\n X As Integer\nEnd Type\nEnum Farge\n Rod = 1\n Bla\nEnd Enum', 'M');
   expect(m.types[0].name).toBe('P'); expect(m.enums[0].members).toEqual([{ name: 'Rod', value: 1 }, { name: 'Bla', value: 2 }]);
 });
-test('unsupported statement', () => expect(() => parseModule('Sub A()\nGoSub X\nEnd Sub', 'M')).toThrow('Not supported in VibeBasic: GoSub'));
+test('unsupported statement', () => expect(() => parseModule('Sub A()\nDeclare X\nEnd Sub', 'M')).toThrow('Not supported in VibeBasic: Declare'));
 test('line check ignores block matching', () => { expect(checkLineSyntax('If x Then')).toBeNull(); expect(checkLineSyntax('End If')).toBeNull(); expect(checkLineSyntax('x = ')?.message).toBe('Expected: expression'); });
 test('collects several errors with lines', () => {
   expect(findSyntaxErrors('Sub A()\nx = \ny = 1 2\nEnd Sub', 'M').map(e => e.line)).toEqual([2, 3]);
@@ -105,7 +105,7 @@ describe('module structure', () => {
   test('executable statement outside procedure', () => expect(err('x = 1')).toBe('Invalid outside procedure'));
   test('Option Explicit inside procedure', () => expect(berr('Option Explicit')).toBe('Invalid inside procedure'));
   test('Option Explicit after a procedure', () => expect(err('Sub A()\nEnd Sub\nOption Explicit')).toBe('Option Explicit must precede any procedure'));
-  test('unsupported Option', () => expect(err('Option Base 1')).toBe('Not supported in VibeBasic: Option Base'));
+  test('unsupported Option', () => expect(err('Option Strict')).toBe('Not supported in VibeBasic: Option Strict'));
   test('missing End Sub / End Function', () => {
     expect(err('Sub A()\nx = 1')).toBe('Expected: End Sub');
     expect(err('Function F()\nx = 1')).toBe('Expected: End Function');
@@ -322,7 +322,10 @@ describe('statements', () => {
     expect(sh(b[3])).toEqual([[null, ',']]);
     expect(sh(b[4])).toEqual([['a', ','], [null, ','], ['b', null]]);
   });
-  test('Debug.Assert style member call stays a call', () => expect(one('Debug.Assert x').kind).toBe('call'));
+  test('Debug.Assert is a statement; other Debug members stay calls', () => {
+    expect(one('Debug.Assert x').kind).toBe('debugAssert');
+    expect(one('Debug.Foo x').kind).toBe('call');
+  });
   test('statement keywords are case-insensitive', () => {
     expect(body('IF a THEN\nX = 1\nend if').map(s => s.kind)).toEqual(['if']);
   });
@@ -435,7 +438,7 @@ describe('syntax errors', () => {
     expect(berr('Line (0, 0)-(10, 10)')).toBe('Not supported in VibeBasic: Line');
     expect(berr('Circle (5, 5), 3')).toBe('Not supported in VibeBasic: Circle');
     expect(berr('PSet (5, 5)')).toBe('Not supported in VibeBasic: PSet');
-    expect(berr('GoSub Foo')).toBe('Not supported in VibeBasic: GoSub');
+    expect(berr('Declare Foo')).toBe('Not supported in VibeBasic: Declare');
   });
   test('file I/O statements', () => {
     const b = body('Open App.Path & "\\x.dat" For Random Access Read Write Lock Write As #f Len = 20\nClose\nClose #1, 2\n'
@@ -470,7 +473,7 @@ describe('checkLineSyntax', () => {
     ['If x', 'Expected: Then'],
     ['For i = 1', 'Expected: To'],
     ['Print "x"', 'Not supported in VibeBasic: Print'],
-    ['GoSub Foo', 'Not supported in VibeBasic: GoSub'],
+    ['Declare Foo', 'Not supported in VibeBasic: Declare'],
     ['x = f(1', 'Expected: )'],
     ['x = "abc', 'Unterminated string'],
     ['End If x', 'Expected: end of statement'],

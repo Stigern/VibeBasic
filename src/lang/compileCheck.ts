@@ -236,7 +236,9 @@ function walkStmts(body: Stmt[], stmt: (s: Stmt) => void, expr: (e: Expr | Missi
       case 'seekFile': x(s.file); x(s.pos); break;
       case 'name': x(s.from); x(s.to); break;
       case 'raiseEvent': s.args.forEach(x); break;
-      case 'exit': case 'onError': case 'resume': case 'goto': case 'label': case 'end': case 'stop': break;
+      case 'onGoto': x(s.index); break;
+      case 'debugAssert': x(s.cond); break;
+      case 'exit': case 'onError': case 'resume': case 'goto': case 'return': case 'label': case 'end': case 'stop': break;
       default: { const never: never = s; void never; }
     }
   }
@@ -251,5 +253,6 @@ function walkExpr(e: Expr | MissingArg, visit: (e: Expr) => void): void {
     case 'call': walkExpr(e.target, visit); e.args.forEach(a => walkExpr(a, visit)); break;
     case 'unary': walkExpr(e.operand, visit); break;
     case 'binary': walkExpr(e.left, visit); walkExpr(e.right, visit); break;
+    case 'typeOf': walkExpr(e.object, visit); break;
   }
 }

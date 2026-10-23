@@ -19,6 +19,10 @@ export interface BuiltinCtx {
   err?: ErrObject;
   /** The program's open files and CurDir (file I/O built-ins raise 68 without it). */
   files?: FileIO;
+  /** The calling module's `Option Compare Text` (InStr, StrComp without a compare argument); set for each call. */
+  textCompare?: boolean;
+  /** The calling module's `Option Base` (Array); set for each call. */
+  optionBase?: number;
 }
 
 /** VB's fixed Rnd sequence: every fresh program (without Randomize) starts the same. */
@@ -42,6 +46,8 @@ export type Builtin = {
   types?: boolean;
   /** Numeric: a Single argument comes exact (Sqr(s)); other built-ins get a Single as its 7 shown digits (CStr(s)). */
   num?: boolean;
+  /** VB6's parameter names, for named arguments (`MsgBox Prompt:="x", Title:="t"`); see params.ts. */
+  params?: readonly string[];
 };
 
 export interface DefOptions { raw?: boolean; types?: boolean; num?: boolean }
@@ -94,6 +100,10 @@ export const optInt = (v: VBValue | undefined, dflt: number): number => (v === u
 
 /** vbTextCompare (1) selects case-insensitive comparison. */
 export const isTextCompare = (v: VBValue | undefined): boolean => v !== undefined && !(v instanceof NullT) && toNumber(v) === 1;
+
+/** A compare argument where an omitted one (or vbUseCompareOption, -1) means the module's Option Compare (InStr, StrComp). */
+export const textMode = (v: VBValue | undefined, ctx: BuiltinCtx): boolean =>
+  v === undefined || (!(v instanceof NullT) && toNumber(v) === -1) ? ctx.textCompare === true : isTextCompare(v);
 
 /** `s` repeated `n` times; more than 2^26 characters is error 7. */
 export function repeat(s: string, n: number): string {

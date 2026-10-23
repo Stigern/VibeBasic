@@ -11,8 +11,8 @@
 // Exit For/Do/Sub and GoTo travel as completion values, not exceptions.
 
 import type {
-  AlignStmt, ArrayBound, CaseTest, ConstDecl, ErrorStmt, Expr, ForEachStmt, ForStmt, LabelStmt, MidStmt, MissingArg, ProcDecl, SelectStmt, Stmt,
-  VarDecl, VBTypeName,
+  AlignStmt, ArrayBound, CaseTest, CompareOp, ConstDecl, DebugAssertStmt, ErrorStmt, Expr, ForEachStmt, ForStmt, GotoStmt, LabelStmt, MidStmt, MissingArg,
+  OnGotoStmt, ProcDecl, ReturnStmt, SelectStmt, Stmt, VarDecl, VBTypeName,
 } from '../ast';
 import { VBRuntimeError, internalError } from '../errors';
 import { PrintLine } from '../printFormat';
@@ -27,7 +27,7 @@ import {
 } from './scope';
 import {
   afterHostCall, assign, awaitHost, callBuiltin, callProc, classCall, constExpr, evalArgValues, evalExpr, formMethod, hostRefs, lookup,
-  memberGet, methodArgs, objectFactory, shownArgs, variableOf, withObject,
+  memberGet, methodArgs, objectFactory, shownArgs, textBinary, variableOf, withObject,
 } from './eval';
 import { compareResult, plain, truthy } from './operators';
 import { shown, type StaticType } from './staticTypes';
@@ -56,7 +56,8 @@ export class ResumeJump {
   constructor(readonly mode: 'resume' | 'next' | 'label', readonly label = '') {}
 }
 
-export type Completion = undefined | 'exitFor' | 'exitDo' | 'exitProc' | GotoJump | ResumeJump;
+/** `'return'`: a `Return` going back to its GoSub (`gosub`). */
+export type Completion = undefined | 'exitFor' | 'exitDo' | 'exitProc' | 'return' | GotoJump | ResumeJump;
 
 /** Returned by `handleError` to run the failing statement (or loop step) again (Resume, Continue). */
 export const RETRY = Symbol('retry');
@@ -545,7 +546,7 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[], inst?: Cla
 export function* evalBounds(f: Frame, bounds: ArrayBound[]): Gen<[number, number][]> {
   const out: [number, number][] = [];
   for (const b of bounds) {
-    const lo = b.lower ? toNumber(yield* evalExpr(f, b.lower)) : 0;
+    const lo = b.lower ? toNumber(yield* evalExpr(f, b.lower)) : f.module.optionBase;
     const hi = toNumber(yield* evalExpr(f, b.upper));
     out.push([lo, hi]);
   }
@@ -760,7 +761,9 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
       if (isLineNumber(s.name)) f.lastLine = +s.name;
       return;
     case 'error': case 'mid': case 'lset': case 'rset': return yield* execStringStmt(f, s);
+    case 'return': case 'onGoto': case 'debugAssert': return yield* execJumpStmt(f, s);
     case 'goto': {
+      if (s.gosub) return yield* execJumpStmt(f, s);
       const label = lc(s.label);
       if (!f.proc || !procLabels(f.proc).has(label)) throw compileError('Label not defined');
       return new GotoJump(label);
@@ -870,6 +873,55 @@ function* execStringStmt(f: Frame, s: ErrorStmt | MidStmt | AlignStmt): Gen<Comp
   }
 }
 
+/** `GoSub`, `Return`, `On n GoTo/GoSub` and `Debug.Assert` (kept out of execInner, which stays small for the hot statements). */
+function* execJumpStmt(f: Frame, s: GotoStmt | ReturnStmt | OnGotoStmt | DebugAssertStmt): Gen<Completion> {
+  switch (s.kind) {
+    case 'goto': return yield* gosub(f, labelOf(f, s.label));
+    case 'return':
+      if (f.gosubDepth === 0) throw new VBRuntimeError(3);
+      return 'return';
+    case 'onGoto': {
+      const labels = s.labels.map(l => labelOf(f, l));
+      const n = bankers(toNumber(plain(yield* evalExpr(f, s.index))));
+      if (n < 0 || n > 255) throw new VBRuntimeError(5);
+      if (n === 0 || n > labels.length) return undefined;   // out of range: the next statement
+      return s.gosub ? yield* gosub(f, labels[n - 1]) : new GotoJump(labels[n - 1]);
+    }
+    case 'debugAssert': {
+      // a made app leaves the statement out (the expression is not evaluated)
+      if (f.rt.ignoreAsserts) return undefined;
+      if (!truthy(yield* evalExpr(f, s.cond))) yield* enterBreak(f, 'pause');
+      return undefined;
+    }
+  }
+}
+
+/** A GoTo / GoSub label of the procedure (lower case); none: "Label not defined". */
+function labelOf(f: Frame, name: string): string {
+  const label = lc(name);
+  if (!f.proc || !procLabels(f.proc).has(label)) throw compileError('Label not defined');
+  return label;
+}
+
+/**
+ * `GoSub label`: the procedure's code from the label (in the procedure's own body, not inside a block) runs until a
+ * `Return`, then the statement after the GoSub. Reaching the end of the procedure first ends the procedure.
+ */
+function* gosub(f: Frame, label: string): Gen<Completion> {
+  const body = f.proc!.body;
+  const at = jumpTo(f, body, label);
+  if (at === undefined) throw compileError('GoSub into a block is not supported');
+  f.gosubDepth++;
+  let c: Completion;
+  try {
+    c = yield* execBlock(f, body, at + 1);
+  } finally {
+    f.gosubDepth--;
+  }
+  if (c === 'return') return undefined;
+  return c ?? 'exitProc';
+}
+
 /** A call statement: `Foo 1, 2`, `Call Foo(1)`, `obj.Method x`. */
 function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Completion> {
   if (target.kind === 'name') {
@@ -930,6 +982,7 @@ function* caseMatches(f: Frame, subject: VBValue, t: CaseTest): Gen<boolean> {
     const a = plain(subject);
     const b = plain(v);
     if (a instanceof NullT || b instanceof NullT) return false;
+    if (f.module.textCompare) return textBinary(op as CompareOp, a, b) === true;   // Option Compare Text
     return compareResult(op, compare(a, b));
   };
   switch (t.kind) {

@@ -35,6 +35,8 @@ const BUILTIN_TYPES: Record<string, StaticType | 'arg'> = {
   cint: 'Integer', clng: 'Long', csng: 'Single', cdbl: 'Double', ccur: 'Currency', cbyte: 'Byte', cbool: 'Boolean',
   cdec: 'Decimal', cdate: 'Date', cstr: 'String', len: 'Long', lenb: 'Long', asc: 'Integer', ascw: 'Integer', ascb: 'Integer',
   sgn: 'Integer', timer: 'Single', rnd: 'Single', val: 'Double', lbound: 'Long', ubound: 'Long', abs: 'arg', int: 'arg', fix: 'arg',
+  pmt: 'Double', ppmt: 'Double', ipmt: 'Double', fv: 'Double', pv: 'Double', npv: 'Double', irr: 'Double', mirr: 'Double',
+  nper: 'Double', rate: 'Double', ddb: 'Double', sln: 'Double', syd: 'Double',
 };
 
 /** A whole number literal is an Integer or a Long by its size; one with a point or exponent is a Double. */
@@ -98,6 +100,7 @@ export function staticType(f: Frame, e: Expr | MissingArg): StaticType {
     }
     case 'unary': return e.st ?? (e.st = unaryType(f, e));
     case 'binary': return e.st ?? (e.st = binaryType(f, e));
+    case 'typeOf': return 'Boolean';
   }
   return V;
 }

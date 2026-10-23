@@ -97,7 +97,9 @@ export class RunSession implements Host, FormSession {
       ...project.forms.map(f => ({ name: f.name, kind: 'form' as const, source: f.code })),
       ...project.modules.map(m => ({ name: m.name, kind: moduleKind(m), source: m.code })),
     ];
-    this.program = new Program(modules, this, { appTitle: this.title, appPath: cb.appPath });
+    this.program = new Program(modules, this, {
+      appTitle: this.title, appPath: cb.appPath, condComp: project.condComp, ignoreAsserts: mode !== 'ide',
+    });
   }
 
   get appPath(): string { return this.cb.appPath; }

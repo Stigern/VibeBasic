@@ -7,6 +7,7 @@
 import { VBSyntaxError } from '../lang/errors';
 import type { BreakInfo } from '../lang/host';
 import { findSyntaxErrors } from '../lang/parser';
+import { parseCondConsts, type CondConsts } from '../lang/condComp';
 import { listProcedures } from '../model/procedures';
 import { moduleKind } from '../model/types';
 import { RunSession } from '../run/session';
@@ -127,8 +128,10 @@ export class RunController {
       ...p.modules.map(m => ({ name: m.name, kind: moduleKind(m), source: m.code })),
     ];
     if (fullCompile) {
+      let consts: CondConsts | undefined;
+      try { consts = p.condComp ? parseCondConsts(p.condComp) : undefined; } catch { /* reported when the program starts */ }
       for (const m of modules) {
-        const errs = findSyntaxErrors(m.source, m.name);
+        const errs = findSyntaxErrors(m.source, m.name, consts);
         if (errs.length) { await this.showCompileError(errs[0]); return null; }
       }
     }

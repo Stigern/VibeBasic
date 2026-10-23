@@ -33,12 +33,22 @@ export type BinaryOp =
   | '^' | '*' | '/' | '\\' | 'mod' | '+' | '-' | '&'
   | '=' | '<>' | '<' | '>' | '<=' | '>=' | 'like' | 'is'
   | 'and' | 'or' | 'xor' | 'eqv' | 'imp';
-export interface BinaryExpr extends OperatorTypeInfo { kind: 'binary'; op: BinaryOp; left: Expr; right: Expr; line: number }
+/** `text`: a comparison or Like in a module with `Option Compare Text` (case-insensitive). */
+export interface BinaryExpr extends OperatorTypeInfo { kind: 'binary'; op: BinaryOp; left: Expr; right: Expr; line: number; text?: boolean }
 /** `.Text` inside a `With` block. */
 export interface WithMemberExpr { kind: 'withMember'; name: string; line: number; paren?: boolean }
 /** The object of the innermost `With` block: the `X` of `!Name` (`X("Name")`) inside it. */
 export interface WithObjectExpr { kind: 'withObject'; line: number }
 export interface NewExpr { kind: 'new'; typeName: string; line: number }
+/** `TypeOf x Is T`: whether the object `x` is of type `T` (a control type, Form, a form or class name, Object ...). */
+export interface TypeOfExpr { kind: 'typeOf'; object: Expr; typeName: string; line: number }
+/**
+ * Named arguments (`MsgBox Prompt:="x", Title:="t"`): the parser attaches the names to the argument array, by position
+ * (undefined for a positional argument; positional ones come first). The callee puts them in place (eval.ts `positional`).
+ */
+export type ArgList = (Expr | MissingArg)[] & { names?: (string | undefined)[] };
+/** The names of a call's named arguments, or undefined when it has none. */
+export const argNames = (args: (Expr | MissingArg)[]): (string | undefined)[] | undefined => (args as ArgList).names;
 /*
  * `paren` on a name, member, call/index or With member: the expression was written in its own parentheses (`Foo (x)`,
  * `Call Foo((x))`). It is then a value, never a variable: a ByRef parameter gets a copy.
@@ -46,7 +56,7 @@ export interface NewExpr { kind: 'new'; typeName: string; line: number }
 
 export type Expr =
   | NumberLit | StringLit | DateLit | BoolLit | NothingLit | NameExpr | MemberExpr
-  | CallOrIndex | UnaryExpr | BinaryExpr | WithMemberExpr | WithObjectExpr | NewExpr;
+  | CallOrIndex | UnaryExpr | BinaryExpr | WithMemberExpr | WithObjectExpr | NewExpr | TypeOfExpr;
 
 /** S-expression rendering of an expression, used by tests. */
 export function exprToString(e: Expr | MissingArg): string {
@@ -65,6 +75,7 @@ export function exprToString(e: Expr | MissingArg): string {
     case 'withMember': return `(with. ${e.name})`;
     case 'withObject': return '(with)';
     case 'new': return `(new ${e.typeName})`;
+    case 'typeOf': return `(typeof ${exprToString(e.object)} ${e.typeName})`;
   }
 }
 
@@ -151,6 +162,10 @@ export interface EventDecl { name: string; params: Param[]; line: number }
 export interface ModuleAst {
   name: string;
   optionExplicit: boolean;
+  /** `Option Base 1`: the default lower bound of arrays (`Dim a(5)`, `Array()`); absent: 0. */
+  optionBase?: number;
+  /** `Option Compare Text`: =, <, Like, InStr and StrComp (without a compare argument) ignore case. */
+  optionCompareText?: boolean;
   variables: VarDecl[];
   consts: ConstDecl[];
   types: TypeDecl[];
@@ -203,7 +218,14 @@ export interface WithStmt { kind: 'with'; object: Expr; body: Stmt[]; line: numb
 export interface OnErrorStmt { kind: 'onError'; mode: 'resumeNext' | 'goto' | 'goto0'; label?: string; line: number }
 /** `Resume` (mode 'resume'), `Resume Next` (mode 'next'), `Resume label`. */
 export interface ResumeStmt { kind: 'resume'; mode: 'resume' | 'next' | 'label'; label?: string; line: number }
-export interface GotoStmt { kind: 'goto'; label: string; line: number }
+/** `GoTo label`; with `gosub`, `GoSub label` (a `Return` comes back after it). */
+export interface GotoStmt { kind: 'goto'; label: string; line: number; gosub?: boolean }
+/** `Return` (from a GoSub). */
+export interface ReturnStmt { kind: 'return'; line: number }
+/** `On n GoTo l1, l2, ...` / `On n GoSub ...`: the n-th label; n = 0 or more than the labels goes on with the next statement. */
+export interface OnGotoStmt { kind: 'onGoto'; index: Expr; labels: string[]; gosub: boolean; line: number }
+/** `Debug.Assert cond`: break mode when cond is False (in the IDE; a made app skips it). */
+export interface DebugAssertStmt { kind: 'debugAssert'; cond: Expr; line: number }
 /** `Retry:` or a bare line number (`10`); `name` is the text. */
 export interface LabelStmt { kind: 'label'; name: string; line: number }
 export interface EndStmt { kind: 'end'; line: number }
@@ -246,4 +268,5 @@ export type Stmt =
   | DimStmt | ConstStmt | ReDimStmt | EraseStmt | AssignStmt | CallStmt | IfStmt | SelectStmt
   | ForStmt | ForEachStmt | DoStmt | WhileStmt | ExitStmt | WithStmt | OnErrorStmt | ResumeStmt
   | GotoStmt | LabelStmt | EndStmt | StopStmt | UnloadStmt | LoadStmt | DebugPrintStmt | ErrorStmt | MidStmt | AlignStmt
-  | OpenStmt | CloseStmt | FilePrintStmt | FileInputStmt | GetPutStmt | SeekStmt | NameStmt | RaiseEventStmt;
+  | OpenStmt | CloseStmt | FilePrintStmt | FileInputStmt | GetPutStmt | SeekStmt | NameStmt | RaiseEventStmt
+  | ReturnStmt | OnGotoStmt | DebugAssertStmt;

@@ -3,8 +3,8 @@
 // Functions that VB6 lets take Null (Left, UCase, ...) return Null for Null.
 
 import { VBRuntimeError } from '../errors';
-import { Null, VBArray, VBRecord, toBool, toStr } from '../values';
-import { def, intArg, isNullV, isTextCompare, optInt, repeat } from './util';
+import { Null, VBArray, VBRecord, toBool, toStr, type VBValue } from '../values';
+import { def, intArg, isNullV, isTextCompare, optInt, repeat, textMode } from './util';
 
 // ---- Windows-1252 ----
 
@@ -119,7 +119,7 @@ def('AscW', 1, 1, a => {
 
 const fold = (s: string, text: boolean) => (text ? s.toLowerCase() : s);
 
-def('InStr', 2, 4, a => {
+def('InStr', 2, 4, (a, ctx) => {
   let start = 1;
   let rest = a;
   if (a.length === 4 || (a.length === 3 && typeof a[0] === 'number')) {
@@ -129,7 +129,7 @@ def('InStr', 2, 4, a => {
   const [h, n, cmp] = rest;
   if (isNullV(h) || isNullV(n)) return Null;
   if (start < 1) throw new VBRuntimeError(5);
-  const text = isTextCompare(cmp);
+  const text = textMode(cmp, ctx);
   const hay = fold(toStr(h), text);
   const needle = fold(toStr(n), text);
   if (start > hay.length) return 0;
@@ -152,9 +152,9 @@ def('InStrRev', 2, 4, a => {
   return hay.lastIndexOf(needle, start - needle.length) + 1;
 });
 
-def('StrComp', 2, 3, a => {
+def('StrComp', 2, 3, (a, ctx) => {
   if (isNullV(a[0]) || isNullV(a[1])) return Null;
-  const text = isTextCompare(a[2]);
+  const text = textMode(a[2], ctx);
   const x = fold(toStr(a[0]), text);
   const y = fold(toStr(a[1]), text);
   return x < y ? -1 : x > y ? 1 : 0;
@@ -237,3 +237,91 @@ def('Join', 1, 2, a => {
   const delim = a[1] === undefined ? ' ' : toStr(a[1]);
   return arr.values().map(v => toStr(v)).join(delim);
 });
+
+// ---- bytes: a string is UTF-16, two bytes a character (low byte first) ----
+// VibeBasic strings hold whole characters: where a byte function would leave an odd last byte, that byte becomes a
+// character of its own (ChrB(65) is "A", LenB(ChrB(65)) is 2; in VB6 it is a 1-byte string).
+
+const bytesOf = (s: string): number[] => {
+  const b: number[] = [];
+  for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); b.push(c & 0xff, c >> 8); }
+  return b;
+};
+const fromBytes = (b: number[]): string => {
+  let s = '';
+  for (let i = 0; i < b.length; i += 2) s += String.fromCharCode(b[i] | ((b[i + 1] ?? 0) << 8));
+  return s;
+};
+const byteCount = (v: VBValue): number => {
+  const n = intArg(v);
+  if (n < 0) throw new VBRuntimeError(5);
+  return n;
+};
+
+def('LenB', 1, 1, (a, ctx) => (isNullV(a[0]) ? Null : a[0] instanceof VBRecord && ctx.files ? ctx.files.recordLength(a[0]) : toStr(a[0]).length * 2));
+def('LeftB', 2, 2, a => (isNullV(a[0]) ? Null : fromBytes(bytesOf(toStr(a[0])).slice(0, byteCount(a[1])))));
+def('RightB', 2, 2, a => {
+  if (isNullV(a[0])) return Null;
+  const n = byteCount(a[1]);
+  const b = bytesOf(toStr(a[0]));
+  return n === 0 ? '' : fromBytes(b.slice(Math.max(0, b.length - n)));
+});
+def('MidB', 2, 3, a => {
+  if (isNullV(a[0])) return Null;
+  const start = intArg(a[1]);
+  if (start < 1) throw new VBRuntimeError(5);
+  const b = bytesOf(toStr(a[0]));
+  return fromBytes(a[2] === undefined ? b.slice(start - 1) : b.slice(start - 1, start - 1 + byteCount(a[2])));
+});
+def('InStrB', 2, 4, a => {
+  let start = 1;
+  let rest = a;
+  if (a.length === 4 || (a.length === 3 && typeof a[0] === 'number')) {
+    start = intArg(a[0]);
+    rest = a.slice(1);
+  }
+  const [h, n] = rest;
+  if (isNullV(h) || isNullV(n)) return Null;
+  if (start < 1) throw new VBRuntimeError(5);
+  const hay = bytesOf(toStr(h));
+  const needle = bytesOf(toStr(n));
+  if (start > hay.length) return 0;
+  if (needle.length === 0) return start;
+  for (let i = start - 1; i + needle.length <= hay.length; i++) {
+    let k = 0;
+    while (k < needle.length && hay[i + k] === needle[k]) k++;
+    if (k === needle.length) return i + 1;
+  }
+  return 0;
+});
+def('AscB', 1, 1, a => {
+  const s = toStr(a[0]);
+  if (s === '') throw new VBRuntimeError(5);
+  return s.charCodeAt(0) & 0xff;
+});
+def('ChrB', 1, 1, a => {
+  const n = intArg(a[0]);
+  if (n < 0 || n > 255) throw new VBRuntimeError(5);
+  return String.fromCharCode(n);
+});
+
+// ---- Partition ----
+
+/**
+ * Partition(Number, Start, Stop, Interval): the range of `Interval` numbers from `Start` that Number is in, as
+ * "lo:hi", both sides padded to the width of Stop + 1 (" 20: 29"); below Start "   : 19", above Stop " 200:    ".
+ */
+def('Partition', 4, 4, a => {
+  if (a.some(v => isNullV(v))) return Null;
+  const n = intArg(a[0]);
+  const start = intArg(a[1]);
+  const stop = intArg(a[2]);
+  const interval = intArg(a[3]);
+  if (start < 0 || stop <= start || interval < 1) throw new VBRuntimeError(5);
+  const w = Math.max(String(stop + 1).length, String(start - 1).length);
+  const pad = (v: number | string) => String(v).padStart(w, ' ');
+  if (n < start) return `${pad('')}:${pad(start - 1)}`;
+  if (n > stop) return `${pad(stop + 1)}:${pad('')}`;
+  const lo = start + Math.floor((n - start) / interval) * interval;
+  return `${pad(lo)}:${pad(Math.min(lo + interval - 1, stop))}`;
+}, { num: true });

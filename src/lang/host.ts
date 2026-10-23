@@ -39,8 +39,10 @@ export interface VBObject {
   /**
    * The object as the value of a variable declared `As <typeName>` (or `As Object`): itself, another view of it (an
    * interface it implements), or undefined when it is not of that type (error 13). Without it any object fits.
+   * `strict` is `TypeOf x Is <typeName>`: undefined for every type the object is not (a host object may otherwise
+   * let a variable of a type it does not know hold it).
    */
-  asType?(typeName: string): VBObject | undefined;
+  asType?(typeName: string, strict?: boolean): VBObject | undefined;
   /** A property written by code (a form's Property Let/Set): an assignment does not read it first. */
   codeProperty?(name: string): boolean;
 }

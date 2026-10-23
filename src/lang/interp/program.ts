@@ -9,6 +9,7 @@ import { generalDateText, localeDateParser } from '../builtins/format';
 import { newRndState } from '../builtins/util';
 import { FileIO } from '../fileio/fileIO';
 import { parseModule } from '../parser';
+import { parseCondConsts, type CondConsts } from '../condComp';
 import {
   Empty, NothingT, VBArray, VBRecord, VBRef, defaultValue, isObject, setDateTextFormatter, setDateTextParser, toNumber, type DateTextFormatter,
   type DateTextParser, type VBValue,
@@ -47,6 +48,10 @@ export interface ProgramOptions {
   appTitle?: string;
   /** App.Path: where CurDir starts (default '/'). */
   appPath?: string;
+  /** The project's conditional compilation arguments for `#If` (`DEBUG = 1 : BETA = 0`, see condComp.ts). */
+  condComp?: string;
+  /** A made app: `Debug.Assert` does nothing (the IDE breaks when its condition is False). */
+  ignoreAsserts?: boolean;
 }
 
 export type ProgramState = 'idle' | 'running' | 'break' | 'ended';
@@ -128,6 +133,8 @@ export class Runtime {
   readonly classes = new Map<string, ModuleScope>();
   /** Objects of class modules that have not terminated, in the order they were made. */
   readonly instances = new Set<ClassInstance>();
+  /** `Debug.Assert` is skipped (a made app). */
+  readonly ignoreAsserts: boolean;
   /**
    * Objects whose last counted reference went away, with the call depth at that moment: a statement at that depth or
    * shallower terminates them when it ends (exec.ts `reap`), unless they were stored again meanwhile.
@@ -156,8 +163,16 @@ export class Runtime {
       cancellable: p => this.cancellable(p),
     };
     this.declRun = new Run(this);
+    this.ignoreAsserts = opts.ignoreAsserts === true;
+    let consts: CondConsts | undefined;
+    try {
+      consts = opts.condComp ? parseCondConsts(opts.condComp) : undefined;
+    } catch (e) {
+      if (e instanceof VBSyntaxError) throw new VBSyntaxError(`Conditional compilation arguments: ${e.message}`, 1, 1);
+      throw e;
+    }
     for (const src of sources) {
-      const m = new ModuleScope(src.name, src.kind, parseModule(src.source, src.name));
+      const m = new ModuleScope(src.name, src.kind, parseModule(src.source, src.name, consts));
       this.modules.set(m.key, m);
       this.moduleList.push(m);
       if (m.kind === 'module') this.globals.addModule(m);
@@ -253,7 +268,7 @@ export class Runtime {
       };
       if (d.bounds) {
         fi.bounds = d.bounds.map(b => [
-          b.lower ? toNumber(constExpr(frame, b.lower)) : 0,
+          b.lower ? toNumber(constExpr(frame, b.lower)) : found.module.optionBase,
           toNumber(constExpr(frame, b.upper)),
         ]);
       }
@@ -308,7 +323,7 @@ export class Runtime {
     const frame = this.moduleFrame(m);
     for (const d of m.ast.variables) {
       const v = newVariable(frame, d, d.isArray && d.bounds ? d.bounds.map(b => [
-        b.lower ? toNumber(constExpr(frame, b.lower)) : 0, toNumber(constExpr(frame, b.upper)),
+        b.lower ? toNumber(constExpr(frame, b.lower)) : m.optionBase, toNumber(constExpr(frame, b.upper)),
       ] as [number, number]) : null);
       if (d.withEvents) v.opts.events = { module: m, instance: inst };
       inst.vars.set(lc(d.name), v);

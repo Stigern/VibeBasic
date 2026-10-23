@@ -381,3 +381,29 @@ test('class modules: the validator accepts class code and the project symbols li
   expect(symbols).toContain('Worker (class): Public Property Get N() As Long');
   expect(symbols).not.toMatch(/mN/);
 });
+
+test('0.9 A2 syntax is valid to the validator', () => {
+  const f = form();
+  const code = [
+    'Option Base 1', 'Option Compare Text', '#Const BETA = 1', 'Global gCount As Integer',
+    'Private Sub Show(a As String, Optional b As String = "")', 'End Sub',
+    'Private Sub Command1_Click()',
+    '    Dim c As Control, n As Integer',
+    '    For Each c In Me.Controls',
+    '        If TypeOf c Is CommandButton And Not TypeOf c Is Timer Then n = n + 1',
+    '    Next',
+    '#If BETA Then',
+    '    MsgBox Prompt:="beta", Title:="T"',
+    '#Else',
+    '    MsgBox "release"',
+    '#End If',
+    '    Show b:="x", a:="y"',
+    '    Debug.Assert n > 0',
+    '    On n GoSub One, Two',
+    '    GoSub One',
+    '    Debug.Print Pmt(0.1, 12, -1000), LenB("ab"), Partition(5, 0, 9, 2)',
+    '    Exit Sub',
+    'One:', '    Return', 'Two:', '    Return',
+    'End Sub'].join('\n');
+  expect(validateCode(code, { moduleName: 'Form1', form: f })).toEqual([]);
+});

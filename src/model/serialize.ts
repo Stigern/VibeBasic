@@ -49,7 +49,8 @@ function isProjectShape(o: Record<string, unknown>): boolean {
     && Array.isArray(o.forms) && o.forms.every(isForm)
     && Array.isArray(o.modules) && o.modules.every(isModule)
     && isObject(o.assets) && Object.values(o.assets).every(isAsset)
-    && (o.iconAsset === null || typeof o.iconAsset === 'string');
+    && (o.iconAsset === null || typeof o.iconAsset === 'string')
+    && (o.condComp === undefined || typeof o.condComp === 'string');
 }
 
 export function parseProject(text: string): Project {

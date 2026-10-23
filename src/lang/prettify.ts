@@ -11,7 +11,7 @@
 // - keywords, built-in functions, constants: canonical casing (KEYWORD_CASE);
 //   declared names: the spelling in `known` (see collectIdentifiers);
 //   names after `.` / `!` are left alone (plan 02 fixes control properties),
-//   except `Debug.Print`.
+//   except `Debug.Print` and `Debug.Assert`.
 // - one space around binary operators, none after a unary +/-; one space
 //   after `,` and `;`, none before; none inside parentheses; none around `.`;
 //   `:=` unspaced; `:` is written as `: ` (a label `Name:` stays as is).
@@ -180,7 +180,7 @@ function prettifyPhysicalLine(line: string, known: Map<string, string>): string 
       const afterMember = prev && (isOp(prev, '.') || isOp(prev, '!'));
       if (afterMember) {
         const before = tokens[i - 2];
-        if (isOp(prev, '.') && before?.kind === 'ident' && !before.suffix && before.text.toLowerCase() === 'debug' && lower === 'print') text = 'Print';
+        if (isOp(prev, '.') && before?.kind === 'ident' && !before.suffix && before.text.toLowerCase() === 'debug' && (lower === 'print' || lower === 'assert')) text = lower === 'print' ? 'Print' : 'Assert';
       } else {
         const key = baseOf(t).toLowerCase();
         const cased = known.get(key) ?? (t.suffix ? KEYWORD_CASE.get(key + t.suffix) : undefined) ?? KEYWORD_CASE.get(key);

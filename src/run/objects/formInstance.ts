@@ -446,6 +446,12 @@ export class FormInstance implements VBObject {
 
   // -- VBObject -----------------------------------------------------------------------------------------------
 
+  /** `TypeOf f Is Form` / `Is Form1` (`strict`); a variable of any object type may hold the form, as before. */
+  asType(typeName: string, strict?: boolean): VBObject | undefined {
+    const k = lc(typeName.slice(typeName.lastIndexOf('.') + 1));
+    return !strict || k === 'object' || k === 'form' || k === lc(this.name) ? this : undefined;
+  }
+
   hasMember(name: string): boolean {
     const l = lc(name);
     if (this.controlNames.has(l) || l === 'scalewidth' || l === 'scaleheight' || l === 'name' || FORM_METHODS.has(l) || FORM_OBJECTS.has(l)) return true;
