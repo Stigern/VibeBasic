@@ -49,6 +49,8 @@ function* targetType(f: Frame, e: Expr): Gen<{ type: VBTypeName; fixedLength?: n
   return { type: 'Variant' };
 }
 
+const NUMERIC = new Set(['Integer', 'Long', 'Byte', 'Single', 'Double', 'Currency']);
+
 const isTarget = (e: Expr) => e.kind === 'name' || e.kind === 'member' || e.kind === 'call' || e.kind === 'withMember';
 
 /** The layout Put writes for an expression that is not a variable (`Put #1, , 5` writes an Integer). */
@@ -107,7 +109,7 @@ export function* execFileStmt(f: Frame, s: Stmt): Gen<void> {
       for (const t of s.targets) {
         if (s.kind === 'lineInput') { yield* assign(f, t, files.lineInput(num), false); continue; }
         const { type } = yield* targetType(f, t);
-        const field = files.inputField(num);
+        const field = files.inputField(num, NUMERIC.has(type as string) ? 'yes' : type === 'Variant' ? 'auto' : 'no');
         yield* assign(f, t, type === 'String' ? field.text : field.value, false);
       }
       return;

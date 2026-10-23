@@ -267,7 +267,7 @@ export function single7(f: number): number {
 }
 
 /** True for a value that may be a Single that is not whole (an IEEE single); the code's type decides (staticTypes.ts). */
-export const maybeSingle = (v: VBValue): v is number => typeof v === 'number' && v % 1 !== 0 && Math.fround(v) === v;
+export const maybeSingle = (v: VBValue): v is number => typeof v === 'number' && Math.fround(v) === v && Math.floor(v) !== v;
 
 /** A Currency value: 4 decimals (banker's rounding); error 6 beyond the Currency range. */
 export function toCurrency(n: number): number {

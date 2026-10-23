@@ -408,13 +408,11 @@ function sameType(a: VBTypeName, b: VBTypeName): boolean {
 /** An object type (`As Object`, `As TextBox`): passing one object variable for another copies the reference. */
 const isObjectType = (t: VBTypeName): boolean => t === 'Object' || (typeof t === 'object' && 'objectType' in t);
 
-/** Runs a Sub/Function body in a new frame (run by the driver as a SubCall). */
-export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBValue> {
-  const rt = run.rt;
-  if (run.frames.length >= MAX_CALL_DEPTH) throw new VBRuntimeError(28);
-  const { module, proc } = ref;
-  const f = new Frame(run, module, proc, proc.line);
-  if (args.length > proc.params.length) throw compileError('Wrong number of arguments or invalid property assignment');
+/** The parameters of `f`'s procedure as its locals, from the arguments the caller bound; a Function's result variable. */
+function bindParams(f: Frame, args: BoundArg[]): void {
+  const rt = f.run.rt;
+  const module = f.module;
+  const proc = f.proc!;
   for (let i = 0; i < proc.params.length; i++) {
     const p = proc.params[i];
     let a = args[i];
@@ -462,6 +460,17 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBVal
       : new Variable(proc.name, t, new VBRef(rt.defaultFor(t)));
     f.locals.set(lc(proc.name), f.returnVar);
   }
+}
+
+
+/** Runs a Sub/Function body in a new frame (run by the driver as a SubCall). */
+export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBValue> {
+  const rt = run.rt;
+  if (run.frames.length >= MAX_CALL_DEPTH) throw new VBRuntimeError(28);
+  const { module, proc } = ref;
+  const f = new Frame(run, module, proc, proc.line);
+  if (args.length > proc.params.length) throw compileError('Wrong number of arguments or invalid property assignment');
+  bindParams(f, args);
   run.frames.push(f);
   rt.callDepth++;
   try {
@@ -495,14 +504,18 @@ export function* evalBounds(f: Frame, bounds: ArrayBound[]): Gen<[number, number
 
 /** Creates the variable for a declaration (default value, fixed or dynamic array). */
 export function* declareVariable(f: Frame, d: VarDecl): Gen<Variable> {
+  return newVariable(f, d, d.isArray && d.bounds ? yield* evalBounds(f, d.bounds) : null);
+}
+
+/** The variable of a declaration, with the bounds of a fixed array. */
+function newVariable(f: Frame, d: VarDecl, bounds: [number, number][] | null): Variable {
   const rt = f.run.rt;
   const type = rt.resolveType(d.type, f.module);
   // `As New T`: each element / the variable makes its object when it is first used
   const create = d.isNew ? objectFactory(rt, d.type ?? 'Variant', f.module) : undefined;
+  const n = d.fixedLength;
   if (d.isArray) {
-    const n = d.fixedLength;
-    if (d.bounds) {
-      const bounds = yield* evalBounds(f, d.bounds);
+    if (bounds) {
       const arr = n === undefined ? rt.newArray(type, bounds, true, create) : VBArray.fixedString(bounds, n, true);
       return new Variable(d.name, type, new VBRef(arr), { isArray: true, fixedArray: true });
     }
@@ -510,7 +523,7 @@ export function* declareVariable(f: Frame, d: VarDecl): Gen<Variable> {
     return new Variable(d.name, type, new VBRef(arr), { isArray: true });
   }
   if (create) return new Variable(d.name, type, new AutoNewSlot(create));
-  return new Variable(d.name, type, new VBRef(rt.defaultFor(type, d.fixedLength)), { fixedLength: d.fixedLength });
+  return new Variable(d.name, type, new VBRef(rt.defaultFor(type, n)), { fixedLength: n });
 }
 
 type LocalDecl = { kind: 'dim'; decl: VarDecl } | { kind: 'const'; decl: ConstDecl };

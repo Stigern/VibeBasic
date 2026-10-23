@@ -23,10 +23,11 @@ export interface CallOrIndex { kind: 'call'; target: Expr; args: (Expr | Missing
 export interface MissingArg { kind: 'missing'; line: number }
 export type UnaryOp = 'neg' | 'not';
 /**
- * On operator nodes, filled by the interpreter when first needed (interp/staticTypes.ts): `st` the static result type;
- * `lo`/`hi` the range a numeric result may have without a check (the parser starts them empty: lo > hi).
+ * On operator nodes, filled by the interpreter when first needed (interp/staticTypes.ts, eval.ts `binaryResult`): `st`
+ * the static result type; `chk` what a result needs: 0 nothing, 1 a range check (`lo`..`hi`, Integer/Long/Byte),
+ * 2 not known yet (the parser's value), 3 the slow path (a Single or Currency result; `&` with a Single operand).
  */
-export interface OperatorTypeInfo { st?: VBTypeName | 'Decimal'; lo?: number; hi?: number }
+export interface OperatorTypeInfo { st?: VBTypeName | 'Decimal'; chk?: number; lo?: number; hi?: number }
 export interface UnaryExpr extends OperatorTypeInfo { kind: 'unary'; op: UnaryOp; operand: Expr; line: number }
 export type BinaryOp =
   | '^' | '*' | '/' | '\\' | 'mod' | '+' | '-' | '&'

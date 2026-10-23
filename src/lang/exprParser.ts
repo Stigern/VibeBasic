@@ -142,7 +142,7 @@ export class Parser {
     if (level === 'not') {
       if (this.isKeyword('not')) {
         const t = this.advance();
-        return { kind: 'unary', op: 'not', operand: this.parseLevel(i), line: t.line, st: undefined, lo: Infinity, hi: -Infinity };
+        return { kind: 'unary', op: 'not', operand: this.parseLevel(i), line: t.line, st: undefined, chk: 2, lo: -Infinity, hi: Infinity };
       }
       return this.parseLevel(i + 1);
     }
@@ -152,7 +152,7 @@ export class Parser {
       if (op === undefined || !level.ops.has(op)) return left;
       this.advance();
       const right = this.parseLevel(i + 1);
-      left = { kind: 'binary', op: op as BinaryOp, left, right, line: left.line, st: undefined, lo: Infinity, hi: -Infinity };
+      left = { kind: 'binary', op: op as BinaryOp, left, right, line: left.line, st: undefined, chk: 2, lo: -Infinity, hi: Infinity };
     }
   }
 
@@ -161,7 +161,7 @@ export class Parser {
     const t = this.peek();
     if (t.kind === 'op' && t.text === '-') {
       this.advance();
-      return { kind: 'unary', op: 'neg', operand: this.parseUnary(), line: t.line, st: undefined, lo: Infinity, hi: -Infinity };
+      return { kind: 'unary', op: 'neg', operand: this.parseUnary(), line: t.line, st: undefined, chk: 2, lo: -Infinity, hi: Infinity };
     }
     if (t.kind === 'op' && t.text === '+') {
       this.advance();
@@ -170,7 +170,7 @@ export class Parser {
     // `x = Not y`: Not in operand position (VB6 accepts this).
     if (this.isKeyword('not')) {
       this.advance();
-      return { kind: 'unary', op: 'not', operand: this.parseLevel(COMPARE_LEVEL), line: t.line, st: undefined, lo: Infinity, hi: -Infinity };
+      return { kind: 'unary', op: 'not', operand: this.parseLevel(COMPARE_LEVEL), line: t.line, st: undefined, chk: 2, lo: -Infinity, hi: Infinity };
     }
     return this.parsePower();
   }
@@ -180,7 +180,7 @@ export class Parser {
     while (this.isOp('^')) {
       this.advance();
       const right = this.parsePowerOperand();
-      left = { kind: 'binary', op: '^', left, right, line: left.line, st: undefined, lo: Infinity, hi: -Infinity };
+      left = { kind: 'binary', op: '^', left, right, line: left.line, st: undefined, chk: 2, lo: -Infinity, hi: Infinity };
     }
     return left;
   }
@@ -190,7 +190,7 @@ export class Parser {
     const t = this.peek();
     if (t.kind === 'op' && t.text === '-') {
       this.advance();
-      return { kind: 'unary', op: 'neg', operand: this.parsePowerOperand(), line: t.line, st: undefined, lo: Infinity, hi: -Infinity };
+      return { kind: 'unary', op: 'neg', operand: this.parsePowerOperand(), line: t.line, st: undefined, chk: 2, lo: -Infinity, hi: Infinity };
     }
     if (t.kind === 'op' && t.text === '+') {
       this.advance();

@@ -229,7 +229,8 @@ export class FileIO {
   }
 
   lineInput(num: number): string { return this.readable(num).line(); }
-  inputField(num: number): InputField { return this.readable(num).field(); }
+  /** Input #: the next field (see TextReader.field for `numeric`). */
+  inputField(num: number, numeric: 'yes' | 'no' | 'auto' = 'no'): InputField { return this.readable(num).field(numeric); }
 
   /** Input(n, #f) / InputB: characters of an Input file, bytes of a Binary file (62 when fewer are left). */
   async inputChars(num: number, n: number): Promise<string> {

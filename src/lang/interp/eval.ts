@@ -3,12 +3,12 @@
 // Everything that can run user code is a generator (`Gen<T>`, see driver.ts):
 // a procedure call yields a SubCall, a host promise is yielded as-is.
 
-import type { BinaryExpr, CallOrIndex, Expr, MemberExpr, MissingArg, NameExpr, TypeSuffix, UnaryExpr, VBTypeName } from '../ast';
+import type { BinaryExpr, CallOrIndex, Expr, MemberExpr, MissingArg, NameExpr, Param, TypeSuffix, UnaryExpr, VBTypeName } from '../ast';
 import { VBRuntimeError } from '../errors';
 import { BUILTINS, CONSTANTS } from '../builtins';
 import { VBCollection } from '../builtins/collection';
 import {
-  Empty, Missing, Null, Nothing, NothingT, VBArray, VBRecord, VBRef, isObject, maybeSingle, parseDate, single7, toCurrency, toNumber, toSingle,
+  Empty, Missing, Null, Nothing, NothingT, VBArray, VBRecord, VBRef, isObject, parseDate, single7, toCurrency, toNumber, toSingle,
   type VBValue,
 } from '../values';
 import { localeDateParser } from '../builtins/format';
@@ -188,28 +188,61 @@ function bindingOf(f: Frame, e: NameExpr, call = false): Binding | undefined {
 // ---------------------------------------------------------------------------
 
 /**
- * The number `r` an operator node gave, outside the range the node lets pass unchecked (`lo`..`hi`): checked against
- * the node's static type (staticTypes.ts), which is worked out on the first call and kept on the node with the range.
- * An Integer, Long or Byte result out of range is error 6 (Overflow); a Single or Currency result is rounded like one
- * (those nodes keep an empty range, so every result comes here). Variant and Double nodes let everything pass.
+ * `a op b` for an operator node, by the node's `chk` (see OperatorTypeInfo in ast.ts): most nodes (Double, Variant,
+ * String, comparisons) need nothing; Integer, Long and Byte nodes compare the result with their range (error 6,
+ * Overflow); the rest take `slowBinary`.
  */
-function typedNumber(f: Frame, e: BinaryExpr | UnaryExpr, r: number): number {
-  let t = e.st;
-  if (t === undefined || e.lo! > e.hi!) {
-    t = e.st ??= operatorType(f, e);
-    const range = RANGES[t as string];
-    if (range) { e.lo = range[0]; e.hi = range[1]; }
-    else if (t !== 'Single' && t !== 'Currency') { e.lo = -Infinity; e.hi = Infinity; }
+function binaryResult(f: Frame, e: BinaryExpr, a: VBValue, b: VBValue): VBValue {
+  const k = e.chk;
+  if (k === 0) return binaryOp(e.op, a, b);
+  if (k === 1) {
+    const r = binaryOp(e.op, a, b);
+    if (typeof r === 'number' && (r > e.hi! || r < e.lo!)) throw new VBRuntimeError(6);
+    return r;
   }
-  switch (t) {
-    case 'Integer': case 'Long': case 'Byte': if (r > e.hi! || r < e.lo!) throw new VBRuntimeError(6); return r;
-    case 'Single': return toSingle(r);
-    case 'Currency': return toCurrency(r);
+  return slowBinary(f, e, a, b);
+}
+
+function unaryResult(f: Frame, e: UnaryExpr, v: VBValue): VBValue {
+  const k = e.chk;
+  if (k === 0) return unaryOp(e.op, v);
+  if (k === 1) {
+    const r = unaryOp(e.op, v);
+    if (typeof r === 'number' && (r > e.hi! || r < e.lo!)) throw new VBRuntimeError(6);
+    return r;
   }
-  return r;
+  if (k !== 3) learn(f, e);   // 2: not known yet (also a node made without `chk`)
+  return e.chk === 3 ? rounded(e, unaryOp(e.op, v)) : unaryResult(f, e, v);
 }
 
 const RANGES: Record<string, [number, number]> = { Integer: [-32768, 32767], Long: [-2147483648, 2147483647], Byte: [0, 255] };
+
+/** Works out (once) the static type of an operator node and what its results need (`chk` 0, 1 or 3; `lo`, `hi`). */
+function learn(f: Frame, e: BinaryExpr | UnaryExpr): void {
+  const t = e.st ??= operatorType(f, e);
+  const range = RANGES[t as string];
+  if (range) { e.chk = 1; e.lo = range[0]; e.hi = range[1]; }
+  else if (t === 'Single' || t === 'Currency') e.chk = 3;
+  // `&` with a Single operand shows it with 7 digits
+  else if (e.kind === 'binary' && e.op === '&' && (staticType(f, e.left) === 'Single' || staticType(f, e.right) === 'Single')) e.chk = 3;
+  else e.chk = 0;
+}
+
+/** A Single or Currency node's result, rounded like one. */
+function rounded(e: BinaryExpr | UnaryExpr, r: VBValue): VBValue {
+  if (typeof r !== 'number') return r;
+  return e.st === 'Single' ? toSingle(r) : e.st === 'Currency' ? toCurrency(r) : r;
+}
+
+function slowBinary(f: Frame, e: BinaryExpr, a: VBValue, b: VBValue): VBValue {
+  if (e.chk !== 3) learn(f, e);
+  if (e.chk !== 3) return binaryResult(f, e, a, b);
+  if (e.op === '&') return binaryOp('&', shown(f, e.left, a), shown(f, e.right, b));
+  return rounded(e, binaryOp(e.op, a, b));
+}
+
+/** A number that may be a Single that is not whole (`maybeSingle` in values.ts; local, the checks run often). */
+const isSingleFrac = (v: VBValue): v is number => typeof v === 'number' && Math.fround(v) === v && Math.floor(v) !== v;
 
 /** Marker: the expression needs the generator path. */
 const NOT_SYNC = Symbol('notSync');
@@ -245,17 +278,22 @@ function evalSync(f: Frame, e: Expr): VBValue | typeof NOT_SYNC {
     case 'unary': {
       const v = evalSync(f, e.operand);
       if (v === NOT_SYNC) return v;
-      const r = unaryOp(e.op, v);
-      return typeof r === 'number' && (r > e.hi! || r < e.lo!) ? typedNumber(f, e, r) : r;
+      return e.chk === 0 ? unaryOp(e.op, v) : unaryResult(f, e, v);
     }
     case 'binary': {
       const a = evalSync(f, e.left);
       if (a === NOT_SYNC) return a;
       const b = evalSync(f, e.right);
       if (b === NOT_SYNC) return b;
-      const r = e.op === '&' ? binaryOp('&', shown(f, e.left, a), shown(f, e.right, b)) : binaryOp(e.op, a, b);
-      // only a result outside 0..255 or not whole can overflow its type or need Single/Currency rounding
-      return typeof r === 'number' && (r > e.hi! || r < e.lo!) ? typedNumber(f, e, r) : r;
+      // binaryResult, inlined for the two common cases
+      const k = e.chk;
+      if (k === 0) return binaryOp(e.op, a, b);
+      if (k === 1) {
+        const r = binaryOp(e.op, a, b);
+        if (typeof r === 'number' && (r > e.hi! || r < e.lo!)) throw new VBRuntimeError(6);
+        return r;
+      }
+      return slowBinary(f, e, a, b);
     }
     case 'call': {
       const t = e.target;
@@ -312,15 +350,10 @@ export function* evalExpr(f: Frame, e: Expr): Gen<VBValue> {
     case 'withMember': return yield* memberGet(f, withObject(f), e.name, null);
     case 'withObject': return withObject(f);
     case 'call': return yield* evalCall(f, e);
-    case 'unary': {
-      const r = unaryOp(e.op, yield* evalExpr(f, e.operand));
-      return typeof r === 'number' && (r > e.hi! || r < e.lo!) ? typedNumber(f, e, r) : r;
-    }
+    case 'unary': return unaryResult(f, e, yield* evalExpr(f, e.operand));
     case 'binary': {
       const a = yield* evalExpr(f, e.left);
-      const b = yield* evalExpr(f, e.right);
-      const r = e.op === '&' ? binaryOp('&', shown(f, e.left, a), shown(f, e.right, b)) : binaryOp(e.op, a, b);
-      return typeof r === 'number' && (r > e.hi! || r < e.lo!) ? typedNumber(f, e, r) : r;
+      return binaryResult(f, e, a, yield* evalExpr(f, e.right));
     }
     case 'new': return objectFactory(f.rt, { objectType: e.typeName }, f.module)();
   }
@@ -399,7 +432,7 @@ export function* awaitHost(f: Frame, p: Promise<VBValue>): Gen<VBValue> {
 
 /** Host method arguments: a Single as its 7 digits (`List1.AddItem s`, `Coll.Add s`), see `shown`. */
 export function shownArgs(f: Frame, args: (Expr | MissingArg)[], argv: VBValue[]): VBValue[] {
-  for (let i = 0; i < argv.length; i++) if (maybeSingle(argv[i])) argv[i] = shown(f, args[i], argv[i]);
+  for (let i = 0; i < argv.length; i++) if (isSingleFrac(argv[i])) argv[i] = shown(f, args[i], argv[i]);
   return argv;
 }
 
@@ -578,7 +611,12 @@ export function* evalArgValues(f: Frame, args: (Expr | MissingArg)[]): Gen<VBVal
 // ---------------------------------------------------------------------------
 
 export function* callBuiltin(f: Frame, b: BuiltinRef, args: (Expr | MissingArg)[]): Gen<VBValue> {
-  const argv = yield* evalArgValues(f, args);
+  const r = builtinCall(f, b, args, yield* evalArgValues(f, args));
+  return r instanceof Promise ? yield* awaitHost(f, r) : r;
+}
+
+/** Checks a built-in's arguments (count, Missing ones, Singles shown) and calls it. */
+function builtinCall(f: Frame, b: BuiltinRef, args: (Expr | MissingArg)[], argv: VBValue[]): VBValue | Promise<VBValue> {
   const { minArgs, maxArgs, fn, raw, types, num } = b.builtin;
   if (argv.length < minArgs || argv.length > maxArgs) throw new VBRuntimeError(450);
   for (let i = 0; i < argv.length; i++) {
@@ -587,12 +625,11 @@ export function* callBuiltin(f: Frame, b: BuiltinRef, args: (Expr | MissingArg)[
     if (v === Missing && !raw) {
       if (i < minArgs) throw new VBRuntimeError(448);
       argv[i] = undefined as unknown as VBValue;
-    } else if (!num && maybeSingle(v)) argv[i] = shown(f, args[i], v);   // CStr(s), Left(s, 3), MsgBox s: 7 digits
+    } else if (!num && isSingleFrac(v)) argv[i] = shown(f, args[i], v);   // CStr(s), Left(s, 3), MsgBox s: 7 digits
   }
-  const r = types
+  return types
     ? fn(argv, f.rt.builtinCtx, args.map(a => (a.kind === 'missing' ? undefined : reportedType(f, a))))
     : fn(argv, f.rt.builtinCtx);
-  return r instanceof Promise ? yield* awaitHost(f, r) : r;
 }
 
 /** Calls a user Sub/Function: binds arguments in the caller, then runs the body as a SubCall. */
@@ -617,13 +654,16 @@ function* bindArgs(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[]): Gen<Bou
       const r = yield* refOf(f, a);
       if (r) { out.push(r); continue; }
     }
-    let value = yield* evalExpr(f, a);
-    // a number for a Variant parameter keeps the type the code gives it (TypeName in the callee); a Single its 7 digits
-    const sub = typeof value === 'number' && p.type === undefined && !p.isArray ? reportedType(f, a) : undefined;
-    if (sub === 'Single') value = shown(f, a, value);
-    out.push(sub === undefined ? { value } : { value, sub: sub as StaticType });
+    out.push(valueArg(f, p, a, yield* evalExpr(f, a)));
   }
   return out;
+}
+
+/** A value argument; a number for a Variant parameter keeps the type the code gives it (TypeName), a Single its 7 digits. */
+function valueArg(f: Frame, p: Param, a: Expr, value: VBValue): BoundArg {
+  const sub = typeof value === 'number' && p.type === undefined && !p.isArray ? reportedType(f, a) : undefined;
+  if (sub === undefined) return { value };
+  return { value: sub === 'Single' ? shown(f, a, value) : value, sub: sub as StaticType };
 }
 
 /** A by-reference argument: the slot of a variable, array element or record field; null for other expressions. */
@@ -708,15 +748,12 @@ function assignVariable(v: Variable, value: VBValue, isSet: boolean): void {
  */
 export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean, src?: Expr): Gen<void> {
   if (isSet && !isObjectValue(value)) throw new VBRuntimeError(424);
-  // a Single stored anywhere but in a numeric slot (a String or Variant, a property) becomes its 7 shown digits
-  const single = src !== undefined && maybeSingle(value) && staticType(f, src) === 'Single';
-  const into = (t: VBTypeName | undefined): VBValue => (single && (t === undefined || !isNumericType(t)) ? single7(value as number) : value);
   switch (target.kind) {
     case 'name': {
       let b = bindingOf(f, target);
       if (b === undefined) b = implicitVariable(f, target);
       if (b instanceof Variable && !b.opts.isConst) {
-        assignVariable(b, into(b.type), isSet);
+        assignVariable(b, src === undefined || !isSingleFrac(value) ? value : into(f, src, value, b.type), isSet);
         // `v = CDbl(5)`: the Variant remembers the number's type for TypeName/VarType
         // (an operator node of Variant type tells nothing: skipped; a stale `sub` no longer matches the value)
         if (src !== undefined && b.type === 'Variant' && typeof value === 'number' && !((src.kind === 'binary' || src.kind === 'unary') && src.st === 'Variant')) {
@@ -726,12 +763,12 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean, 
         return;
       }
       if (b instanceof ObjectRef && !isSet) {
-        setDefault(b.obj, [], plain(into(undefined)));
+        setDefault(b.obj, [], plain(src === undefined ? value : into(f, src, value, undefined)));
         yield* afterHostCall(f);
         return;
       }
       if (b instanceof MemberRef) {
-        yield* memberSet(f, b.obj, b.name, [], into(undefined), isSet);
+        yield* memberSet(f, b.obj, b.name, [], src === undefined ? value : into(f, src, value, undefined), isSet);
         return;
       }
       if (b instanceof ProcRef) throw compileError('Function call on left-hand side of assignment must return Variant or Object');
@@ -744,7 +781,7 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean, 
         const b = bindingOf(f, t, true);
         if (b instanceof MemberRef) {
           // `List(2) = "x"` in the form's code
-          yield* memberSet(f, b.obj, b.name, yield* evalArgValues(f, target.args), into(undefined), isSet);
+          yield* memberSet(f, b.obj, b.name, yield* evalArgValues(f, target.args), src === undefined ? value : into(f, src, value, undefined), isSet);
           return;
         }
         if (b instanceof Variable) container = b.value;
@@ -755,7 +792,7 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean, 
         const base = t.kind === 'member' ? yield* memberBase(f, t.object) : withObject(f);
         if (!(base instanceof ModuleRef) && !(base instanceof EnumRef) && isObject(base)) {
           // `List1.List(2) = "x"`
-          yield* memberSet(f, base, t.name, yield* evalArgValues(f, target.args), into(undefined), isSet);
+          yield* memberSet(f, base, t.name, yield* evalArgValues(f, target.args), src === undefined ? value : into(f, src, value, undefined), isSet);
           return;
         }
         container = yield* memberGet(f, base, t.name, null);
@@ -764,18 +801,18 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean, 
       }
       if (container instanceof VBArray) {
         const idx = yield* evalIndices(f, target.args);
-        let v = into(container.elemType);
-        if (!isSet) v = plain(v);
-        container.set(idx, v instanceof VBRecord || v instanceof VBArray ? v.clone() : v);
+        if (src !== undefined) value = into(f, src, value, container.elemType);
+        if (!isSet) value = plain(value);
+        container.set(idx, value instanceof VBRecord || value instanceof VBArray ? value.clone() : value);
         return;
       }
       if (container instanceof NothingT) throw new VBRuntimeError(91);
       if (isObject(container)) {
         if (isSet) throw compileError('Invalid use of property');
         const argv = yield* evalArgValues(f, target.args);
-        const v = plain(into(undefined));
-        if (container.item && argv.length === 1) setDefault(container.item(toNumber(argv[0])), [], v);
-        else setDefault(container, argv, v);
+        if (src !== undefined) value = into(f, src, value, undefined);
+        if (container.item && argv.length === 1) setDefault(container.item(toNumber(argv[0])), [], plain(value));
+        else setDefault(container, argv, plain(value));
         yield* afterHostCall(f);
         return;
       }
@@ -783,16 +820,25 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean, 
     }
     case 'member': case 'withMember': {
       const base = target.kind === 'member' ? yield* memberBase(f, target.object) : withObject(f);
-      let t: VBTypeName | undefined;
-      if (single) {
-        if (base instanceof VBRecord) t = f.rt.typeInfo(base.typeName).fields.get(lc(target.name))?.type;
-        else if (base instanceof ModuleRef) t = base.module.vars.get(lc(target.name))?.type;
-      }
-      yield* memberSet(f, base, target.name, [], into(t), isSet);
+      yield* memberSet(f, base, target.name, [], src === undefined ? value : into(f, src, value, base, target.name), isSet);
       return;
     }
   }
   throw compileError('Expected: variable');
+}
+
+/**
+ * `value` (of the expression `src`) for a slot of type `t` (undefined: a property; a record or module and a name: that
+ * field or variable): a Single stays exact in a numeric slot and becomes its 7 shown digits anywhere else (a String or
+ * Variant, a property).
+ */
+function into(f: Frame, src: Expr, value: VBValue, t: VBTypeName | undefined | VBValue | ModuleRef | EnumRef, name?: string): VBValue {
+  if (!isSingleFrac(value) || staticType(f, src) !== 'Single') return value;
+  let type: VBTypeName | undefined;
+  if (name === undefined) type = t as VBTypeName | undefined;
+  else if (t instanceof VBRecord) type = f.rt.typeInfo(t.typeName).fields.get(lc(name))?.type;
+  else if (t instanceof ModuleRef) type = t.module.vars.get(lc(name))?.type;
+  return type !== undefined && isNumericType(type) ? value : single7(value);
 }
 
 /**

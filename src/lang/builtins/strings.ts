@@ -3,7 +3,7 @@
 // Functions that VB6 lets take Null (Left, UCase, ...) return Null for Null.
 
 import { VBRuntimeError } from '../errors';
-import { Null, VBArray, VBRecord, toStr } from '../values';
+import { Null, VBArray, VBRecord, toBool, toStr } from '../values';
 import { def, intArg, isNullV, isTextCompare, optInt, repeat } from './util';
 
 // ---- Windows-1252 ----
@@ -204,6 +204,20 @@ def('Split', 1, 4, a => {
   const arr = new VBArray('String', [[0, parts.length - 1]]);
   parts.forEach((p, i) => arr.set([i], p));
   return arr;
+});
+
+/** Filter(strings, match[, include[, compare]]): the elements that contain `match` (or, with include False, do not). */
+def('Filter', 2, 4, a => {
+  const arr = a[0];
+  if (isNullV(arr) || isNullV(a[1])) throw new VBRuntimeError(94);
+  if (!(arr instanceof VBArray) || arr.bounds.length !== 1) throw new VBRuntimeError(13);
+  const text = isTextCompare(a[3]);
+  const match = fold(toStr(a[1]), text);
+  const include = a[2] === undefined || toBool(a[2]);
+  const hits = arr.values().map(v => toStr(v)).filter(v => fold(v, text).includes(match) === include);
+  const out = new VBArray('String', [[0, hits.length - 1]]);
+  hits.forEach((h, i) => out.set([i], h));
+  return out;
 });
 
 def('Join', 1, 2, a => {

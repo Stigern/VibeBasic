@@ -285,3 +285,67 @@ Debug.Print "1,000" = 1000; "1,000" + 1; Val("1,000")`))).toEqual([
     'TrueTrueTrueFalseFalse', ' 1000  1234.5  1234.5 -5 -5 -3 ', 'True 1001  1 ',
   ]);
 });
+
+test('#12 FormatNumber, FormatCurrency, FormatPercent, Filter, CDec, IsError, CVErr', async () => {
+  expect(await run(main(`Debug.Print FormatNumber(1234.567, 2); " "; FormatNumber(-0.5, 1, vbFalse, vbTrue); " "; FormatNumber(1234.5, 0, , , vbFalse)
+Debug.Print FormatCurrency(5); " "; FormatCurrency(-1234.5); " "; FormatCurrency(-2, 0, , vbFalse)
+Debug.Print FormatPercent(0.5); " "; FormatPercent(0.1234, 1); " "; FormatNumber(0.25)
+Debug.Print Join(Filter(Split("a,b,ab", ","), "a"), "|"); " "; Join(Filter(Split("a,b,AB", ","), "a", False), "|"); " "; Join(Filter(Split("a,b,AB", ","), "a", True, vbTextCompare), "|")
+Debug.Print CDec(1.5); UBound(Filter(Split("x,y", ","), "z"))
+Dim e: e = CVErr(5)
+Debug.Print IsError(e); IsError(5); TypeName(e); VarType(e); e`))).toEqual([
+    '1,234.57 (.5) 1235', '$5.00 ($1,234.50) -$2', '50.00% 12.3% 0.25', 'a|ab b|AB a|AB', ' 1.5 -1 ', 'TrueFalseError 10 Error 5',
+  ]);
+});
+
+test('#14 Format @ keeps the order of extra characters; ! fills from the left', async () => {
+  expect(await run(main(`Debug.Print Format("hello", "@@@"); "|"; Format("abcdef", "@@-@@"); "|"; Format("hi", "!@@@@@"); "|"; Format("hi", "@@@@@"); "|"; Format("abcdef", "!@@-@@")`)))
+    .toEqual(['hello|abcd-ef|hi   |   hi|ab-cdef']);
+});
+
+test("#19 Format AMPM is the locale's AM/PM text", async () => {
+  expect(await run(main(`Debug.Print Format(#3:05:00 PM#, "h:mm AMPM"); "|"; Format(#9:05:00 AM#, "hh:mm ampm")`))).toEqual(['3:05 PM|09:05 AM']);
+});
+
+test('#10 Input # ends a number at a space, so Print # numbers read back', async () => {
+  expect(await run(main(`Dim a As Integer, b As Integer, c As Integer, v, w, s As String, t
+Open "n.txt" For Output As #1
+Print #1, 1; 2; 3
+Print #1, -4.5; 6, "x y"
+Print #1, "hello world"
+Write #1, CVErr(7)
+Close #1
+Open "n.txt" For Input As #1
+Input #1, a, b, c
+Debug.Print a; b; c
+Input #1, v, w, s
+Debug.Print v; w; s
+Input #1, t: Debug.Print t
+Input #1, t: Debug.Print TypeName(t); t
+Close #1`))).toEqual([' 1  2  3 ', '-4.5  6 x y', 'hello world', 'ErrorError 7']);
+});
+
+test('#5 CDate, DateValue and IsDate read the date texts VB6 reads', async () => {
+  const y = new Date().getFullYear();
+  expect(await run(main(`Debug.Print IsDate("1-5-2003"); IsDate("2003/01/05"); IsDate("Jan 5, 2003"); IsDate("January 5 2003"); IsDate("5 Jan 2003"); IsDate("1/5")
+Debug.Print DateValue("Jan 5, 2003"); CDate("5-Jan-2003"); CDate("2003/1/5"); CDate("1.5.2003"); CDate("13/1/2003"); CDate("Sunday, January 5, 2003")
+Debug.Print CDate("Jan 5, 2003 10:30 PM"); Year(CDate("1/5")) = ${y}; Month(CDate("1/5")); Day(CDate("Jan 2003"))
+Debug.Print IsDate("Jan"); IsDate("Foo 5, 2003"); IsDate("2/30/2003"); IsDate("1 2 3 4")`))).toEqual([
+    'TrueTrueTrueTrueTrueTrue', '1/5/20031/5/20031/5/20031/5/20031/13/20031/5/2003', '1/5/2003 10:30:00 PMTrue 1  1 ', 'FalseFalseFalseFalse',
+  ]);
+});
+
+test('#5 day-first locales read numbers day first', async () => {
+  const host = new TestHost();
+  const prog = new Program([{ name: 'Module1', kind: 'module', source: main('Debug.Print Month(CDate("3-4-2003")); Day(CDate("3-4-2003")); Month(CDate("5 jan 2003")); Month(CDate("13.1.2003"))') }], host, { locale: 'en-GB' });
+  await prog.runEvent('Module1', 'Main');
+  expect(host.lines()).toEqual([' 4  3  1  1 ']);
+});
+
+test('#4/#18 Single and Currency results of typed operands are rounded like their type', async () => {
+  expect(await run(main(`Dim c As Currency, s As Single, i As Integer
+c = 1.23456: s = 2: i = 3
+Debug.Print c; c * i; c / 3; s / i; s * 0.1; -s / 3; TypeName(c * i); TypeName(s * i); TypeName(s * 0.1)`))).toEqual([
+    ' 1.2346  3.7038  .411533333333333  .6666667  .2 -.6666667 CurrencySingleDouble',
+  ]);
+});

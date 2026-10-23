@@ -47,7 +47,8 @@ const STATEMENTS = 'Option Explicit; Dim / Private / Public / Static x As Type, 
   + ' Do [While|Until] ... Loop [While|Until]; While ... Wend; With ... End With; Exit Sub / Function / For / Do;'
   + ' On Error GoTo label / Resume Next / GoTo 0; Resume [Next]; GoTo label; Load / Unload; End; Stop; Debug.Print; : joins statements, _ continues a line.'
   + ' Files: Open path For Input|Output|Append|Binary|Random As #n [Len = n]; Close [#n]; Print #n, a; b; Write #n, a, b; Input #n, a, b;'
-  + ' Line Input #n, s; Get / Put #n, [pos], var; Seek #n, pos; Name old As new (paths may use \\ or /, relative to CurDir = App.Path at start).';
+  + ' Line Input #n, s; Get / Put #n, [pos], var; Seek #n, pos; Name old As new (paths may use \\ or /, relative to CurDir = App.Path at start).'
+  + ' Also: Mid(s, i, n) = x; LSet / RSet s = x; Error n; Dim c As New Collection / Set c = New Collection (Add, Item, Count, Remove).';
 
 /** Builds the card from the language's tables (exported for the stability test). */
 export function buildLanguageReference(): string {

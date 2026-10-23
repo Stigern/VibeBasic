@@ -4,7 +4,7 @@
 import { asc1252, chr1252 } from '../builtins/strings';
 import { VBRuntimeError } from '../errors';
 import { printItemText, printNumber } from '../printFormat';
-import { Empty, EmptyT, Null, NullT, dateFrom, dateParts, isDate, isObject, type VBValue } from '../values';
+import { Empty, EmptyT, Null, NullT, VBErrorValue, dateFrom, dateParts, isDate, isObject, type VBValue } from '../values';
 
 // ---- codec ----
 
@@ -68,6 +68,7 @@ export function writeItemText(v: VBValue): string {
   if (v instanceof NullT) return '#NULL#';
   if (v instanceof EmptyT) return '';
   if (isDate(v)) return writeDate(v.serial);
+  if (v instanceof VBErrorValue) return `#ERROR ${v.code}#`;
   return printItemText(v);
 }
 
@@ -117,8 +118,12 @@ export class TextReader {
     return t[p] === ',' ? p + 1 : this.skipBreak(p);
   }
 
-  /** Input #: the next comma- or line-separated field. 62 at the end of the file. */
-  field(): InputField {
+  /**
+   * Input #: the next comma- or line-separated field. 62 at the end of the file. An unquoted number read into a numeric
+   * variable (`numeric` 'yes'), or into a Variant (`'auto'`, when the text there is a number), also ends at a space or
+   * tab, so `Print #1, 1; 2; 3` (" 1  2  3 ") reads back as three fields.
+   */
+  field(numeric: 'yes' | 'no' | 'auto' = 'no'): InputField {
     const t = this.text;
     let p = this.pos;
     while (p < t.length && (t[p] === ' ' || t[p] === '\t')) p++;
@@ -142,6 +147,18 @@ export class TextReader {
       }
     }
     let e = p;
+    if (numeric !== 'no') {
+      while (e < t.length && t[e] !== ',' && t[e] !== '\r' && t[e] !== '\n' && t[e] !== ' ' && t[e] !== '\t') e++;
+      const word = t.slice(p, e);
+      if (word !== '' && (numeric === 'yes' || NUMBER.test(word))) {
+        // after the number: blanks, then at most one comma or the line break
+        let q = e;
+        while (q < t.length && (t[q] === ' ' || t[q] === '\t')) q++;
+        this.pos = t[q] === ',' ? q + 1 : this.skipBreak(q);
+        return { value: NUMBER.test(word) ? Number(word) : word, text: word };
+      }
+      e = p;
+    }
     while (e < t.length && t[e] !== ',' && t[e] !== '\r' && t[e] !== '\n') e++;
     const raw = t.slice(p, e).replace(/[ \t]+$/, '');
     this.pos = t[e] === ',' ? e + 1 : this.skipBreak(e);
@@ -156,6 +173,8 @@ function hashValue(inner: string): VBValue | undefined {
   if (s === 'TRUE') return true;
   if (s === 'FALSE') return false;
   if (s === 'NULL') return Null;
+  const err = /^ERROR\s+(\d+)$/.exec(s);
+  if (err) return new VBErrorValue(+err[1]);
   const m = /^(?:(\d{4})-(\d{1,2})-(\d{1,2}))?\s*(?:(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(s);
   if (m && (m[1] || m[4])) {
     return m[1]

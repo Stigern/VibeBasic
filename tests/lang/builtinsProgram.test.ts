@@ -226,7 +226,8 @@ Debug.Print Format(CDate("2026-10-22"), "yyyy-mm-dd"); " "; Format(CDate("10/22/
 
   test('the parser of one Program does not leak into another', async () => {
     const host = new TestHost();
-    const src = 'Sub Main()\nDebug.Print IsDate("22.10.2026")\nEnd Sub\n';
+    // a Norwegian month name: en-US reads 22.10.2026 too (VB6 swaps day and month when the month is out of range)
+    const src = 'Sub Main()\nDebug.Print IsDate("22. okt. 2026")\nEnd Sub\n';
     const us = new Program([{ name: 'Module1', kind: 'module', source: src }], host, { locale: 'en-US' });
     const no = new Program([{ name: 'Module1', kind: 'module', source: src }], host, { locale: 'nb-NO' });
     await no.runEvent('Module1', 'Main');
