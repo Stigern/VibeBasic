@@ -84,6 +84,8 @@ export class MemoryFs implements FileSystemApi {
 
   async fioClose(id: number): Promise<void> { this.handles.delete(id); }
 
+  async fioReset(): Promise<void> { this.handles.clear(); }
+
   async fsKill(path: string): Promise<void> {
     if (!this.files.has(path)) throw this.missing(path);
     this.files.delete(path);

@@ -260,13 +260,15 @@ export class RunSession implements Host, FormSession {
     this.lastYield = performance.now();
   }
 
-  /** A file of the program (relative paths are from App.Path; VB code builds Windows paths: App.Path & "\pic.bmp"). 53 when it cannot be read. */
+  /** A file of the program (relative paths are from App.Path; VB code builds Windows paths: App.Path & "\pic.bmp"). 53 when it
+   *  cannot be read, 7 when it is too big (the rejection's `vbNumber`). */
   async readFile(path: string): Promise<Uint8Array> {
     const full = this.resolvePath(path);
     try {
       return await this.cb.readFile(full);
-    } catch {
-      throw new VBRuntimeError(53);
+    } catch (e) {
+      const n = (e as { vbNumber?: unknown } | null)?.vbNumber;
+      throw new VBRuntimeError(n === 7 ? 7 : 53);
     }
   }
 

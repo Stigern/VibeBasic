@@ -16,6 +16,7 @@ pub const APP_COMMANDS: &[&str] = &[
   "fio_read",
   "fio_write",
   "fio_close",
+  "fio_reset",
   "fs_kill",
   "fs_rename",
   "fs_mkdir",

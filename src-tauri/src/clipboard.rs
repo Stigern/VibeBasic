@@ -11,8 +11,18 @@ fn tool(name: &str) -> Command {
   c
 }
 
+/// pbpaste and pbcopy run on the blocking pool, not on the main thread.
 #[tauri::command]
-pub fn clipboard_get_text() -> Result<String, String> {
+pub async fn clipboard_get_text() -> Result<String, String> {
+  crate::io_util::off_main(get_text).await
+}
+
+#[tauri::command]
+pub async fn clipboard_set_text(text: String) -> Result<(), String> {
+  crate::io_util::off_main(move || set_text(&text)).await
+}
+
+fn get_text() -> Result<String, String> {
   let out = tool("pbpaste").output().map_err(|e| format!("pbpaste: {}", e))?;
   if !out.status.success() {
     return Err(format!("pbpaste: {}", out.status));
@@ -20,8 +30,7 @@ pub fn clipboard_get_text() -> Result<String, String> {
   Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-#[tauri::command]
-pub fn clipboard_set_text(text: String) -> Result<(), String> {
+fn set_text(text: &str) -> Result<(), String> {
   let mut child = tool("pbcopy").stdin(Stdio::piped()).spawn().map_err(|e| format!("pbcopy: {}", e))?;
   child.stdin.take().ok_or("pbcopy: no stdin")?.write_all(text.as_bytes()).map_err(|e| format!("pbcopy: {}", e))?;
   let status = child.wait().map_err(|e| format!("pbcopy: {}", e))?;

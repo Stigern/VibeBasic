@@ -28,6 +28,8 @@ export interface FileSystemApi {
   fioRead(id: number, pos: number, len: number): Promise<Uint8Array>;
   fioWrite(id: number, pos: number, data: Uint8Array): Promise<void>;
   fioClose(id: number): Promise<void>;
+  /** Closes every file still open (left by an earlier run, or by a page that was reloaded). */
+  fioReset?(): Promise<void>;
   fsKill(path: string): Promise<void>;
   fsRename(from: string, to: string): Promise<void>;
   fsMkDir(path: string): Promise<void>;

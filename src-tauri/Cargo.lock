@@ -82,6 +82,7 @@ version = "0.7.5"
 dependencies = [
  "base64 0.22.1",
  "httpmock",
+ "libc",
  "log",
  "plist",
  "reqwest 0.12.28",

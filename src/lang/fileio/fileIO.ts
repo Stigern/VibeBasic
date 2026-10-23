@@ -1,6 +1,7 @@
 // The open files of a running program (file numbers 1-511) and the current folder (CurDir), on top of a FileSystemApi.
 //
-// - Input files are read whole when opened (Line Input, Input # and EOF then need no waiting); Output and Append files
+// - Input files are read whole when opened (Line Input, Input # and EOF then need no waiting), in chunks of READ_CHUNK and
+//   at most MAX_READ_BYTES (error 7 beyond: the text must fit in memory); Output and Append files
 //   are buffered and written on Close, at End, before Seek/LOF and every 64K characters. Binary and Random files are
 //   read and written by position on every Get / Put.
 // - Text is Windows-1252 like VB6 (UTF-8 is read when the file is UTF-8, see decodeText); lines end in CRLF.
@@ -16,6 +17,15 @@ import { TextReader, decode1252, decodeText, encode1252, type InputField } from 
 
 const MAX_FILE = 511;
 const FLUSH_CHARS = 65536;
+/** One fioRead asks for at most this much (the backend refuses more than 64 MB a call). */
+export const READ_CHUNK = 8 * 1024 * 1024;
+/** An Input file, or one Input(n) / Get, bigger than this is error 7 (Out of memory). */
+export const MAX_READ_BYTES = 256 * 1024 * 1024;
+
+/** The closeAll of the program before this one (one program runs at a time in a page). A new program's first Open waits for
+ *  it, then has the backend close whatever an earlier run (or a page that was reloaded) left open (fioReset). */
+let lastClose: Promise<void> = Promise.resolve();
+
 export const vbDirectory = 16;
 
 interface OpenFile {
@@ -60,6 +70,10 @@ export class FileIO {
   curDir: string;
   /** What `Dir()` without arguments returns next; null before the first Dir(path) and after the last name. */
   private dirNames: string[] | null = null;
+  /** closeAll ran: the program has ended. */
+  private ended = false;
+  /** Files left open by an earlier run are closed (once, before this program's first Open). */
+  private reset: Promise<void> | null = null;
 
   constructor(private readonly getApi: () => FileSystemApi | undefined, appPath: string, private readonly types: TypeSource) {
     this.curDir = this.normalize(appPath.replace(/\\/g, '/') || '/');
@@ -89,6 +103,25 @@ export class FileIO {
       else out.push(part);
     }
     return '/' + out.join('/');
+  }
+
+  /** Up to `n` bytes from `pos` in chunks (fewer only at the end of the file); 7 when `n` is more than MAX_READ_BYTES. */
+  private async readBytes(id: number, pos: number, n: number): Promise<Uint8Array> {
+    if (n > MAX_READ_BYTES) throw new VBRuntimeError(7);
+    if (n <= READ_CHUNK) return this.call(a => a.fioRead(id, pos, n), 57);
+    const parts: Uint8Array[] = [];
+    let got = 0;
+    while (got < n) {
+      const want = Math.min(READ_CHUNK, n - got);
+      const c = await this.call(a => a.fioRead(id, pos + got, want), 57);
+      parts.push(c);
+      got += c.length;
+      if (c.length < want) break;
+    }
+    const out = new Uint8Array(got);
+    let at = 0;
+    for (const c of parts) { out.set(c, at); at += c.length; }
+    return out;
   }
 
   /** The full Mac path of a VB path. */
@@ -132,19 +165,25 @@ export class FileIO {
     for (const f of this.files.values()) {
       if (f.path.toLowerCase() === l && (f.mode === 'output' || f.mode === 'append' || mode === 'output' || mode === 'append')) throw new VBRuntimeError(55);
     }
+    if (this.ended) throw new VBRuntimeError(52);
+    const api = this.api();
+    await (this.reset ??= lastClose.then(() => api.fioReset?.()).catch(() => {}));
     const { id, len } = await this.call(a => a.fioOpen(full, mode, access));
-    if (this.files.has(num)) { void this.api().fioClose(id).catch(() => {}); throw new VBRuntimeError(55); }
+    // the program ended while the file was opening (closeAll has run): nobody would close it
+    if (this.ended) { void api.fioClose(id).catch(() => {}); throw new VBRuntimeError(52); }
+    if (this.files.has(num)) { void api.fioClose(id).catch(() => {}); throw new VBRuntimeError(55); }
     const f: OpenFile = {
       num, path: full, mode, id, recLen: recLen ?? 128, len, pending: '', wpos: mode === 'append' ? len : 0,
       writing: Promise.resolve(), column: 0, pos: 0, lastRec: 0, eof: false,
     };
     if (mode === 'input') {
       try {
-        f.reader = new TextReader(decodeText(len > 0 ? await this.call(a => a.fioRead(id, 0, len), 57) : new Uint8Array(0)));
+        f.reader = new TextReader(decodeText(len > 0 ? await this.readBytes(id, 0, len) : new Uint8Array(0)));
       } catch (e) {
-        void this.api().fioClose(id).catch(() => {});
+        void api.fioClose(id).catch(() => {});
         throw e;
       }
+      if (this.ended) { void api.fioClose(id).catch(() => {}); throw new VBRuntimeError(52); }
     }
     this.files.set(num, f);
   }
@@ -198,9 +237,12 @@ export class FileIO {
   /** The end of the program: every file is written and closed. */
   closeAll(): Promise<void> {
     const list = [...this.files.values()];
+    this.ended = true;
     this.files.clear();
     this.dirNames = null;
-    return Promise.all(list.map(f => this.flush(f).catch(() => {}).then(() => this.getApi()?.fioClose(f.id)).catch(() => {}))).then(() => {});
+    const done = Promise.all(list.map(f => this.flush(f).catch(() => {}).then(() => this.getApi()?.fioClose(f.id)).catch(() => {}))).then(() => {});
+    lastClose = lastClose.then(() => done);
+    return done;
   }
 
   // ---- sequential files ----
@@ -237,7 +279,7 @@ export class FileIO {
     const f = this.file(num);
     if (f.reader) return f.reader.chars(n);
     if (f.mode !== 'binary') throw new VBRuntimeError(54);
-    const data = n > 0 ? await this.call(a => a.fioRead(f.id, f.pos, n), 57) : new Uint8Array(0);
+    const data = n > 0 ? await this.readBytes(f.id, f.pos, n) : new Uint8Array(0);
     if (data.length < n) throw new VBRuntimeError(62);
     f.pos += n;
     return decode1252(data);
@@ -298,7 +340,7 @@ export class FileIO {
   async get(num: number, rec: number | undefined, cur: VBValue, t: VBTypeName, fixedLength: number | undefined): Promise<VBValue> {
     const { f, at } = this.recordFile(num, rec);
     if (f.mode === 'random') {
-      const data = await this.call(a => a.fioRead(f.id, at, f.recLen), 57);
+      const data = await this.readBytes(f.id, at, f.recLen);
       const r = new ByteReader(data, f.recLen, false);
       const v = decodeRecord(r, cur, t, fixedLength, true, this.types);
       f.eof = r.short;
@@ -307,7 +349,7 @@ export class FileIO {
       return v;
     }
     for (let want = 256; ; ) {
-      const data = await this.call(a => a.fioRead(f.id, at, want), 57);
+      const data = await this.readBytes(f.id, at, want);
       const r = new ByteReader(data, Infinity, data.length === want);
       try {
         const v = decodeRecord(r, cur, t, fixedLength, false, this.types);

@@ -28,6 +28,7 @@
     "allow-fio-read",
     "allow-fio-write",
     "allow-fio-close",
+    "allow-fio-reset",
     "allow-fs-kill",
     "allow-fs-rename",
     "allow-fs-mkdir",

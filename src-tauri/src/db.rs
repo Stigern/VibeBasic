@@ -3,6 +3,11 @@
 //! main window (the run session) calls these. A run keeps its connections by id and closes them at the end (db_reset).
 //! Errors are "number|description" with the DAO error number (3078 table not found, 3022 duplicate key ...) and the
 //! SQLite message as the description.
+//!
+//! Every query runs on the blocking pool (`off_main`), with its own connection lock: the map of connections is locked
+//! only to look one up, so db_close and db_reset never wait for a query. They interrupt the queries still running
+//! (sqlite3_interrupt) and drop the connections. A result bigger than MAX_ROWS rows or about MAX_BYTES of values is
+//! "7|Out of memory" instead of eating all the memory there is (a runaway recursive query, a cartesian join).
 
 use base64::Engine;
 use rusqlite::types::{Value as SqlValue, ValueRef};
@@ -10,21 +15,34 @@ use rusqlite::{Connection, ErrorCode, OpenFlags};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::State;
 
+use crate::io_util::off_main;
+
 const B64: base64::engine::general_purpose::GeneralPurpose = base64::engine::general_purpose::STANDARD;
+
+/// A query returns at most this many rows ...
+pub const MAX_ROWS: usize = 1_000_000;
+/// ... and about this many bytes of values.
+pub const MAX_BYTES: usize = 256 * 1024 * 1024;
+
+struct Db {
+  conn: Mutex<Connection>,
+  /// Stops the statement running on `conn` from any thread (db_close, db_reset).
+  interrupt: rusqlite::InterruptHandle,
+}
 
 #[derive(Default)]
 struct Inner {
   next: u32,
-  conns: HashMap<u32, Connection>,
+  conns: HashMap<u32, Arc<Db>>,
 }
 
-#[derive(Default)]
-pub struct Databases(Mutex<Inner>);
+#[derive(Default, Clone)]
+pub struct Databases(Arc<Mutex<Inner>>);
 
 /// The rows of a query: column names, their declared types ("" when none, e.g. an expression) and the values
 /// (null, a number, a string, or `{"blob": base64}`).
@@ -122,20 +140,26 @@ impl Databases {
     let _ = conn.busy_timeout(Duration::from_secs(2));
     // a file that is not a database fails here rather than on the first query
     conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(())).map_err(|e| sql_err(&e))?;
+    let interrupt = conn.get_interrupt_handle();
     let mut g = self.0.lock().unwrap();
     g.next += 1;
     let id = g.next;
-    g.conns.insert(id, conn);
+    g.conns.insert(id, Arc::new(Db { conn: Mutex::new(conn), interrupt }));
     Ok(id)
   }
 
+  /// Runs `f` on connection `id`; the map lock is held only for the lookup.
   fn with<T>(&self, id: u32, f: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
-    let g = self.0.lock().unwrap();
-    let c = g.conns.get(&id).ok_or_else(|| err(3420, "Object invalid or no longer set."))?;
-    f(c)
+    let db = self.0.lock().unwrap().conns.get(&id).cloned().ok_or_else(|| err(3420, "Object invalid or no longer set."))?;
+    let c = db.conn.lock().unwrap_or_else(|p| p.into_inner());
+    f(&c)
   }
 
   pub fn query(&self, id: u32, sql: &str, params: &[Value]) -> Result<QueryResult, String> {
+    self.query_limited(id, sql, params, MAX_ROWS, MAX_BYTES)
+  }
+
+  fn query_limited(&self, id: u32, sql: &str, params: &[Value], max_rows: usize, max_bytes: usize) -> Result<QueryResult, String> {
     self.with(id, |c| {
       let mut st = c.prepare(sql).map_err(|e| sql_err(&e))?;
       let columns: Vec<String> = st.column_names().iter().map(|s| s.to_string()).collect();
@@ -144,10 +168,22 @@ impl Databases {
       let args: Vec<SqlValue> = params.iter().map(to_sql).collect();
       let mut rows = st.query(rusqlite::params_from_iter(args.iter())).map_err(|e| sql_err(&e))?;
       let mut out = Vec::new();
+      let mut bytes = 0usize;
       while let Some(r) = rows.next().map_err(|e| sql_err(&e))? {
+        if out.len() >= max_rows {
+          return Err(err(7, "Out of memory"));
+        }
         let mut row = Vec::with_capacity(n);
         for i in 0..n {
-          row.push(from_sql(r.get_ref(i).map_err(|e| sql_err(&e))?));
+          let v = r.get_ref(i).map_err(|e| sql_err(&e))?;
+          bytes += 16 + match v {
+            ValueRef::Text(t) | ValueRef::Blob(t) => t.len(),
+            _ => 8,
+          };
+          row.push(from_sql(v));
+        }
+        if bytes > max_bytes {
+          return Err(err(7, "Out of memory"));
         }
         out.push(row);
       }
@@ -169,28 +205,39 @@ impl Databases {
     })
   }
 
+  /// The connection is closed once a query still running on it (interrupted here) has stopped.
   pub fn close(&self, id: u32) {
-    self.0.lock().unwrap().conns.remove(&id);
+    let db = self.0.lock().unwrap().conns.remove(&id);
+    if let Some(db) = db {
+      db.interrupt.interrupt();
+    }
   }
 
+  /// Every connection: running queries are interrupted, and nothing waits for them.
   pub fn reset(&self) {
-    self.0.lock().unwrap().conns.clear();
+    let all: Vec<Arc<Db>> = self.0.lock().unwrap().conns.drain().map(|(_, d)| d).collect();
+    for db in &all {
+      db.interrupt.interrupt();
+    }
   }
 }
 
 #[tauri::command]
 pub async fn db_open(dbs: State<'_, Databases>, path: String) -> Result<u32, String> {
-  dbs.open(&path)
+  let dbs = dbs.inner().clone();
+  off_main(move || dbs.open(&path)).await
 }
 
 #[tauri::command]
 pub async fn db_query(dbs: State<'_, Databases>, id: u32, sql: String, params: Vec<Value>) -> Result<QueryResult, String> {
-  dbs.query(id, &sql, &params)
+  let dbs = dbs.inner().clone();
+  off_main(move || dbs.query(id, &sql, &params)).await
 }
 
 #[tauri::command]
 pub async fn db_execute(dbs: State<'_, Databases>, id: u32, sql: String, params: Vec<Value>) -> Result<ExecResult, String> {
-  dbs.execute(id, &sql, &params)
+  let dbs = dbs.inner().clone();
+  off_main(move || dbs.execute(id, &sql, &params)).await
 }
 
 #[tauri::command]
@@ -199,7 +246,7 @@ pub async fn db_close(dbs: State<'_, Databases>, id: u32) -> Result<(), String> 
   Ok(())
 }
 
-/// The end of a run (and the start of the next): every connection closed.
+/// The end of a run (and the start of the next): every connection closed, running queries interrupted.
 #[tauri::command]
 pub async fn db_reset(dbs: State<'_, Databases>) -> Result<(), String> {
   dbs.reset();
@@ -251,5 +298,45 @@ mod tests {
     assert_eq!(dbs.query(id2, "SELECT count(*) FROM People", &[]).unwrap().rows, vec![vec![json!(1)]]);
     dbs.close(id2);
     assert!(dbs.open(&dir.path().join("no/such/x.db").to_string_lossy()).unwrap_err().starts_with("3044|"));
+  }
+
+  const RUNAWAY: &str = "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n) SELECT x FROM n";
+
+  /// H2: a runaway query is stopped by the row cap with "7|" instead of using all the memory.
+  #[test]
+  fn a_runaway_result_is_out_of_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    let dbs = Databases::default();
+    let id = dbs.open(&dir.path().join("a.db").to_string_lossy()).unwrap();
+    assert!(dbs.query_limited(id, RUNAWAY, &[], 1000, MAX_BYTES).unwrap_err().starts_with("7|"));
+    let blob = "SELECT zeroblob(1000) FROM (WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n LIMIT 100) SELECT x FROM n)";
+    assert!(dbs.query_limited(id, blob, &[], MAX_ROWS, 50_000).unwrap_err().starts_with("7|"));
+    assert_eq!(dbs.query_limited(id, blob, &[], MAX_ROWS, 200_000).unwrap().rows.len(), 100);
+  }
+
+  /// H2: reset does not wait for a query that never ends; it interrupts it, and the next run can open databases at once.
+  #[test]
+  fn reset_interrupts_a_query_that_never_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.db").to_string_lossy().to_string();
+    let dbs = Databases::default();
+    let id = dbs.open(&path).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let d = dbs.clone();
+    // no row ever comes out of this, so the row cap does not stop it
+    std::thread::spawn(move || {
+      let _ = tx.send(d.query(id, "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n) SELECT count(*) FROM n", &[]));
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let d = dbs.clone();
+    std::thread::spawn(move || {
+      d.reset();
+      let id2 = d.open(&path);
+      let _ = done_tx.send(id2.is_ok());
+    });
+    assert!(done_rx.recv_timeout(Duration::from_secs(5)).expect("reset waited for the query"));
+    let r = rx.recv_timeout(Duration::from_secs(5)).expect("the query was not interrupted");
+    assert!(r.is_err());
   }
 }

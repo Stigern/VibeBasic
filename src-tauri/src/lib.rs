@@ -6,6 +6,7 @@ mod embedded;
 mod files;
 mod fileio;
 mod inet;
+mod io_util;
 mod make_app;
 mod media;
 mod sysinfo;
@@ -36,6 +37,7 @@ pub fn run() {
       fileio::fio_read,
       fileio::fio_write,
       fileio::fio_close,
+      fileio::fio_reset,
       fileio::fs_kill,
       fileio::fs_rename,
       fileio::fs_mkdir,

@@ -139,6 +139,7 @@ export class BrowserBackend implements Backend {
   fioRead(id: number, pos: number, len: number): Promise<Uint8Array> { return this.memFs.fioRead(id, pos, len); }
   fioWrite(id: number, pos: number, data: Uint8Array): Promise<void> { return this.memFs.fioWrite(id, pos, data); }
   fioClose(id: number): Promise<void> { return this.memFs.fioClose(id); }
+  fioReset(): Promise<void> { return this.memFs.fioReset(); }
   fsKill(path: string): Promise<void> { return this.memFs.fsKill(path); }
   fsRename(from: string, to: string): Promise<void> { return this.memFs.fsRename(from, to); }
   fsMkDir(path: string): Promise<void> { return this.memFs.fsMkDir(path); }

@@ -19,6 +19,18 @@ async function call<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
   }
 }
 
+/** A raw IPC response (tauri::ipc::Response) is an ArrayBuffer; older shapes are a number array. */
+function bytesOf(r: number[] | ArrayBuffer | Uint8Array): Uint8Array {
+  return r instanceof Uint8Array ? r : new Uint8Array(r);
+}
+
+/** "7|path: the file is too big" -> an Error with the text and `vbNumber` 7 (the IDE shows the text, a running program
+ *  raises the number). */
+function numbered(e: unknown): never {
+  const m = /^(\d+)\|([\s\S]*)$/.exec(e instanceof Error ? e.message : String(e));
+  throw m ? Object.assign(new Error(m[2]), { vbNumber: Number(m[1]) }) : e;
+}
+
 function toBase64(bytes: Uint8Array): string {
   let s = '';
   for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
@@ -117,23 +129,24 @@ export class TauriBackend implements Backend {
   }
 
   readTextFile(path: string): Promise<string> {
-    return call<string>('read_text_file', { path });
+    return call<string>('read_text_file', { path }).catch(numbered);
   }
 
   async writeTextFile(path: string, text: string): Promise<void> {
     await call<void>('write_text_file', { path, text });
   }
 
+  /** Raw bytes. A file over the size cap rejects with an Error whose `vbNumber` is 7 (Out of memory). */
   async readBinaryFile(path: string): Promise<Uint8Array> {
-    const r = await call<number[] | ArrayBuffer | Uint8Array>('read_binary_file', { path });
-    return r instanceof Uint8Array ? r : new Uint8Array(r);
+    return bytesOf(await call<number[] | ArrayBuffer | Uint8Array>('read_binary_file', { path }).catch(numbered));
   }
 
   // the files of a running program (src-tauri/src/fileio.rs); rejections are "number|description"
   fioOpen(path: string, mode: FileMode, access: FileAccess): Promise<{ id: number; len: number }> { return call('fio_open', { path, mode, access }); }
-  async fioRead(id: number, pos: number, len: number): Promise<Uint8Array> { return fromBase64(await call<string>('fio_read', { id, pos, len })); }
+  async fioRead(id: number, pos: number, len: number): Promise<Uint8Array> { return bytesOf(await call<ArrayBuffer>('fio_read', { id, pos, len })); }
   async fioWrite(id: number, pos: number, data: Uint8Array): Promise<void> { await call<void>('fio_write', { id, pos, data: toBase64(data) }); }
   async fioClose(id: number): Promise<void> { await call<void>('fio_close', { id }); }
+  async fioReset(): Promise<void> { await call<void>('fio_reset', {}); }
   async fsKill(path: string): Promise<void> { await call<void>('fs_kill', { path }); }
   async fsRename(from: string, to: string): Promise<void> { await call<void>('fs_rename', { from, to }); }
   async fsMkDir(path: string): Promise<void> { await call<void>('fs_mkdir', { path }); }
@@ -172,8 +185,7 @@ export class TauriBackend implements Backend {
 
   mediaOpen(path: string): Promise<string> { return call<string>('media_open', { path }); }
   async mediaRead(token: string): Promise<Uint8Array> {
-    const r = await call<number[] | ArrayBuffer | Uint8Array>('media_read', { token });
-    return r instanceof Uint8Array ? r : new Uint8Array(r);
+    return bytesOf(await call<number[] | ArrayBuffer | Uint8Array>('media_read', { token }));
   }
   async mediaClose(token: string): Promise<void> { await call<void>('media_close', { token }); }
 
