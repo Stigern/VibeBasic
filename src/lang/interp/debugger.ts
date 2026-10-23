@@ -6,10 +6,10 @@
 
 import type { Expr, ProcDecl, Stmt } from '../ast';
 import { VBRuntimeError, VBSyntaxError } from '../errors';
-import type { VBObject } from '../host';
+import { NotLoaded, type VBObject } from '../host';
 import { parseExpression } from '../parser';
 import {
-  EmptyT, NothingT, NullT, VBArray, VBErrorValue, VBRecord, isObject, maybeSingle, single7, toBool, toStr, vbTypeName,
+  Empty, EmptyT, NothingT, NullT, VBArray, VBErrorValue, VBRecord, isObject, maybeSingle, single7, toBool, toStr, vbTypeName,
   type VBValue,
 } from '../values';
 import { EndSignal, runCallsSync, runGenerator, type Gen } from './driver';
@@ -43,6 +43,8 @@ export type MemberLister = (obj: VBObject) => readonly string[];
 export type EvalResult = { ok: true; value: VBValue } | { ok: false; error: string };
 
 export const OUT_OF_CONTEXT = '<Out of context>';
+/** The value of a property of a form that is not loaded (reading it would load the form). */
+export const NOT_LOADED = '<not loaded>';
 /** Most elements shown of an array or a collection. */
 const MAX_ELEMENTS = 1000;
 
@@ -132,7 +134,7 @@ function nodeOf(rt: Runtime, name: string, expr: string, read: () => VBValue, de
     const props = safe(() => members(o)) ?? [];
     if (items || props.length) node.children = () => [
       ...(items ?? []).slice(0, MAX_ELEMENTS).map((it, i) => nodeOf(rt, `Item ${i + 1}`, `${expr}(${i + 1})`, () => it, undefined, members, false)),
-      ...props.map(p => nodeOf(rt, p, `${expr}.${p}`, () => o.getMember(p, []), undefined, members, assignable)),
+      ...props.map(p => nodeOf(rt, p, `${expr}.${p}`, () => peekRow(o, p), undefined, members, assignable)),
     ];
   } else node.editable = assignable;
   return node;
@@ -160,6 +162,11 @@ function classMembers(rt: Runtime, o: ClassValue, expr: string, members: MemberL
     }
   }, undefined, members, assignable && !!(p.let || p.set)));
   return [...vars, ...props];
+}
+
+/** A property row of a host object (a form or control): read with `peekMember`, so no code runs and no form loads. */
+function peekRow(o: VBObject, name: string): VBValue {
+  return o.peekMember ? o.peekMember(name) ?? Empty : o.getMember(name, []);   // NotLoaded shows as <not loaded>
 }
 
 function safe<T>(fn: () => T): T | undefined {
@@ -330,18 +337,24 @@ export class ProgramDebugger {
     let e: Expr;
     try { e = parseExpression(text); } catch { return null; }
     let v: VBValue | ModuleRef | undefined;
-    try { v = this.peek(f, e); } catch { return null; }
-    if (v === undefined || v instanceof ModuleRef || v instanceof VBArray || v instanceof VBRecord) return null;
-    if (isObject(v)) {
-      const o = v;
-      if (o.defaultMember === undefined) return null;
-      try { v = o.getMember(o.defaultMember, []); } catch { return null; }
-      if (isObject(v)) return null;
+    try {
+      v = this.peek(f, e);
+      if (v instanceof ModuleRef) return null;
+      if (v !== undefined && isObject(v)) {   // a control or form as its default member (Text1, Label1)
+        const o = v;
+        v = o.defaultMember === undefined ? undefined : o.peekMember?.(o.defaultMember);
+      }
+    } catch (err) {
+      return err instanceof NotLoaded ? `${text} = ${NOT_LOADED}` : null;
     }
-    return `${text} = ${valueText(v as VBValue, this.declared(text))}`;
+    if (v === undefined || v instanceof VBArray || v instanceof VBRecord || isObject(v)) return null;
+    return `${text} = ${valueText(v, this.declared(text))}`;
   }
 
-  /** The side-effect free value of a name or `a.b.c` chain (undefined: not one, or it would run code). */
+  /**
+   * The side-effect free value of a name or `a.b.c` chain (undefined: not one, or it would run code). Members of objects
+   * come only from `peekMember`: never a method, a procedure or Property Get of the program, nor loading a form.
+   */
   private peek(f: Frame, e: Expr): VBValue | ModuleRef | undefined {
     if (e.kind === 'name') {
       const key = lc(e.name);
@@ -351,11 +364,7 @@ export class ProgramDebugger {
       if (b instanceof ValueRef) return b.value;
       if (b instanceof ObjectRef) return b.obj;
       if (b instanceof ModuleRef) return b;
-      if (b instanceof MemberRef) {   // a member of the form (Me): not one of its Property procedures
-        if (b.obj.codeProperty?.(b.name)) return undefined;
-        const v = b.obj.getMember(b.name, []) as VBValue | Promise<VBValue>;
-        return v instanceof Promise ? undefined : v;
-      }
+      if (b instanceof MemberRef) return b.obj.peekMember?.(b.name);   // a member of the form (Me): `Caption`, never `Hide`
       return undefined;
     }
     if (e.kind === 'member') {
@@ -363,13 +372,7 @@ export class ProgramDebugger {
       const key = lc(e.name);
       if (base instanceof ModuleRef) return base.module.vars.get(key)?.value;
       if (base instanceof VBRecord) return base.fields.get(key);
-      if (base instanceof ClassValue) return base.iface ? undefined : base.inst.publicVar(key)?.value;   // never a Property Get
-      if (base !== undefined && isObject(base)) {
-        // a form's Property procedure would run code; a host member that waits has no value now
-        if (!base.hasMember(e.name) || base.codeProperty?.(e.name)) return undefined;
-        const v = base.getMember(e.name, []) as VBValue | Promise<VBValue>;
-        return v instanceof Promise ? undefined : v;
-      }
+      if (base !== undefined && isObject(base)) return base.peekMember?.(e.name);
     }
     return undefined;
   }
