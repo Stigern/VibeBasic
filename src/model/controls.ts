@@ -341,7 +341,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
       en('Style', 0, ['sbrNormal', 'sbrSimple']), str('SimpleText'),
       p('Panels', 'list', [''], { runtime: 'ro' }),
     ],
-    events: [evClick(), evDbl(), ev('PanelClick', 'ByVal Panel As Panel'), ...evMouse()],
+    events: [evClick(), evDbl(), ev('PanelClick', 'ByVal Panel As MSComctlLib.Panel'), ...evMouse()],
   }),
 
   TabStrip: def({
