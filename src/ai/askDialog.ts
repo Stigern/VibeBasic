@@ -310,13 +310,14 @@ export const LOOP_NUDGE = 'Your previous answer got stuck repeating the same ite
 /** The message when the retry looped too. */
 export const AI_STUCK = 'The AI got stuck repeating itself. Try again, rephrase the request, or ask for less at a time.';
 /**
- * presence_penalty and frequency_penalty of the retry after a loop (vLLM or OpenAI-style servers only). Mild on purpose:
- * 1.5 (Qwen's advice) emptied the answer in the measurement.
+ * presence_penalty of the retry after a loop (vLLM or OpenAI-style servers only). Mild on purpose: 1.5 (Qwen's advice) emptied
+ * the answer in the measurement. No frequency_penalty: it grows with every repeat of a token, and over thousands of thinking
+ * tokens even 0.3 drove the retry into word salad and thinking loops (4 of 4 live runs; presence_penalty alone: 4 of 4 fine).
  */
 export const LOOP_PENALTY = 0.3;
 /** "baseUrl|model" of servers that rejected the penalties in this session. */
 const noPenalties = new Set<string>();
-const rejectsPenalties = (message: string): boolean => /\b(400|422)\b/.test(message) && /presence_penalty|frequency_penalty|penalt/i.test(message);
+const rejectsPenalties = (message: string): boolean => /\b(400|422)\b/.test(message) && /presence_penalty|penalt/i.test(message);
 
 /** A structured output schema, sent as `structured_outputs` to vLLM and as `response_format` to other (and unknown) servers. */
 export interface StructuredOutput { responseFormat: unknown; structuredOutputs: unknown }
@@ -360,7 +361,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
       sent: describeRequest(settings.baseUrl, settings.model, messages, {
         reasoning_effort: level, max_tokens: x.maxTokens,
         ...(x.structuredOutputs !== undefined ? { structured_outputs: 'json schema' } : {}), ...(x.responseFormat !== undefined ? { response_format: 'json_schema' } : {}),
-        presence_penalty: x.presencePenalty, frequency_penalty: x.frequencyPenalty,
+        presence_penalty: x.presencePenalty,
       }),
     }, secret);
     lastEntry = entry;
@@ -404,8 +405,8 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     const partial = { content: '' };
     /** The request; after a loop, with the nudge appended. */
     let current = all;
-    /** The penalties of the retry after a loop (none otherwise). */
-    let penalties: Pick<AiChatOptions, 'presencePenalty' | 'frequencyPenalty'> = {};
+    /** The penalty of the retry after a loop (none otherwise). */
+    let penalties: Pick<AiChatOptions, 'presencePenalty'> = {};
     const prepared = () => limitPictures(current, picturesOn(settings) ? pictureLimit.get(server) ?? MAX_PICTURES : 0);
     /**
      * One request with the max_tokens cap; a server that rejects the cap gets it again at once without, and no cap for the rest
@@ -475,7 +476,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
       log.separator(LOOP_SEPARATOR);
       ui.setLabel(LOOP_RETRY_LABEL);
       current = [...all, { role: 'user', content: LOOP_NUDGE }];
-      if (settings.serverKind && !noPenalties.has(server)) penalties = { presencePenalty: LOOP_PENALTY, frequencyPenalty: LOOP_PENALTY };
+      if (settings.serverKind && !noPenalties.has(server)) penalties = { presencePenalty: LOOP_PENALTY };
       try { return await retried('retry'); }
       catch (e2) { throw !o.signal?.aborted && isLoop(e2) ? new Error(AI_STUCK) : e2; }
     }

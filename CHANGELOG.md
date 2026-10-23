@@ -5,7 +5,7 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 ## [0.8.2] - 2026-10-23
 
 ### Fixed
-- Ask AI answers that repeat themselves forever (seen in form mode with the form picture: the same `{"op":"form",...}` over and over until Cancel or the token cap). The streamed answer and the thinking are watched for one block repeated at the end; such a request is stopped at once, shown as "loop" in the AI Log, and tried once more with a short reminder and mild presence/frequency penalties (0.3, on vLLM and OpenAI-style servers; dropped if the server refuses them). If the retry loops too, "The AI got stuck repeating itself" is shown and nothing is applied.
+- Ask AI answers that repeat themselves forever (seen in form mode with the form picture: the same `{"op":"form",...}` over and over until Cancel or the token cap). The streamed answer and the thinking are watched for one block repeated at the end; such a request is stopped at once, shown as "loop" in the AI Log, and tried once more with a short reminder and a mild presence_penalty (0.3, on vLLM and OpenAI-style servers; dropped if the server refuses it). No frequency_penalty: on a thinking model it turned the retry into word salad. If the retry loops too, "The AI got stuck repeating itself" is shown and nothing is applied.
 - Form mode drops exact duplicate ops (the first one counts), and the structured output schema allows at most 300 ops.
 
 ## [0.8.1] - 2026-10-23

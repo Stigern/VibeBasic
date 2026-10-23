@@ -247,7 +247,7 @@ export class TauriBackend implements Backend {
 
   async aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string, opts?: AiChatOptions): Promise<string> {
     const args = { baseUrl, apiKey, model, messages, reasoningEffort: reasoningEffort || null, responseFormat: opts?.responseFormat ?? null, structuredOutputs: opts?.structuredOutputs ?? null, maxTokens: opts?.maxTokens ?? null,
-      presencePenalty: opts?.presencePenalty ?? null, frequencyPenalty: opts?.frequencyPenalty ?? null };
+      presencePenalty: opts?.presencePenalty ?? null };
     if (!opts?.onDelta && !opts?.signal) return call<string>('ai_chat', args);
     if (opts.signal?.aborted) throw new Error('cancelled');
     const streamId = `ai-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// An answer that repeats itself: stopped at once, logged as "loop", tried once more with a nudge and mild penalties.
+// An answer that repeats itself: stopped at once, logged as "loop", tried once more with a nudge and a mild presence penalty.
 import { afterEach, expect, test, vi } from 'vitest';
 import { AI_STUCK, LOOP_NUDGE, LOOP_PENALTY, LOOP_RETRY_LABEL, askAi } from '../../src/ai/askDialog';
 import { aiLogEntries, clearAiLog } from '../../src/ai/aiLog';
@@ -52,7 +52,7 @@ function loop(c: Call) {
 const OPS = '{"ops":[{"op":"set","name":"Command1","props":{"Caption":"Go"}}]}';
 afterEach(() => { document.body.innerHTML = ''; clearAiLog(); });
 
-test('a loop is stopped at once, logged and tried once more with the nudge and mild penalties', async () => {
+test('a loop is stopped at once, logged and tried once more with the nudge and a mild presence penalty', async () => {
   const { b, calls } = fakeBackend({ model: 'loop-vllm', serverKind: 'vllm' });
   const { s, p } = await start(b);
   await vi.waitFor(() => expect(calls).toHaveLength(1));
@@ -64,7 +64,8 @@ test('a loop is stopped at once, logged and tried once more with the nudge and m
   // the same request plus one short user message, so the cached prefix stays
   expect(calls[1].msgs.slice(0, -1)).toEqual(calls[0].msgs);
   expect(calls[1].msgs.at(-1)).toEqual({ role: 'user', content: LOOP_NUDGE });
-  expect([calls[1].opts.presencePenalty, calls[1].opts.frequencyPenalty]).toEqual([LOOP_PENALTY, LOOP_PENALTY]);
+  expect(calls[1].opts.presencePenalty).toBe(LOOP_PENALTY);
+  expect(calls[1].opts).not.toHaveProperty('frequencyPenalty');
   expect(calls[1].opts.structuredOutputs).toBeDefined();
   expect(aiLogEntries()[1].status).toBe('loop');
   expect(aiLogEntries()[1].reply).toContain(OBSERVED);
@@ -91,7 +92,7 @@ test('a second loop gives the message and nothing is applied', async () => {
   expect(s.project.forms[0].controls[0].props.Caption).toBe('Command1');
 });
 
-test('penalties only on a known server kind, and dropped when the server rejects them', async () => {
+test('the penalty only on a known server kind, and dropped when the server rejects it', async () => {
   const unknown = fakeBackend({ model: 'loop-unknown' });
   const a = await start(unknown.b);
   await vi.waitFor(() => expect(unknown.calls).toHaveLength(1));

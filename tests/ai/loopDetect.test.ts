@@ -48,9 +48,18 @@ test('no loop on 50 distinct add ops, AddItem lines, repeated End If or a row of
   expect(stream(items)).toBeNull();
   const ifs = `Private Sub Command1_Click()\n${'    If a Then\n        If b Then\n            x = 1\n'.repeat(1)}${'        End If\n'.repeat(40)}End Sub\n`;
   expect(stream(ifs)).toBeNull();
-  expect(stream(`' ${'='.repeat(3000)}\n`)).toBeNull();
+  const banners = Array.from({ length: 20 }, (_, i) => `' ${'='.repeat(100)}\n' Section ${i + 1}\n' ${'='.repeat(100)}\nPrint String(60, "-")\n`).join('');
+  expect(stream(banners)).toBeNull();
+  expect(stream(`' ${'='.repeat(500)}\n`)).toBeNull();
   const code = Array.from({ length: 80 }, (_, i) => `    If Val(Text${i}.Text) > 0 Then\n        Total = Total + Val(Text${i}.Text)\n    End If`).join('\n');
   expect(stream(code)).toBeNull();
+});
+
+test('a short word repeated on and on is a loop once it runs long (seen live in the thinking)', () => {
+  expect(findLoop(`brilliantly cleverly smartly ${'penetrating '.repeat(25)}`)).toBeNull();
+  expect(stream(`brilliantly cleverly smartly ${'penetrating '.repeat(120)}`, 'reasoning')).not.toBeNull();
+  expect(stream(`{"ops":[],"code":""} ${'STOP '.repeat(200)}`)).not.toBeNull();
+  expect(stream(`No wait - client area is wider than tall? `.repeat(30), 'reasoning')).not.toBeNull();
 });
 
 test('a watch checks only every ~500 new characters and stays flagged', () => {
