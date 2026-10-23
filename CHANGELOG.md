@@ -2,6 +2,11 @@
 
 All notable changes to VibeBasic. Format follows Keep a Changelog.
 
+## [0.8.1] - 2026-10-23
+
+### Fixed
+- Large form requests (a whole program with its code) were cut off at 12,288 tokens and failed with "The AI answer was cut off". The answer room is now 16,384 tokens, or 32,768 when the server reports a large context, plus the thinking room.
+
 ## [0.8.0] - 2026-10-23
 
 ### Added

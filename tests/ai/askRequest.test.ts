@@ -64,7 +64,7 @@ test('form request includes response_format (json_schema form_ops) and max_token
     expect(opts(b, 0).responseFormat).toEqual(FORM_RESPONSE_FORMAT);
     expect(opts(b, 0).responseFormat.json_schema.name).toBe('form_ops');
     expect(opts(b, 0).structuredOutputs).toBeUndefined();
-    expect(opts(b, 0).maxTokens).toBe(8192 + 16384);
+    expect(opts(b, 0).maxTokens).toBe(16384 + 16384);
   }
 });
 
@@ -155,7 +155,7 @@ test('a server that rejects max_tokens gets the request again at once without it
   });
   await askForm(b);
   expect(b.aiChat).toHaveBeenCalledTimes(2);
-  expect(opts(b, 0).maxTokens).toBe(24576);
+  expect(opts(b, 0).maxTokens).toBe(32768);
   expect(opts(b, 1).maxTokens).toBeUndefined();
   await askForm(b);
   expect(b.aiChat).toHaveBeenCalledTimes(3);
@@ -179,14 +179,14 @@ async function levels(settings: Record<string, unknown>) {
 }
 
 test('follow-up rounds think low only with Fast follow-up rounds on and a thinking level set', async () => {
-  expect(await levels({ thinking: 'high' })).toEqual({ levels: ['high', 'low', 'low'], maxTokens: [24576, 12288, 12288] });
+  expect(await levels({ thinking: 'high' })).toEqual({ levels: ['high', 'low', 'low'], maxTokens: [32768, 20480, 20480] });
   expect((await levels({ thinking: 'medium', fastFollowUp: false })).levels).toEqual(['medium', 'medium', 'medium']);
   expect((await levels({ thinking: 'server' })).levels).toEqual([undefined, undefined, undefined]);
 });
 
 test('max_tokens is lowered to fit a known context, or left out when it cannot', () => {
-  expect(maxTokensFor('low', undefined, 1000)).toBe(12288);
-  expect(maxTokensFor('low', 262144, 30000)).toBe(12288);
+  expect(maxTokensFor('low', undefined, 1000)).toBe(20480);
+  expect(maxTokensFor('low', 262144, 30000)).toBe(36864);
   expect(maxTokensFor('low', 32768, 90000)).toBe(32768 - 30000 - 256);
   expect(maxTokensFor('high', 8192, 30000)).toBeUndefined();
 });

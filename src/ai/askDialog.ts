@@ -243,15 +243,18 @@ export function trimConversation(messages: ChatMessage[], max = MAX_CONVERSATION
 }
 
 /**
- * max_tokens for a request. On vLLM the thinking counts as well, so the cap is room for the answer (8,192) plus room for the
+ * max_tokens for a request. On vLLM the thinking counts as well, so the cap is room for the answer plus room for the
  * thinking at the level sent: Low 4,096, Medium 8,192, High 16,384, and 16,384 for Server default (the level is unknown).
- * With a known context size it is lowered so that prompt + answer fit (vLLM rejects more); when not even 1,024 tokens
- * are left over, no cap is sent and the server decides.
+ * The answer room is 16,384, or 32,768 when the server reports a large context (a whole form with its code, as pretty-
+ * printed JSON, needs more than 8k). With a known context size it is lowered so that prompt + answer fit (vLLM rejects
+ * more); when not even 1,024 tokens are left over, no cap is sent and the server decides.
  */
-export const ANSWER_TOKENS = 8192;
+export const ANSWER_TOKENS = 16384;
+const LARGE_CONTEXT = 65536, LARGE_ANSWER_TOKENS = 32768;
 const THINKING_TOKENS: Record<Thinking, number> = { server: 16384, low: 4096, medium: 8192, high: 16384 };
 export function maxTokensFor(thinking: Thinking, contextTokens: number | undefined, promptChars: number): number | undefined {
-  const cap = ANSWER_TOKENS + THINKING_TOKENS[thinking];
+  const answer = contextTokens && contextTokens >= LARGE_CONTEXT ? LARGE_ANSWER_TOKENS : ANSWER_TOKENS;
+  const cap = answer + THINKING_TOKENS[thinking];
   if (!contextTokens) return cap;
   const room = contextTokens - Math.ceil(promptChars / 3) - 256;   // about 3 characters per token errs on the safe side
   return room < 1024 ? undefined : Math.min(cap, room);
