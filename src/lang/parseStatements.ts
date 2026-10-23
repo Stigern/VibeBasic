@@ -86,6 +86,8 @@ export class StatementParser extends Parser {
 
   private singleLine = 0;
   private nextQueue: string[] = [];
+  /** `Attribute Name.VB_UserMemId = n` lines seen: the member by id (0 default member, -4 NewEnum). */
+  private memberIds = new Map<number, string>();
   private nextTokLine = 0;   // line of the last `Next` keyword (shared by the loops `Next j, i` closes)
   /** Set when a block opener reported a missing closer without throwing (collect mode). */
   private unclosed = false;
@@ -211,6 +213,7 @@ export class StatementParser extends Parser {
       if (this.peek().kind === 'eof') return { body, closer: null };
       const closer = this.closerAt();
       if (closer) return { body, closer };
+      if (this.attributeLine()) continue;
       const s = this.recovering(() => this.statementChecked());
       if (s) body.push(s);
     }
@@ -1179,6 +1182,7 @@ export class StatementParser extends Parser {
       if (this.peek().kind === 'eof') return;
       const closer = this.closerAt();
       if (closer) { this.lineCloser(closer); continue; }
+      if (this.attributeLine()) continue;
       const t = this.peek();
       // `X As Integer` / `V(1 To 3) As Integer`: a line inside a Type block
       if (t.kind === 'ident' && !t.suffix && (this.isKeyword('as', 1) || (this.isOp('(', 1) && this.fieldAhead()))) {
@@ -1251,9 +1255,35 @@ export class StatementParser extends Parser {
     const ast: ModuleAst = { name, optionExplicit: false, variables: [], consts: [], types: [], enums: [], procedures: [], events: [], implements: [] };
     for (;;) {
       this.skipSeparators();
-      if (this.peek().kind === 'eof') return ast;
+      if (this.peek().kind === 'eof') {
+        const def = this.memberIds.get(0), en = this.memberIds.get(-4);
+        if (def !== undefined) ast.defaultMember = def;
+        if (en !== undefined) ast.newEnum = en;
+        return ast;
+      }
+      if (this.attributeLine()) continue;
       this.recovering(() => { this.moduleItem(ast); this.expectEnd(); });
     }
+  }
+
+  /**
+   * A member attribute of a VB6 class file (`Attribute Value.VB_UserMemId = 0`, `Attribute NewEnum.VB_MemberFlags = "40"`),
+   * at module level or inside the procedure it belongs to: consumed whole. VB_UserMemId 0 makes the default member, -4
+   * the member For Each enumerates; the others change nothing. False (nothing consumed) for anything else.
+   */
+  private attributeLine(): boolean {
+    const t = this.peek();
+    if (t.kind !== 'ident' || t.suffix || lower(t) !== 'attribute' || this.peek(1).kind !== 'ident' || !this.isOp('.', 2)
+      || this.peek(3).kind !== 'ident' || !this.isOp('=', 4)) return false;
+    const member = baseName(this.peek(1));
+    const attr = this.peek(3).text.toLowerCase();
+    for (let i = 0; i < 5; i++) this.advance();
+    let sign = 1;
+    if (this.isOp('-')) { this.advance(); sign = -1; }
+    const v = this.peek();
+    if (attr === 'vb_usermemid' && v.kind === 'number') this.memberIds.set(sign * (v.value as number), member);
+    this.skipLine();
+    return true;
   }
 
   /** One module-level item. With `ast` null (line mode) only headers are parsed. */

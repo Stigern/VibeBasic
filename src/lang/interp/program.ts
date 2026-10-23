@@ -11,7 +11,7 @@ import { FileIO } from '../fileio/fileIO';
 import { parseModule } from '../parser';
 import { parseCondConsts, type CondConsts } from '../condComp';
 import {
-  Empty, NothingT, VBArray, VBRecord, VBRef, defaultValue, isObject, setDateTextFormatter, setDateTextParser, toNumber, type DateTextFormatter,
+  Empty, NothingT, RefContainer, VBArray, VBRecord, VBRef, defaultValue, dropValue, isObject, refCounting, setDateTextFormatter, setDateTextParser, toNumber, type DateTextFormatter,
   type DateTextParser, type VBValue,
 } from '../values';
 import { EndSignal, SubCall, runGenerator, runSync, type ExecScope, type Gen } from './driver';
@@ -29,7 +29,7 @@ import { snapshotVariables } from './snapshot';
  */
 export const MAX_EVENT_NESTING = 100;
 import {
-  ClassInstance, Frame, GlobalScope, ModuleScope, ProcRef, Run, Variable, fitFixed, lc, rawValue, release, type FieldInfo, type TypeInfo,
+  ClassInstance, Frame, GlobalScope, ModuleScope, ProcRef, Run, Variable, fitFixed, lc, rawValue, startCounting, type FieldInfo, type TypeInfo,
 } from './scope';
 
 const now = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -144,7 +144,9 @@ export class Runtime {
    * Objects whose last counted reference went away, with the call depth at that moment: a statement at that depth or
    * shallower terminates them when it ends (exec.ts `reap`), unless they were stored again meanwhile.
    */
-  dying: { inst: ClassInstance; depth: number }[] | null = null;
+  dying: { inst: ClassInstance | RefContainer; depth: number }[] | null = null;
+  /** Where this program's Collections and Dictionaries without references wait (refCounting.sink while its code runs). */
+  private readonly sink = (c: RefContainer): void => this.queueDying(c);
 
   constructor(sources: SourceModule[], readonly host: Host, opts: ProgramOptions = {}) {
     this.sliceSize = Math.max(1, opts.sliceSize ?? 1000);
@@ -160,9 +162,12 @@ export class Runtime {
       activate: () => {
         const prev = setDateTextFormatter(this.dateText);
         const prevParse = setDateTextParser(this.dateParse);
+        const prevSink = refCounting.sink;
+        refCounting.sink = this.sink;
         return () => {
           setDateTextFormatter(prev);
           setDateTextParser(prevParse);
+          refCounting.sink = prevSink;
         };
       },
       cancellable: p => this.cancellable(p),
@@ -183,6 +188,8 @@ export class Runtime {
       if (m.kind === 'module') this.globals.addModule(m);
       else if (m.kind === 'class' && !this.classes.has(m.key)) this.classes.set(m.key, m);
     }
+    // objects of class modules can end (Class_Terminate): count references from the start, also in the Collections made first
+    if (this.classes.size > 0) startCounting();
     // the compile errors VB6 finds before the program starts (a ByRef type mismatch, New of a record ...)
     const problem = compileProblems(this.moduleList.map(m => ({ name: m.name, kind: m.kind, ast: m.ast })))[0];
     if (problem) {
@@ -245,6 +252,8 @@ export class Runtime {
       if (m.enums.has(key) || this.globals.enums.has(key) || this.moduleList.some(o => o.enums.has(key))) r = 'Long';
       // an enum of a type library (ADODB.EventReasonEnum, MSComctlLib.ListLabelEditConstants): a Long
       else if (/\.\w*(enum|constants)$/i.test(name)) r = 'Long';
+      // a class module of the project (`As Thing`, `As Project1.Thing`)
+      else if (this.classes.has(lc(name.slice(name.lastIndexOf('.') + 1)))) r = { objectType: name, classModule: true };
     } else throw VBRuntimeError.compile('User-defined type not defined');
     this.resolvedTypes.set(t, r);
     return r;
@@ -306,11 +315,11 @@ export class Runtime {
 
   /** `init` makes each element (`Dim a(3) As New Collection`); by default the type's default value. */
   newArray(t: VBTypeName, bounds: [number, number][], fixed: boolean, init?: () => VBValue): VBArray {
-    return new VBArray(t, bounds, fixed, init ?? this.elementInit(t));
+    return new VBArray(t, bounds, fixed, init ?? this.elementInit(t)).own();
   }
 
   unallocatedArray(t: VBTypeName, init?: () => VBValue): VBArray {
-    return VBArray.unallocated(t, init ?? this.elementInit(t));
+    return VBArray.unallocated(t, init ?? this.elementInit(t)).own();
   }
 
   /** Initial value of a variable of type `t` (`String * n` starts as n spaces). */
@@ -337,8 +346,11 @@ export class Runtime {
     return inst;
   }
 
-  /** `inst` has no counted reference left: it terminates at the end of the statement (see `dying`). */
-  queueDying(inst: ClassInstance): void {
+  /**
+   * `inst` has no counted reference left: it terminates at the end of the statement (see `dying`); a Collection or
+   * Dictionary lets go of its items then.
+   */
+  queueDying(inst: ClassInstance | RefContainer): void {
     (this.dying ??= []).push({ inst, depth: this.callDepth });
   }
 
@@ -349,7 +361,7 @@ export class Runtime {
     for (const v of inst.vars.values()) {
       const x = rawValue(v.ref);
       if (v.opts.events && x instanceof ClassInstance) x.sinks?.delete(v);
-      release(x);
+      if (!v.opts.isConst) dropValue(x);
     }
   }
 

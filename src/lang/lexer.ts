@@ -192,6 +192,13 @@ export function tokenize(src: string): Token[] {
       pos = close + 1;
       continue;
     }
+    if (c === '[') {   // `[_NewEnum]`, `[My Name]`: a bracketed identifier (any name, a keyword too)
+      const close = src.indexOf(']', pos + 1);
+      if (close < 0 || close === pos + 1 || /[\r\n]/.test(src.slice(pos + 1, close))) fail("Expected: ']'", pos);
+      out.push({ kind: 'ident', text: src.slice(pos + 1, close), line, col: colAt(pos) });
+      pos = close + 1;
+      continue;
+    }
     if ('+-*/\\^&=<>(),;.!'.includes(c)) { push('op', c, start); pos++; continue; }
 
     fail(`Invalid character '${c}'`, pos);

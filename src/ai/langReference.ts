@@ -54,7 +54,9 @@ const STATEMENTS = 'Option Explicit; Dim / Private / Public / Static x As Type, 
   + ' Also: Mid(s, i, n) = x; LSet / RSet s = x; Error n (Erl gives the last line number); Dim c As New Collection / Set c = New Collection (Add, Item, Count, Remove);'
   + ' Function F() As Long() returns an array; IsMissing(v) for an Optional Variant; !Name also works inside With rs.'
   + ' Classes: Set x = New Class1 / Dim x As New Class1; Class_Initialize, Class_Terminate; Public vars, Sub, Function,'
-  + ' Property Get/Let/Set, Exit Property, Me; Event E(a) + RaiseEvent E(a) -> Private WithEvents x As Class1, Sub x_E(a); Implements IFoo, Sub IFoo_M().'
+  + ' Property Get/Let/Set, Exit Property, Me; Event E(a) + RaiseEvent E(a) -> Private WithEvents x As Class1, Sub x_E(a); Implements IFoo, Sub IFoo_M();'
+  + ' default member: Attribute Item.VB_UserMemId = 0 inside its Property Get (x(2), Debug.Print x); For Each over a class:'
+  + ' Property Get NewEnum() As IUnknown with Attribute NewEnum.VB_UserMemId = -4 and Set NewEnum = mCol.[_NewEnum].'
   + ' If TypeOf x Is TextBox (or Form, a class, Collection); named arguments MsgBox Prompt:="x", Title:="t" (skip Optionals);'
   + ' Option Base 1, Option Compare Text; Global = Public; GoSub label ... Return; On n GoTo|GoSub a, b; Debug.Assert cond;'
   + ' #Const X = 1, #If X Then ... #ElseIf ... #Else ... #End If. App.Major, Minor, Revision, PrevInstance, LogEvent s.';

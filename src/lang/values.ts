@@ -38,14 +38,139 @@ export class VBRef {
   constructor(public value: VBValue) {}
 }
 
+// ---------------------------------------------------------------------------
+// Counted references
+// ---------------------------------------------------------------------------
+
+/**
+ * A value whose references the interpreter counts, so that it goes away with its last reference, as VB6 objects do: an
+ * object of a class module (Class_Terminate runs) or a Collection / Dictionary (it lets go of its items). Arrays and
+ * records hold counted references for the objects they keep (see `VBArray.owned`).
+ */
+export abstract class Counted {
+  /** One more counted reference. */
+  abstract hold(): void;
+  /** One counted reference less. */
+  abstract drop(): void;
+  /** Kept where references are not counted (host code): it lives until the program ends. */
+  abstract escape(): void;
+}
+
+/**
+ * `on`: references are counted (set when the first object of a class module is made; before that no object can need
+ * it). `sink`: where a Collection or Dictionary without references waits for the end of the statement (the running
+ * program's `Runtime.queueDying`; set while its code runs).
+ */
+export const refCounting: { on: boolean; sink: ((c: RefContainer) => void) | null } = { on: false, sink: null };
+
+/**
+ * A host object that holds values and counts the references to itself (Collection, Dictionary): when the last one goes,
+ * it lets go of its items (`releaseItems`), which may end objects of class modules.
+ */
+export abstract class RefContainer extends Counted {
+  refs = 0;
+  escaped = false;
+  /** Waiting in the program's dying list. */
+  dying = false;
+  /** Counts references and holds its items: made while references are counted, and its items not let go yet. */
+  counting = refCounting.on;
+
+  hold(): void { if (this.counting) this.refs++; }
+  drop(): void {
+    if (!this.counting || --this.refs > 0 || this.escaped || this.dying || !refCounting.sink) return;
+    this.dying = true;
+    refCounting.sink(this);
+  }
+  escape(): void { this.escaped = true; }
+
+  /** An item it now keeps: a counted reference (an object it does not count for lives until the end). */
+  protected keep(v: VBValue): void {
+    if (this.counting) holdValue(v);
+    else escapeValue(v);
+  }
+
+  /** An item it no longer keeps. */
+  protected letGo(v: VBValue): void {
+    if (this.counting) dropValue(v);
+  }
+
+  /** No reference is left: it lets go of its items, for good (it counts nothing from now on). */
+  releaseItems(): void {
+    if (!this.counting) return;
+    this.counting = false;
+    for (const v of this.heldValues()) dropValue(v);
+  }
+
+  /** The values it holds references for. */
+  protected abstract heldValues(): VBValue[];
+}
+
+/** A counted reference to `v` (an array or record stored somewhere holds its own: nothing to do for those). */
+export function holdValue(v: VBValue): void {
+  if (v instanceof Counted) v.hold();
+}
+
+/** `v` was let go: an object loses a reference, an array or record lets go of what it holds. */
+export function dropValue(v: VBValue): void {
+  if (v instanceof Counted) v.drop();
+  else if (v instanceof VBArray || v instanceof VBRecord) v.release();
+}
+
+/** `v` is kept where references are not counted. */
+export function escapeValue(v: VBValue): void {
+  if (v instanceof Counted) v.escape();
+}
+
+/** A container (array or record) that holds `v` now: `v` reports its writes to it (see `touch`). */
+function adopt(parent: VBArray | VBRecord, v: VBValue): void {
+  if (v instanceof VBArray || v instanceof VBRecord) v.parent = parent;
+}
+
 /** A user-defined type instance (`Type ... End Type`). Keys are the interpreter's choice. */
 export class VBRecord {
-  constructor(public typeName: string, public fields: Map<string, VBValue>) {}
+  /**
+   * Holds counted references for the objects in its fields (records are always stored somewhere: a variable, an array
+   * element, a field); false once it has let go of them (`release`).
+   */
+  owned = true;
+  /** Counts the writes to its fields (and to arrays and records inside it): the debugger compares it. */
+  version = 0;
+  parent: VBArray | VBRecord | null = null;
+
+  constructor(public typeName: string, public fields: Map<string, VBValue>) {
+    for (const v of fields.values()) adopt(this, v);
+  }
+
+  /** Stores a converted value in a field. */
+  put(key: string, v: VBValue): void {
+    const old = this.fields.get(key);
+    if (old !== v) {
+      if (this.owned) { holdValue(v); if (old !== undefined) dropValue(old); }
+      adopt(this, v);
+    }
+    this.fields.set(key, v);
+    this.touch();
+  }
+
+  touch(): void {
+    this.version++;
+    if (this.parent !== null) this.parent.touch();
+  }
+
+  /** The record is gone (its variable, element or field let go of it): its objects lose a reference. */
+  release(): void {
+    if (!this.owned) return;
+    this.owned = false;
+    for (const v of this.fields.values()) dropValue(v);
+  }
 
   /** Deep copy (records have value semantics). */
   clone(): VBRecord {
     const f = new Map<string, VBValue>();
-    for (const [k, v] of this.fields) f.set(k, cloneValue(v));
+    for (const [k, v] of this.fields) {
+      holdValue(v);
+      f.set(k, cloneValue(v));
+    }
     return new VBRecord(this.typeName, f);
   }
 }
@@ -74,6 +199,17 @@ export class VBArray {
    * TypeName), by storage offset, valid while the element still holds `of` (like `Variable.sub`).
    */
   private subs?: Map<number, { t: string; of: VBValue }>;
+  /**
+   * Stored in a variable, field, element or container (made by `Dim`, `ReDim` or `clone`): it holds counted references
+   * for the objects in its elements and lets go of them in `release`. A temporary (`Array(a, b)`, a ParamArray, a
+   * built-in's result) holds none.
+   */
+  owned = false;
+  /** Counts the writes to its elements (and to arrays and records inside them): the debugger compares it. */
+  version = 0;
+  parent: VBArray | VBRecord | null = null;
+  /** The elements can be objects, arrays or records (Variant, Object, a class or a user type). */
+  private readonly objects: boolean;
 
   constructor(
     public elemType: VBTypeName,
@@ -81,8 +217,28 @@ export class VBArray {
     public fixed = false,
     private init: () => VBValue = () => defaultValue(elemType),
   ) {
+    this.objects = elemType === 'Variant' || elemType === 'Object' || typeof elemType === 'object';
     this.bounds = bounds.length === 0 && unallocating ? [] : checkBounds(bounds);
     this.data = this.bounds.length === 0 ? [] : this.fresh(this.bounds);
+  }
+
+  /** The array is stored now: it holds its elements' objects (`Dim a(3) As New Class1`). */
+  own(): this {
+    this.owned = true;
+    if (this.objects) for (const v of this.data) { holdValue(v); adopt(this, v); }
+    return this;
+  }
+
+  /** The array is gone (its variable or container let go of it): its objects lose a reference. */
+  release(): void {
+    if (!this.owned) return;
+    this.owned = false;
+    if (this.objects) for (const v of this.data) dropValue(v);
+  }
+
+  touch(): void {
+    this.version++;
+    if (this.parent !== null) this.parent.touch();
   }
 
   /** A dynamic array that has not been `ReDim`'d yet (`Dim a() As T`). */
@@ -129,8 +285,23 @@ export class VBArray {
 
   /** Stores `v` after coercing it to the element type. */
   set(idx: number[], v: VBValue): void {
+    const o = this.offset(idx);
     const n = this.fixedLength;
-    this.data[this.offset(idx)] = n === undefined ? coerce(v, this.elemType) : fitFixed(toStr(v), n);
+    const nv = n === undefined ? coerce(v, this.elemType) : fitFixed(toStr(v), n);
+    if (this.objects) { this.setObject(o, nv); return; }
+    if (this.data[o] === nv) return;   // an unchanged value is no write (Break When Value Changes)
+    this.data[o] = nv;
+    this.touch();
+  }
+
+  /** `set` of an element that can hold an object, array or record: the references change hands. */
+  private setObject(o: number, nv: VBValue): void {
+    const old = this.data[o];
+    if (old === nv) return;
+    if (this.owned) { holdValue(nv); dropValue(old); }
+    adopt(this, nv);
+    this.data[o] = nv;
+    this.touch();
   }
 
   /**
@@ -142,6 +313,10 @@ export class VBArray {
     if (this.fixed) throw new VBRuntimeError(10);
     const nb = checkBounds(bounds);
     const next = this.fresh(nb);
+    const counted = this.owned && this.objects;
+    /** Elements of `next` that are old ones (kept references); the others are new, the old ones not kept are let go. */
+    const moved = counted ? new Uint8Array(next.length) : null;
+    const kept = counted ? new Uint8Array(this.data.length) : null;
     if (preserve) {
       const last = nb.length - 1;
       const ok = nb.length === this.bounds.length
@@ -158,11 +333,18 @@ export class VBArray {
           rest = Math.floor(rest / n);
         }
         if (idx[last] > nb[last][1]) continue;
-        next[offsetIn(nb, idx)] = this.data[flat];
+        const at = offsetIn(nb, idx);
+        next[at] = this.data[flat];
+        if (moved) { moved[at] = 1; kept![flat] = 1; }
       }
+    }
+    if (moved) {
+      for (let i = 0; i < this.data.length; i++) if (!kept![i]) dropValue(this.data[i]);
+      for (let i = 0; i < next.length; i++) if (!moved[i]) { holdValue(next[i]); adopt(this, next[i]); }
     }
     this.bounds = nb;
     this.data = next;
+    this.touch();
   }
 
   /** Deep copy. */
@@ -173,7 +355,7 @@ export class VBArray {
     c.data = this.data.map(cloneValue);
     c.fixedLength = this.fixedLength;
     if (this.subs) c.subs = new Map(this.subs);
-    return c;
+    return c.own();
   }
 
   private fresh(b: [number, number][]): VBValue[] {
@@ -537,7 +719,7 @@ export function coerce(v: VBValue, t: VBTypeName): VBValue {
       if (v instanceof VBRecord && v.typeName.toLowerCase() === t.userType.toLowerCase()) return v;
       throw new VBRuntimeError(13);
     }
-    return coerceObject(v, t.objectType);
+    return coerceObject(v, t.objectType, t.classModule);
   }
   switch (t) {
     case 'Variant': return v;
@@ -562,11 +744,17 @@ export function coerce(v: VBValue, t: VBTypeName): VBValue {
   }
 }
 
-/** An object (or Nothing) for a variable of type `typeName`; an object that knows its types may become a view of itself (`asType`). */
-function coerceObject(v: VBValue, typeName: string): VBValue {
+/**
+ * An object (or Nothing) for a variable of type `typeName`; an object that knows its types may become a view of itself
+ * (`asType`). A type that is a class module takes only objects that know their types (a Collection is error 13).
+ */
+function coerceObject(v: VBValue, typeName: string, classModule?: true): VBValue {
   if (v instanceof NothingT) return v;
   if (isObject(v)) {
-    if (!v.asType) return v;
+    if (!v.asType) {
+      if (classModule) throw new VBRuntimeError(13);
+      return v;
+    }
     const r = v.asType(typeName);
     if (r === undefined) throw new VBRuntimeError(13);
     return r;

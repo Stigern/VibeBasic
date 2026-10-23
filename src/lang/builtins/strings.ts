@@ -32,8 +32,18 @@ export function asc1252(c: string): number {
 
 // ---- length, slicing ----
 
-/** Len of a user-type variable is its size in a file (Open ... Len = Len(rec)). */
-def('Len', 1, 1, (a, ctx) => (isNullV(a[0]) ? Null : a[0] instanceof VBRecord && ctx.files ? ctx.files.recordLength(a[0]) : toStr(a[0]).length));
+/** Bytes of a variable of a numeric, Boolean or Date type (Len and LenB of one); a String or Variant uses its text. */
+const STORAGE: Record<string, number> = { Byte: 1, Integer: 2, Boolean: 2, Long: 4, Single: 4, Double: 8, Currency: 8, Date: 8 };
+
+/**
+ * Len of a user-type variable is its size in a file (Open ... Len = Len(rec)); of a numeric, Boolean or Date variable
+ * its storage size (`Len(l)` of a Long is 4); otherwise the length of the text.
+ */
+def('Len', 1, 1, (a, ctx, types) => {
+  if (isNullV(a[0])) return Null;
+  if (a[0] instanceof VBRecord && ctx.files) return ctx.files.recordLength(a[0]);
+  return STORAGE[types?.[0] ?? ''] ?? toStr(a[0]).length;
+}, { vars: true });
 
 def('Left', 2, 2, a => {
   if (isNullV(a[0])) return Null;
@@ -258,7 +268,11 @@ const byteCount = (v: VBValue): number => {
   return n;
 };
 
-def('LenB', 1, 1, (a, ctx) => (isNullV(a[0]) ? Null : a[0] instanceof VBRecord && ctx.files ? ctx.files.recordLength(a[0]) : toStr(a[0]).length * 2));
+def('LenB', 1, 1, (a, ctx, types) => {
+  if (isNullV(a[0])) return Null;
+  if (a[0] instanceof VBRecord && ctx.files) return ctx.files.recordLength(a[0]);
+  return STORAGE[types?.[0] ?? ''] ?? toStr(a[0]).length * 2;
+}, { vars: true });
 def('LeftB', 2, 2, a => (isNullV(a[0]) ? Null : fromBytes(bytesOf(toStr(a[0])).slice(0, byteCount(a[1])))));
 def('RightB', 2, 2, a => {
   if (isNullV(a[0])) return Null;

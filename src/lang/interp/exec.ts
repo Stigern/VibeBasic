@@ -17,7 +17,8 @@ import type {
 import { VBRuntimeError, internalError } from '../errors';
 import { PrintLine } from '../printFormat';
 import {
-  Empty, Missing, NothingT, NullT, VBArray, VBRecord, VBRef, bankers, compare, isObject, maybeSingle, single7, toNumber, toStr, type VBValue,
+  Counted, Empty, Missing, NothingT, NullT, RefContainer, VBArray, VBRecord, VBRef, bankers, compare, dropValue, isObject, maybeSingle, single7,
+  toNumber, toStr, type VBValue,
 } from '../values';
 import { EndSignal, SubCall, nextTick, type Gen } from './driver';
 import { execFileStmt, printItems } from './fileStmts';
@@ -28,7 +29,7 @@ import {
 } from './scope';
 import {
   afterHostCall, assign, awaitHost, callBuiltin, callProc, classCall, constExpr, evalArgValues, evalExpr, formMethod, hostRefs, lookup,
-  memberGet, methodArgs, objectFactory, shownArgs, textBinary, variableOf, withObject,
+  forEachSource, hostArgs, memberGet, methodArgs, objectFactory, shownArgs, textBinary, variableOf, withObject,
 } from './eval';
 import { compareResult, plain, truthy } from './operators';
 import { shown, type StaticType } from './staticTypes';
@@ -276,6 +277,8 @@ function canHandle(fr: Frame): boolean {
  */
 export function* handleError(f: Frame, e: unknown): Gen<ErrorOutcome> {
   if (e instanceof EndSignal || e instanceof Unwind) throw e;
+  // objects let go of while the error left inner procedures terminate before a handler runs (VB6 unwinds first)
+  if (f.run.rt.dying !== null) yield* reap(f.run, f.run.rt.callDepth);
   let err: VBRuntimeError;
   if (e instanceof VBRuntimeError) err = e;
   else if (isStackOverflow(e)) err = new VBRuntimeError(28);
@@ -445,6 +448,10 @@ export function* reap(run: Run, depth: number): Gen<void> {
     list.splice(i, 1);
     if (list.length === 0) rt.dying = null;
     inst.dying = false;
+    if (inst instanceof RefContainer) {   // a Collection or Dictionary nobody holds: its items lose their references
+      if (inst.refs <= 0 && !inst.escaped) inst.releaseItems();
+      continue;
+    }
     if (inst.refs > 0 || inst.escaped || inst.dead) continue;
     const t = inst.initPending ? undefined : inst.module.procs.get('class_terminate');
     if (t) {
@@ -455,13 +462,20 @@ export function* reap(run: Run, depth: number): Gen<void> {
   }
 }
 
-/** Leaving a procedure: its own variables let go of the class objects they hold. */
+/** Leaving a procedure: its own variables let go of the objects they hold (also in their arrays and records). */
 function releaseLocals(f: Frame): void {
   for (const v of f.locals.values()) {
-    if (v.opts.shared) continue;
+    if (v.opts.shared || v.opts.isConst) continue;
     const x = rawValue(v.ref);
-    if (x instanceof ClassValue) x.inst.release();
+    if (typeof x === 'object') dropValue(x);
   }
+}
+
+/** A variable gets a new value outside an assignment (ReDim of a Variant, Erase): the old one is let go. */
+function replaceValue(v: Variable, nv: VBValue): void {
+  const prev = rawValue(v.ref);
+  v.ref.value = nv;
+  if (classesInUse && !v.ref.counts && prev !== nv) dropValue(prev);
 }
 
 // ---------------------------------------------------------------------------
@@ -517,6 +531,9 @@ function bindParams(f: Frame, args: BoundArg[]): void {
         // shared: assignments convert to the caller's declared type (an array stays an array, a String * n keeps n)
         v = new Variable(p.name, a.type, a.slot, { isArray: a.isArray, fixedLength: a.fixedLength, variantAlias: !sameType(a.type, type), shared: true });
       } else if (isObjectType(a.type) && isObjectType(type)) {
+        // a variable of a host type (As Collection) for a class module's type never fits: VB6 does not compile it
+        if (typeof type === 'object' && 'objectType' in type && type.classModule && typeof a.type === 'object' && 'objectType' in a.type
+          && !a.type.classModule) throw compileError('ByRef argument type mismatch');
         // another object type (an interface of the object): a reference of the parameter's own type
         v = new Variable(p.name, type, new VBRef(storeValue(a.slot.value, type)));
       } else {
@@ -553,6 +570,8 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[], inst?: Cla
   bindParams(f, args);
   run.frames.push(f);
   rt.callDepth++;
+  // VB6 holds a reference to Me while its procedure runs: the object cannot terminate in its own code
+  if (inst) inst.refs++;
   try {
     yield* declareLocals(f);
     const c = yield* execBlock(f, proc.body);
@@ -563,7 +582,8 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[], inst?: Cla
   } finally {
     rt.callDepth--;
     run.frames.pop();
-    if (rt.instances.size > 0) releaseLocals(f);
+    if (classesInUse) releaseLocals(f);
+    if (inst) inst.release();
   }
   return f.returnVar ? f.returnVar.value : Empty;
 }
@@ -758,7 +778,7 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
         if (!(v instanceof Variable) || v.opts.isConst) throw compileError('Expected: array');
         const cur = v.value;
         if (cur instanceof VBArray) cur.redim(bounds, s.preserve);
-        else if (v.type === 'Variant') v.ref.value = rt.newArray(rt.resolveType(d.type, f.module), bounds, false);
+        else if (v.type === 'Variant') replaceValue(v, rt.newArray(rt.resolveType(d.type, f.module), bounds, false));
         else throw compileError('Expected: array');
       }
       return;
@@ -769,9 +789,9 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
         const cur = v.value;
         if (!(cur instanceof VBArray)) throw new VBRuntimeError(13);
         const n = cur.fixedLength;
-        if (!v.opts.isArray) v.ref.value = Empty;
-        else if (cur.fixed) v.ref.value = n === undefined ? rt.newArray(cur.elemType, cur.bounds, true) : VBArray.fixedString(cur.bounds, n, true);
-        else v.ref.value = n === undefined ? rt.unallocatedArray(cur.elemType) : VBArray.fixedString(null, n, false);
+        if (!v.opts.isArray) replaceValue(v, Empty);
+        else if (cur.fixed) replaceValue(v, n === undefined ? rt.newArray(cur.elemType, cur.bounds, true) : VBArray.fixedString(cur.bounds, n, true));
+        else replaceValue(v, n === undefined ? rt.unallocatedArray(cur.elemType) : VBArray.fixedString(null, n, false));
       }
       return;
     }
@@ -1001,6 +1021,7 @@ function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Com
 
 /** `obj.name args` as a statement: `callMethod` (a Promise result is awaited). */
 function* callObjectMethod(f: Frame, obj: VBObject, name: string, args: (Expr | MissingArg)[]): Gen<void> {
+  args = hostArgs(obj, name, args);
   const argv = shownArgs(f, args, yield* evalArgValues(f, args));
   const r = obj.callMethod(name, methodArgs(argv, obj), yield* hostRefs(f, obj, name, args));
   if (r instanceof Promise) yield* awaitHost(f, r);
@@ -1087,8 +1108,20 @@ function* execFor(f: Frame, s: ForStmt): Gen<Completion> {
 
 function* execForEach(f: Frame, s: ForEachStmt): Gen<Completion> {
   const v = variableOf(f, s.variable);
-  const source = yield* evalExpr(f, s.collection);
+  // a class object: the Collection its NewEnum member (VB_UserMemId -4) gives
+  const source = yield* forEachSource(f, yield* evalExpr(f, s.collection));
   let coll = plainCollection(source);
+  // the loop keeps the objects it visits (the array or collection may be let go of meanwhile)
+  const held = classesInUse ? coll.filter(x => x instanceof Counted) : [];
+  for (const x of held) (x as Counted).hold();
+  try {
+    return yield* forEachItems(f, s, v, source, coll);
+  } finally {
+    for (const x of held) (x as Counted).drop();
+  }
+}
+
+function* forEachItems(f: Frame, s: ForEachStmt, v: Variable, source: VBValue, coll: VBValue[]): Gen<Completion> {
   // the elements of a Single array in a Variant: their 7 shown digits (see staticTypes.ts `shown`)
   if (source instanceof VBArray && source.elemType === 'Single' && v.type !== 'Single') coll = coll.map(x => (maybeSingle(x) ? single7(x) : x));
   // a ParamArray's items keep the number subtype the caller's code gave them (VBArray.noteSub)

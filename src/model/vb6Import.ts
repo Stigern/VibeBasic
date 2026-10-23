@@ -200,10 +200,12 @@ function parseNode(lines: string[], i: number): { node: FrmNode; next: number } 
 const objectFile = (v: string): string => (v.split(';')[1] ?? '').trim().replace(/^"|"$/g, '');
 
 const ATTRIBUTE_LINE = /^\s*Attribute\s+[\w.]+\s*=/i;
+/** `Attribute Item.VB_UserMemId = 0` (a class's default member; -4 its NewEnum): kept, the language reads it. */
+const MEMBER_ID_LINE = /^\s*Attribute\s+\w+\.VB_UserMemId\s*=/i;
 
-/** The code part: every Attribute line dropped, leading blank lines and trailing white space trimmed, '\n' line ends. */
+/** The code part: Attribute lines dropped (except member ids), leading blank lines and trailing white space trimmed, '\n' line ends. */
 function codeOf(lines: string[]): string {
-  const kept = lines.filter(l => !ATTRIBUTE_LINE.test(l));
+  const kept = lines.filter(l => !ATTRIBUTE_LINE.test(l) || MEMBER_ID_LINE.test(l));
   while (kept.length && !kept[0].trim()) kept.shift();
   const code = kept.join('\n').replace(/\s+$/, '');
   return code ? code + '\n' : '';

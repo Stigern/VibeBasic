@@ -9,9 +9,9 @@
 
 import { VBRuntimeError } from '../errors';
 import type { VBObject } from '../host';
-import type { FileIO } from '../fileio/fileIO';
+import { wildcardMatcher, type FileIO } from '../fileio/fileIO';
 import type { FileStat } from '../fileio/fsApi';
-import { Empty, EmptyT, NullT, VBArray, VBRecord, dateFrom, isDate, isObject, toBool, toNumber, toStr, type VBValue } from '../values';
+import { Empty, EmptyT, NullT, RefContainer, VBArray, VBRecord, dateFrom, isDate, isObject, toBool, toNumber, toStr, type VBValue } from '../values';
 import { PROG_IDS, defClass } from './collection';
 import { BUILTINS, def, type BuiltinCtx } from './util';
 
@@ -22,17 +22,34 @@ const argc = (args: VBValue[], min: number, max: number): void => { if (args.len
 // ---------------------------------------------------------------------------------------------------------------
 // Dictionary
 
-export class VBDictionary implements VBObject {
+const DICT_PARAMS: Record<string, readonly string[]> = { add: ['Key', 'Item'], exists: ['Key'], remove: ['Key'], item: ['Key'], key: ['Key'] };
+
+/** A Dictionary: its items and object keys are counted references (they leave with Remove, RemoveAll, or the Dictionary). */
+export class VBDictionary extends RefContainer implements VBObject {
   readonly vbTypeName = 'Dictionary';
   readonly defaultMember = 'Item';
   readonly rawArgs = true;
   private map = new Map<unknown, { key: VBValue; item: VBValue }>();
   private mode = 0;
 
+  protected heldValues(): VBValue[] { return [...this.map.values()].flatMap(e => [e.key, e.item]); }
+
+  paramNames(name: string): readonly string[] | undefined { return DICT_PARAMS[name.toLowerCase()]; }
+
+  /** Adds an entry, holding its key and item. */
+  private put(k: unknown, key: VBValue, item: VBValue): void {
+    this.keep(key);
+    this.keep(item);
+    this.map.set(k, { key, item });
+  }
+
+  /** The key as stored: an object stays itself (keys compare by identity), anything else is its plain value. */
+  private static keyValue(k: VBValue): VBValue { return isObject(k) ? k : plain(k); }
+
   /** The map key of a VB key: text by CompareMode, numbers by value, an object by reference. */
   private keyOf(k: VBValue): unknown {
+    if (isObject(k)) return k.identity ?? k;
     k = plain(k);
-    if (isObject(k)) return k;
     if (typeof k === 'string') return 's' + (this.mode ? k.toLowerCase() : k);
     if (typeof k === 'number') return 'n' + k;
     if (typeof k === 'boolean') return 'b' + k;
@@ -58,7 +75,7 @@ export class VBDictionary implements VBObject {
         const k = this.keyOf(args[0]);
         const e = this.map.get(k);
         if (e) return e.item;
-        this.map.set(k, { key: plain(args[0]), item: Empty });   // reading a missing key adds it
+        this.put(k, VBDictionary.keyValue(args[0]), Empty);   // reading a missing key adds it
         return Empty;
       }
       case 'key': throw new VBRuntimeError(450);
@@ -72,8 +89,9 @@ export class VBDictionary implements VBObject {
         argc(args, 1, 1);
         const k = this.keyOf(args[0]);
         const e = this.map.get(k);
-        if (e) e.item = VBDictionary.stored(value);
-        else this.map.set(k, { key: plain(args[0]), item: VBDictionary.stored(value) });
+        const item = VBDictionary.stored(value);
+        if (e) { const old = e.item; this.keep(item); e.item = item; this.letGo(old); }
+        else this.put(k, VBDictionary.keyValue(args[0]), item);
         return;
       }
       case 'key': {   // d.Key(old) = new
@@ -82,7 +100,10 @@ export class VBDictionary implements VBObject {
         const e = this.map.get(old);
         if (!e) throw new VBRuntimeError(32811);
         if (nk !== old && this.map.has(nk)) throw new VBRuntimeError(457);
-        const entries = [...this.map.entries()].map(([k, v]): [unknown, typeof v] => (k === old ? [nk, { key: plain(value), item: v.item }] : [k, v]));
+        const key = VBDictionary.keyValue(value);
+        this.keep(key);
+        this.letGo(e.key);
+        const entries = [...this.map.entries()].map(([k, v]): [unknown, typeof v] => (k === old ? [nk, { key, item: v.item }] : [k, v]));
         this.map = new Map(entries);
         return;
       }
@@ -104,16 +125,27 @@ export class VBDictionary implements VBObject {
         argc(args, 2, 2);
         const k = this.keyOf(args[0]);
         if (this.map.has(k)) throw new VBRuntimeError(457);
-        this.map.set(k, { key: plain(args[0]), item: VBDictionary.stored(args[1]) });
+        this.put(k, VBDictionary.keyValue(args[0]), VBDictionary.stored(args[1]));
         return Empty;
       }
       case 'exists': argc(args, 1, 1); return this.map.has(this.keyOf(args[0]));
       case 'remove': {
         argc(args, 1, 1);
-        if (!this.map.delete(this.keyOf(args[0]))) throw new VBRuntimeError(32811);
+        const k = this.keyOf(args[0]);
+        const e = this.map.get(k);
+        if (!e) throw new VBRuntimeError(32811);
+        this.map.delete(k);
+        this.letGo(e.key);
+        this.letGo(e.item);
         return Empty;
       }
-      case 'removeall': argc(args, 0, 0); this.map.clear(); return Empty;
+      case 'removeall': {
+        argc(args, 0, 0);
+        const all = this.heldValues();
+        this.map.clear();
+        for (const v of all) this.letGo(v);
+        return Empty;
+      }
       case 'keys': case 'items': {
         argc(args, 0, 0);
         const vals = [...this.map.values()].map(e => (name.toLowerCase() === 'keys' ? e.key : e.item));
@@ -242,13 +274,13 @@ class FsFolder extends FsEntry {
         return io(this.ctx).listing(this.path).then(ls => (l === 'files'
           ? new FsItems('Files', ls.files.map(x => new FsFile(this.ctx, buildPath(this.path, x.name))))
           : new FsItems('Folders', ls.dirs.map(d => new FsFolder(this.ctx, buildPath(this.path, d))))));
-      case 'size': return undefined;
+      case 'size': return folderSize(this.ctx, this.path);
     }
     return undefined;
   }
   callMethod(name: string, args: VBValue[]): VBValue | Promise<VBValue> {
     switch (name.toLowerCase()) {
-      case 'delete': argc(args, 0, 1); return io(this.ctx).rmDir(this.path).then(() => Empty);
+      case 'delete': argc(args, 0, 1); return deleteFolder(this.ctx, this.path, args[0]);
       case 'createtextfile': argc(args, 1, 3); return createText(this.ctx, buildPath(this.path, toStr(args[0])), args[1]);
     }
     if (this.hasMember(name)) return this.getMember(name, args);
@@ -348,21 +380,68 @@ async function createText(ctx: BuiltinCtx, path: string, overwrite: VBValue | un
   return new TextStream(f, await f.openStream(path, 'output'), false);
 }
 
-/** A destination that ends in "\" or "/" is a folder: the file keeps its name there. */
-const target = (from: string, to: string): string => (SEP.test(to[to.length - 1] ?? '') ? to + fileNameOf(from) : to);
+/** A destination that ends in "\" or "/" (or any destination of a wildcard source) is a folder: the file keeps its name there. */
+const target = (from: string, to: string, folder: boolean): string =>
+  (SEP.test(to[to.length - 1] ?? '') ? to + fileNameOf(from) : folder ? buildPath(to, fileNameOf(from)) : to);
+
+/**
+ * The files a CopyFile / MoveFile source names: a wildcard (`*`, `?`) in its last part matches the files of that folder
+ * (none: 53); `folder` is then true (the destination must be a folder that exists, else 76).
+ */
+async function sourceFiles(ctx: BuiltinCtx, from: string, to: string): Promise<{ files: string[]; folder: boolean }> {
+  const name = fileNameOf(from);
+  if (!/[*?]/.test(name)) return { files: [from], folder: false };
+  const dir = parentOf(from);
+  const ls = await io(ctx).listing(dir || '.');
+  const match = wildcardMatcher(name);
+  const files = ls.files.map(x => x.name).filter(match).map(n => buildPath(dir, n));
+  if (files.length === 0) throw new VBRuntimeError(53);
+  if (!(await exists(ctx, to))?.isDir) throw new VBRuntimeError(76);
+  return { files, folder: true };
+}
 
 async function copyFile(ctx: BuiltinCtx, from: string, to: string, overwrite: VBValue | undefined): Promise<VBValue> {
-  const dest = target(from, to);
-  if (given(overwrite) && !toBool(overwrite) && await exists(ctx, dest)) throw new VBRuntimeError(58);
-  await io(ctx).fileCopy(from, dest);
+  const { files, folder } = await sourceFiles(ctx, from, to);
+  for (const file of files) {
+    const dest = target(file, to, folder);
+    if (given(overwrite) && !toBool(overwrite) && await exists(ctx, dest)) throw new VBRuntimeError(58);
+    await io(ctx).fileCopy(file, dest);
+  }
   return Empty;
 }
 
 async function moveFile(ctx: BuiltinCtx, from: string, to: string): Promise<VBValue> {
-  const dest = target(from, to);
-  if (await exists(ctx, dest)) throw new VBRuntimeError(58);
-  await io(ctx).rename(from, dest);
+  const { files, folder } = await sourceFiles(ctx, from, to);
+  for (const file of files) {
+    const dest = target(file, to, folder);
+    if (await exists(ctx, dest)) throw new VBRuntimeError(58);
+    await io(ctx).rename(file, dest);
+  }
   return Empty;
+}
+
+/** DeleteFolder / Folder.Delete: the folder with everything in it (Force: read-only files too). */
+async function deleteFolder(ctx: BuiltinCtx, path: string, force: VBValue | undefined): Promise<VBValue> {
+  const f = io(ctx);
+  const ls = await f.listing(path);
+  for (const file of ls.files) {
+    const p = buildPath(path, file.name);
+    if (given(force) && toBool(force)) await f.setAttr(p, 0).catch(() => {});
+    await f.kill(p);
+  }
+  for (const d of ls.dirs) await deleteFolder(ctx, buildPath(path, d), force);
+  await f.rmDir(path);
+  return Empty;
+}
+
+/** Folder.Size: the bytes of every file in the folder and its subfolders. */
+async function folderSize(ctx: BuiltinCtx, path: string): Promise<number> {
+  const f = io(ctx);
+  const ls = await f.listing(path);
+  let n = 0;
+  for (const file of ls.files) n += (await f.statOf(buildPath(path, file.name)))?.size ?? 0;
+  for (const d of ls.dirs) n += await folderSize(ctx, buildPath(path, d));
+  return n;
 }
 
 export class FileSystemObject implements VBObject {
@@ -389,7 +468,10 @@ export class FileSystemObject implements VBObject {
       case 'createtextfile': argc(args, 1, 3); return createText(ctx, s(0), args[1]);
       case 'opentextfile': argc(args, 1, 4); return openText(ctx, s(0), args[1], args[2]);
       case 'deletefile': argc(args, 1, 2); return f.kill(s(0)).then(() => Empty);
-      case 'deletefolder': argc(args, 1, 2); return f.rmDir(s(0)).then(() => Empty);
+      case 'deletefolder': argc(args, 1, 2); return exists(ctx, s(0)).then(st => {
+        if (!st?.isDir) throw new VBRuntimeError(76);
+        return deleteFolder(ctx, s(0), args[1]);
+      });
       case 'createfolder': argc(args, 1, 1); return exists(ctx, s(0)).then(async st => {
         if (st) throw new VBRuntimeError(58);
         await f.mkDir(s(0));

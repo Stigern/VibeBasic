@@ -28,6 +28,8 @@ export interface VBObject {
   callMethod(name: string, args: VBValue[], refs?: (OutSlot | undefined)[]): VBValue | Promise<VBValue>;
   /** The 0-based positions of a method's ByRef parameters (`Winsock1.GetData data`); the method writes to them through `refs`. */
   byRefArgs?(name: string): readonly number[] | undefined;
+  /** A method's parameter names in order, for named arguments (`col.Add x, Key:="k"`); none: a named argument is error 448. */
+  paramNames?(name: string): readonly string[] | undefined;
   /** `Load Name(i)` / `Unload Name(i)` of a control array element (a control array object only). */
   loadElement?(index: number): void | Promise<void>;
   unloadElement?(index: number): void | Promise<void>;
