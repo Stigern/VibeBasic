@@ -2,6 +2,31 @@
 
 All notable changes to VibeBasic. Format follows Keep a Changelog.
 
+## [0.8.0] - 2026-10-23
+
+### Added
+- File I/O in the language: Open, Close, Print #, Write #, Input #, Line Input, Get/Put, Seek, EOF, LOF, Loc, FreeFile, Dir, Kill, Name, MkDir, RmDir, ChDir, FileCopy, FileLen, FileDateTime, GetAttr/SetAttr, CurDir, with VB6 error numbers. SaveSetting, GetSetting, DeleteSetting and GetAllSettings.
+- Databases on SQLite: the Data control and ADO Data Control, Recordset (navigation, AddNew/Edit/Update/Delete, Find, `rs!Field`), data binding (DataSource/DataField), DataGrid, DataList and DataCombo.
+- Sheridan 3D controls: SSPanel (with flood bar), SSCommand, SSCheck, SSOption, SSFrame and SSRibbon.
+- MSComm (serial port) and SysInfo.
+- Animation, ImageCombo, CoolBar, FlatScrollBar and Calendar (MSCAL).
+- Code window: folding with an outlining margin (Edit > Outlining, Ctrl+M chords), a Visual Studio colour palette (or Classic VB6) and font size under Tools > Options > Editor Format, indentation guides, procedure separators, matching block keywords, highlighted identifiers, and automatic End lines on Enter.
+- The AI sees the form: a picture of the form for vision models, a layout check (overlaps, out of bounds, cut captions, alignment) and relative placement (below, right of, arrange as row/column/grid, autosize). An ASCII layout map for servers without vision.
+- Ask AI answers questions in plain text (Ask more...), Tools > AI Log shows every exchange, and transient network errors are retried once.
+- Language: IsMissing, Mid/LSet/RSet statements, FormatNumber/FormatCurrency/FormatPercent, Filter, CDec, IsError, CVErr, the Error statement and Erl, New Collection, typed array returns, ParamArray, Single as its own type, StrConv, Beep.
+
+### Changed
+- The AI code check also catches wrong event signatures, calls to missing procedures, wrong argument counts and duplicate procedures.
+- Form mode uses structured output (vLLM structured_outputs, else response_format, with automatic fallback); follow-up rounds can use low thinking for speed; answers have a token cap.
+- The AI settings and API key live in a private file on the Rust side, out of reach of the program's form windows.
+- Builds read the signing identity from a local .env.local (npm run build:app).
+
+### Fixed
+- Integer overflow (error 6), parenthesised arguments passed by value, CDate/CDbl/IsNumeric formats, Input #/Write # round trips and other VB6 differences.
+- Lost work in the IDE: undo of Add Module/Form, the multi-line Properties editor, values typed before Exit/New/Open. Modules can be renamed; paste into containers; breakpoints follow deleted lines; TabIndex and pictures.
+- Run time: programs end when their forms are closed, TextBox selection, ADO blank records, MultiSelect lists, ItemData, CRLF in multi-line text, KeyPress for Escape/Ctrl, Activate/Deactivate, Cmd+Q in made apps.
+- Robustness: FileCopy onto itself, runaway queries, blocking file work, size caps, leaked handles, Winsock sends, the settings store.
+
 ## [0.7.5] - 2026-10-23
 
 ### Changed
