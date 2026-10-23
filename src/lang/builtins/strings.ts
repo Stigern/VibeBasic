@@ -3,7 +3,7 @@
 // Functions that VB6 lets take Null (Left, UCase, ...) return Null for Null.
 
 import { VBRuntimeError } from '../errors';
-import { Null, VBArray, toStr } from '../values';
+import { Null, VBArray, VBRecord, toStr } from '../values';
 import { def, intArg, isNullV, isTextCompare, optInt, repeat } from './util';
 
 // ---- Windows-1252 ----
@@ -32,7 +32,8 @@ export function asc1252(c: string): number {
 
 // ---- length, slicing ----
 
-def('Len', 1, 1, a => (isNullV(a[0]) ? Null : toStr(a[0]).length));
+/** Len of a user-type variable is its size in a file (Open ... Len = Len(rec)). */
+def('Len', 1, 1, (a, ctx) => (isNullV(a[0]) ? Null : a[0] instanceof VBRecord && ctx.files ? ctx.files.recordLength(a[0]) : toStr(a[0]).length));
 
 def('Left', 2, 2, a => {
   if (isNullV(a[0])) return Null;

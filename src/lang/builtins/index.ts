@@ -1,7 +1,7 @@
 // Built-in function and constant registry. The interpreter looks names up
 // here after user code, enum members and constants (see interp/eval.ts).
 // The library is split over strings.ts, convert.ts, math.ts, datetime.ts,
-// misc.ts (dialogs, colours, IIf ...) and constants.ts; importing this file
+// misc.ts (dialogs, colours, IIf ...), files.ts (file I/O, settings) and constants.ts; importing this file
 // registers everything.
 
 import { VBRuntimeError } from '../errors';
@@ -31,5 +31,6 @@ import './convert';
 import './math';
 import './datetime';
 import './misc';
+import './files';
 import './constants';
 import './err';

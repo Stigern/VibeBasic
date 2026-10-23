@@ -43,6 +43,38 @@ const KEYWORD_SPELLING: Record<string, string> = {
 /** Names that are neither keywords nor registered built-ins but have a fixed VB6 spelling. */
 const EXTRA_NAMES = ['Debug', 'Print', 'Tab', 'Spc'];
 
+/** Identifiers that are keywords inside a file statement (VB6 colours them): the statement word, and Open's clauses. */
+const FILE_STATEMENT_WORDS = new Set(['print', 'write', 'input', 'get', 'put', 'seek']);
+const OPEN_WORDS = new Set(['input', 'output', 'append', 'binary', 'random', 'access', 'read', 'write', 'shared', 'lock', 'len']);
+
+/**
+ * Indexes of the identifier tokens that act as keywords in a file statement: `Print #`, `Line Input #`, `Get #`, ...,
+ * `Name ... As`, and in `Open ... For Input Access Read Lock Write As #1 Len = 8` the mode and clause words.
+ */
+export function fileStatementWords(tokens: Token[]): Set<number> {
+  const out = new Set<number>();
+  let start = true;
+  let open: '' | 'path' | 'for' | 'as' = '';
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    const l = t.text.toLowerCase();
+    if (t.kind === 'newline' || t.kind === 'colon' || (t.kind === 'keyword' && (l === 'then' || l === 'else'))) { start = true; open = ''; continue; }
+    if (start && t.kind === 'ident' && !t.suffix) {
+      const next = tokens[i + 1];
+      const hash = (n: Token | undefined) => n?.kind === 'op' && n.text === '#';
+      if (FILE_STATEMENT_WORDS.has(l) && hash(next)) out.add(i);
+      else if (l === 'line' && next?.kind === 'ident' && next.text.toLowerCase() === 'input' && hash(tokens[i + 2])) { out.add(i); out.add(i + 1); }
+      else if (l === 'name' && tokens.slice(i + 1).some(x => x.kind === 'keyword' && x.text.toLowerCase() === 'as')) out.add(i);
+    }
+    if (t.kind === 'keyword' && l === 'open' && start) open = 'path';
+    else if (open && t.kind === 'keyword' && (l === 'for' || l === 'as')) open = l === 'for' ? 'for' : 'as';
+    // the mode and Access / Lock words after `For`, `Len` after `As #n`
+    else if (t.kind === 'ident' && !t.suffix && (open === 'for' && OPEN_WORDS.has(l) && l !== 'len' || open === 'as' && l === 'len')) out.add(i);
+    start = false;
+  }
+  return out;
+}
+
 /** Built-ins that also exist as `$` string variants (`Left$`). */
 const DOLLAR_FUNCTIONS = [
   'Left', 'Right', 'Mid', 'Trim', 'LTrim', 'RTrim', 'UCase', 'LCase', 'Space', 'String', 'Chr', 'ChrW',
@@ -127,6 +159,7 @@ function prettifyPhysicalLine(line: string, known: Map<string, string>): string 
   let head = true;          // the statement so far is just a leading name (a.b.c)
   let prevHead = false;     // prev is the last name of that leading chain
 
+  const fileWords = fileStatementWords(tokens);
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
     const next = tokens[i + 1];
@@ -138,6 +171,8 @@ function prettifyPhysicalLine(line: string, known: Map<string, string>): string 
     // ---- casing
     if (t.kind === 'keyword') {
       text = KEYWORD_CASE.get(lower) ?? t.text;
+    } else if (fileWords.has(i)) {
+      text = t.text[0].toUpperCase() + lower.slice(1);   // Print #, Line Input #, Output, Access, Read, Len ...
     } else if (t.kind === 'ident') {
       const afterMember = prev && (isOp(prev, '.') || isOp(prev, '!'));
       if (afterMember) {

@@ -4,6 +4,7 @@
 
 import type { VBValue } from './values';
 import type { VBRuntimeError } from './errors';
+import type { FileSystemApi } from './fileio/fsApi';
 
 /**
  * A host object (form, control, App …). Contract the interpreter relies on:
@@ -61,4 +62,6 @@ export interface Host {
   onBreak(info: BreakInfo): Promise<'continue' | 'end'>;
   /** The program has ended (called once). */
   onEnd(): void;
+  /** File I/O and SaveSetting (Open, Kill, Dir ...). Absent: those statements raise error 68, Device unavailable. */
+  fileSystem?(): FileSystemApi | undefined;
 }

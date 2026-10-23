@@ -102,11 +102,11 @@ test('Option Explicit: undeclared variables', () => {
 });
 
 test('unsupported functions and statements', () => {
-  expect(inForm1(sub('    SaveSetting "App", "S", "K", Text1(0).Text'))).toEqual(['SaveSetting is not supported in VibeBasic. Use a module-level variable instead.']);
   expect(validateCode('Sub Main()\n    Dim o\n    Set o = CreateObject("Scripting.Dictionary")\nEnd Sub', { moduleName: 'Module2', form: null }))
     .toEqual(['CreateObject is not supported in VibeBasic.']);
-  expect(validateCode('Sub Main()\n    Print #1, "x"\nEnd Sub', { moduleName: 'Module2', form: null }))
-    .toEqual(['Line 2: Print # is not supported in VibeBasic. There is no file I/O; keep the data in variables instead.']);
+  // file I/O and the settings are supported
+  expect(inForm1(sub('    SaveSetting "App", "S", "K", Text1(0).Text'))).toEqual([]);
+  expect(validateCode('Sub Main()\n    Open "x" For Output As #1\n    Print #1, "x"\n    Close #1\nEnd Sub', { moduleName: 'Module2', form: null })).toEqual([]);
 });
 
 test('a large valid program has no problems', () => {

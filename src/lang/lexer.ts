@@ -17,6 +17,9 @@ import { KEYWORDS, type Token, type TokenKind } from './tokens';
 
 type Suffix = NonNullable<Token['suffix']>;
 
+/** What a date literal has besides digits: a date separator or a colon between digits, or a month name. */
+const DATE_SHAPE = /\d\s*[/-]\s*\d|\d\s*:\s*\d|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i;
+
 const isDigit = (c: string) => c >= '0' && c <= '9';
 const isIdentStart = (c: string) => /\p{L}/u.test(c);
 const isIdentPart = (c: string) => /[\p{L}\p{N}_]/u.test(c);
@@ -136,7 +139,8 @@ export function tokenize(src: string): Token[] {
       let p = pos + 1;
       while (p < n && src[p] !== '#' && !newlineLen(p)) p++;
       const inner = src.slice(pos + 1, p);
-      if (src[p] === '#' && /\d/.test(inner) && /^[\w/\-:.,\s]+$/.test(inner)) {
+      // a date or time (`#1/2/2000#`, `#12:30 PM#`, `#1 Jan 2000#`); `#1, #2` (file numbers) is not one
+      if (src[p] === '#' && /\d/.test(inner) && /^[\w/\-:.,\s]+$/.test(inner) && DATE_SHAPE.test(inner)) {
         push('date', src.slice(pos, p + 1), start, { value: inner.trim() });
         pos = p + 1;
         continue;

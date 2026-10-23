@@ -4,7 +4,7 @@ import { Parser } from './exprParser';
 import type { Token } from './tokens';
 import type {
   ArrayBound, CaseTest, CompareOp, ConstDecl, DebugPrintStmt, EnumDecl, Expr, IfBranch, MissingArg,
-  ModuleAst, NameExpr, Param, PrintItem, ProcDecl, ReDimDecl, Stmt, TypeDecl, TypeSuffix, VarDecl, VBTypeName,
+  ModuleAst, NameExpr, OpenMode, OpenStmt, Param, PrintItem, ProcDecl, ReDimDecl, Stmt, TypeDecl, TypeSuffix, VarDecl, VBTypeName,
 } from './ast';
 
 /*
@@ -36,13 +36,13 @@ const SUFFIX_TYPES: Record<TypeSuffix, VBTypeName> = { '%': 'Integer', '&': 'Lon
 
 /** Unsupported VB6 keywords (see KEYWORDS in tokens.ts), with the name shown in the error. */
 export const UNSUPPORTED_KEYWORDS: Record<string, string> = {
-  declare: 'Declare', open: 'Open', close: 'Close', property: 'Property', implements: 'Implements',
+  declare: 'Declare', property: 'Property', implements: 'Implements',
   event: 'Event', raiseevent: 'RaiseEvent', withevents: 'WithEvents', friend: 'Friend', global: 'Global',
   lib: 'Lib', alias: 'Alias', paramarray: 'ParamArray', gosub: 'GoSub', return: 'Return',
 };
 /** Unsupported statements that are plain identifiers; only unsupported when they start a statement and are not assigned to / member-accessed. */
 export const UNSUPPORTED_IDENTS: Record<string, string> = { print: 'Print', line: 'Line', circle: 'Circle', pset: 'PSet' };
-/** File I/O statements: an identifier followed by `#`. */
+/** File I/O statements that are an identifier followed by `#` (also `Line Input #`, and `Open`/`Close` as keywords). */
 export const HASH_STATEMENTS: Record<string, string> = { print: 'Print', write: 'Write', input: 'Input', get: 'Get', put: 'Put', seek: 'Seek' };
 
 const STRAY_MESSAGES: Record<Closer, string> = {
@@ -66,6 +66,7 @@ const END_WORDS: Record<string, Closer> = {
 /** Keywords that can start an argument of a paren-less call. */
 const ARG_START_KEYWORDS = new Set(['true', 'false', 'nothing', 'new', 'not', 'me', 'date', 'string', 'error', 'empty', 'null']);
 const COMPARE_OPS = new Set(['=', '<>', '<', '>', '<=', '>=']);
+const OPEN_MODES = new Set<string>(['input', 'output', 'append', 'binary', 'random']);
 
 const lower = (t: Token) => t.text.toLowerCase();
 const baseName = (t: Token) => (t.suffix ? t.text.slice(0, -1) : t.text);
@@ -133,6 +134,12 @@ export class StatementParser extends Parser {
     const t = this.peek();
     return t.kind === 'newline' || t.kind === 'colon' || t.kind === 'comment' || t.kind === 'eof'
       || (this.singleLine > 0 && this.isKeyword('else'));
+  }
+
+  /** The token after the cursor ends the statement. */
+  private atEnd1(): boolean {
+    const k = this.peek(1).kind;
+    return k === 'newline' || k === 'colon' || k === 'comment' || k === 'eof';
   }
 
   private atLineEnd(): boolean {
@@ -261,13 +268,137 @@ export class StatementParser extends Parser {
       if (w === 'debug' && this.isOp('.', 1) && this.peek(2).kind === 'ident' && lower(this.peek(2)) === 'print') {
         return this.debugPrint();
       }
-      if (HASH_STATEMENTS[w] && this.isOp('#', 1)) this.unsupported(HASH_STATEMENTS[w]);
+      if (HASH_STATEMENTS[w] && this.isOp('#', 1)) return this.fileStatement(w);
+      // `Seek 1, 100`, `Get 1, , x`: the # is optional
+      if ((w === 'seek' || w === 'get' || w === 'put') && !(n.kind === 'op' && (n.text === '=' || n.text === '.')) && !this.atEnd1()) {
+        return this.fileStatement(w);
+      }
+      if (w === 'line' && n.kind === 'ident' && lower(n) === 'input' && !n.suffix && this.isOp('#', 2)) {
+        this.advance();
+        return this.fileStatement('line input');
+      }
+      if (w === 'name' && !(n.kind === 'op' && (n.text === '=' || n.text === '.'))) {
+        const s = this.nameStatement();
+        if (s) return s;
+      }
       if (UNSUPPORTED_IDENTS[w] && !(n.kind === 'op' && (n.text === '=' || n.text === '.'))) {
         if (w === 'line' && n.kind === 'ident' && n.text.toLowerCase() === 'input') this.unsupported('Line Input');
         this.unsupported(UNSUPPORTED_IDENTS[w]);
       }
     }
     return this.assignOrCall();
+  }
+
+  // ---- file I/O ----
+
+  /** `[#]n`: a file number. */
+  private fileNumber(): Expr {
+    if (this.isOp('#')) this.advance();
+    return this.parseExpression();
+  }
+
+  /** The variable a statement reads into (`Input #1, a`, `Get #1, , rec`). */
+  private target(): Expr {
+    const start = this.peek();
+    const e = this.parsePostfix();
+    if (!this.isLvalue(e)) this.fail('Expected: variable', start);
+    return e;
+  }
+
+  /** Print # / Write # / Input # / Line Input # / Get # / Put # / Seek #; the cursor is on the statement word. */
+  private fileStatement(w: string): Stmt {
+    const t = this.advance();
+    const line = t.line;
+    const file = this.fileNumber();
+    switch (w) {
+      case 'print': case 'write': {
+        let items: PrintItem[] = [];
+        if (this.isOp(',')) { this.advance(); items = this.printItems(); }
+        else if (!this.atEnd()) this.fail('Expected: ,');
+        return { kind: w === 'print' ? 'printFile' : 'writeFile', file, items, line };
+      }
+      case 'input': case 'line input': {
+        const targets: Expr[] = [];
+        do { this.expectOp(','); targets.push(this.target()); } while (w === 'input' && this.isOp(','));
+        return { kind: w === 'input' ? 'inputFile' : 'lineInput', file, targets, line };
+      }
+      case 'get': case 'put': {
+        this.expectOp(',');
+        const rec = this.isOp(',') ? undefined : this.parseExpression();
+        this.expectOp(',');
+        const target = w === 'get' ? this.target() : this.parseExpression();
+        return rec ? { kind: w === 'get' ? 'getFile' : 'putFile', file, rec, target, line } : { kind: w === 'get' ? 'getFile' : 'putFile', file, target, line };
+      }
+      default: {   // seek
+        this.expectOp(',');
+        return { kind: 'seekFile', file, pos: this.parseExpression(), line };
+      }
+    }
+  }
+
+  /** `Open path For mode [Access ...] [Shared | Lock ...] As [#]n [Len = reclen]`. */
+  private openStatement(): Stmt {
+    const t = this.advance();
+    const path = this.parseExpression();
+    const word = (offset = 0) => (this.peek(offset).kind === 'ident' ? lower(this.peek(offset)) : '');
+    let mode: OpenMode = 'random';
+    if (this.isKeyword('for')) {
+      this.advance();
+      if (!OPEN_MODES.has(word())) this.fail('Expected: Input, Output, Append, Binary or Random');
+      mode = word() as OpenMode;
+      this.advance();
+    }
+    let access: OpenStmt['access'] = '';
+    if (word() === 'access') {
+      this.advance();
+      if (word() === 'read') { this.advance(); access = 'read'; if (word() === 'write') { this.advance(); access = 'readwrite'; } }
+      else if (word() === 'write') { this.advance(); access = 'write'; }
+      else this.fail('Expected: Read or Write');
+    }
+    if (word() === 'shared') this.advance();
+    else if (word() === 'lock') {
+      this.advance();
+      if (word() === 'read') { this.advance(); if (word() === 'write') this.advance(); }
+      else if (word() === 'write') this.advance();
+      else this.fail('Expected: Read or Write');
+    }
+    this.expectKeyword('as');
+    const file = this.fileNumber();
+    const s: OpenStmt = { kind: 'open', path, mode, access, file, line: t.line };
+    if (word() === 'len') {
+      this.advance();
+      this.expectOp('=');
+      s.recLen = this.parseExpression();
+    }
+    return s;
+  }
+
+  /** `Close` or `Close #1, #2`. */
+  private closeStatement(): Stmt {
+    const t = this.advance();
+    const files: Expr[] = [];
+    if (!this.atEnd()) {
+      files.push(this.fileNumber());
+      while (this.isOp(',')) { this.advance(); files.push(this.fileNumber()); }
+    }
+    return { kind: 'close', files, line: t.line };
+  }
+
+  /** `Name old As new`; null (cursor unchanged) when the statement is something else (`Name x` as a call). */
+  private nameStatement(): Stmt | null {
+    const start = this.pos;
+    const t = this.advance();
+    try {
+      const from = this.parseExpression();
+      if (this.isKeyword('as')) {
+        this.advance();
+        return { kind: 'name', from, to: this.parseExpression(), line: t.line };
+      }
+    } catch (e) {
+      if (!(e instanceof VBSyntaxError)) throw e;
+    }
+    this.pos = start;
+    return null;
   }
 
   private keywordStatement(t: Token): Stmt {
@@ -294,6 +425,8 @@ export class StatementParser extends Parser {
       case 'call': return this.callStatement();
       case 'let': case 'set': return this.explicitAssign(w === 'set');
       case 'end': this.advance(); return { kind: 'end', line: t.line };
+      case 'open': return this.openStatement();
+      case 'close': return this.closeStatement();
       case 'stop': this.advance(); return { kind: 'stop', line: t.line };
       case 'unload': case 'load': {
         this.advance();
@@ -385,16 +518,32 @@ export class StatementParser extends Parser {
   private debugPrint(): DebugPrintStmt {
     const start = this.advance(); // Debug
     this.advance(); this.advance(); // . Print
+    return { kind: 'debugPrint', items: this.printItems(), line: start.line };
+  }
+
+  /**
+   * The items of Debug.Print / Print # / Write #: expressions, `Spc(n)`, `Tab(n)` and `Tab`, each followed by an
+   * optional `;` or `,`.
+   */
+  private printItems(): PrintItem[] {
     const items: PrintItem[] = [];
     while (!this.atEnd()) {
       const item: PrintItem = {};
-      if (!(this.isOp(';') || this.isOp(','))) item.expr = this.parseExpression();
+      if (!(this.isOp(';') || this.isOp(','))) {
+        const t = this.peek();
+        const w = t.kind === 'ident' && !t.suffix ? lower(t) : '';
+        if (w === 'spc' && this.isOp('(', 1) || w === 'tab') {
+          this.advance();
+          item.fn = { kind: w };
+          if (this.isOp('(')) { this.advance(); item.fn.arg = this.parseExpression(); this.expectOp(')'); }
+        } else item.expr = this.parseExpression();
+      }
       if (this.isOp(';') || this.isOp(',')) item.sep = this.advance().text as ';' | ',';
-      else if (item.expr === undefined) break;
+      else if (item.expr === undefined && item.fn === undefined) break;
       items.push(item);
       if (item.sep === undefined) break;
     }
-    return { kind: 'debugPrint', items, line: start.line };
+    return items;
   }
 
   // ---- declarations ----

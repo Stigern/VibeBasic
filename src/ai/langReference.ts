@@ -2,7 +2,7 @@
 // tables (built-in functions and constants, the parser's type and unsupported-word tables), so a new built-in shows up
 // by itself. Everything is sorted: the card, and with it the system prompt, is byte-identical on every build (prefix caching).
 import { BUILTINS, CANONICAL_NAMES, CONSTANTS } from '../lang/builtins';
-import { HASH_STATEMENTS, TYPE_KEYWORDS, UNSUPPORTED_IDENTS, UNSUPPORTED_KEYWORDS } from '../lang/parseStatements';
+import { TYPE_KEYWORDS, UNSUPPORTED_IDENTS, UNSUPPORTED_KEYWORDS } from '../lang/parseStatements';
 import { BUILTIN_OBJECTS } from './knownNames';
 
 const byName = (a: string, b: string): number => a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0;
@@ -45,14 +45,15 @@ const STATEMENTS = 'Option Explicit; Dim / Private / Public / Static x As Type, 
   + ' [Public|Private] Sub / Function (ByVal, ByRef, Optional p = default) ... End Sub / End Function; Call; Set obj = ...;'
   + ' If ... Then ... ElseIf ... Else ... End If (and one-line If); Select Case (Case 1, 2 To 5, Is > 3, Case Else); For ... To ... Step ... Next; For Each x In ... Next;'
   + ' Do [While|Until] ... Loop [While|Until]; While ... Wend; With ... End With; Exit Sub / Function / For / Do;'
-  + ' On Error GoTo label / Resume Next / GoTo 0; Resume [Next]; GoTo label; Load / Unload; End; Stop; Debug.Print; : joins statements, _ continues a line.';
+  + ' On Error GoTo label / Resume Next / GoTo 0; Resume [Next]; GoTo label; Load / Unload; End; Stop; Debug.Print; : joins statements, _ continues a line.'
+  + ' Files: Open path For Input|Output|Append|Binary|Random As #n [Len = n]; Close [#n]; Print #n, a; b; Write #n, a, b; Input #n, a, b;'
+  + ' Line Input #n, s; Get / Put #n, [pos], var; Seek #n, pos; Name old As new (paths may use \\ or /, relative to CurDir = App.Path at start).';
 
 /** Builds the card from the language's tables (exported for the stability test). */
 export function buildLanguageReference(): string {
   const types = Object.values(TYPE_KEYWORDS).map(String).sort(byName);
   const objects = [...BUILTIN_OBJECTS].map(cap).sort(byName);
   const words = Object.values(UNSUPPORTED_KEYWORDS).sort(byName);
-  const fileIo = Object.values(HASH_STATEMENTS).sort(byName).map(w => `${w} #`);
   const drawing = Object.values(UNSUPPORTED_IDENTS).sort(byName);
   return [
     'Language reference (VibeBasic dialect of VB6):',
@@ -63,8 +64,8 @@ export function buildLanguageReference(): string {
     ...functionLines(),
     'Constant groups (prefix, count, examples):',
     ...constantGroups(),
-    `Not available: ${words.join(', ')}; file I/O (${fileIo.join(', ')}); ${drawing.join(' / ')} on forms; class modules;`
-      + ' CreateObject / GetObject (no COM automation); named arguments (x:=1). Keep data in variables.',
+    `Not available: ${words.join(', ')}; ${drawing.join(' / ')} on forms; class modules;`
+      + ' CreateObject / GetObject (no COM automation); named arguments (x:=1).',
   ].join('\n');
 }
 

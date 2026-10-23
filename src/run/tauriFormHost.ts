@@ -14,6 +14,7 @@
 import { emitTo, listen } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { getBackend, type DirListing, type NetApi, type Volume } from '../backend/backend';
+import type { FileSystemApi } from '../lang/fileio/fsApi';
 import type { FontValue } from '../model/types';
 import { VBRuntimeError } from '../lang/errors';
 import { runFileDialog, type FileDialogRequest } from './commonDialog';
@@ -242,6 +243,8 @@ export class TauriFormHost implements FormHost {
   listDir(path: string): Promise<DirListing> { return getBackend().listDir(path); }
   /** Inet and Winsock: the sockets and requests belong to this (main) window, which runs the program. */
   net(): NetApi { return getBackend(); }
+  /** File I/O and SaveSetting: the open files belong to this (main) window, which runs the program. */
+  fileSystem(): FileSystemApi { return getBackend(); }
   /** Clipboard: from this (main) window, through the backend (pbcopy / pbpaste). */
   clipboard(): ClipboardApi {
     const b = getBackend();

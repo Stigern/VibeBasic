@@ -3,6 +3,7 @@
 
 import type { Host } from '../host';
 import type { ErrObject } from './err';
+import type { FileIO } from '../fileio/fileIO';
 import { VBRuntimeError } from '../errors';
 import { NullT, bankers, toNumber, type VBValue } from '../values';
 
@@ -16,6 +17,8 @@ export interface BuiltinCtx {
   rnd?: RndState;
   /** The program's `Err` object (created on first use if absent). */
   err?: ErrObject;
+  /** The program's open files and CurDir (file I/O built-ins raise 68 without it). */
+  files?: FileIO;
 }
 
 /** VB's fixed Rnd sequence: every fresh program (without Randomize) starts the same. */

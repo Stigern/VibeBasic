@@ -48,25 +48,19 @@ const BARE_PROC = 'AiBody__';
 // ---------------------------------------------------------------------------------------------------------------
 // Unsupported functions and statements
 
-const NO_FILES = 'There is no file I/O; keep the data in variables instead.';
-const NO_REGISTRY = 'Use a module-level variable instead.';
 /** Alternatives offered with "X is not supported in VibeBasic." (keys lower case). */
 const ALTERNATIVES: Record<string, string> = {
-  savesetting: NO_REGISTRY, getsetting: NO_REGISTRY, deletesetting: NO_REGISTRY,
-  open: NO_FILES, close: NO_FILES, 'line input': NO_FILES,
-  'print #': NO_FILES, 'write #': NO_FILES, 'input #': NO_FILES, 'get #': NO_FILES, 'put #': NO_FILES, 'seek #': NO_FILES,
   print: 'Use a Label, a TextBox or Debug.Print instead.',
 };
 /** Functions that parse fine but do not exist in VibeBasic, with the name as written in VB6. */
 const UNSUPPORTED_CALLS: Record<string, string> = {
-  savesetting: 'SaveSetting', getsetting: 'GetSetting', deletesetting: 'DeleteSetting', createobject: 'CreateObject', getobject: 'GetObject',
+  createobject: 'CreateObject', getobject: 'GetObject',
 };
 const unsupported = (name: string): string => {
   const alt = ALTERNATIVES[name.toLowerCase()];
   return `${name} is not supported in VibeBasic.${alt ? ` ${alt}` : ''}`;
 };
 const PARSER_UNSUPPORTED = /^Not supported in VibeBasic: (.+)$/;
-const HASH_LINE = /^\s*(Print|Write|Input|Get|Put|Seek)\s*#/i;
 
 // ---------------------------------------------------------------------------------------------------------------
 // Control members
@@ -322,16 +316,13 @@ export function validateCode(code: string, ctx: ValidateContext): string[] {
   const bare = listProcedures(code).length === 0 && code.split(/\r?\n/).some(l => !DECL_OR_COMMENT.test(l));
   const source = bare ? `Sub ${BARE_PROC}()\n${code}\nEnd Sub` : code;
   const parsed = parseModuleLenient(source, ctx.moduleName);
-  const sourceLines = source.split(/\r?\n/);
   const count = code.split(/\r?\n/).length;
   for (const e of parsed.errors) {
     const line = bare ? e.line - 1 : e.line;
     if (bare && (line < 1 || line > count)) continue;
     const un = PARSER_UNSUPPORTED.exec(e.message);
-    if (un) {
-      const hash = HASH_LINE.exec(sourceLines[e.line - 1] ?? '');
-      report(`Line ${line}: ${unsupported(hash && lc(hash[1]) === lc(un[1]) ? `${un[1]} #` : un[1])}`);
-    } else report(`Line ${line}: ${e.message}`);
+    if (un) report(`Line ${line}: ${unsupported(un[1])}`);
+    else report(`Line ${line}: ${e.message}`);
   }
 
   if (ctx.form) {

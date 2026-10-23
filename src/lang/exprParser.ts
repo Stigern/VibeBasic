@@ -118,6 +118,7 @@ export class Parser {
       if (this.isOp(',') || this.atArgListEnd(parenthesised)) {
         args.push({ kind: 'missing', line: this.peek().line });
       } else {
+        if (this.isOp('#')) this.advance();   // a file number: Input(5, #1), EOF(#1)
         args.push(this.parseExpression());
         if (this.isOp(':=')) this.fail('Named arguments are not supported');
       }

@@ -6,6 +6,7 @@ import { ErrObject, type BuiltinCtx } from '../builtins';
 import type { CodeLocation, Host } from '../host';
 import { generalDateText, localeDateParser } from '../builtins/format';
 import { newRndState } from '../builtins/util';
+import { FileIO } from '../fileio/fileIO';
 import { parseModule } from '../parser';
 import {
   Empty, VBArray, VBRecord, VBRef, defaultValue, setDateTextFormatter, setDateTextParser, toNumber, type DateTextFormatter,
@@ -42,6 +43,8 @@ export interface ProgramOptions {
   locale?: string;
   /** Default MsgBox/InputBox title (default 'Project1'). */
   appTitle?: string;
+  /** App.Path: where CurDir starts (default '/'). */
+  appPath?: string;
 }
 
 export type ProgramState = 'idle' | 'running' | 'break' | 'ended';
@@ -101,6 +104,8 @@ export class Runtime {
   lastSlice = 0;
   readonly locale: string;
   readonly builtinCtx: BuiltinCtx;
+  /** Open, Close, Print # ... and CurDir. */
+  readonly files: FileIO;
   /** Makes this program's locale (date text and parsing) current while its code runs; pass to `runGenerator`. */
   readonly scope: ExecScope;
   private readonly dateText: DateTextFormatter;
@@ -122,7 +127,8 @@ export class Runtime {
     this.locale = opts.locale ?? Intl.DateTimeFormat().resolvedOptions().locale;
     const appTitle = opts.appTitle ?? 'Project1';
     this.err = new ErrObject(appTitle);
-    this.builtinCtx = { host, locale: this.locale, appTitle, rnd: newRndState(), err: this.err };
+    this.files = new FileIO(() => host.fileSystem?.(), opts.appPath ?? '/', this);
+    this.builtinCtx = { host, locale: this.locale, appTitle, rnd: newRndState(), err: this.err, files: this.files };
     this.dateText = v => generalDateText(v.serial, this.locale);
     this.dateParse = localeDateParser(this.locale);
     this.scope = {
@@ -291,6 +297,7 @@ export class Runtime {
     this.abortListeners.clear();
     for (const cancel of cancels) cancel(new EndSignal());
     this.drainEvents(); // each queued runEvent sees 'ended' and resolves
+    void this.files.closeAll(); // buffered Print # text is written, every file closed
     try {
       this.host.onEnd();
     } catch (e) {

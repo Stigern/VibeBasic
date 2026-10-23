@@ -2,6 +2,7 @@ mod ai;
 mod clipboard;
 mod embedded;
 mod files;
+mod fileio;
 mod inet;
 mod make_app;
 mod media;
@@ -15,6 +16,7 @@ pub fn run() {
     .manage(inet::InetTasks::default())
     .manage(winsock::Sockets::default())
     .manage(media::MediaFiles::default())
+    .manage(fileio::OpenFiles::default())
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       ai::ai_list_models,
@@ -25,6 +27,21 @@ pub fn run() {
       files::read_binary_file,
       files::list_volumes,
       files::list_dir,
+      fileio::fio_open,
+      fileio::fio_read,
+      fileio::fio_write,
+      fileio::fio_close,
+      fileio::fs_kill,
+      fileio::fs_rename,
+      fileio::fs_mkdir,
+      fileio::fs_rmdir,
+      fileio::fs_copy,
+      fileio::fs_set_attr,
+      fileio::fs_stat,
+      fileio::setting_get,
+      fileio::setting_save,
+      fileio::setting_delete,
+      fileio::setting_all,
       clipboard::clipboard_get_text,
       clipboard::clipboard_set_text,
       inet::inet_request,

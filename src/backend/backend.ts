@@ -2,6 +2,7 @@ import { BrowserBackend } from './browserBackend';
 import { TauriBackend } from './tauriBackend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import type { AiChatOptions } from '../ai/sse';
+import type { FileSystemApi } from '../lang/fileio/fsApi';
 
 export interface FileFilter { name: string; extensions: string[] }
 /** A drive of DriveListBox: `path` is what `Drive1.Drive` returns ("/" is the startup disk). */
@@ -44,7 +45,8 @@ export interface NetApi {
   onSocketEvent(handler: (e: SocketEvent) => void): Promise<() => void>;
 }
 
-export interface Backend extends NetApi {
+/** FileSystemApi: the files of a running program (Open, Kill, Dir ...) and SaveSetting, made by the main window. */
+export interface Backend extends NetApi, FileSystemApi {
   readonly kind: 'tauri' | 'browser';
   showMainWindow(): Promise<void>;
   /** Open dialog filtered to *.vbb. Null when cancelled. */

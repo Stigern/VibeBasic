@@ -6,6 +6,7 @@ import type { Backend, DirListing, FileFilter, InetRequest, InetResponse, Socket
 import type { AiModel, ChatMessage } from '../ai/types';
 import { dialogFilters } from './dialogFilters';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
+import type { FileAccess, FileMode, FileStat } from '../lang/fileio/fsApi';
 
 
 const PROJECT_FILTER: FileFilter = { name: 'VibeBasic Project', extensions: ['vbb'] };
@@ -126,6 +127,23 @@ export class TauriBackend implements Backend {
     const r = await call<number[] | ArrayBuffer | Uint8Array>('read_binary_file', { path });
     return r instanceof Uint8Array ? r : new Uint8Array(r);
   }
+
+  // the files of a running program (src-tauri/src/fileio.rs); rejections are "number|description"
+  fioOpen(path: string, mode: FileMode, access: FileAccess): Promise<{ id: number; len: number }> { return call('fio_open', { path, mode, access }); }
+  async fioRead(id: number, pos: number, len: number): Promise<Uint8Array> { return fromBase64(await call<string>('fio_read', { id, pos, len })); }
+  async fioWrite(id: number, pos: number, data: Uint8Array): Promise<void> { await call<void>('fio_write', { id, pos, data: toBase64(data) }); }
+  async fioClose(id: number): Promise<void> { await call<void>('fio_close', { id }); }
+  async fsKill(path: string): Promise<void> { await call<void>('fs_kill', { path }); }
+  async fsRename(from: string, to: string): Promise<void> { await call<void>('fs_rename', { from, to }); }
+  async fsMkDir(path: string): Promise<void> { await call<void>('fs_mkdir', { path }); }
+  async fsRmDir(path: string): Promise<void> { await call<void>('fs_rmdir', { path }); }
+  async fsCopy(from: string, to: string): Promise<void> { await call<void>('fs_copy', { from, to }); }
+  async fsSetAttr(path: string, attr: number): Promise<void> { await call<void>('fs_set_attr', { path, attr }); }
+  fsStat(path: string): Promise<FileStat | null> { return call('fs_stat', { path }); }
+  settingGet(appName: string, section: string, key: string): Promise<string | null> { return call('setting_get', { appName, section, key }); }
+  async settingSave(appName: string, section: string, key: string, value: string): Promise<void> { await call<void>('setting_save', { appName, section, key, value }); }
+  async settingDelete(appName: string, section: string, key: string | null): Promise<void> { await call<void>('setting_delete', { appName, section, key }); }
+  settingAll(appName: string, section: string): Promise<[string, string][]> { return call('setting_all', { appName, section }); }
 
   mediaOpen(path: string): Promise<string> { return call<string>('media_open', { path }); }
   async mediaRead(token: string): Promise<Uint8Array> {

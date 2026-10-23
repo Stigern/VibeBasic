@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { collectIdentifiers, KEYWORD_CASE, prettifyLine } from '../../src/lang/prettify';
+import { collectIdentifiers, fileStatementWords, KEYWORD_CASE, prettifyLine } from '../../src/lang/prettify';
 import { tokenize } from '../../src/lang/lexer';
 import { KEYWORDS } from '../../src/lang/tokens';
 import { BUILTINS, CONSTANTS } from '../../src/lang/builtins';
@@ -346,4 +346,12 @@ test('fast: 20000 lines', () => {
   const t0 = performance.now();
   for (let i = 0; i < 20000; i++) p('If teller<10 Then msgbox "a",vbokonly Else x=foo(1,2)+bar(-1)');
   expect(performance.now() - t0).toBeLessThan(3000);
+});
+
+test('file statements: VB6 casing, and their words count as keywords for colouring', () => {
+  expect(p('open "x" for output access write lock read as #1 len = 5')).toBe('Open "x" For Output Access Write Lock Read As #1 Len = 5');
+  expect(p('line input #1, s')).toBe('Line Input #1, s');
+  const kw = (line: string) => { const t = tokenize(line); return [...fileStatementWords(t)].map(i => t[i].text); };
+  expect(kw('Open output For Binary Access Read As #1 Len = 4')).toEqual(['Binary', 'Access', 'Read', 'Len']);
+  expect(kw('Line Input #1, s: Get #1, , x: Name a As b: Print = 1')).toEqual(['Line', 'Input', 'Get', 'Name']);
 });

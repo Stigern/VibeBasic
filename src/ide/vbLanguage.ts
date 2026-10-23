@@ -3,6 +3,7 @@
 import { RangeSetBuilder, StateField, type Extension } from '@codemirror/state';
 import { Decoration, EditorView, type DecorationSet } from '@codemirror/view';
 import { tokenize } from '../lang/lexer';
+import { fileStatementWords } from '../lang/prettify';
 
 export interface Span { from: number; to: number; cls: 'cm-vb-kw' | 'cm-vb-comment' }
 
@@ -11,8 +12,10 @@ export function vbSpans(line: string): Span[] {
   const run = (src: string): Span[] | null => {
     try {
       const out: Span[] = [];
-      for (const t of tokenize(src)) {
-        if (t.kind === 'keyword') out.push({ from: t.col - 1, to: t.col - 1 + t.text.length, cls: 'cm-vb-kw' });
+      const tokens = tokenize(src);
+      const fileWords = fileStatementWords(tokens);
+      for (const [i, t] of tokens.entries()) {
+        if (t.kind === 'keyword' || fileWords.has(i)) out.push({ from: t.col - 1, to: t.col - 1 + t.text.length, cls: 'cm-vb-kw' });
         else if (t.kind === 'comment') out.push({ from: t.col - 1, to: line.length, cls: 'cm-vb-comment' });
       }
       return out;

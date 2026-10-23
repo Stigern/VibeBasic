@@ -89,7 +89,7 @@ export class RunSession implements Host, FormSession {
       ...project.forms.map(f => ({ name: f.name, kind: 'form' as const, source: f.code })),
       ...project.modules.map(m => ({ name: m.name, kind: 'module' as const, source: m.code })),
     ];
-    this.program = new Program(modules, this, { appTitle: this.title });
+    this.program = new Program(modules, this, { appTitle: this.title, appPath: cb.appPath });
   }
 
   get appPath(): string { return this.cb.appPath; }
@@ -220,6 +220,9 @@ export class RunSession implements Host, FormSession {
   }
 
   debugPrint(text: string, newline: boolean): void { this.cb.debugPrint(text, newline); }
+
+  /** Open, Kill, Dir, SaveSetting ...: through the form host (the main window's backend). */
+  fileSystem() { return this.formHost.fileSystem?.(); }
 
   /**
    * DoEvents. Queued VB events are pumped by the driver on every await; the window (UI, timers, IPC) gets a real

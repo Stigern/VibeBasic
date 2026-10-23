@@ -17,6 +17,7 @@ import { VBRuntimeError, internalError } from '../errors';
 import { PrintLine } from '../printFormat';
 import { Empty, NothingT, NullT, VBArray, VBRef, compare, isObject, toNumber, type VBValue } from '../values';
 import { EndSignal, nextTick, type Gen } from './driver';
+import { execFileStmt, printItems } from './fileStmts';
 import { Frame, ProcRef, Run, Variable, lc, storeValue, type Slot } from './scope';
 import {
   afterHostCall, assign, awaitHost, callBuiltin, callProc, constExpr, evalArgValues, evalExpr, formMethod, hostRefs, lookup, memberGet,
@@ -568,19 +569,16 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
     }
     case 'call': return yield* execCall(f, s.target, s.args);
     case 'debugPrint': {
-      const line = new PrintLine(rt.printColumn);
-      for (const it of s.items) {
-        if (it.expr) line.addItem(yield* evalExpr(f, it.expr));
-        if (it.sep === ';') line.addSemicolon();
-        else if (it.sep === ',') line.addComma();
-      }
-      const last = s.items[s.items.length - 1];
-      const newline = last === undefined || last.sep === undefined;
-      const text = line.text();
-      rt.printColumn = newline ? 0 : rt.printColumn + text.length;
-      rt.host.debugPrint(text, newline);
+      const line = new PrintLine(rt.printColumn, '\n');
+      const newline = yield* printItems(f, s.items, line);
+      rt.printColumn = newline ? 0 : line.column();
+      rt.host.debugPrint(line.text(), newline);
       return;
     }
+    case 'open': case 'close': case 'printFile': case 'writeFile': case 'inputFile': case 'lineInput':
+    case 'getFile': case 'putFile': case 'seekFile': case 'name':
+      yield* execFileStmt(f, s);
+      return;
     case 'if': {
       for (const b of s.branches) {
         if (yield* guardedCond(f, b.line, b.cond, true)) return yield* execBlock(f, b.body);

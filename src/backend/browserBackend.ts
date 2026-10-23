@@ -1,6 +1,8 @@
 import type { Backend, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import { readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
+import { MemoryFs } from '../lang/fileio/memoryFs';
+import type { FileAccess, FileMode, FileStat } from '../lang/fileio/fsApi';
 
 const AI_CONNECT_ERROR = (baseUrl: string) =>
   `Could not connect to ${baseUrl}. Check that the AI server is running and can be reached from this Mac. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0.`;
@@ -130,6 +132,24 @@ const FS_PREFIX = 'vibebasic.fs:';
 /** Development only: files live in localStorage under `vibebasic.fs:<path>`, dialogs are window.prompt. */
 export class BrowserBackend implements Backend {
   readonly kind = 'browser' as const;
+  /** The files of a running program and SaveSetting: in memory, as long as the page lives (development only). */
+  private readonly memFs = new MemoryFs();
+
+  fioOpen(path: string, mode: FileMode, access: FileAccess): Promise<{ id: number; len: number }> { return this.memFs.fioOpen(path, mode, access); }
+  fioRead(id: number, pos: number, len: number): Promise<Uint8Array> { return this.memFs.fioRead(id, pos, len); }
+  fioWrite(id: number, pos: number, data: Uint8Array): Promise<void> { return this.memFs.fioWrite(id, pos, data); }
+  fioClose(id: number): Promise<void> { return this.memFs.fioClose(id); }
+  fsKill(path: string): Promise<void> { return this.memFs.fsKill(path); }
+  fsRename(from: string, to: string): Promise<void> { return this.memFs.fsRename(from, to); }
+  fsMkDir(path: string): Promise<void> { return this.memFs.fsMkDir(path); }
+  fsRmDir(path: string): Promise<void> { return this.memFs.fsRmDir(path); }
+  fsCopy(from: string, to: string): Promise<void> { return this.memFs.fsCopy(from, to); }
+  fsSetAttr(path: string, attr: number): Promise<void> { return this.memFs.fsSetAttr(path, attr); }
+  fsStat(path: string): Promise<FileStat | null> { return this.memFs.fsStat(path); }
+  settingGet(app: string, section: string, key: string): Promise<string | null> { return this.memFs.settingGet(app, section, key); }
+  settingSave(app: string, section: string, key: string, value: string): Promise<void> { return this.memFs.settingSave(app, section, key, value); }
+  settingDelete(app: string, section: string, key: string | null): Promise<void> { return this.memFs.settingDelete(app, section, key); }
+  settingAll(app: string, section: string): Promise<[string, string][]> { return this.memFs.settingAll(app, section); }
 
   async showMainWindow(): Promise<void> {
     // Ingenting å gjøre i nettleseren.

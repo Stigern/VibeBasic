@@ -176,12 +176,34 @@ export interface EndStmt { kind: 'end'; line: number }
 export interface StopStmt { kind: 'stop'; line: number }
 export interface UnloadStmt { kind: 'unload'; target: Expr; line: number }
 export interface LoadStmt { kind: 'load'; target: Expr; line: number }
-/** One item of `Debug.Print`: an expression and/or the separator written after it. */
-export interface PrintItem { expr?: Expr; sep?: ';' | ',' }
+/**
+ * One item of `Debug.Print` / `Print #`: an expression, or `Spc(n)` / `Tab(n)` / `Tab` (`fn`), and/or the separator
+ * written after it.
+ */
+export interface PrintItem { expr?: Expr; fn?: { kind: 'spc' | 'tab'; arg?: Expr }; sep?: ';' | ',' }
 /** `Debug.Print a; b, c;`: `items` in source order; a trailing separator is on the last item. */
 export interface DebugPrintStmt { kind: 'debugPrint'; items: PrintItem[]; line: number }
+
+
+// File I/O. `file` is the file number expression (the `#` before it is optional in VB6 and not kept).
+export type OpenMode = 'input' | 'output' | 'append' | 'binary' | 'random';
+/** `Open path For mode [Access ...] [Shared | Lock ...] As #n [Len = reclen]`; no `For` is Random. The lock is accepted and ignored. */
+export interface OpenStmt { kind: 'open'; path: Expr; mode: OpenMode; access: '' | 'read' | 'write' | 'readwrite'; file: Expr; recLen?: Expr; line: number }
+/** `Close` (every file) or `Close #1, #2`. */
+export interface CloseStmt { kind: 'close'; files: Expr[]; line: number }
+/** `Print #n, items` (Debug.Print rules, in the file's own columns) and `Write #n, items`. */
+export interface FilePrintStmt { kind: 'printFile' | 'writeFile'; file: Expr; items: PrintItem[]; line: number }
+/** `Input #n, a, b` and `Line Input #n, s`. */
+export interface FileInputStmt { kind: 'inputFile' | 'lineInput'; file: Expr; targets: Expr[]; line: number }
+/** `Get #n, [rec], var` / `Put #n, [rec], var`. */
+export interface GetPutStmt { kind: 'getFile' | 'putFile'; file: Expr; rec?: Expr; target: Expr; line: number }
+/** `Seek #n, pos`. */
+export interface SeekStmt { kind: 'seekFile'; file: Expr; pos: Expr; line: number }
+/** `Name old As new`. */
+export interface NameStmt { kind: 'name'; from: Expr; to: Expr; line: number }
 
 export type Stmt =
   | DimStmt | ConstStmt | ReDimStmt | EraseStmt | AssignStmt | CallStmt | IfStmt | SelectStmt
   | ForStmt | ForEachStmt | DoStmt | WhileStmt | ExitStmt | WithStmt | OnErrorStmt | ResumeStmt
-  | GotoStmt | LabelStmt | EndStmt | StopStmt | UnloadStmt | LoadStmt | DebugPrintStmt;
+  | GotoStmt | LabelStmt | EndStmt | StopStmt | UnloadStmt | LoadStmt | DebugPrintStmt
+  | OpenStmt | CloseStmt | FilePrintStmt | FileInputStmt | GetPutStmt | SeekStmt | NameStmt;
