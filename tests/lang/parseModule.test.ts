@@ -434,10 +434,6 @@ describe('syntax errors', () => {
   test('expected )', () => expect(berr('x = f(1')).toBe('Expected: )'));
   test('lexer errors surface', () => expect(berr('x = "abc')).toBe('Unterminated string'));
   test('Not supported statements', () => {
-    expect(berr('Print "hi"')).toBe('Not supported in VibeBasic: Print');
-    expect(berr('Line (0, 0)-(10, 10)')).toBe('Not supported in VibeBasic: Line');
-    expect(berr('Circle (5, 5), 3')).toBe('Not supported in VibeBasic: Circle');
-    expect(berr('PSet (5, 5)')).toBe('Not supported in VibeBasic: PSet');
     expect(berr('Declare Foo')).toBe('Not supported in VibeBasic: Declare');
   });
   test('file I/O statements', () => {
@@ -465,6 +461,7 @@ describe('checkLineSyntax', () => {
     'Static Sub A()', 'X As Integer', 'V(1 To 3) As Integer', 'Rod = 1', 'Dim x As Integer', 'Option Explicit', 'Private x As Long', 'Const A = 1',
     'x = 1: y = 2', "' just a comment", '', 'Retry:', 'Debug.Print a; b', 'Foo 1, 2', 'End', 'Exit Sub',
     'Open "f" For Input As #1', 'Close #1, #2', 'Line Input #1, s', 'Get #1, , x',
+    'Print "x"; 1, Tab(5); Spc(2)', 'Picture1.Line (0, 0)-Step(10, 10), vbRed, BF', 'Me.Circle Step(5, 5), 3, , -1, -2, 0.5',
   ])('valid: %s', line => expect(checkLineSyntax(line)).toBeNull());
 
   test.each([
@@ -472,7 +469,6 @@ describe('checkLineSyntax', () => {
     ['x = 1 2', 'Expected: end of statement'],
     ['If x', 'Expected: Then'],
     ['For i = 1', 'Expected: To'],
-    ['Print "x"', 'Not supported in VibeBasic: Print'],
     ['Declare Foo', 'Not supported in VibeBasic: Declare'],
     ['x = f(1', 'Expected: )'],
     ['x = "abc', 'Unterminated string'],

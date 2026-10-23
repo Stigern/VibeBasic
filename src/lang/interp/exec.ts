@@ -21,6 +21,7 @@ import {
 } from '../values';
 import { EndSignal, SubCall, nextTick, type Gen } from './driver';
 import { execFileStmt, printItems } from './fileStmts';
+import { execGraphics } from './gfxStmts';
 import {
   AutoNewSlot, ClassInstance, ClassValue, Frame, ProcRef, PropRef, Run, Variable, classesInUse, lc, rawValue, release, retain, storeValue,
   type Slot,
@@ -677,6 +678,7 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
     case 'getFile': case 'putFile': case 'seekFile': case 'name':
       yield* execFileStmt(f, s);
       return;
+    case 'gfx': yield* execGraphics(f, s); return;
     case 'if': {
       for (const b of s.branches) {
         if (yield* guardedCond(f, b.line, b.cond, true)) return yield* execBlock(f, b.body);

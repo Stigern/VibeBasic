@@ -6,7 +6,7 @@
 //
 // Every rule stays silent when it is not sure: a name it cannot resolve to a declared variable, a callee that may be
 // something else than a procedure, a type it does not know.
-import type { Expr, MissingArg, ModuleAst, Param, PrintItem, ProcDecl, Stmt, VarDecl, VBTypeName } from './ast';
+import { gfxExprs, type Expr, type MissingArg, type ModuleAst, type Param, type PrintItem, type ProcDecl, type Stmt, type VarDecl, type VBTypeName } from './ast';
 import { BUILTIN_CLASSES } from './builtins';
 
 export interface CheckModule { name: string; kind: 'form' | 'module' | 'class'; ast: ModuleAst }
@@ -238,6 +238,7 @@ function walkStmts(body: Stmt[], stmt: (s: Stmt) => void, expr: (e: Expr | Missi
       case 'raiseEvent': s.args.forEach(x); break;
       case 'onGoto': x(s.index); break;
       case 'debugAssert': x(s.cond); break;
+      case 'gfx': gfxExprs(s).forEach(x); break;
       case 'exit': case 'onError': case 'resume': case 'goto': case 'return': case 'label': case 'end': case 'stop': break;
       default: { const never: never = s; void never; }
     }

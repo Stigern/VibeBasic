@@ -11,8 +11,11 @@ import { LANGUAGE_REFERENCE } from './langReference';
 import { BODY_OMITTED } from './omitted';
 import { CODE_SYSTEM_PROMPT, FORM_SYSTEM_PROMPT } from './prompts';
 
-const COMMON = new Set(['left', 'top', 'width', 'height', 'visible', 'enabled', 'tabindex', 'tabstop', 'tag', 'tooltiptext']);
-const BASE_METHODS = new Set(['move', 'setfocus', 'refresh', 'zorder']);
+const COMMON = new Set(['left', 'top', 'width', 'height', 'visible', 'enabled', 'tabindex', 'tabstop', 'tag', 'tooltiptext', 'mousepointer', 'mouseicon', 'causesvalidation',
+  'dragmode', 'dragicon', 'oledragmode', 'oledropmode']);
+const BASE_METHODS = new Set(['move', 'setfocus', 'refresh', 'zorder', 'drag', 'oledrag']);
+/** Drag and drop events: one note for all controls (below), not on every line. */
+const DRAG_EVENTS = new Set(['Validate', 'DragDrop', 'DragOver', 'OLEDragDrop', 'OLEDragOver', 'OLEStartDrag', 'OLECompleteDrag', 'OLESetData']);
 
 /** The labels of an enum property: the registry's "0 - " numbering and "Justify" dropped, and a library prefix all of them share (ccOrientation, tvw, sld) cut off. */
 function enumLabels(values: { value: number; label: string }[]): string[] {
@@ -28,7 +31,7 @@ function enumLabels(values: { value: number; label: string }[]): string[] {
  *  a wrong guess there only changes how a control looks. Alignment, ScrollBars, Style, MultiSelect, Value, the data and
  *  protocol enums ... keep their values (they change what a program does, and Alignment was misread without them). */
 const NAME_ONLY_ENUMS = new Set(['align', 'appearance', 'arrows', 'autosize', 'backstyle', 'bevelinner', 'bevelouter', 'borderstyle', 'daylength',
-  'fillstyle', 'floodtype', 'font3d', 'gridcelleffect', 'gridlines', 'linestyle', 'monthlength', 'orientation', 'scrolling', 'shadowstyle', 'shape',
+  'drawmode', 'drawstyle', 'scalemode', 'fillstyle', 'floodtype', 'font3d', 'gridcelleffect', 'gridlines', 'linestyle', 'monthlength', 'orientation', 'scrolling', 'shadowstyle', 'shape',
   'startupposition', 'tickstyle', 'windowstate']);
 
 /** "Alignment(0 Left,1 Right,2 Center)": an enum property with its values; other properties by name. */
@@ -57,18 +60,23 @@ export function describeControlTypes(): string {
     const props = td.props.filter(p => !COMMON.has(p.name.toLowerCase()) && (p.designTime || p.runtime !== 'none')).map(propText);
     const methods = td.methods.filter(m => !BASE_METHODS.has(m.name.toLowerCase())).map(m => m.name);
     let line = `${td.type}: ${props.join(', ')}`;
-    if (td.events.length) line += ` | events: ${eventText(td.events.map(e => e.name)).join(', ')}`;
+    if (td.events.length) line += ` | events: ${eventText(td.events.map(e => e.name).filter(n => !DRAG_EVENTS.has(n))).join(', ')}`;
     if (methods.length) line += ` | methods: ${methods.join(', ')}`;
     lines.push(line);
   }
   lines.push('All controls also have: Left, Top, Width, Height, Visible, Enabled, TabIndex, Tag and the methods Move, SetFocus, Refresh, ZOrder.'
+    + ' Visible controls and the Form have MousePointer (and MouseIcon), Screen.MousePointer too.'
+    + ' +focus controls have CausesValidation and Validate(Cancel As Boolean). A & in a Caption: Alt+letter.'
+    + ' Drag: DragMode (vbAutomatic, or Ctl.Drag), DragDrop(Source As Control, X, Y), DragOver(Source, X, Y, State); OLEDropMode 1: OLEDragDrop(Data As DataObject, Effect, Button, Shift, X, Y), also Finder files (Data.Files(1)).'
     + ' In the events, +focus is GotFocus and LostFocus, +keys KeyPress, KeyDown and KeyUp, +mouse MouseDown, MouseMove and MouseUp (VB6 parameters).'
     + ' Exceptions: Shape has no Enabled, TabIndex or SetFocus; Line has X1, Y1, X2, Y2 (twips) instead of Left, Top, Width, Height, and no Enabled, TabIndex, Move or SetFocus.'
     + ' A StatusBar always sits at the bottom of the form, full width (only its Height matters). Its Panels and a TabStrip\'s Tabs are one item per line,'
     + ' fields separated by | : Panels "Text|Key|Width|Alignment(0 left, 1 center, 2 right)", Tabs "Caption|Key".'
     + ' A ListView\'s ColumnHeaders are lines "Text|Key|Width|Alignment(0 left, 1 right, 2 center)"; Nodes, ListItems and the cells of an MSFlexGrid (TextMatrix) are filled by code at run time.'
-    + ' A CommonDialog is invisible at run time and has only Left and Top (no Width, Height, Enabled, TabIndex) and no Move, SetFocus, Refresh or ZOrder; code opens it with ShowOpen, ShowSave, ShowColor or ShowFont (ShowPrinter and ShowHelp do not work).'
+    + ' A CommonDialog is invisible at run time and has only Left and Top (no Width, Height, Enabled, TabIndex) and no Move, SetFocus, Refresh or ZOrder; code opens it with ShowOpen, ShowSave, ShowColor, ShowFont or ShowPrinter (ShowHelp does not work).'
     + ' Its Filter looks like "Text (*.txt)|*.txt|All (*.*)|*.*".'
+    + ' With Flags = cdlOFNAllowMultiselect Or cdlOFNExplorer, FileName is the folder, Chr(0), then the names separated by Chr(0); DefaultExt is added to a ShowSave name.'
+    + ' A RichTextBox formats with SelBold, SelColor, SelAlignment ... and reads or writes RTF with TextRTF and SelRTF; LoadFile path[, rtfText] and SaveFile path[, rtfText] use a file; Find(text, [start], [end], [options]) selects the match and returns its position (-1 if none).'
     + ' DriveListBox, DirListBox and FileListBox show the Mac\'s volumes, folders and files: Drive1.Drive is the path of a volume ("/" is the startup disk), Dir1.Path a folder, File1.Pattern "*.txt;*.bas".'
     + ' The usual link is Drive1_Change: Dir1.Path = Drive1.Drive, and Dir1_Change: File1.Path = Dir1.Path; File1.FileName is the selected file. The lists are filled asynchronously, so a read of ListCount or List(i) waits for the folder.'
     + ' An SSTab is a container with Tabs tabs (Tab is the current one, 0-based); TabCaption is one caption per line. A control added with "container" set to an SSTab goes on the tab given by "tab" (0-based, default the current tab); Top must leave room for the tabs (TabHeight, 520).'

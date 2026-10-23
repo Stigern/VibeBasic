@@ -3,6 +3,7 @@
 
 import type { BreakInfo, CodeLocation, Host, VBObject } from '../lang/host';
 import { VBRuntimeError, VBSyntaxError } from '../lang/errors';
+import { fsError } from '../lang/fileio/fsApi';
 import { macrotask } from '../lang/interp/driver';
 import { Program, type SourceModule } from '../lang/interp/program';
 import { Nothing, type VBRef, type VBValue } from '../lang/values';
@@ -18,6 +19,12 @@ import { AppObject, PictureObject, ScreenObject } from './objects/appObjects';
 import { ClipboardObject, ObjectList } from './objects/globalObjects';
 import type { ControlObject } from './objects/controlObject';
 import { FormInstance, type FormSession } from './objects/formInstance';
+import { DrawnPicture } from './objects/drawSurface';
+import { fromBase64 } from '../gfx/raster';
+import { PrinterObject, type PrinterHost } from './objects/printerObject';
+import type { PrintJob } from './printing';
+import type { FormSnapshot } from './protocol';
+import { cursorCss } from '../controls/cursor';
 
 export interface SessionCallbacks {
   debugPrint(text: string, newline: boolean): void;
@@ -74,7 +81,10 @@ export class RunSession implements Host, FormSession {
   private readonly screen = new ScreenObject({
     form: () => this.activeForm ?? Nothing,
     control: () => this.activeForm?.activeControl() ?? Nothing,
-  });
+  }, (pointer, icon) => this.setScreenPointer(pointer, icon));
+  /** Screen.MousePointer and MouseIcon: they win over the cursor of every control in every form window, until the program ends. */
+  private screenPointer = 0;
+  private screenIcon: PictureRef | null = null;
   /** Forms: the loaded forms in the order they were loaded. */
   private readonly formList = new ObjectList('Object',
     () => [...this.forms.values()].filter(f => f.loaded).sort((a, b) => a.loadOrder - b.loadOrder), o => (o as FormInstance).name,
@@ -90,6 +100,15 @@ export class RunSession implements Host, FormSession {
   private netSession: NetSession | null = null;
   private dbSession: DbSession | null = null;
   private commSession: CommSession | null = null;
+  private readonly printerHost: PrinterHost = {
+    print: job => this.printJob(job), resolveAsset: r => this.resolveAsset(r), title: () => this.app.title,
+  };
+  /** Printer: the default printer (Set Printer = Printers(i) replaces it). */
+  private printer: PrinterObject;
+  /** Printers: read from the system before the program starts, when its code uses Printer or Printers. */
+  private printerList: PrinterObject[] = [];
+  private readonly printers = new ObjectList('Printers', () => this.printerList, o => (o as PrinterObject).deviceName, () => new VBRuntimeError(9));
+  private readonly usesPrinters: boolean;
 
   constructor(private project: Project, readonly formHost: FormHost, private cb: SessionCallbacks, readonly mode: 'ide' | 'app') {
     for (const [k, a] of Object.entries(project.assets)) this.assets[k] = `data:${a.mime};base64,${a.dataBase64}`;
@@ -106,6 +125,8 @@ export class RunSession implements Host, FormSession {
     this.program = new Program(modules, this, {
       appTitle: this.title, appPath: cb.appPath, condComp: project.condComp, ignoreAsserts: mode !== 'ide',
     });
+    this.printer = new PrinterObject(this.printerHost);
+    this.usesPrinters = modules.some(m => /\bprinters?\b/i.test(m.source));
     if (project.subMain && !this.mainModule()) throw new VBSyntaxError(NO_STARTUP, 0, 0);
   }
 
@@ -121,6 +142,7 @@ export class RunSession implements Host, FormSession {
   /** Runs Sub Main, or loads and shows the startup form. In a made app App.PrevInstance is known first. */
   async start(): Promise<void> {
     if (this.mode === 'app') this.app.prevInstance = await this.system()?.prevInstance?.().catch(() => false) ?? false;
+    if (this.usesPrinters) await this.loadPrinters();
     const main = this.project.subMain ? this.mainModule() : undefined;
     if (main) {
       await this.fire(main, 'Main', []);   // the program ends when Main returns and no form is loaded
@@ -133,6 +155,59 @@ export class RunSession implements Host, FormSession {
   }
 
   end(): void { this.program.end(); }
+
+  /** Printers and the default Printer from the host (none when it cannot tell within a few seconds). */
+  private async loadPrinters(): Promise<void> {
+    const list = this.formHost.listPrinters;
+    if (!list) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<[]>(r => { timer = setTimeout(() => r([]), 3000); });
+    const infos = await Promise.race([list.call(this.formHost).catch(() => []), late]);
+    clearTimeout(timer);
+    this.printerList = infos.map(i => new PrinterObject(this.printerHost, i));
+    this.printer = this.printerList.find((_, i) => infos[i].isDefault) ?? this.printerList[0] ?? this.printer;
+  }
+
+  /** CommonDialog.ShowPrinter: the printers to choose from and the Printer the choice goes to (PrinterDefault). */
+  printSetup(): { printers: PrinterObject[]; printer: PrinterObject; select(name: string): void } {
+    return {
+      printers: this.printerList, printer: this.printer,
+      select: name => { const p = this.printerList.find(x => x.deviceName === name); if (p) this.printer = p; },
+    };
+  }
+
+  private async printJob(job: PrintJob): Promise<void> {
+    this.queue.flush();
+    if (!this.formHost.printPages) throw new VBRuntimeError(482);
+    const assets: Record<string, string> = {};
+    for (const p of job.pages) {
+      for (const op of p.ops ?? []) {
+        const src = op.startsWith('{"o":"pic"') ? (JSON.parse(op) as { src: string }).src : null;
+        const url = src && !src.startsWith('data:') ? this.assets[src] : undefined;
+        if (url) assets[src!] = url;
+      }
+    }
+    try {
+      await this.formHost.printPages({ ...job, assets });
+    } catch (e) {
+      throw e instanceof VBRuntimeError ? e : new VBRuntimeError(482);   // Printer error
+    }
+  }
+
+  /** PrintForm: the form's client area on one page, at its size on the screen, with the Printer's settings. */
+  printForm(s: FormSnapshot): Promise<void> {
+    return this.printJob(this.printer.job([{ ...this.printer.layout(), form: s }]));
+  }
+
+  /** The CSS cursor of Screen.MousePointer ('' = none). */
+  screenCursor(): string { return cursorCss(this.screenPointer, this.screenIcon ? this.resolveAsset(this.screenIcon) : null); }
+
+  private setScreenPointer(pointer: number, icon: PictureRef | null): void {
+    this.screenPointer = pointer;
+    this.screenIcon = icon;
+    const css = this.screenCursor();
+    for (const f of this.forms.values()) f.deliver({ t: 'cursor', css });
+  }
 
   /** Resolves when the files left open at the end are written and closed. */
   get filesClosed(): Promise<void> { return this.program.filesClosed; }
@@ -296,7 +371,17 @@ export class RunSession implements Host, FormSession {
     if (l === 'screen') return this.screen;
     if (l === 'forms') return this.formList;
     if (l === 'clipboard') return this.clipboard;
+    if (l === 'printer') return this.printer;
+    if (l === 'printers') return this.printers;
     return undefined;
+  }
+
+  /** `Set Printer = Printers(i)`: the printer the program prints on. */
+  setGlobalObject(name: string, value: VBValue): boolean {
+    if (name.toLowerCase() !== 'printer') return false;
+    if (!(value instanceof PrinterObject)) throw new VBRuntimeError(13);
+    this.printer = value;
+    return true;
   }
 
   msgBox(prompt: string, buttons: number, title: string): Promise<number> {
@@ -373,6 +458,27 @@ export class RunSession implements Host, FormSession {
     }
   }
 
+  /** RichTextBox.LoadFile / SaveFile: a whole file through the file system (the same errors as Open: 53, 76 ...). */
+  async loadBytes(path: string): Promise<Uint8Array> {
+    const fs = this.fileSystem();
+    if (!fs) throw new VBRuntimeError(68);
+    const full = this.resolvePath(path);
+    try {
+      const { id, len } = await fs.fioOpen(full, 'binary', 'read');
+      try { return await fs.fioRead(id, 0, len); } finally { await fs.fioClose(id); }
+    } catch (e) { throw fsError(e); }
+  }
+
+  async saveBytes(path: string, bytes: Uint8Array): Promise<void> {
+    const fs = this.fileSystem();
+    if (!fs) throw new VBRuntimeError(68);
+    const full = this.resolvePath(path);
+    try {
+      const { id } = await fs.fioOpen(full, 'output', '');
+      try { await fs.fioWrite(id, 0, bytes); } finally { await fs.fioClose(id); }
+    } catch (e) { throw fsError(e); }
+  }
+
   /** The full path of a file of the program, as Open resolves it (CurDir; the drive letter dropped). */
   resolvePath(path: string): string { return this.program.resolvePath(path); }
 
@@ -382,6 +488,16 @@ export class RunSession implements Host, FormSession {
     const bytes = await this.readFile(path);
     const ext = /\.([^./]+)$/.exec(full)?.[1]?.toLowerCase() ?? '';
     return new PictureObject({ asset: `data:${MIME[ext] ?? 'application/octet-stream'};base64,${base64(bytes)}` });
+  }
+
+  /** SavePicture: an Image (drawn pixels) as BMP or PNG by the extension; a loaded or design-time picture as its own bytes. */
+  pictureBytes(picture: VBValue, ext: string): Uint8Array {
+    if (picture instanceof DrawnPicture) return picture.fileBytes(ext);
+    const ref = picture instanceof PictureObject ? picture.pictureRef : null;
+    const url = ref ? this.resolveAsset(ref) : null;
+    const m = url ? /^data:[^,]*;base64,(.*)$/s.exec(url) : null;
+    if (!m) throw new VBRuntimeError(481);
+    return fromBase64(m[1]);
   }
 
   /** 'ai' (Ask AI) is 'debug' for the program; the break that follows tells the IDE to start the AI flow. */
@@ -415,6 +531,8 @@ export class RunSession implements Host, FormSession {
   onEnd(): void {
     if (this.ended) return;
     this._state = 'ended';
+    this.screenPointer = 0;   // Screen.MousePointer is back to the default at the end
+    this.screenIcon = null;
     for (const t of this.timers.values()) clearInterval(t);
     this.timers.clear();
     this.queue.stop();

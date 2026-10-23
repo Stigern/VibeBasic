@@ -82,6 +82,8 @@
     "allow-get-command-line",
     "allow-get-environment",
     "allow-app-prev-instance",
-    "allow-app-log-event"
+    "allow-app-log-event",
+    "allow-printer-list",
+    "allow-print-window"
   ]
 }

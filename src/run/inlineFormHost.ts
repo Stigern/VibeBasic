@@ -12,6 +12,8 @@ import type { RuntimeErrorInfo } from './errorDialog';
 import type { FormHost, FormWindow } from './formHost';
 import type { ClipboardApi } from './objects/globalObjects';
 import { mountFormWindow } from './formWindow';
+import type { PrintJob, PrinterDialogRequest, PrinterDialogResult, PrinterInfo } from './printing';
+import { mountPrintPreview } from './printView';
 import type { FormSnapshot, FromWindow } from './protocol';
 
 export class InlineFormHost implements FormHost {
@@ -81,7 +83,7 @@ export class InlineFormHost implements FormHost {
     return this.withDialog(() => runDialog(this.doc, { kind: 'input', ...o })) as Promise<string>;
   }
 
-  fileDialog(o: FileDialogRequest): Promise<string | null> {
+  fileDialog(o: FileDialogRequest): Promise<string | string[] | null> {
     return this.withDialog(() => runFileDialog(this.backend ?? getBackend(), o));
   }
 
@@ -105,6 +107,26 @@ export class InlineFormHost implements FormHost {
   async fontDialog(o: { font: FontValue }): Promise<FontValue | null> {
     const r = await this.withDialog(() => runDialog(this.doc, { kind: 'font', ...o }));
     return r === '' ? null : JSON.parse(String(r)) as FontValue;
+  }
+
+  async printerDialog(o: PrinterDialogRequest): Promise<PrinterDialogResult | null> {
+    const r = await this.withDialog(() => runDialog(this.doc, { kind: 'printer', req: o }));
+    return r === '' ? null : JSON.parse(String(r)) as PrinterDialogResult;
+  }
+
+  async listPrinters(): Promise<PrinterInfo[]> { return (await (this.backend ?? getBackend()).printerList?.()) ?? []; }
+
+  /** The pages in a Print Preview overlay of this document; the browser's print prints only them (print CSS hides the rest). */
+  async printPages(job: PrintJob): Promise<void> {
+    const overlay = h('div', { class: 'vb-print-overlay' });
+    overlay.style.cssText = 'position:fixed;inset:24px;z-index:100000;display:flex';
+    const style = this.doc.createElement('style');
+    style.textContent = '@media print { body > :not(.vb-print-overlay) { display: none !important; } .vb-print-overlay { position: static !important; } }';
+    this.doc.head.appendChild(style);
+    this.doc.body.appendChild(overlay);
+    const print = () => { try { this.doc.defaultView?.print(); } catch { /* no printing here */ } };
+    const view = await mountPrintPreview(overlay, job, { onPrint: print, onClose: () => { view.dispose(); overlay.remove(); style.remove(); } });
+    print();
   }
 
   /** Closes dialogs this host opened that are still on screen (End during a MsgBox / error dialog). */

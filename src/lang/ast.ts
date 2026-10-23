@@ -264,9 +264,36 @@ export interface SeekStmt { kind: 'seekFile'; file: Expr; pos: Expr; line: numbe
 /** `Name old As new`. */
 export interface NameStmt { kind: 'name'; from: Expr; to: Expr; line: number }
 
+// Drawing statements with their own syntax: `[obj.]Print`, `PSet`, `Line`, `Circle`, `Scale`. `object` absent: the form whose
+// code runs (Me). A point is `[Step] (x, y)`.
+export interface GfxPoint { step: boolean; x: Expr; y: Expr }
+export type GfxStmt = { kind: 'gfx'; object?: Expr; line: number } & (
+  | { method: 'print'; items: PrintItem[] }
+  | { method: 'pset'; at: GfxPoint; color?: Expr }
+  /** `Line [p1]-p2[, color][, B[F]]`. */
+  | { method: 'line'; from?: GfxPoint; to: GfxPoint; color?: Expr; box: '' | 'b' | 'bf' }
+  | { method: 'circle'; at: GfxPoint; radius: Expr; color?: Expr; start?: Expr; end?: Expr; aspect?: Expr }
+  /** `Scale` alone (back to twips) or `Scale (x1, y1)-(x2, y2)`. */
+  | { method: 'scale'; from?: GfxPoint; to?: GfxPoint });
+
+/** Every expression of a drawing statement (for the code checks). */
+export function gfxExprs(s: GfxStmt): Expr[] {
+  const out: Expr[] = s.object ? [s.object] : [];
+  const pt = (p?: GfxPoint) => { if (p) out.push(p.x, p.y); };
+  const opt = (...e: (Expr | undefined)[]) => { for (const x of e) if (x) out.push(x); };
+  switch (s.method) {
+    case 'print': for (const it of s.items) opt(it.expr, it.fn?.arg); break;
+    case 'pset': pt(s.at); opt(s.color); break;
+    case 'line': pt(s.from); pt(s.to); opt(s.color); break;
+    case 'circle': pt(s.at); opt(s.radius, s.color, s.start, s.end, s.aspect); break;
+    case 'scale': pt(s.from); pt(s.to); break;
+  }
+  return out;
+}
+
 export type Stmt =
   | DimStmt | ConstStmt | ReDimStmt | EraseStmt | AssignStmt | CallStmt | IfStmt | SelectStmt
   | ForStmt | ForEachStmt | DoStmt | WhileStmt | ExitStmt | WithStmt | OnErrorStmt | ResumeStmt
   | GotoStmt | LabelStmt | EndStmt | StopStmt | UnloadStmt | LoadStmt | DebugPrintStmt | ErrorStmt | MidStmt | AlignStmt
   | OpenStmt | CloseStmt | FilePrintStmt | FileInputStmt | GetPutStmt | SeekStmt | NameStmt | RaiseEventStmt
-  | ReturnStmt | OnGotoStmt | DebugAssertStmt;
+  | ReturnStmt | OnGotoStmt | DebugAssertStmt | GfxStmt;

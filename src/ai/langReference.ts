@@ -3,7 +3,7 @@
 // by itself. Everything is sorted: the card, and with it the system prompt, is byte-identical on every build (prefix caching).
 import { BUILTINS, CANONICAL_NAMES, CONSTANTS, PROG_IDS } from '../lang/builtins';
 import { FINANCIAL } from '../lang/builtins/financial';
-import { TYPE_KEYWORDS, UNSUPPORTED_IDENTS, UNSUPPORTED_KEYWORDS } from '../lang/parseStatements';
+import { GFX_STATEMENTS, TYPE_KEYWORDS, UNSUPPORTED_KEYWORDS } from '../lang/parseStatements';
 import { BUILTIN_OBJECTS } from './knownNames';
 
 const byName = (a: string, b: string): number => a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0;
@@ -64,7 +64,7 @@ export function buildLanguageReference(): string {
   const types = Object.values(TYPE_KEYWORDS).map(String).sort(byName);
   const objects = [...BUILTIN_OBJECTS].map(cap).sort(byName);
   const words = Object.values(UNSUPPORTED_KEYWORDS).sort(byName);
-  const drawing = Object.values(UNSUPPORTED_IDENTS).sort(byName);
+  const drawing = Object.values(GFX_STATEMENTS).sort(byName);
   return [
     'Language reference (VibeBasic dialect of VB6):',
     `Statements: ${STATEMENTS}`,
@@ -73,12 +73,13 @@ export function buildLanguageReference(): string {
     `CreateObject(ProgID) or New: ${[...new Set([...PROG_IDS.values()].map(c => c.name))].sort(byName).join(', ')}. ADO on SQLite files:`
       + ' cn.Open "Data Source=x.db", cn.Execute sql[, n], BeginTrans / CommitTrans / RollbackTrans; rs.Open sql, cn, adOpenStatic, adLockOptimistic;'
       + ' rs.Filter = "A > 1 And B Like \'x*\'", rs.Sort = "B DESC". FSO: OpenTextFile / CreateTextFile -> ReadLine, WriteLine, AtEndOfStream, Close.',
+    `Drawing on a Form, PictureBox or Printer (NewPage, EndDoc prints, KillDoc): ${drawing.join(', ')} (Line (x1, y1)-(x2, y2)[, c][, B[F]]), Cls, Point, PaintPicture; AutoRedraw or Paint.`,
     'Built-in functions by argument count (String functions also have a $ form, e.g. Left$):',
     ...functionLines(),
     `Financial: ${FINANCIAL.join(', ')} (VB6 argument order).`,
     'Constant groups (prefix, count, examples):',
     ...constantGroups(),
-    `Not available: ${words.join(', ')}; ${drawing.join(' / ')} on forms;`
+    `Not available: ${words.join(', ')};`
       + ' GetObject, other ProgIDs (no COM automation); Shell (programs cannot be started).',
   ].join('\n');
 }

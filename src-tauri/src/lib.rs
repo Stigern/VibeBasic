@@ -11,6 +11,7 @@ mod inet;
 mod io_util;
 mod make_app;
 mod media;
+mod printing;
 mod sysinfo;
 mod winsock;
 mod app_commands;
@@ -94,7 +95,9 @@ pub fn run() {
       appinfo::get_command_line,
       appinfo::get_environment,
       appinfo::app_prev_instance,
-      appinfo::app_log_event
+      appinfo::app_log_event,
+      printing::printer_list,
+      printing::print_window
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

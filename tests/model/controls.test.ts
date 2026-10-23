@@ -143,7 +143,7 @@ test('event coverage per type', () => {
   expect(names('CommandButton')).toEqual(expect.arrayContaining(['Click', 'GotFocus', 'LostFocus', 'KeyPress', 'KeyDown', 'KeyUp', 'MouseDown', 'MouseMove', 'MouseUp']));
   expect(names('TextBox')).toEqual(expect.arrayContaining(['Change', 'Click', 'DblClick', 'GotFocus', 'LostFocus', 'KeyPress']));
   expect(names('Frame')).toEqual(expect.arrayContaining(['Click', 'DblClick', 'MouseDown', 'MouseMove', 'MouseUp']));
-  expect(names('ProgressBar')).toEqual(['Click', 'MouseDown', 'MouseMove', 'MouseUp']);
+  expect(names('ProgressBar').filter(n => !/Drag|^OLE/.test(n))).toEqual(['Click', 'MouseDown', 'MouseMove', 'MouseUp']);
   expect(names('VScrollBar')).toEqual(expect.arrayContaining(['Change', 'Scroll']));
   expect(names('Form')).toEqual(expect.arrayContaining(['Load', 'Unload', 'QueryUnload', 'Activate', 'Deactivate', 'Resize', 'Initialize']));
 });
@@ -157,7 +157,8 @@ test('methods', () => {
   expect(m('ComboBox', 'RemoveItem')?.params).toBe('Index As Integer');
   expect(m('ComboBox', 'Clear')).toBeDefined();
   expect(m('TextBox', 'AddItem')).toBeUndefined();
-  expect(CONTROL_TYPES.Form.methods.map(x => x.name).sort()).toEqual(['Hide', 'Move', 'Refresh', 'Show']);
+  expect(CONTROL_TYPES.Form.methods.map(x => x.name).sort()).toEqual(['Circle', 'Cls', 'Hide', 'Line', 'Move', 'PSet', 'PaintPicture',
+    'Point', 'Print', 'PrintForm', 'Refresh', 'Scale', 'ScaleX', 'ScaleY', 'Show', 'TextHeight', 'TextWidth', 'ValidateControls']);
   expect(m('Form', 'Show')?.params).toBe('[Modal], [OwnerForm]');
 });
 

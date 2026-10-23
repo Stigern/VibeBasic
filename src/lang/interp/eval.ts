@@ -996,6 +996,7 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean, 
         yield* afterHostCall(f);
         return;
       }
+      if (b instanceof ObjectRef && f.rt.host.setGlobalObject?.(target.name, value)) return;
       if (b instanceof MemberRef) {
         yield* memberSet(f, b.obj, b.name, [], src === undefined ? value : into(f, src, value, undefined), isSet);
         return;

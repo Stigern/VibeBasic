@@ -78,7 +78,7 @@ test('enum properties list their values; the whole system prompt stays within bu
   const p = project();
   for (const content of [buildCodeRequest(p, 'm1', 1, 'x')[0].content, buildFormRequest(p, p.forms[0].id, 'x')[0].content]) {
     // card + control types + rules, at about 3.5 characters per token. 7,000 before the 0.8 components (about 25 more controls)
-    expect(content.length / 3.5).toBeLessThanOrEqual(9000);
+    expect(content.length / 3.5).toBeLessThanOrEqual(10500);
   }
 });
 test('system prompts contain format rules', () => { expect(CODE_SYSTEM_PROMPT).toContain('```vb'); expect(FORM_SYSTEM_PROMPT).toContain('"ops"'); });

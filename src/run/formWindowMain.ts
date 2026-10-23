@@ -1,16 +1,20 @@
 // Entry of form.html: one Tauri window of the running program. form.html#<key> shows form <key>,
-// form.html#dialog-<n> shows a MsgBox / InputBox / error dialog. Protocol: see tauriFormHost.ts.
+// form.html#dialog-<n> shows a MsgBox / InputBox / error dialog, form.html#print-<n> a print job. Protocol: see tauriFormHost.ts.
 
 import { invoke } from '@tauri-apps/api/core';
 import { LogicalPosition, LogicalSize } from '@tauri-apps/api/dpi';
 import { emit } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { runDialog, type DialogSpec } from './dialogSpec';
 import { mountFormWindow } from './formWindow';
 import { setMediaLoader } from './mediaSource';
 import type { PropValue } from '../model/types';
 import type { FormSnapshot, ToWindow } from './protocol';
+import type { PrintJob } from './printing';
+import { mountPrintPreview } from './printView';
 import type { FromPayload } from './tauriFormHost';
+import type { FileDrag } from './dragDrop';
 
 // MMControl / MediaPlayer: this window reads a file the main window opened, by its token (media_read is the only app command a
 // form window may call; capabilities/run-windows.json). The bytes come raw, never through an event.
@@ -113,6 +117,14 @@ async function startForm(): Promise<void> {
     if (ws === 1 || ws === 2) await applyWindowState(ws).catch(() => {});
   });
   await win.listen<ToWindow>('vb:to', e => { if (mounted) handle(e.payload); else early.push(e.payload); });
+  // files dragged from Finder: Tauri's drag-drop events of this window (core:event:default lets it listen) go to the form, which
+  // tells the run session (OLEDragOver / OLEDragDrop). On macOS the position is in points of the webview, i.e. CSS pixels.
+  await getCurrentWebview().onDragDropEvent(e => {
+    const p = e.payload;
+    const detail: FileDrag = p.type === 'leave' ? { type: 'leave' }
+      : { type: p.type, x: p.position.x, y: p.position.y, ...('paths' in p ? { paths: p.paths } : {}) };
+    if (mounted) root.dispatchEvent(new CustomEvent('vbfiledrag', { detail }));
+  }).catch(() => {});
   await emit('vb:hello', key);
 }
 
@@ -140,4 +152,29 @@ async function startDialog(): Promise<void> {
   await emit('vb:hello', key);
 }
 
-void (key.startsWith('dialog-') ? startDialog() : startForm());
+/** A print window: the pages in a Print Preview frame; the main window opens the print dialog on it when they are drawn. */
+async function startPrint(): Promise<void> {
+  document.body.classList.add('vb-print-window');
+  let started = false;
+  const close = () => void send({ key, result: 'close' });
+  const print = () => void send({ key, result: 'print' });
+  await win.onCloseRequested(e => { e.preventDefault(); close(); });
+  window.addEventListener('keydown', e => {
+    if (isCloseKey(e)) { e.preventDefault(); close(); } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') { e.preventDefault(); print(); }
+  }, true);
+  await win.listen('vb:print-self', () => window.print());
+  await win.listen<PrintJob>('vb:print', async e => {
+    if (started) return;
+    started = true;
+    await mountPrintPreview(root, e.payload, { onPrint: print, onClose: close });
+    markDragRegions();
+    await frame();
+    await win.show();
+    await win.setFocus();
+    await frame();   // the canvases of a PrintForm page are drawn
+    await send({ key, result: 'ready' });
+  });
+  await emit('vb:hello', key);
+}
+
+void (key.startsWith('dialog-') ? startDialog() : key.startsWith('print-') ? startPrint() : startForm());

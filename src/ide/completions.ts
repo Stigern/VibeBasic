@@ -26,9 +26,14 @@ const membersOf = (type: ControlType): string[] =>
 const GLOBAL_OBJECTS: Record<string, string[]> = {
   app: ['Comments', 'CompanyName', 'EXEName', 'FileDescription', 'LegalCopyright', 'LegalTrademarks', 'LogEvent', 'Major', 'Minor',
     'Path', 'PrevInstance', 'ProductName', 'Revision', 'Title'],
-  screen: ['ActiveControl', 'ActiveForm', 'Height', 'MousePointer', 'Width'],
+  screen: ['ActiveControl', 'ActiveForm', 'Height', 'MouseIcon', 'MousePointer', 'Width'],
   clipboard: ['Clear', 'GetFormat', 'GetText', 'SetText'],
   forms: ['Count', 'Item'],
+  printer: ['ColorMode', 'Copies', 'CurrentX', 'CurrentY', 'DeviceName', 'DrawMode', 'DrawStyle', 'DrawWidth', 'DriverName', 'EndDoc',
+    'FillColor', 'FillStyle', 'Font', 'FontBold', 'FontItalic', 'FontName', 'FontSize', 'FontTransparent', 'FontUnderline', 'ForeColor',
+    'Height', 'KillDoc', 'NewPage', 'Orientation', 'Page', 'PaintPicture', 'PaperSize', 'Port', 'ScaleHeight', 'ScaleLeft', 'ScaleMode',
+    'ScaleTop', 'ScaleWidth', 'ScaleX', 'ScaleY', 'TextHeight', 'TextWidth', 'Width'],
+  printers: ['Count', 'Item'],
 };
 /** What every run-time form has besides its registry members (formInstance.ts FORM_OBJECTS). */
 const FORM_OBJECTS = ['ActiveControl', 'Controls', 'Count'];

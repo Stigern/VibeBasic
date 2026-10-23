@@ -1,4 +1,5 @@
 import { BrowserBackend } from './browserBackend';
+import type { PrinterInfo } from '../run/printing';
 import { TauriBackend } from './tauriBackend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import type { AiChatOptions } from '../ai/sse';
@@ -138,6 +139,8 @@ export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, 
   openFileDialog(filters: FileFilter[]): Promise<string | null>;
   /** Generic open dialog (CommonDialog.ShowOpen): `filters` in the order shown (the first is selected), `initDir` '' for the default folder. Null when cancelled. An extension `*` means every file. */
   showOpenDialog(filters: FileFilter[], title: string, initDir: string): Promise<string | null>;
+  /** CommonDialog.ShowOpen with cdlOFNAllowMultiselect: the same, for one or more files (the full paths, in the order the dialog gives them). */
+  showOpenMultipleDialog(filters: FileFilter[], title: string, initDir: string): Promise<string[] | null>;
   /** Generic save dialog (CommonDialog.ShowSave). `defaultName` is the file name suggested ('' for none). Null when cancelled. */
   showSaveDialog(filters: FileFilter[], title: string, initDir: string, defaultName?: string): Promise<string | null>;
   /** DriveListBox: the startup disk "/" first, then /Volumes/*. */
@@ -156,6 +159,10 @@ export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, 
   /** The bytes of an opened media file. */
   mediaRead?(token: string): Promise<Uint8Array>;
   mediaClose?(token: string): Promise<void>;
+  /** Printers (desktop only): the printers of the system. */
+  printerList?(): Promise<PrinterInfo[]>;
+  /** The macOS print dialog for a print window (label vbdialog-print-<n>), as a sheet on it. */
+  printWindow?(label: string): Promise<void>;
   /** Small JSON settings (IDE options ...) kept in localStorage under `vibebasic.settings:<key>`. Null when absent. In the
    *  desktop app the 'ai' settings (with the API key) are kept by the Rust side instead, out of reach of the form windows,
    *  which share the localStorage (src/backend/aiSettingsStore.ts). */

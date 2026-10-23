@@ -18,6 +18,8 @@
 .vb-ctl.vb-disabled, .vb-ctl.vb-disabled * { color: #808080 !important; }
 .vb-ctl.vb-disabled .vb-text, .vb-ctl.vb-disabled .vb-opt-text, .vb-ctl.vb-disabled .vb-frame-legend,
 .vb-ctl.vb-disabled .vb-btn { text-shadow: 1px 1px 0 #fff; }
+/* MousePointer: the control's cursor (inline style) also over its field or button */
+.vb-ctl[data-vb-cursor] * { cursor: inherit; }
 .draw-layer { position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none; }
 
 /* ---------- CommandButton (98.css button + overrides) ---------- */
@@ -136,6 +138,7 @@
 .vb-ctl.vb-ctl .vb-rtf { white-space: pre-wrap; overflow-wrap: break-word; overflow: hidden; padding: 0 1px; user-select: text; -webkit-user-select: text; }
 /* a final line break only shows its new line when something follows it */
 .vb-rtf::after { content: '\200b'; }
+.vb-rtf .vb-para[data-vb-bullet]::before { content: '\2022\00a0\00a0'; }
 
 /* ---------- ProgressBar ---------- */
 .vb-ProgressBar { background-color: #c0c0c0; padding: 2px; box-shadow: inset -1px -1px #fff, inset 1px 1px #808080; }

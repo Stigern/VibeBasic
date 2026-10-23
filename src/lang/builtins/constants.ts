@@ -33,6 +33,19 @@ group({
   vbBlue: 0xff0000, vbMagenta: 0xff00ff, vbCyan: 0xffff00, vbWhite: 0xffffff,
 });
 
+// Drawing: DrawMode, DrawStyle, FillStyle, ScaleMode (ScaleX / ScaleY also vbHimetric and the container), PaintPicture opcodes
+group({
+  vbBlackness: 1, vbNotMergePen: 2, vbMaskNotPen: 3, vbNotCopyPen: 4, vbMaskPenNot: 5, vbInvert: 6, vbXorPen: 7, vbNotMaskPen: 8,
+  vbMaskPen: 9, vbNotXorPen: 10, vbNop: 11, vbMergeNotPen: 12, vbCopyPen: 13, vbMergePenNot: 14, vbMergePen: 15, vbWhiteness: 16,
+  vbSolid: 0, vbDash: 1, vbDot: 2, vbDashDot: 3, vbDashDotDot: 4, vbInvisible: 5, vbInsideSolid: 6,
+  vbFSSolid: 0, vbFSTransparent: 1, vbHorizontalLine: 2, vbVerticalLine: 3, vbUpwardDiagonal: 4, vbDownwardDiagonal: 5, vbCross: 6, vbDiagonalCross: 7,
+  vbUser: 0, vbTwips: 1, vbPoints: 2, vbPixels: 3, vbCharacters: 4, vbInches: 5, vbMillimeters: 6, vbCentimeters: 7, vbHimetric: 8,
+  vbContainerPosition: 9, vbContainerSize: 10,
+  vbSrcCopy: 0xcc0020, vbSrcPaint: 0xee0086, vbSrcAnd: 0x8800c6, vbSrcInvert: 0x660046, vbSrcErase: 0x440328, vbNotSrcCopy: 0x330008,
+  vbNotSrcErase: 0x1100a6, vbMergeCopy: 0xc000ca, vbMergePaint: 0xbb0226, vbPatCopy: 0xf00021, vbPatPaint: 0xfb0a09, vbPatInvert: 0x5a0049,
+  vbDstInvert: 0x550009,
+});
+
 // Keys
 group({
   vbKeyReturn: 13, vbKeyEscape: 27, vbKeySpace: 32, vbKeyBack: 8, vbKeyTab: 9,
@@ -53,6 +66,20 @@ group({
   vbModal: 1, vbModeless: 0,
   vbUpperCase: 1, vbLowerCase: 2, vbProperCase: 3, vbWide: 4, vbNarrow: 8, vbUnicode: 64, vbFromUnicode: 128,
   vbTextCompare: 1, vbBinaryCompare: 0, vbUseCompareOption: -1,
+});
+
+// MousePointer
+group({
+  vbDefault: 0, vbArrow: 1, vbCrosshair: 2, vbIbeam: 3, vbIconPointer: 4, vbSizePointer: 5, vbSizeNESW: 6, vbSizeNS: 7, vbSizeNWSE: 8, vbSizeWE: 9,
+  vbUpArrow: 10, vbHourglass: 11, vbNoDrop: 12, vbArrowHourglass: 13, vbArrowQuestion: 14, vbSizeAll: 15, vbCustom: 99,
+});
+
+// Drag and drop: DragMode, Drag's Action, DragOver's State, OLEDragMode / OLEDropMode, Effect. (vbCancel stays the MsgBox
+// result 2, as in VB6 where the VBA constant hides VBRUN's vbCancel 0: `Drag 0` cancels a drag.)
+group({
+  vbManual: 0, vbAutomatic: 1, vbBeginDrag: 1, vbEndDrag: 2, vbEnter: 0, vbLeave: 1, vbOver: 2,
+  vbOLEDragManual: 0, vbOLEDragAutomatic: 1, vbOLEDropNone: 0, vbOLEDropManual: 1, vbOLEDropAutomatic: 2,
+  vbDropEffectNone: 0, vbDropEffectCopy: 1, vbDropEffectMove: 2, vbDropEffectScroll: -2147483648,
 });
 
 // Misc
@@ -87,14 +114,18 @@ group({
   flexAlignCenterBottom: 5, flexAlignRightTop: 6, flexAlignRightCenter: 7, flexAlignRightBottom: 8, flexAlignGeneral: 9,
 });
 
-// CommonDialog (Flags are stored but not used) and RichTextBox
+// CommonDialog (cdlOFNAllowMultiselect and cdlOFNExplorer are honoured, the other Flags are stored) and RichTextBox
 group({
   cdlCancel: 32755,
   cdlOFNReadOnly: 0x1, cdlOFNOverwritePrompt: 0x2, cdlOFNHideReadOnly: 0x4, cdlOFNNoChangeDir: 0x8, cdlOFNAllowMultiselect: 0x200,
   cdlOFNPathMustExist: 0x800, cdlOFNFileMustExist: 0x1000, cdlOFNCreatePrompt: 0x2000, cdlOFNExplorer: 0x80000,
   cdlCCRGBInit: 0x1, cdlCCFullOpen: 0x2, cdlCCPreventFullOpen: 0x4,
   cdlCFScreenFonts: 0x1, cdlCFPrinterFonts: 0x2, cdlCFBoth: 0x3, cdlCFEffects: 0x100,
+  cdlOFNNoValidate: 0x100, cdlOFNExtensionDifferent: 0x400, cdlOFNNoNetworkButton: 0x20000, cdlOFNLongNames: 0x200000,
+  cdlCCHelpButton: 0x8, cdlCFANSIOnly: 0x400, cdlCFNoSimulations: 0x1000, cdlCFLimitSize: 0x2000, cdlCFFixedPitchOnly: 0x4000,
+  cdlCFWYSIWYG: 0x8000, cdlCFForceFontExist: 0x10000, cdlCFScalableOnly: 0x20000, cdlCFTTOnly: 0x40000, cdlCFNoFaceSel: 0x80000,
   rtfNone: 0, rtfHorizontal: 1, rtfVertical: 2, rtfBoth: 3,
+  rtfRTF: 0, rtfText: 1, rtfLeft: 0, rtfRight: 1, rtfCenter: 2, rtfWholeWord: 2, rtfMatchCase: 4, rtfNoHighlight: 8,
 });
 
 // StatusBar / TabStrip
@@ -185,6 +216,20 @@ group({
 group({
   mpStopped: 0, mpPaused: 1, mpPlaying: 2, mpWaiting: 3, mpScanForward: 4, mpScanReverse: 5, mpClosed: 6,
   mpReadyStateUninitialized: 0, mpReadyStateLoading: 1, mpReadyStateInteractive: 3, mpReadyStateComplete: 4,
+});
+
+// Printer (Orientation, PaperSize: only Letter and A4 print as such, ColorMode, PrintQuality, Duplex) and CommonDialog.ShowPrinter
+group({
+  vbPRORPortrait: 1, vbPRORLandscape: 2,
+  vbPRPSLetter: 1, vbPRPSLetterSmall: 2, vbPRPSTabloid: 3, vbPRPSLedger: 4, vbPRPSLegal: 5, vbPRPSStatement: 6, vbPRPSExecutive: 7,
+  vbPRPSA3: 8, vbPRPSA4: 9, vbPRPSA4Small: 10, vbPRPSA5: 11, vbPRPSB4: 12, vbPRPSB5: 13, vbPRPSUser: 256,
+  vbPRCMMonochrome: 1, vbPRCMColor: 2, vbPRPQDraft: -1, vbPRPQLow: -2, vbPRPQMedium: -3, vbPRPQHigh: -4,
+  vbPRDPSimplex: 1, vbPRDPHorizontal: 2, vbPRDPVertical: 3,
+  cdlPortrait: 1, cdlLandscape: 2,
+  cdlPDAllPages: 0, cdlPDSelection: 0x1, cdlPDPageNums: 0x2, cdlPDNoSelection: 0x4, cdlPDNoPageNums: 0x8, cdlPDCollate: 0x10,
+  cdlPDPrintToFile: 0x20, cdlPDPrintSetup: 0x40, cdlPDNoWarning: 0x80, cdlPDReturnDC: 0x100, cdlPDReturnIC: 0x200,
+  cdlPDReturnDefault: 0x400, cdlPDHelpButton: 0x800, cdlPDUseDevModeCopies: 0x40000, cdlPDDisablePrintToFile: 0x80000,
+  cdlPDHidePrintToFile: 0x100000,
 });
 
 // Clipboard formats (GetFormat, GetText, SetText): only vbCFText is supported

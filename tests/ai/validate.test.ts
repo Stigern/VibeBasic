@@ -410,3 +410,42 @@ test('0.9 A2 syntax is valid to the validator', () => {
     'End Sub'].join('\n');
   expect(validateCode(code, { moduleName: 'Form1', form: f })).toEqual([]);
 });
+
+test('validateCode: the drawing statements and methods are valid (0.9)', () => {
+  const p = newProject(), f = p.forms[0];
+  const pic = newControl(f, 'PictureBox', { left: 0, top: 0 }, null);
+  f.controls.push(pic);
+  const code = 'Option Explicit\nPrivate Sub Form_Paint()\n    Dim c As Long\n    Cls\n    ScaleMode = vbPixels\n    Print "x"; 1, Tab(3);\n'
+    + '    Line (0, 0)-Step(10, 10), vbRed, BF\n    Circle (5, 5), 3, , -1, -2, 0.5\n    PSet (1, 1): c = Point(1, 1)\n'
+    + '    Picture1.Line -(5, 5)\n    Picture1.Print TextWidth("a")\n    Picture1.PaintPicture Picture1.Picture, 0, 0\n    Scale (0, 0)-(1, 1)\n'
+    + '    SavePicture Picture1.Image, "a.bmp"\nEnd Sub\nPrivate Sub Picture1_Paint()\nEnd Sub\nPrivate Sub Picture1_Resize()\nEnd Sub';
+  expect(validateCode(code, { moduleName: f.name, form: f, project: p })).toEqual([]);
+});
+
+test('validateCode: Printer, Printers, PrintForm and ShowPrinter are valid (0.9)', () => {
+  const p = newProject(), f = p.forms[0];
+  const cd = newControl(f, 'CommonDialog', { left: 0, top: 0 }, null);
+  f.controls.push(cd);
+  const code = 'Option Explicit\nPrivate Sub Form_Click()\n    Dim i As Integer\n    For i = 0 To Printers.Count - 1\n        If Printers(i).DeviceName = "x" Then Set Printer = Printers(i)\n    Next\n'
+    + '    CommonDialog1.ShowPrinter\n    Printer.Orientation = vbPRORLandscape\n    Printer.Print "x"; Tab(3); 1\n    Printer.Line (0, 0)-(100, 100), , B\n'
+    + '    Printer.NewPage\n    Printer.EndDoc\n    PrintForm\nEnd Sub';
+  expect(validateCode(code, { moduleName: f.name, form: f, project: p })).toEqual([]);
+});
+
+test('validateCode: Validate, MousePointer constants, Screen.MousePointer and ValidateControls are valid (0.9 B3)', () => {
+  const f = newProject().forms[0];
+  f.controls.push(newControl(f, 'TextBox', { left: 0, top: 0 }, null));   // Text1
+  const code = 'Private Sub Text1_Validate(Cancel As Boolean)\n    Cancel = (Text1.Text = "")\nEnd Sub\n'
+    + 'Private Sub Form_Click()\n    Screen.MousePointer = vbHourglass\n    Text1.MousePointer = vbCrosshair\n    ValidateControls\n    Screen.MousePointer = vbDefault\nEnd Sub';
+  expect(validateCode(code, { moduleName: 'Form1', form: f })).toEqual([]);
+});
+
+test('validateCode: drag and drop events, DataObject members, Drag / OLEDrag and their constants are valid (0.9 B4)', () => {
+  const f = newProject().forms[0];
+  f.controls.push(newControl(f, 'PictureBox', { left: 0, top: 0 }, null));   // Picture1
+  const code = 'Private Sub Picture1_DragDrop(Source As Control, X As Single, Y As Single)\n    Source.Move X, Y\n    Picture1.Drag vbEndDrag\nEnd Sub\n'
+    + 'Private Sub Form_OLEDragDrop(Data As DataObject, Effect As Long, Button As Integer, Shift As Integer, X As Single, Y As Single)\n'
+    + '    If Data.GetFormat(vbCFFiles) Then Caption = Data.Files(1) & Data.Files.Count\n    Effect = vbDropEffectCopy\n    Picture1.OLEDrag\n'
+    + '    Picture1.DragMode = vbAutomatic\n    Picture1.OLEDropMode = vbOLEDropManual\nEnd Sub';
+  expect(validateCode(code, { moduleName: 'Form1', form: f })).toEqual([]);
+});

@@ -36,6 +36,15 @@ def('Shell', 1, 2, () => {
 });
 
 def('LoadPicture', 0, 2, (a, ctx) => (a[0] === undefined ? Nothing : ctx.host.loadPicture(toStr(a[0]))));
+/** SavePicture picture, path: a drawn Image as BMP (.bmp) or PNG; a loaded picture as its own file. */
+def('SavePicture', 2, 2, async (a, ctx) => {
+  const path = toStr(a[1]);
+  if (!ctx.host.pictureBytes) throw new VBRuntimeError(481);
+  const bytes = ctx.host.pictureBytes(a[0], /\.([^./\\]+)$/.exec(path)?.[1]?.toLowerCase() ?? '');
+  if (!ctx.files) throw new VBRuntimeError(68);
+  await ctx.files.writeFile(path, bytes);
+  return Empty;
+});
 
 // ---- colours ----
 
