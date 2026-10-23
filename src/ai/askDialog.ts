@@ -407,7 +407,12 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     let current = all;
     /** The penalty of the retry after a loop (none otherwise). */
     let penalties: Pick<AiChatOptions, 'presencePenalty'> = {};
-    const prepared = () => limitPictures(current, picturesOn(settings) ? pictureLimit.get(server) ?? MAX_PICTURES : 0);
+    /**
+     * The retry after a loop goes without the form picture and the structured output: the same request with only the nudge
+     * looped again in the same place (live, qwen38-27b), and the picture is what sets the loop off.
+     */
+    let afterLoop = false;
+    const prepared = () => limitPictures(current, !afterLoop && picturesOn(settings) ? pictureLimit.get(server) ?? MAX_PICTURES : 0);
     /**
      * One request with the max_tokens cap; a server that rejects the cap gets it again at once without, and no cap for the rest
      * of the session. The same for the penalties.
@@ -426,7 +431,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     };
     const plain = async (messages: ChatMessage[], m: AiLogMode): Promise<string> => {
       const so = co.structured;
-      if (so === undefined || noStructuredOutput.has(server)) return capped(messages, o, m);
+      if (so === undefined || afterLoop || noStructuredOutput.has(server)) return capped(messages, o, m);
       const field = settings.serverKind === 'vllm' ? { structuredOutputs: so.structuredOutputs } : { responseFormat: so.responseFormat };
       // the whitespace runaway is stopped as soon as it shows, not at max_tokens
       const inner = new AbortController();
@@ -471,11 +476,12 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     };
     try { return await retried(mode); }
     catch (e) {
-      // A loop: once more with a nudge and mild penalties; a second loop gives up.
+      // A loop: once more with a nudge and mild penalties, without picture and structured output; a second loop gives up.
       if (o.signal?.aborted || !isLoop(e)) throw e;
       log.separator(LOOP_SEPARATOR);
       ui.setLabel(LOOP_RETRY_LABEL);
       current = [...all, { role: 'user', content: LOOP_NUDGE }];
+      afterLoop = true;
       if (settings.serverKind && !noPenalties.has(server)) penalties = { presencePenalty: LOOP_PENALTY };
       try { return await retried('retry'); }
       catch (e2) { throw !o.signal?.aborted && isLoop(e2) ? new Error(AI_STUCK) : e2; }

@@ -69,7 +69,8 @@ export function createCombo(o: ComboOptions): Combo {
   }
 
   arrow.addEventListener('mousedown', e => e.preventDefault());   // keep the focus where it is
-  arrow.addEventListener('click', () => (floating ? closeList() : openList()));
+  // preventDefault: inside a <label> the click would also go on to the input, whose click closes the list again
+  arrow.addEventListener('click', e => { e.preventDefault(); return floating ? closeList() : openList(); });
   if (!o.editable && o.openOnClick !== false) input.addEventListener('click', () => (floating ? closeList() : openList()));
   input.addEventListener('change', () => set(input.value, true));
   input.addEventListener('keydown', e => {

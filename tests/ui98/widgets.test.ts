@@ -80,6 +80,15 @@ describe('combo', () => {
     expect(c.list).toBeNull();
     expect(document.querySelector('.cb98-list')).toBeNull();
   });
+  test('the arrow opens the list inside a <label> too (the label must not pass the click on to the input)', () => {
+    for (const editable of [false, true]) {
+      const c = createCombo({ items: ['A', 'B'], value: 'A', editable });
+      document.body.appendChild(h('label', {}, 'Thinking:', c.el));
+      (c.el.querySelector('.cb98-arrow') as HTMLElement).click();
+      expect(c.list).not.toBeNull();
+      c.close();
+    }
+  });
   test('setItems/setValue; non-editable input is readonly', () => {
     const c = createCombo({ items: ['A'] });
     c.setItems(['X', 'Y']); c.setValue('Y');
