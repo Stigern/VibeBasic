@@ -3,6 +3,10 @@
 import type { PropValue } from '../model/types';
 import type { ToWindow } from './protocol';
 
+/** Props whose queued values are appended, not replaced: an ordered list of changes the window replays (RichTextBox: see
+ *  ControlObject.send). */
+const APPEND_PROPS = new Set(['RtfOps']);
+
 export class PatchQueue {
   private forms = new Map<string, Map<string, Record<string, PropValue>>>();
 
@@ -14,7 +18,11 @@ export class PatchQueue {
     let form = this.forms.get(formKey);
     if (!form) this.forms.set(formKey, form = new Map());
     const cur = form.get(id);
-    if (cur) Object.assign(cur, props); else form.set(id, { ...props });
+    if (!cur) { form.set(id, { ...props }); return; }
+    for (const [k, v] of Object.entries(props)) {
+      const was = cur[k];
+      cur[k] = APPEND_PROPS.has(k) && Array.isArray(was) && Array.isArray(v) ? [...was, ...v] : v;
+    }
   }
 
   /** Send a non-patch message; patches queued before it go first so the window sees them in order. */

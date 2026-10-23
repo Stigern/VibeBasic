@@ -66,7 +66,7 @@ describe('brief', () => {
 describe('every control type', () => {
   test.each(ALL_TYPES)('%s renders in both modes with id and absolute position', type => {
     for (const mode of ['design', 'run'] as const) {
-      const def = mk(type, { Left: 300, Top: 150 });
+      const def = mk(type, type === 'Line' ? { X1: 300, Y1: 150, X2: 600, Y2: 450 } : { Left: 300, Top: 150 });
       const v = renderControl(def, mode, none);
       expect(v.el.dataset.controlId).toBe(def.id);
       expect(v.el.classList.contains('vb-ctl')).toBe(true);
@@ -675,5 +675,34 @@ describe('client-area helper', () => {
   });
   test('formScaleSize gives the client size in twips', () => {
     expect(formScaleSize({ Width: 4800, Height: 3600 })).toEqual({ width: 312 * 15, height: 214 * 15 });
+  });
+});
+
+describe('StatusBar and TabStrip', () => {
+  test('a StatusBar docks to the bottom of the form and follows its size; panels render from lines', () => {
+    const sb = mk('StatusBar', { Height: 315, Panels: ['Ready|k|0|0', 'Right|r|1500|2'] });
+    const surf = renderFormSurface({ props: { Width: 4800, Height: 3600 }, controls: [sb] }, 'design', none);
+    const m = formMetrics({ Width: 4800, Height: 3600 });
+    const el = surf.views.get(sb.id)!.el;
+    expect(el.style.left).toBe('0px'); expect(el.style.width).toBe(`${m.clientWidth}px`);
+    expect(el.style.top).toBe(`${m.clientHeight - 21}px`);
+    const panels = [...el.querySelectorAll<HTMLElement>('.stb-panel')];
+    expect(panels.map(p => p.textContent)).toEqual(['Ready', 'Right']);
+    expect(panels[1].style.width).toBe('100px'); expect(panels[1].style.textAlign).toBe('right');
+    surf.update('form', { Height: 4800 });
+    expect(el.style.top).toBe(`${formMetrics({ Width: 4800, Height: 4800 }).clientHeight - 21}px`);
+    surf.update(sb.id, { Height: 600 });
+    expect(el.style.top).toBe(`${formMetrics({ Width: 4800, Height: 4800 }).clientHeight - 40}px`);
+    surf.update(sb.id, { Style: 1, SimpleText: 'simple' });
+    expect([...el.querySelectorAll('.stb-panel')].map(p => p.textContent)).toEqual(['simple']);
+  });
+  test('TabStrip renders its tabs and marks SelectedTab', () => {
+    const ts = mk('TabStrip', { Tabs: ['One|a', '&Two'] });
+    const v = renderControl(ts, 'design', none);
+    const tabs = [...v.el.querySelectorAll('.ts-tab')];
+    expect(tabs.map(t => t.textContent)).toEqual(['One', 'Two']);
+    expect(tabs.map(t => t.classList.contains('selected'))).toEqual([true, false]);
+    v.update({ SelectedTab: 2 });
+    expect([...v.el.querySelectorAll('.ts-tab')].map(t => t.classList.contains('selected'))).toEqual([false, true]);
   });
 });

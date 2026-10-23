@@ -3,7 +3,7 @@
 // marks it red and shows the compile error box. Edits write form.code / module.code and mark the project dirty.
 import { Annotation, Compartment, EditorState, StateEffect, StateField, type Extension, type Transaction } from '@codemirror/state';
 import { Decoration, EditorView, GutterMarker, gutter, keymap, type DecorationSet } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap, insertNewlineKeepIndent, insertTab, indentLess, undo, redo } from '@codemirror/commands';
+import { defaultKeymap, history, historyKeymap, insertNewlineKeepIndent, insertTab, indentLess, undo, redo, deleteCharForward } from '@codemirror/commands';
 import { acceptCompletion, autocompletion } from '@codemirror/autocomplete';
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search';
 import { tokenize } from '../lang/lexer';
@@ -11,7 +11,7 @@ import { checkLineSyntax } from '../lang/parser';
 import { collectIdentifiers, prettifyLine } from '../lang/prettify';
 import { CONTROL_TYPES, getPropDef } from '../model/controls';
 import { buildEventStub, findProcedureRange, insertProcedure, listProcedures } from '../model/procedures';
-import type { ControlType, FormDef } from '../model/types';
+import type { ControlType, FormDef, Project } from '../model/types';
 import { compileErrorBox } from '../ui98/dialogs';
 import { createCombo, type Combo } from '../ui98/combo';
 import { h } from '../ui98/dom';
@@ -21,6 +21,7 @@ import { openDesigner } from './designer';
 import type { IdeState } from './ideState';
 import type { IdeActions } from './menus';
 import { memberCompletion } from './completions';
+import { bpEffect, bpField, bpLines, toggleBreakpointAt } from './breakpoints';
 import { vbHighlight, vbTheme } from './vbLanguage';
 import './codeWindow.css';
 
@@ -34,6 +35,9 @@ export interface CodeWindow {
   applyChange(from: number, to: number, text: string): void;
   getCursorLine(): number;
   getSource(): string;
+  /** F9: toggles the breakpoint on `line` (default: the cursor line); false when the line cannot have one. */
+  toggleBreakpoint(line?: number): boolean;
+  breakpointLines(): number[];
 }
 export interface CodeEnv { mdiHost: HTMLElement; actions?: IdeActions }
 
@@ -70,19 +74,37 @@ const breakField = StateField.define<number | null>({
   },
 });
 const breakDeco = Decoration.line({ class: 'cm-vb-break' });
-class ArrowMarker extends GutterMarker { toDOM() { const s = document.createElement('span'); s.className = 'cm-vb-arrow'; s.textContent = '▶'; return s; } }
-const arrow = new ArrowMarker();
+/** The margin indicator: the yellow-line arrow, the breakpoint dot, or both. */
+class MarginMarker extends GutterMarker {
+  constructor(readonly arrow: boolean, readonly dot: boolean) { super(); }
+  override eq(o: MarginMarker) { return o.arrow === this.arrow && o.dot === this.dot; }
+  toDOM() {
+    const s = document.createElement('span');
+    s.className = 'cm-vb-mark';
+    if (this.dot) s.appendChild(document.createElement('span')).className = 'cm-vb-bpdot';
+    if (this.arrow) { const a = s.appendChild(document.createElement('span')); a.className = 'cm-vb-arrow'; a.textContent = '▶'; }
+    return s;
+  }
+}
+const arrow = new MarginMarker(true, false), dot = new MarginMarker(false, true), both = new MarginMarker(true, true);
 const breakExt: Extension = [
-  breakField,
+  breakField, bpField,
   EditorView.decorations.compute([breakField], s => {
     const p = s.field(breakField);
     return p === null ? Decoration.none : Decoration.set([breakDeco.range(s.doc.lineAt(p).from)]);
   }),
   gutter({
     class: 'cm-vb-margin',
-    lineMarker: (v, line) => { const p = v.state.field(breakField); return p !== null && v.state.doc.lineAt(p).from === line.from ? arrow : null; },
-    lineMarkerChange: u => u.startState.field(breakField) !== u.state.field(breakField) || u.docChanged,
+    lineMarker: (v, line) => {
+      const p = v.state.field(breakField);
+      const isBreak = p !== null && v.state.doc.lineAt(p).from === line.from;
+      const isBp = v.state.field(bpField).includes(line.from);
+      return isBreak ? (isBp ? both : arrow) : isBp ? dot : null;
+    },
+    lineMarkerChange: u => u.startState.field(breakField) !== u.state.field(breakField) || u.startState.field(bpField) !== u.state.field(bpField) || u.docChanged,
     initialSpacer: () => arrow,
+    // a click in the margin toggles the line's breakpoint (VB6)
+    domEventHandlers: { mousedown: (v, line) => { toggleBreakpointAt(v, v.state.doc.lineAt(line.from).number); return true; } },
   }),
 ];
 
@@ -94,6 +116,33 @@ const procEndExt = EditorView.decorations.compute(['doc'], s => {
 
 const envs = new WeakMap<IdeState, CodeEnv>();
 const windows = new WeakMap<IdeState, Map<string, CodeWindow>>();
+/** Breakpoint lines of closed code windows (VB6 keeps them until the project is closed). */
+const savedBps = new WeakMap<IdeState, { project: Project; lines: Map<string, number[]> }>();
+function saved(ide: IdeState): Map<string, number[]> {
+  let s = savedBps.get(ide);
+  if (!s || s.project !== ide.project) savedBps.set(ide, s = { project: ide.project, lines: new Map() });
+  return s.lines;
+}
+
+/** Breakpoint lines per form/module id (open and closed code windows), only items that have some. */
+export function breakpointsOf(ide: IdeState): Map<string, number[]> {
+  const out = new Map<string, number[]>();
+  for (const [id, lines] of saved(ide)) if (lines.length) out.set(id, lines);
+  for (const [id, w] of windows.get(ide) ?? []) {
+    const lines = w.breakpointLines();
+    if (lines.length) out.set(id, lines); else out.delete(id);
+  }
+  return out;
+}
+
+/** Debug > Clear All Breakpoints. */
+export function clearAllBreakpoints(ide: IdeState): void {
+  saved(ide).clear();
+  for (const w of windows.get(ide)?.values() ?? []) (w as CodeWindow & { view: EditorView }).view.dispatch({ effects: bpEffect.of({ clear: true }) });
+  ide.breakpointsChanged(false);
+}
+
+const notifyBreakpoints = (ide: IdeState) => ide.breakpointsChanged(breakpointsOf(ide).size > 0);
 const norm = (s: string) => s.replace(/\r\n?/g, '\n');
 const continues = (t: string) => /(^|\s)_\s*$/.test(t);
 
@@ -148,12 +197,54 @@ export function getCodeWindow(ide: IdeState, itemId: string): CodeWindow | null 
   return windows.get(ide)?.get(itemId) ?? null;
 }
 
+// ---- clipboard / edit commands on an EditorView (context menu, Edit menu and toolbar) --------------------------------
+const clip = (): Clipboard | undefined => (globalThis.navigator as Navigator | undefined)?.clipboard;
+const selectedText = (v: EditorView): string => { const r = v.state.selection.main; return v.state.sliceDoc(r.from, r.to); };
+
+export async function editCopy(v: EditorView): Promise<void> {
+  const t = selectedText(v);
+  if (!t) { v.focus(); return; }
+  const c = clip();
+  let done = false;
+  if (c?.writeText) { try { await c.writeText(t); done = true; } catch { /* fall back */ } }
+  v.focus();
+  if (!done) v.dom.ownerDocument.execCommand?.('copy');
+}
+export async function editCut(v: EditorView): Promise<void> {
+  if (v.state.readOnly || !selectedText(v)) { v.focus(); return; }
+  await editCopy(v);
+  v.dispatch(v.state.replaceSelection(''));
+  v.focus();
+}
+export async function editPaste(v: EditorView): Promise<void> {
+  if (v.state.readOnly) { v.focus(); return; }
+  const c = clip();
+  if (c?.readText) {
+    try { const t = await c.readText(); v.dispatch(v.state.replaceSelection(norm(t))); v.focus(); return; } catch { /* fall back */ }
+  }
+  v.focus();
+  v.dom.ownerDocument.execCommand?.('paste');
+}
+export function editDelete(v: EditorView): void {
+  if (!v.state.readOnly) deleteCharForward(v);
+  v.focus();
+}
+export function editSelectAll(v: EditorView): void {
+  v.dispatch({ selection: { anchor: 0, head: v.state.doc.length } });
+  v.focus();
+}
+
 export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): CodeWindow {
   if (env) envs.set(ide, env);
   let reg = windows.get(ide);
   if (!reg) windows.set(ide, reg = new Map());
   const existing = reg.get(itemId);
-  if (existing) { existing.win.activate(); ide.setActiveView({ kind: 'code', itemId }); return existing; }
+  if (existing) {
+    existing.win.activate();
+    ide.setActiveView({ kind: 'code', itemId });
+    (existing as CodeWindow & { view: EditorView }).view.focus();
+    return existing;
+  }
   const item0 = itemOf(ide, itemId);
   if (!item0) throw new Error(`Code item not found: ${itemId}`);
   const host = (envs.get(ide) ?? (() => { const e = { mdiHost: document.body.appendChild(h('div')) }; envs.set(ide, e); return e; })()).mdiHost;
@@ -266,12 +357,19 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     if (err) void compileErrorBox(v.dom.ownerDocument, err.message).then(() => v.focus());
   }
 
+  /** Tells the IDE (menu / toolbar enabled state) whether this window's editor has a selection. */
+  const syncSelection = (v: EditorView) => {
+    const a = ide.activeView;
+    if (a.kind === 'code' && a.itemId === itemId) ide.setCodeSelection(!v.state.selection.main.empty);
+  };
   function onTransaction(tr: Transaction, v: EditorView): void {
+    if (tr.effects.some(e => e.is(bpEffect)) || tr.startState.field(bpField).length !== tr.state.field(bpField).length) notifyBreakpoints(ide);
     if (tr.docChanged && !tr.annotation(EXTERNAL)) {
       const it = item();
       if (it) { it.code = src(); ide.stack.markDirtyExternal(); }
     }
     if (!tr.docChanged && !tr.selection && !tr.annotation(EXTERNAL)) return;
+    syncSelection(v);
     const head = v.state.selection.main.head;
     const was = tr.annotation(INTERNAL) || tr.annotation(EXTERNAL) ? null : tr.changes.mapPos(prevHead, -1);
     const before = was === null ? null : v.state.doc.lineAt(Math.min(was, v.state.doc.length)).number;
@@ -304,32 +402,15 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   win.body.append(h('div', { class: 'cw-root' }, h('div', { class: 'cw-bar' }, objCombo.el, procCombo.el), editorEl));
   view = new EditorView({ state, parent: editorEl, dispatch: (tr, v) => { v.update([tr]); onTransaction(tr, v); } });
   syncCombos();
+  // breakpoints of this module from when its window was last open
+  const kept = saved(ide).get(itemId);
+  if (kept) {
+    view.dispatch({ effects: kept.filter(n => n <= view.state.doc.lines).map(n => bpEffect.of({ toggle: view.state.doc.line(n).from })) });
+    saved(ide).delete(itemId);
+  }
   // Right-click: Cut / Copy / Paste / Select All (+ Ask AI... in design mode); Copy and Select All only in run/break mode.
-  const selected = () => { const r = view.state.selection.main; return view.state.sliceDoc(r.from, r.to); };
-  const clip = (): Clipboard | undefined => (globalThis.navigator as Navigator | undefined)?.clipboard;
-  const copy = async (): Promise<void> => {
-    const t = selected();
-    if (!t) return;
-    const c = clip();
-    if (c?.writeText) { try { await c.writeText(t); return; } catch { /* fall back */ } }
-    view.focus();
-    editorEl.ownerDocument.execCommand?.('copy');
-  };
-  const cut = async (): Promise<void> => {
-    if (!selected()) return;
-    await copy();
-    view.dispatch(view.state.replaceSelection(''));
-    view.focus();
-  };
-  const paste = async (): Promise<void> => {
-    const c = clip();
-    if (c?.readText) {
-      try { const t = await c.readText(); view.dispatch(view.state.replaceSelection(norm(t))); view.focus(); return; } catch { /* fall back */ }
-    }
-    view.focus();
-    editorEl.ownerDocument.execCommand?.('paste');
-  };
-  const selectAll = () => { view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } }); view.focus(); };
+  const copy = () => editCopy(view), cut = () => editCut(view), paste = () => editPaste(view);
+  const selectAll = () => editSelectAll(view);
   editorEl.addEventListener('contextmenu', e => {
     e.preventDefault();
     const askAi = envs.get(ide)?.actions?.askAi;
@@ -342,7 +423,7 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   });
 
   // ---- window / model sync -----------------------------------------------------------------------------------------
-  const setActive = () => ide.setActiveView({ kind: 'code', itemId });
+  const setActive = () => { ide.setActiveView({ kind: 'code', itemId }); if (view) syncSelection(view); };
   win.el.addEventListener('focusin', setActive);
   win.el.addEventListener('mousedown', setActive);
   const onProject = () => {
@@ -350,7 +431,7 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     if (!it) { win.close(); return; }
     win.setTitle(title());
     const code = norm(it.code), cur = src();
-    if (code !== cur && !view.hasFocus) {
+    if (code !== cur) {
       let s = 0;
       while (s < code.length && s < cur.length && code[s] === cur[s]) s++;
       let e = 0;
@@ -368,7 +449,13 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   const unsubMode = ide.on('mode', () => { if (!closed) view.dispatch({ effects: lock.reconfigure(lockExt()) }); });
   const unsub = () => { unsubProject(); unsubClose(); unsubMode(); };
   let closed = false;
-  win.onClose = () => { closed = true; unsub(); reg!.delete(itemId); view.destroy(); return true; };
+  win.onClose = () => {
+    closed = true; unsub(); reg!.delete(itemId);
+    const lines = bpLines(view.state);
+    if (lines.length) saved(ide).set(itemId, lines);
+    view.destroy();
+    return true;
+  };
 
   // ---- API ---------------------------------------------------------------------------------------------------------
   const lineStart = (n: number) => view.state.doc.line(Math.max(1, Math.min(n, view.state.doc.lines))).from;
@@ -410,11 +497,14 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     applyChange(from, to, text) { view.dispatch({ changes: { from, to, insert: text } }); },
     getCursorLine: () => view.state.doc.lineAt(view.state.selection.main.head).number,
     getSource: () => src(),
+    toggleBreakpoint: line => toggleBreakpointAt(view, line ?? api.getCursorLine()),
+    breakpointLines: () => bpLines(view.state),
   };
   const lineStartIn = (s: string, n: number) => s.split('\n').slice(0, n - 1).reduce((a, l) => a + l.length + 1, 0);
   (api as CodeWindow & { view: EditorView }).view = view;
   reg.set(itemId, api);
   setActive();
+  view.focus();
   return api;
 }
 
@@ -447,8 +537,23 @@ export function registerCodeActions(ide: IdeState, actions: IdeActions, env: Cod
     const prev = actions[name];
     actions[name] = (...a: unknown[]) => { const v = viewOf(); if (v) cmd(v); else prev?.(...a); };
   }
+  // Edit commands: one dispatcher per action; the active code window's editor wins, else the designer's handler
+  const edits: [string, (v: EditorView) => unknown][] = [
+    ['cut', editCut], ['copy', editCopy], ['paste', editPaste], ['delete', editDelete], ['selectAll', editSelectAll],
+  ];
+  for (const [name, fn] of edits) {
+    const prev = actions[name];
+    actions[name] = (...a: unknown[]) => { const v = viewOf(); if (v) void fn(v); else prev?.(...a); };
+  }
   actions.find = () => {
     const v = viewOf();
     if (v) openSearchPanel(v);
   };
+  actions.toggleBreakpoint = () => {
+    const v = ide.activeView;
+    if (v.kind === 'code') windows.get(ide)?.get(v.itemId)?.toggleBreakpoint();
+  };
+  actions.clearAllBreakpoints = () => clearAllBreakpoints(ide);
+  // a new project has no breakpoints
+  ide.on('project', () => { if (ide.hasBreakpoints && breakpointsOf(ide).size === 0) ide.breakpointsChanged(false); });
 }

@@ -3,6 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- WebBrowser frames: other sites only, never this app's own origin (tauri://, or the dev server on its own port; `http://*` is
+         port 80 only). The bundled app also gets the full policy from tauri.conf.json; this tag covers `tauri dev` as well. -->
+    <meta http-equiv="Content-Security-Policy" content="frame-src https: http://* about:" />
     <title>VibeBasic</title>
     <link rel="stylesheet" href="/src/ui98/theme.css" />
   </head>

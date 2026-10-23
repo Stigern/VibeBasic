@@ -241,7 +241,13 @@ describe('compileErrorBox', () => {
     btns()[1].click();
     expect(await settled(p)).toBe('pending');
     btns()[0].click();
-    expect(await p).toBeUndefined();
+    expect(await p).toBe('ok');
+  });
+  test('Ask AI after OK when asked for', async () => {
+    const p = compileErrorBox(document, 'x', { askAi: true });
+    expect(labels()).toEqual(['OK', 'Ask AI', 'Help']);
+    btns()[1].click();
+    expect(await p).toBe('ai');
   });
   test('enter and escape both close it', async () => {
     const p = compileErrorBox(document, 'x');

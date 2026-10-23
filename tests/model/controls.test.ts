@@ -9,13 +9,16 @@ test('new control defaults', () => { const f = newProject().forms[0]; const c = 
 test('new project', () => expect(newProject()).toMatchObject({ name: 'Project1', startupForm: 'Form1', forms: [{ name: 'Form1', props: { Caption: 'Form1', Width: 4800, Height: 3600 } }] }));
 test('name validation', () => { expect(validateName('cmdOK')).toBe(true); expect(validateName('1abc')).toBe(false); expect(validateName('Dim')).toBe(false); expect(validateName('a'.repeat(41))).toBe(false); });
 test('prop lookup case-insensitive', () => expect(getPropDef('TextBox', 'text')?.name).toBe('Text'));
-test('every type has its default event', () => { for (const t of Object.values(CONTROL_TYPES)) expect(t.events.map(e => e.name)).toContain(t.defaultEvent); });
+test('every type has its default event', () => { for (const t of Object.values(CONTROL_TYPES)) {
+  if (t.events.length) expect(t.events.map(e => e.name)).toContain(t.defaultEvent);
+  else expect(t.defaultEvent).toBe('');   // Shape and Line have no events
+} });
 
 const ALL = Object.keys(CONTROL_TYPES) as ControlType[];
 const NON_FORM = ALL.filter(t => t !== 'Form') as Exclude<ControlType, 'Form'>[];
 
 test('registry has every ControlType keyed by its own type', () => {
-  expect(ALL.sort()).toEqual(['CheckBox', 'ComboBox', 'CommandButton', 'Form', 'Frame', 'HScrollBar', 'Image', 'Label', 'ListBox', 'OptionButton', 'PictureBox', 'ProgressBar', 'TextBox', 'Timer', 'VScrollBar'].sort());
+  expect(ALL.sort()).toEqual(['CheckBox', 'ComboBox', 'CommandButton', 'Form', 'Frame', 'HScrollBar', 'Image', 'Label', 'ListBox', 'OptionButton', 'PictureBox', 'ProgressBar', 'TextBox', 'Timer', 'VScrollBar', 'Shape', 'Line', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'TreeView', 'ListView', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'DriveListBox', 'DirListBox', 'FileListBox', 'SSTab', 'ImageList', 'Toolbar', 'DTPicker', 'MonthView', 'MaskedEdit', 'WebBrowser', 'Inet', 'Winsock', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent'].sort());
   for (const [k, d] of Object.entries(CONTROL_TYPES)) expect(d.type).toBe(k);
 });
 
@@ -44,11 +47,12 @@ test('event and method names are unique per type', () => {
 });
 
 test('common properties on every type except Timer; Timer has exactly its five', () => {
-  for (const t of NON_FORM.filter(x => x !== 'Timer')) {
+  for (const t of NON_FORM.filter(x => x !== 'Timer' && x !== 'CommonDialog' && x !== 'Shape' && x !== 'Line' && x !== 'StatusBar' && x !== 'Toolbar' && x !== 'ImageList' && x !== 'Inet' && x !== 'Winsock' && x !== 'Agent')) {   // StatusBar, Toolbar: no TabIndex/TabStop; ImageList: Left, Top, Tag only
     for (const p of ['Left', 'Top', 'Width', 'Height', 'Visible', 'Enabled', 'TabIndex', 'TabStop', 'Tag', 'ToolTipText'])
       expect(getPropDef(t, p), `${t}.${p}`).toBeDefined();
   }
   expect(CONTROL_TYPES.Timer.props.map(p => p.name).sort()).toEqual(['Enabled', 'Interval', 'Left', 'Tag', 'Top']);
+  expect(CONTROL_TYPES.CommonDialog.props.map(p => p.name)).not.toContain('Width');   // invisible at run time, like the Timer
   for (const p of ['Left', 'Top', 'Width', 'Height', 'Visible', 'Enabled', 'Tag']) expect(getPropDef('Form', p), `Form.${p}`).toBeDefined();
 });
 
@@ -89,8 +93,8 @@ test('defaults from the control table', () => {
 
 test('flags: containers, invisible at runtime, tooltips', () => {
   for (const t of ALL) {
-    expect(CONTROL_TYPES[t].isContainer).toBe(t === 'Form' || t === 'Frame' || t === 'PictureBox');
-    expect(CONTROL_TYPES[t].invisibleAtRuntime).toBe(t === 'Timer');
+    expect(CONTROL_TYPES[t].isContainer).toBe(t === 'Form' || t === 'Frame' || t === 'PictureBox' || t === 'SSTab');
+    expect(CONTROL_TYPES[t].invisibleAtRuntime).toBe(t === 'Timer' || t === 'CommonDialog' || t === 'ImageList' || t === 'Inet' || t === 'Winsock' || t === 'Agent');
     expect(CONTROL_TYPES[t].toolboxTooltip.length).toBeGreaterThan(0);
   }
 });
@@ -146,7 +150,7 @@ test('event coverage per type', () => {
 
 test('methods', () => {
   const m = (t: ControlType, n: string) => CONTROL_TYPES[t].methods.find(x => x.name === n);
-  for (const t of NON_FORM.filter(x => x !== 'Timer')) for (const n of ['Move', 'SetFocus', 'Refresh', 'ZOrder']) expect(m(t, n), `${t}.${n}`).toBeDefined();
+  for (const t of NON_FORM.filter(x => !['Timer', 'CommonDialog', 'Shape', 'Line', 'ImageList', 'Inet', 'Winsock', 'Agent'].includes(x))) for (const n of ['Move', 'SetFocus', 'Refresh', 'ZOrder']) expect(m(t, n), `${t}.${n}`).toBeDefined();
   expect(m('CommandButton', 'Move')?.params).toBe('Left As Single, [Top], [Width], [Height]');
   expect(m('CommandButton', 'ZOrder')?.params).toBe('[Position]');
   expect(m('ListBox', 'AddItem')?.params).toBe('Item As String, [Index]');
@@ -159,7 +163,7 @@ test('methods', () => {
 
 test('toolbox order follows VB6', () => {
   expect(TOOLBOX_ORDER).toEqual(['Pointer', 'PictureBox', 'Label', 'TextBox', 'Frame', 'CommandButton', 'CheckBox', 'OptionButton',
-    'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'Image', 'ProgressBar']);
+    'ComboBox', 'ListBox', 'HScrollBar', 'VScrollBar', 'Timer', 'DriveListBox', 'DirListBox', 'FileListBox', 'Shape', 'Line', 'Image', 'ProgressBar', 'Slider', 'UpDown', 'StatusBar', 'TabStrip', 'Toolbar', 'TreeView', 'ListView', 'ImageList', 'MSFlexGrid', 'CommonDialog', 'RichTextBox', 'SSTab', 'DTPicker', 'MonthView', 'MaskedEdit', 'WebBrowser', 'Inet', 'Winsock', 'MSChart', 'MMControl', 'MediaPlayer', 'Agent']);
 });
 
 test('getPropDef is case-insensitive and returns undefined for unknown', () => {
@@ -253,4 +257,41 @@ test('newId looks like a UUID and is unique', () => {
   const a = newId(), b = newId();
   expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   expect(a).not.toBe(b);
+});
+
+test('Shape, Line, Slider, UpDown: events, defaults, geometry', async () => {
+  const names = (t: ControlType) => CONTROL_TYPES[t].events.map(e => e.name);
+  expect(names('Shape')).toEqual([]); expect(names('Line')).toEqual([]);
+  expect(CONTROL_TYPES.Slider.defaultEvent).toBe('Change'); expect(names('Slider')).toEqual(expect.arrayContaining(['Change', 'Scroll']));
+  expect(CONTROL_TYPES.UpDown.defaultEvent).toBe('Change'); expect(names('UpDown')).toEqual(expect.arrayContaining(['Change', 'UpClick', 'DownClick']));
+  expect(getPropDef('Shape', 'Shape')?.enumValues).toHaveLength(6);
+  expect(getPropDef('Shape', 'FillStyle')?.enumValues).toHaveLength(8);
+  expect(getPropDef('Shape', 'Enabled')).toBeUndefined();
+  expect(getPropDef('Line', 'Left')).toBeUndefined();
+  const f = newProject().forms[0];
+  const line = newControl(f, 'Line', { left: 100, top: 200 }, null);
+  expect(line).toMatchObject({ name: 'Line1', props: { X1: 100, Y1: 200, X2: 1315, Y2: 1415 } });
+  expect(line.props).not.toHaveProperty('Left'); expect(line.props).not.toHaveProperty('TabIndex');
+  expect(newControl(f, 'Shape', { left: 0, top: 0 }, null).props).toMatchObject({ Shape: 0, FillStyle: 1, BorderWidth: 1, Width: 1215 });
+  // a project with the new controls survives a save and load
+  const { serializeProject, parseProject } = await import('../../src/model/serialize');
+  const p = newProject();
+  for (const t of ['Shape', 'Line', 'Slider', 'UpDown'] as const) p.forms[0].controls.push(newControl(p.forms[0], t, { left: 0, top: 0 }, null));
+  expect(parseProject(serializeProject(p)).forms[0].controls.map(c => c.type)).toEqual(['Shape', 'Line', 'Slider', 'UpDown']);
+});
+
+test('StatusBar and TabStrip: defaults, Panels/Tabs are list props that survive a save and load, no focus props on StatusBar', async () => {
+  const { serializeProject, parseProject } = await import('../../src/model/serialize');
+  const p = newProject();
+  const sb = newControl(p.forms[0], 'StatusBar', { left: 0, top: 0 }, null), ts = newControl(p.forms[0], 'TabStrip', { left: 0, top: 0 }, null);
+  expect(sb.name).toBe('StatusBar1'); expect(sb.props).toMatchObject({ Height: 315, Style: 0, Panels: [''] });
+  expect(ts.props).toMatchObject({ Tabs: ['Tab 1'] });
+  sb.props.Panels = ['Ready|main|0|0', 'a\\|b']; ts.props.Tabs = ['One|a', 'Two'];
+  p.forms[0].controls.push(sb, ts);
+  const back = parseProject(serializeProject(p)).forms[0].controls;
+  expect(back[0].props.Panels).toEqual(['Ready|main|0|0', 'a\\|b']);
+  expect(back[1].props.Tabs).toEqual(['One|a', 'Two']);
+  expect(CONTROL_TYPES.StatusBar.events.map(e => e.name)).toEqual(expect.arrayContaining(['PanelClick', 'Click']));
+  expect(CONTROL_TYPES.TabStrip.defaultEvent).toBe('Click');
+  expect(getPropDef('StatusBar', 'TabIndex')).toBeUndefined();
 });

@@ -266,3 +266,30 @@ test('undoing the add of a form clears a selection that pointed at it', () => {
   ide.stack.undo();
   expect(ide.selection).toBeNull();
 });
+
+test('Line: drawn from end to end, end point handles move X1/Y1 or X2/Y2, no resize handles', () => {
+  ide.setTool('Line');
+  drag([px(120, OX), px(120, OY)], [px(1320, OX), px(240, OY)]);
+  expect(form().controls[0]).toMatchObject({ type: 'Line', props: { X1: 120, Y1: 120, X2: 1320, Y2: 240 } });
+  expect(host.querySelectorAll('[data-handle="p1"], [data-handle="p2"]')).toHaveLength(2);
+  expect(host.querySelector('[data-handle="se"]')).toBeNull();
+  drag([0, 0], [240 / 15, 120 / 15], host.querySelector('[data-handle="p2"]') as HTMLElement);
+  expect(form().controls[0].props).toMatchObject({ X1: 120, Y1: 120, X2: 1560, Y2: 360 });
+  ide.stack.undo();
+  expect(form().controls[0].props).toMatchObject({ X2: 1320, Y2: 240 });
+  drag([px(720, OX), px(180, OY)], [px(720, OX), px(180, OY) + 8]);   // grab the line (near the segment) and move it down
+  expect(form().controls[0].props).toMatchObject({ X1: 120, X2: 1320 });
+  expect(Number(form().controls[0].props.Y1)).toBeGreaterThan(120);
+});
+
+test('Toolbox double-click: a control larger than the form shrinks to fit and never starts off the form', async () => {
+  const { placeControlCentered } = await import('../../src/ide/designer');
+  ide.setActiveView({ kind: 'designer', formId: form().id });
+  placeControlCentered(ide, 'WebBrowser');   // 4815 x 3615 by default; the default form's client area is smaller
+  const c = form().controls.find(x => x.type === 'WebBrowser')!;
+  expect(c.props.Left as number).toBeGreaterThanOrEqual(0);
+  expect(c.props.Top as number).toBeGreaterThanOrEqual(0);
+  expect(c.props.Width as number).toBeLessThan(4815);
+  placeControlCentered(ide, 'CommandButton');   // small controls keep their default size
+  expect(form().controls.find(x => x.type === 'CommandButton')!.props.Width).toBe(1215);
+});

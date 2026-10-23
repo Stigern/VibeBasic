@@ -13,9 +13,15 @@
 
 import { emitTo, listen } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { getBackend, type DirListing, type NetApi, type Volume } from '../backend/backend';
+import type { FontValue } from '../model/types';
+import { VBRuntimeError } from '../lang/errors';
+import { runFileDialog, type FileDialogRequest } from './commonDialog';
+import { mediaRef, type OpenedMedia } from './mediaSource';
 import type { DialogSpec } from './dialogSpec';
 import type { RuntimeErrorInfo } from './errorDialog';
 import type { FormHost, FormWindow } from './formHost';
+import type { ClipboardApi } from './objects/globalObjects';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 import { windowOptionsFor } from './windowOptions';
 
@@ -196,7 +202,7 @@ export class TauriFormHost implements FormHost {
     const destroy = () => (destroying ??= this.destroy(label, handle));
     const cancel = async () => { done(cancelled); await destroy(); };
     this.closers.add(cancel);
-    const title = spec.kind === 'error' ? spec.info.title : spec.title;
+    const title = spec.kind === 'error' ? spec.info.title : spec.kind === 'color' ? 'Color' : spec.kind === 'font' ? 'Font' : spec.title;
     const handle = this.glue.createWindow(label, {
       url: `form.html#${key}`, title, width: 420, height: 160, center: true,
       resizable: false, minimizable: false, maximizable: false,
@@ -221,8 +227,60 @@ export class TauriFormHost implements FormHost {
     return String(await this.dialog({ kind: 'input', ...o }, ''));
   }
 
-  async runtimeErrorBox(o: RuntimeErrorInfo): Promise<'end' | 'debug'> {
-    return (await this.dialog({ kind: 'error', info: o }, 'end')) === 'debug' ? 'debug' : 'end';
+  /** ShowOpen / ShowSave: the Mac dialog opens from this (main) window; the form windows ignore input meanwhile. */
+  async fileDialog(o: FileDialogRequest): Promise<string | null> {
+    if (this.openDialogs++ === 0) for (const f of this.forms) f.apply();
+    try {
+      return await runFileDialog(getBackend(), o);
+    } finally {
+      if (--this.openDialogs === 0) for (const f of this.forms) f.apply();
+    }
+  }
+
+  /** The file controls: the calls go from this (main) window, so the form windows need no permissions for them. */
+  listVolumes(): Promise<Volume[]> { return getBackend().listVolumes(); }
+  listDir(path: string): Promise<DirListing> { return getBackend().listDir(path); }
+  /** Inet and Winsock: the sockets and requests belong to this (main) window, which runs the program. */
+  net(): NetApi { return getBackend(); }
+  /** Clipboard: from this (main) window, through the backend (pbcopy / pbpaste). */
+  clipboard(): ClipboardApi {
+    const b = getBackend();
+    return { getText: () => b.clipboardGetText(), setText: t => b.clipboardSetText(t) };
+  }
+
+  /** MMControl / MediaPlayer: the backend keeps the path under a token; the form window reads the bytes by it (media_read). */
+  async openMedia(fullPath: string, mime: string): Promise<OpenedMedia> {
+    const b = getBackend();
+    if (!b.mediaOpen || !b.mediaRead) throw new VBRuntimeError(53);
+    let token: string;
+    try {
+      token = await b.mediaOpen(fullPath);
+    } catch (e) {
+      const text = e instanceof Error ? e.message : String(e);
+      if (text.startsWith('53|')) throw new VBRuntimeError(53);
+      throw new Error(text.replace(/^\d+\|/, ''));   // too big: the controls report that they cannot play it
+    }
+    let open = true;
+    return {
+      src: mediaRef(token, mime),
+      bytes: () => b.mediaRead!(token),
+      release: () => { if (open) { open = false; void b.mediaClose?.(token).catch(() => {}); } },
+    };
+  }
+
+  async colorDialog(o: { color: number }): Promise<number | null> {
+    const r = String(await this.dialog({ kind: 'color', ...o }, ''));
+    return r === '' ? null : Number(r);
+  }
+
+  async fontDialog(o: { font: FontValue }): Promise<FontValue | null> {
+    const r = String(await this.dialog({ kind: 'font', ...o }, ''));
+    return r === '' ? null : JSON.parse(r) as FontValue;
+  }
+
+  async runtimeErrorBox(o: RuntimeErrorInfo): Promise<'end' | 'debug' | 'ai'> {
+    const r = await this.dialog({ kind: 'error', info: o }, 'end');
+    return r === 'debug' || r === 'ai' ? r : 'end';
   }
 
   /** End of the run: closes every form and dialog window and drops the event listeners. */

@@ -5,19 +5,22 @@ import type { BreakInfo, CodeLocation, Host, VBObject } from '../lang/host';
 import { VBRuntimeError } from '../lang/errors';
 import { macrotask } from '../lang/interp/driver';
 import { Program, type SourceModule } from '../lang/interp/program';
-import type { VBRef, VBValue } from '../lang/values';
+import { Nothing, type VBRef, type VBValue } from '../lang/values';
 import type { PictureRef, Project } from '../model/types';
 import type { FormHost } from './formHost';
+import { NetSession } from './net';
 import { PatchQueue } from './patchQueue';
 import { AppObject, PictureObject, ScreenObject } from './objects/appObjects';
+import { ClipboardObject, ObjectList } from './objects/globalObjects';
 import type { ControlObject } from './objects/controlObject';
 import { FormInstance, type FormSession } from './objects/formInstance';
 
 export interface SessionCallbacks {
   debugPrint(text: string, newline: boolean): void;
-  onBreak(info: BreakInfo): Promise<'continue' | 'end'>;   // IDE: yellow line and wait. App: never called
+  /** IDE: yellow line and wait. App: never called. `askAi`: the error dialog's Ask AI was pressed (break mode, then the AI flow). */
+  onBreak(info: BreakInfo & { askAi?: boolean }): Promise<'continue' | 'end'>;
   onEnded(): void;
-  readFile(path: string): Promise<Uint8Array>;            // LoadPicture
+  readFile(path: string): Promise<Uint8Array>;            // LoadPicture, MMControl and MediaPlayer files
   appPath: string;
   /** App.EXEName; defaults to the project name (the IDE). Made apps pass the bundle name. */
   appName?: string;
@@ -57,12 +60,24 @@ export class RunSession implements Host, FormSession {
   private _state: 'running' | 'break' | 'ended' = 'running';
   private readonly forms = new Map<string, FormInstance>();   // lower-case name
   private readonly app: AppObject;
-  private readonly screen = new ScreenObject();
+  /** The form activated last (Screen.ActiveForm); null when no form is shown. */
+  private activeForm: FormInstance | null = null;
+  private readonly screen = new ScreenObject({
+    form: () => this.activeForm ?? Nothing,
+    control: () => this.activeForm?.activeControl() ?? Nothing,
+  });
+  /** Forms: the loaded forms in the order they were loaded. */
+  private readonly formList = new ObjectList('Object',
+    () => [...this.forms.values()].filter(f => f.loaded).sort((a, b) => a.loadOrder - b.loadOrder), o => (o as FormInstance).name,
+    () => new VBRuntimeError(9));
+  private readonly clipboard = new ClipboardObject(() => this.formHost.clipboard?.());
   private readonly title: string;
   private modalStack: FormInstance[] = [];
   private timers = new Map<ControlObject, ReturnType<typeof setInterval>>();
   private timerBusy = new Set<ControlObject>();
   private lastYield = -Infinity;   // performance.now() of the last real DoEvents yield
+  private askAiOnBreak = false;    // the error dialog answered 'ai': the next onBreak (on that error) starts the AI flow
+  private netSession: NetSession | null = null;
 
   constructor(private project: Project, readonly formHost: FormHost, private cb: SessionCallbacks, readonly mode: 'ide' | 'app') {
     for (const [k, a] of Object.entries(project.assets)) this.assets[k] = `data:${a.mime};base64,${a.dataBase64}`;
@@ -77,6 +92,7 @@ export class RunSession implements Host, FormSession {
     this.program = new Program(modules, this, { appTitle: this.title });
   }
 
+  get appPath(): string { return this.cb.appPath; }
   get state(): 'running' | 'break' | 'ended' { return this._state; }
   get ended(): boolean { return this._state === 'ended'; }
 
@@ -90,6 +106,11 @@ export class RunSession implements Host, FormSession {
 
   end(): void { this.program.end(); }
   pause(): void { this.program.requestPause(); }
+
+  // Debugging (IDE only: a made app never breaks on a breakpoint or a step)
+  setBreakpoints(moduleName: string, lines: number[]): void { if (this.mode === 'ide') this.program.setBreakpoints(moduleName, lines); }
+  step(mode: 'into' | 'over' | 'out'): void { if (this.mode === 'ide') this.program.step(mode); }
+  runToLine(moduleName: string, line: number): void { if (this.mode === 'ide') this.program.runToLine(moduleName, line); }
 
   async immediate(text: string): Promise<string> {
     const r = await this.program.immediate(text);
@@ -113,6 +134,14 @@ export class RunSession implements Host, FormSession {
     this.program.end();
   }
 
+  /** Inet, Winsock, WebBrowser: made when the first such control is created; closed at the end of the program. */
+  net(): NetSession {
+    if (this.netSession) return this.netSession;
+    const api = this.formHost.net?.();
+    if (!api) throw new VBRuntimeError(429, 'ActiveX component can\'t create object');
+    return this.netSession = new NetSession(api);
+  }
+
   resolveAsset(ref: PictureRef): string | null {
     return this.assets[ref.asset] ?? (ref.asset.startsWith('data:') ? ref.asset : null);
   }
@@ -129,10 +158,13 @@ export class RunSession implements Host, FormSession {
     }, interval));
   }
 
-  formUnloaded(_form: FormInstance): void {
+  formUnloaded(form: FormInstance): void {
+    if (this.activeForm === form) this.activeForm = null;
     this.updateBlocked();
     this.maybeEnd();
   }
+
+  formActivated(form: FormInstance): void { this.activeForm = form; }
 
   pushModal(form: FormInstance): void {
     if (!this.modalStack.includes(form)) this.modalStack.push(form);
@@ -172,6 +204,8 @@ export class RunSession implements Host, FormSession {
     if (f) return f;
     if (l === 'app') return this.app;
     if (l === 'screen') return this.screen;
+    if (l === 'forms') return this.formList;
+    if (l === 'clipboard') return this.clipboard;
     return undefined;
   }
 
@@ -199,32 +233,50 @@ export class RunSession implements Host, FormSession {
     this.lastYield = performance.now();
   }
 
-  async loadPicture(path: string): Promise<VBValue> {
-    if (path === '') return new PictureObject(null);
-    const p = path.replace(/\\/g, '/');   // VB code builds Windows paths: App.Path & "\pic.bmp"
-    const full = p.startsWith('/') || /^[A-Za-z]:\//.test(p) ? p : `${this.cb.appPath.replace(/\\/g, '/').replace(/\/+$/, '')}/${p}`;
-    let bytes: Uint8Array;
+  /** A file of the program (relative paths are from App.Path; VB code builds Windows paths: App.Path & "\pic.bmp"). 53 when it cannot be read. */
+  async readFile(path: string): Promise<Uint8Array> {
+    const full = this.resolvePath(path);
     try {
-      bytes = await this.cb.readFile(full);
+      return await this.cb.readFile(full);
     } catch {
       throw new VBRuntimeError(53);
     }
+  }
+
+  /** The full path of a file of the program (relative paths are from App.Path). */
+  resolvePath(path: string): string {
+    const p = path.replace(/\\/g, '/');
+    return p.startsWith('/') || /^[A-Za-z]:\//.test(p) ? p : `${this.cb.appPath.replace(/\\/g, '/').replace(/\/+$/, '')}/${p}`;
+  }
+
+  async loadPicture(path: string): Promise<VBValue> {
+    if (path === '') return new PictureObject(null);
+    const full = path.replace(/\\/g, '/');
+    const bytes = await this.readFile(path);
     const ext = /\.([^./]+)$/.exec(full)?.[1]?.toLowerCase() ?? '';
     return new PictureObject({ asset: `data:${MIME[ext] ?? 'application/octet-stream'};base64,${base64(bytes)}` });
   }
 
-  onRuntimeError(err: VBRuntimeError, _at: CodeLocation): Promise<'end' | 'debug'> {
+  /** 'ai' (Ask AI) is 'debug' for the program; the break that follows tells the IDE to start the AI flow. */
+  async onRuntimeError(err: VBRuntimeError, _at: CodeLocation): Promise<'end' | 'debug'> {
     this.queue.flush();
-    return this.formHost.runtimeErrorBox({ number: err.number, description: err.description, compile: err.compile, mode: this.mode, title: this.title });
+    const r = await this.formHost.runtimeErrorBox({ number: err.number, description: err.description, compile: err.compile, mode: this.mode, title: this.title });
+    this.askAiOnBreak = r === 'ai' && this.mode === 'ide';
+    return r === 'end' ? 'end' : 'debug';
   }
+
+  /** Local and module variables of the frame stopped in break mode (empty otherwise). */
+  variables(): { name: string; value: string }[] { return this.program.snapshotVariables(); }
 
   async onBreak(info: BreakInfo): Promise<'continue' | 'end'> {
     this.queue.flush();
     if (this.mode === 'app') return 'end';
     this._state = 'break';
     this.updateBlocked();
+    const askAi = this.askAiOnBreak && info.reason === 'error';
+    this.askAiOnBreak = false;
     try {
-      return await this.cb.onBreak(info);
+      return await this.cb.onBreak(askAi ? { ...info, askAi } : info);
     } finally {
       if (this._state === 'break') {
         this._state = 'running';
@@ -241,6 +293,7 @@ export class RunSession implements Host, FormSession {
     this.queue.stop();
     this.modalStack = [];
     for (const f of this.forms.values()) if (f.loaded || f.hasWindow()) f.teardown();
+    this.netSession?.shutdown();   // every socket closed, every Inet request aborted
     this.cb.onEnded();
   }
 }

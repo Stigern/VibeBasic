@@ -38,8 +38,8 @@ test('alias and default name', () => {
 });
 test('unknown prop, type, invalid value and missing control warn', () => {
   const { p } = setup();
-  const r = parseFormOps('{"ops":[{"op":"add","type":"Label","props":{"Foo":1}},{"op":"add","type":"Slider"},{"op":"add","type":"CommandButton","name":"cmdOK","props":{"Left":"abc"}},{"op":"delete","name":"Label9"}]}', p.forms[0]) as any;
-  expect(r.warnings).toEqual(['Ignored unknown property Foo on Label.', 'Ignored unknown control type Slider.',
+  const r = parseFormOps('{"ops":[{"op":"add","type":"Label","props":{"Foo":1}},{"op":"add","type":"Gizmo"},{"op":"add","type":"CommandButton","name":"cmdOK","props":{"Left":"abc"}},{"op":"delete","name":"Label9"}]}', p.forms[0]) as any;
+  expect(r.warnings).toEqual(['Ignored unknown property Foo on Label.', 'Ignored unknown control type Gizmo.',
     'Ignored invalid value for Left on cmdOK.', 'Ignored change to missing control Label9.']);
 });
 test('taken name is renamed', () => {
@@ -54,7 +54,7 @@ test('pixels converted', () => {
   expect(r.warnings).toContain('Sizes for cmdOK looked like pixels and were converted to twips.');
 });
 test('garbage is not understood', () => {
-  expect(parseFormOps('Jeg kan ikke det.', setup().p.forms[0])).toEqual({ ok: false, error: 'The AI answer could not be understood. Try again or rephrase.', raw: 'Jeg kan ikke det.' });
+  expect(parseFormOps('Jeg kan ikke det.', setup().p.forms[0])).toEqual({ ok: false, error: 'The AI answer could not be understood. Try again or rephrase.', raw: 'Jeg kan ikke det.', reason: 'no JSON object found' });
   expect(parseFormOps('{"ops":[{"op":"delete","name":"Nope"}]}', setup().p.forms[0]).ok).toBe(false);
 });
 test('control array name parsed', () => {
@@ -94,10 +94,10 @@ test('form preview dialog OK / Cancel', async () => {
   expect(document.querySelector('.ai-ops')!.textContent).toContain('Add Label Label1');
   expect(document.querySelector('.ai-warning')!.textContent).toBe('careful');
   click('OK');
-  expect(await pr).toBe(true);
+  expect(await pr).toBe('ok');
   pr = showFormPreview(document, form, [], []);
   click('Cancel');
-  expect(await pr).toBe(false);
+  expect(await pr).toBe('cancel');
 });
 test('undo keeps hand edits made after the AI change', () => {
   const { p, stack } = setup();
@@ -148,7 +148,7 @@ test('small-model quirks: op aliases, loose props, bare array, raw newlines', ()
   ]);
 });
 test('all ops ignored: warnings go into the details text', () => {
-  const r = parseFormOps('{"ops":[{"op":"add","type":"Slider"}]}', setup().p.forms[0]);
+  const r = parseFormOps('{"ops":[{"op":"add","type":"Gizmo"}]}', setup().p.forms[0]);
   expect(r.ok).toBe(false);
-  if (!r.ok) expect(r.raw).toContain('Ignored unknown control type Slider.');
+  if (!r.ok) expect(r.raw).toContain('Ignored unknown control type Gizmo.');
 });

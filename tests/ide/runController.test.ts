@@ -13,7 +13,7 @@ import { compileErrorBox, messageBox98 } from '../../src/ui98/dialogs';
 
 vi.mock('../../src/ui98/dialogs', async orig => {
   const real = await orig<typeof import('../../src/ui98/dialogs')>();
-  return { ...real, compileErrorBox: vi.fn(async () => {}), messageBox98: vi.fn(real.messageBox98) };
+  return { ...real, compileErrorBox: vi.fn(async () => 'ok' as const), messageBox98: vi.fn(real.messageBox98) };
 });
 const box = vi.mocked(compileErrorBox);
 const msgBox = vi.mocked(messageBox98);
@@ -137,12 +137,12 @@ test('read-only during run, title follows mode', async () => {
   expect(view.state.readOnly).toBe(false);
   await app.run.start(false);
   expect(app.state.mode).toBe('run');
-  expect(be.titles.at(-1)).toBe('Project1 - VibeBasic [run]');
+  expect(be.titles.at(-1)).toBe(`Project1 - VibeBasic ${__APP_VERSION__} [run]`);
   expect(root.querySelector('.pw98-editor')?.hasAttribute('disabled')).toBe(true);
   expect(view.state.readOnly).toBe(true);
   expect(root.querySelector('.tbx98-grid')?.classList.contains('tbx98-locked')).toBe(true);
   app.run.end();
-  expect(be.titles.at(-1)).toBe('Project1 - VibeBasic [design]');
+  expect(be.titles.at(-1)).toBe(`Project1 - VibeBasic ${__APP_VERSION__} [design]`);
   expect(view.state.readOnly).toBe(false);
 });
 
@@ -169,7 +169,7 @@ test('End while a MsgBox is open closes the dialog; End in break leaves no break
 test('project changes are blocked while running; a second start during the compile box does not stack', async () => {
   setup('', 'Sub Main()\n    x = \nEnd Sub\n');
   let release!: () => void;
-  box.mockImplementationOnce(() => new Promise<void>(r => { release = r; }));
+  box.mockImplementationOnce(() => new Promise<'ok'>(r => { release = () => r('ok'); }));
   const first = rc.start(true);
   await tick();
   void rc.start(true);
@@ -229,4 +229,28 @@ test('a failing session start shows a critical message box', async () => {
   expect(msgBox.mock.calls[0][1]).toMatchObject({ buttons: 16 });
   expect(String(msgBox.mock.calls[0][1].prompt)).toContain('no window');
   expect(ide.mode).toBe('design');
+});
+
+test('F8 in design starts and breaks in Form_Load; stepping stays armed for the next event; F9 breaks a click', async () => {
+  setup(['Private Sub Form_Load()', '  a = 1', 'End Sub', 'Private Sub Command1_Click()', '  b = 2', '  c = 3', 'End Sub'].join('\n'));
+  rc.step('into');
+  await until(() => ide.mode === 'break');
+  expect(ide.mode).toBe('break');
+  const w = wins.get(ide.project.forms[0].id)!;
+  expect(w.win.el.querySelector('.cm-line.cm-vb-break')!.textContent).toBe('  a = 1');
+  expect(w.win.el.contains(document.activeElement)).toBe(true);   // VB6: focus on the code window, not the Immediate window
+  expect(w.getCursorLine()).toBe(2);
+  rc.step('over');   // last statement of Form_Load: runs, then the program waits for events with the step armed
+  await until(() => ide.mode === 'run');
+  expect(ide.mode).toBe('run');
+  clickButton();
+  await until(() => ide.mode === 'break');
+  expect(w.win.el.querySelector('.cm-line.cm-vb-break')!.textContent).toBe('  b = 2');
+  expect(w.win.el.contains(document.activeElement)).toBe(true);
+  await rc.start(false);   // F5: continue, stepping ends
+  await until(() => ide.mode === 'run');
+  w.toggleBreakpoint(6);   // F9 while running reaches the program
+  clickButton();
+  await until(() => ide.mode === 'break');
+  expect(w.win.el.querySelector('.cm-line.cm-vb-break')!.textContent).toBe('  c = 3');
 });

@@ -1,5 +1,6 @@
-// Member completion ("IntelliSense") after `Control.`, `Control(n).`, `Me.` and `Me.Control.` - a pure function plus the
-// CodeMirror completion source that feeds it. Only run-time members are listed (props with runtime !== 'none', methods).
+// Member completion ("IntelliSense") after `Control.`, `Control(n).`, `Me.`, `Me.Control.` and the global objects (App,
+// Screen, Clipboard, Forms; Controls in a form) - a pure function plus the CodeMirror completion source that feeds it.
+// Only run-time members are listed (props with runtime !== 'none', methods).
 import type { CompletionContext, CompletionResult, CompletionSource } from '@codemirror/autocomplete';
 import { CONTROL_TYPES } from '../model/controls';
 import type { ControlType, FormDef } from '../model/types';
@@ -20,19 +21,35 @@ function inStringOrComment(line: string): boolean {
 const membersOf = (type: ControlType): string[] =>
   [...CONTROL_TYPES[type].props.filter(p => p.runtime !== 'none').map(p => p.name), ...CONTROL_TYPES[type].methods.map(m => m.name)];
 
+/** The members of the run session's global objects (src/run/objects/appObjects.ts, globalObjects.ts). */
+const GLOBAL_OBJECTS: Record<string, string[]> = {
+  app: ['EXEName', 'Path', 'PrevInstance', 'Title'],
+  screen: ['ActiveControl', 'ActiveForm', 'Height', 'MousePointer', 'Width'],
+  clipboard: ['Clear', 'GetFormat', 'GetText', 'SetText'],
+  forms: ['Count', 'Item'],
+};
+/** What every run-time form has besides its registry members (formInstance.ts FORM_OBJECTS). */
+const FORM_OBJECTS = ['ActiveControl', 'Controls', 'Count'];
+
+/** `form` null: a module window (only the global objects). */
 export function completionsFor(lineBeforeCursor: string, form: FormDef | null): { from: number; options: string[] } | null {
-  if (!form || inStringOrComment(lineBeforeCursor)) return null;
+  if (inStringOrComment(lineBeforeCursor)) return null;
   const m = /((?:[A-Za-z_]\w*(?:\([^()]*\))?\s*\.\s*)+)(\w*)$/.exec(lineBeforeCursor);
   if (!m) return null;
   const prefix = m[2];
   const segs = m[1].split('.').map(s => s.trim()).filter(Boolean).map(s => s.replace(/\(.*\)$/, '').toLowerCase());
-  const ctl = (name: string) => form.controls.find(c => c.name.toLowerCase() === name);
+  const ctl = (name: string) => form?.controls.find(c => c.name.toLowerCase() === name);
   let names: string[] | null = null;
   const first = segs[0];
-  if (first === 'me' || first === form.name.toLowerCase()) {
-    if (segs.length === 1) names = [...membersOf('Form'), ...form.controls.map(c => c.name)];
-    else if (segs.length === 2) { const c = ctl(segs[1]); if (c) names = membersOf(c.type); }
-  } else if (segs.length === 1) { const c = ctl(first); if (c) names = membersOf(c.type); }
+  if (form && (first === 'me' || first === form.name.toLowerCase())) {
+    if (segs.length === 1) names = [...membersOf('Form'), ...FORM_OBJECTS, ...form.controls.map(c => c.name)];
+    else if (segs.length === 2) { const c = ctl(segs[1]); if (c) names = membersOf(c.type); else if (segs[1] === 'controls') names = GLOBAL_OBJECTS.forms; }
+  } else if (segs.length === 1) {
+    const c = ctl(first);
+    if (c) names = membersOf(c.type);
+    else if (GLOBAL_OBJECTS[first]) names = GLOBAL_OBJECTS[first];
+    else if (form && first === 'controls') names = GLOBAL_OBJECTS.forms;
+  }
   if (!names) return null;
   const low = prefix.toLowerCase();
   const options = [...new Set(names)].filter(n => n.toLowerCase().startsWith(low))
@@ -41,7 +58,7 @@ export function completionsFor(lineBeforeCursor: string, form: FormDef | null): 
   return { from: lineBeforeCursor.length - prefix.length, options };
 }
 
-/** CodeMirror source; `getForm` returns the form being edited (null in module windows: no completion). */
+/** CodeMirror source; `getForm` returns the form being edited (null in module windows: the global objects only). */
 export function memberCompletion(getForm: () => FormDef | null): CompletionSource {
   return (ctx: CompletionContext): CompletionResult | null => {
     const line = ctx.state.doc.lineAt(ctx.pos);

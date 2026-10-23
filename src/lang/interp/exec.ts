@@ -19,7 +19,7 @@ import { Empty, NothingT, NullT, VBArray, VBRef, compare, isObject, toNumber, ty
 import { EndSignal, nextTick, type Gen } from './driver';
 import { Frame, ProcRef, Run, Variable, lc, storeValue, type Slot } from './scope';
 import {
-  afterHostCall, assign, awaitHost, callBuiltin, callProc, constExpr, evalArgValues, evalExpr, formMethod, lookup, memberGet,
+  afterHostCall, assign, awaitHost, callBuiltin, callProc, constExpr, evalArgValues, evalExpr, formMethod, hostRefs, lookup, memberGet,
   methodArgs, variableOf, withObject,
 } from './eval';
 import { compareResult, plain, truthy } from './operators';
@@ -132,12 +132,21 @@ export function* execBlock(f: Frame, body: Stmt[], start = 0): Gen<Completion> {
  */
 function atBoundary(f: Frame, line: number): boolean {
   const rt = f.run.rt;
-  f.line = line;
-  return ++rt.stmtCount >= rt.sliceSize || rt.stopping || rt.pauseRequested;
+  if (f.line !== line) {
+    f.line = line;
+    // a breakpoint is checked only when the line changes (not on every pass of a one-line loop)
+    const bp = f.module.breakpoints;
+    if (bp !== null && bp.has(line) && !f.run.immediate) rt.pauseRequested = true;
+  }
+  // stepping (Step Into/Over/Out): one comparison of the call depth
+  return ++rt.stmtCount >= rt.sliceSize || rt.stopping || rt.pauseRequested || rt.callDepth <= rt.stepDepth;
 }
 
-/** The slow part of a boundary, when `atBoundary` returned true. */
-function* boundary(f: Frame): Gen<void> {
+/**
+ * The slow part of a boundary, when `atBoundary` returned true. `stoppable`
+ * is false for statements a step never stops at (Dim, Const, labels).
+ */
+function* boundary(f: Frame, stoppable = true): Gen<void> {
   const rt = f.run.rt;
   if (rt.stopping) throw END;
   if (rt.stmtCount >= rt.sliceSize && rt.sliceDue()) {
@@ -153,12 +162,15 @@ function* boundary(f: Frame): Gen<void> {
     if (rt.stopping) throw END;
   }
   // Immediate commands never break (the program may already be in break mode)
-  if (rt.pauseRequested && !f.run.immediate) yield* pauseHere(f);
+  if (f.run.immediate) return;
+  if (rt.pauseRequested || (stoppable && rt.callDepth <= rt.stepDepth)) yield* pauseHere(f);
 }
+
+const notStoppable = (s: Stmt) => s.kind === 'dim' || s.kind === 'const' || s.kind === 'label';
 
 /** Runs one statement: boundary checks, then the statement with error handling (and retry). */
 export function* execStmt(f: Frame, s: Stmt): Gen<Completion> {
-  if (atBoundary(f, s.line)) yield* boundary(f);
+  if (atBoundary(f, s.line)) yield* boundary(f, !notStoppable(s));
   for (;;) {
     try {
       return yield* execInner(f, s);
@@ -320,6 +332,7 @@ export function* enterBreak(f: Frame, reason: 'error' | 'pause', error?: VBRunti
   const rt = f.run.rt;
   if (f.run.immediate) return;
   rt.pauseRequested = false; // this break answers a pending pause request too
+  rt.stopDebugging(); // a step or Run To Cursor ends at any break
   rt.state = 'break';
   rt.breakFrame = f;
   rt.eventsSuspended++;
@@ -422,6 +435,7 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBVal
     f.locals.set(lc(proc.name), f.returnVar);
   }
   run.frames.push(f);
+  rt.callDepth++;
   try {
     yield* declareLocals(f);
     const c = yield* execBlock(f, proc.body);
@@ -430,6 +444,7 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBVal
     // VB6 clears Err when a procedure with an active error handler returns
     if (f.onError !== 'none' || f.inHandler) rt.err.clear();
   } finally {
+    rt.callDepth--;
     run.frames.pop();
   }
   return f.returnVar ? f.returnVar.value : Empty;
@@ -655,6 +670,21 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
       yield* enterBreak(f, 'pause');
       return;
     case 'unload': case 'load': {
+      // `Load Command1(i)`: an element of a control array, which may not exist yet
+      if (s.target.kind === 'call' && s.target.target.kind === 'name' && s.target.args.length === 1) {
+        const arr = yield* evalExpr(f, s.target.target);
+        if (isObject(arr) && (s.kind === 'load' ? arr.loadElement : arr.unloadElement)) {
+          const a = s.target.args[0];
+          if (a.kind === 'missing') throw new VBRuntimeError(450);
+          const index = toNumber(yield* evalExpr(f, a));
+          const r = s.kind === 'load' ? arr.loadElement!(index) : arr.unloadElement!(index);
+          if (r instanceof Promise) yield* awaitHost(f, r.then(() => Empty));
+          else yield* afterHostCall(f);
+          return;
+        }
+        // `Load Text1(1)` where Text1 is a single control (or another object): not a control array
+        if (isObject(arr)) throw new VBRuntimeError(343, 'Object not an array');
+      }
       const obj = yield* evalExpr(f, s.target);
       if (obj instanceof NothingT) throw new VBRuntimeError(91);
       if (!isObject(obj)) throw new VBRuntimeError(424);
@@ -733,7 +763,7 @@ function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Com
 /** `obj.name args` as a statement: `callMethod` (a Promise result is awaited). */
 function* callObjectMethod(f: Frame, obj: VBObject, name: string, args: (Expr | MissingArg)[]): Gen<void> {
   const argv = yield* evalArgValues(f, args);
-  const r = obj.callMethod(name, methodArgs(argv));
+  const r = obj.callMethod(name, methodArgs(argv), yield* hostRefs(f, obj, name, args));
   if (r instanceof Promise) yield* awaitHost(f, r);
   else yield* afterHostCall(f);
 }
@@ -797,10 +827,11 @@ function* execFor(f: Frame, s: ForStmt): Gen<Completion> {
     const c = yield* execBlock(f, s.body);
     if (c === 'exitFor') return;
     if (c !== undefined) return c;
-    if (atBoundary(f, s.line)) yield* boundary(f);
-    // the increment belongs to the For statement; a failure is retried on its own
+    // the back-edge (increment and test) is the Next line, as in VB6: a step stops there, not on the For line again
+    if (atBoundary(f, s.nextLine)) yield* boundary(f);
+    // the increment belongs to the Next statement; a failure is retried on its own
     for (;;) {
-      f.line = s.line;
+      f.line = s.nextLine;
       try {
         v.set(toNumber(v.value) + step);
         break;
@@ -834,7 +865,7 @@ function* execForEach(f: Frame, s: ForEachStmt): Gen<Completion> {
     const c = yield* execBlock(f, s.body);
     if (c === 'exitFor') return;
     if (c !== undefined) return c;
-    if (atBoundary(f, s.line)) yield* boundary(f);
+    if (atBoundary(f, s.nextLine)) yield* boundary(f);
   }
   return;
 }

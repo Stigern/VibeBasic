@@ -2,23 +2,23 @@
 import type { Backend } from '../backend/backend';
 import { newProject } from '../model/controls';
 import { bindShortcuts, createMenubar } from '../ui98/menubar';
-import { createToolbar, type ToolbarItem } from '../ui98/toolbar';
-import { messageBox98, vbOK } from '../ui98/dialogs';
-import { TOOLBAR_ICONS } from './icons/toolbarIcons';
+import { createToolbar } from '../ui98/toolbar';
+import { buildToolbarItems, createReadouts } from './toolbarItems';
+import { showAbout } from './aboutDialog';
 import { IdeState, OPTION_EXPLICIT, type IdeOptions } from './ideState';
 import { buildLayout, type IdeLayout } from './layout';
 import { buildMenus, type IdeActions } from './menus';
-import { askAi } from '../ai/askDialog';
+import { askAi, askAiAboutError } from '../ai/askDialog';
 import { getCodeWindow, openCodeWindow, registerCodeActions } from './codeWindow';
 import { openDesigner, registerDesignerActions } from './designer';
 import { createPropertiesWindow, type PropertiesWindow } from './properties';
-import { createToolbox } from './toolbox';
+import { attachToolboxWindow, createToolbox, type ToolboxLayout } from './toolbox';
 import { createProjectExplorer, registerProjectActions, type ProjectExplorer } from './projectExplorer';
-import { showProjectProperties } from './projectDialogs';
+import { showComponents, showProjectProperties } from './projectDialogs';
 import { showOptions } from './optionsDialog';
 import { makeAppFlow } from '../build/makeApp';
 import { FileController } from './fileController';
-import { RunController } from './runController';
+import { RunController, type ErrorToFix } from './runController';
 import { createImmediateWindow } from './immediate';
 import { InlineFormHost } from '../run/inlineFormHost';
 import { TauriFormHost } from '../run/tauriFormHost';
@@ -26,9 +26,6 @@ import type { FormHost } from '../run/formHost';
 import { h } from '../ui98/dom';
 
 export interface Ide { state: IdeState; layout: IdeLayout; actions: IdeActions; menus: ReturnType<typeof buildMenus>; run: RunController; refresh(): void }
-
-export const ABOUT_TEXT = 'VibeBasic\nA Visual Basic 6 style programming environment for macOS.\n\n'
-  + "Pixel font 'MS Sans Serif' by lou (FontStruct), CC BY-SA 3.0\nWin98 look based on 98.css (MIT).";
 
 export function startIde(backend: Backend, root: HTMLElement = document.getElementById('app') ?? document.body): Ide {
   const state = new IdeState(newProject());
@@ -46,15 +43,16 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     viewProjectExplorer: () => { layout.setPaneVisible('project', true); explorer?.focus(); },
     viewProperties: () => { layout.setPaneVisible('properties', true); propsWin?.focus(); },
     viewToolbox: () => layout.setPaneVisible('toolbox', true),
-    about: () => { void messageBox98(doc, { prompt: ABOUT_TEXT, title: 'About VibeBasic', buttons: vbOK }); },
+    about: () => { void showAbout(doc); },
   };
-  const menus = buildMenus(actions, state);
+  const menus = buildMenus(actions, state, { breakOnError: () => !!run.rc?.breakError });
   let refresh = () => {};
   registerDesignerActions(state, actions, () => refresh());
   registerCodeActions(state, actions, { mdiHost: layout.mdiHost, actions });
   const env = { mdiHost: layout.mdiHost, actions };
   registerProjectActions(state, actions, env);
   actions.projectProperties = () => { if (state.mode === 'design') void showProjectProperties(state, doc); };
+  actions.components = () => { if (state.mode === 'design') void showComponents(state, doc); };
   actions.options = () => { void showOptions(state, backend, doc); };
   actions.askAi = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc); };
   const fc = new FileController(state, backend, doc);
@@ -64,9 +62,11 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   };
   actions.newProject = () => { if (state.mode === 'design') void fc.newProject(); };
   actions.openProject = () => { if (state.mode === 'design') void fc.open(); };
-  actions.saveProject = () => { void fc.save(); };
-  actions.saveProjectAs = () => { void fc.saveAs(); };
-  actions.makeApp = () => { if (state.mode === 'design') void makeAppFlow(state, backend); };
+  // a value typed in the Properties window but not yet entered goes into the project first (false: it was invalid)
+  const committed = (): boolean => propsWin?.commitPendingEdit() ?? true;
+  actions.saveProject = () => { if (committed()) void fc.save(); };
+  actions.saveProjectAs = () => { if (committed()) void fc.saveAs(); };
+  actions.makeApp = () => { if (state.mode === 'design' && committed()) void makeAppFlow(state, backend); };
   actions.exit = () => { void fc.exit(); };
   backend.onCloseRequested(() => fc.confirmDiscard());
   // Form windows: real Tauri windows in the app, a floating layer over the MDI area in the browser
@@ -77,40 +77,51 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     const host = new InlineFormHost(layer);
     return Object.assign(host, { dispose: () => { InlineFormHost.prototype.dispose.call(host); layer.remove(); } });
   };
+  const askAboutError = (fix: ErrorToFix) => {
+    void askAiAboutError(state, backend, fix, { openCode: id => openCodeWindow(state, id, env), end: () => rc.endAndWait() }, doc);
+  };
   const rc = new RunController(state, hostFactory, id => openCodeWindow(state, id, env), {
-    immediate, doc, readFile: p => backend.readBinaryFile(p),
+    immediate, doc, readFile: p => backend.readBinaryFile(p), onAskAi: askAboutError,
   });
   run.rc = rc;
-  actions.start = () => { void rc.start(false); };
-  actions.startFullCompile = () => { void rc.start(true); };
+  actions.askAiAboutError = () => { const fix = rc.errorToFix(); if (fix) askAboutError(fix); };
+  actions.start = () => { if (committed()) void rc.start(false); };
+  actions.startFullCompile = () => { if (committed()) void rc.start(true); };
   actions.break = () => rc.breakNow();
   actions.end = () => rc.end();
   actions.restart = () => { void rc.restart(); };
+  actions.stepInto = () => { if (committed()) rc.step('into'); };   // in design mode these start the program
+  actions.stepOver = () => { if (committed()) rc.step('over'); };
+  actions.stepOut = () => rc.step('out');
+  actions.runToCursor = () => {
+    const v = state.activeView;
+    const w = v.kind === 'code' ? getCodeWindow(state, v.itemId) : null;
+    const item = v.kind === 'code' ? [...state.project.forms, ...state.project.modules].find(x => x.id === v.itemId) : undefined;
+    if (w && item) rc.runToCursor(item.name, w.getCursorLine());
+  };
   const menubar = createMenubar(layout.menubarHost, menus);
 
-  const tb = (icon: string, title: string, name: string, pred?: () => boolean): ToolbarItem => ({
-    icon: TOOLBAR_ICONS[icon], title, action: () => actions[name]?.(), enabled: () => !!actions[name] && (pred ? pred() : true),
+  const toolbar = createToolbar(layout.toolbarHost, buildToolbarItems(actions, state));
+  const readouts = createReadouts(layout.toolbarHost, state);
+  createToolbox(layout.toolboxHost, state, () => actions.components?.());
+  const tbxPane = layout.panes.toolbox.el;
+  const toolboxWin = attachToolboxWindow({
+    pane: tbxPane, bar: tbxPane.querySelector(':scope > .title-bar')!, grid: layout.toolboxHost.querySelector('.tbx98-grid')!,
+    area: layout.mainArea, save: l => { void backend.saveSettings('toolbox', l).catch(() => {}); },
   });
-  const sep: ToolbarItem = { separator: true };
-  const toolbar = createToolbar(layout.toolbarHost, [
-    tb('new', 'New Project', 'newProject', () => state.mode === 'design'), tb('open', 'Open Project', 'openProject', () => state.mode === 'design'), tb('save', 'Save Project', 'saveProject'), sep,
-    tb('cut', 'Cut', 'cut'), tb('copy', 'Copy', 'copy'), tb('paste', 'Paste', 'paste'), sep,
-    tb('undo', 'Undo', 'undo', () => state.mode === 'design' && (state.activeView.kind === 'code' || state.stack.canUndo)), tb('redo', 'Redo', 'redo', () => state.mode === 'design' && (state.activeView.kind === 'code' || state.stack.canRedo)), sep,
-    tb('start', 'Start', 'start', () => !state.busy && state.mode !== 'run'), tb('break', 'Break', 'break', () => state.mode === 'run'), tb('end', 'End', 'end', () => state.mode !== 'design'), sep,
-    tb('projectExplorer', 'Project Explorer', 'viewProjectExplorer'), tb('properties', 'Properties Window', 'viewProperties'),
-    tb('toolbox', 'Toolbox', 'viewToolbox'),
-  ]);
-  createToolbox(layout.toolboxHost, state);
+  void backend.loadSettings<Partial<ToolboxLayout>>('toolbox').then(l => { if (l && typeof l === 'object') toolboxWin.setLayout(l); }).catch(() => {});
   explorer = createProjectExplorer(layout.projectHost, state, env);
   propsWin = createPropertiesWindow(layout.propertiesHost, state, { backend });
   bindShortcuts(menus, window);
 
-  refresh = () => { menubar.refresh(); toolbar.refresh(); };
+  refresh = () => { menubar.refresh(); toolbar.refresh(); readouts.refresh(); };
   const updateTitle = () => fc.updateTitle();
   state.on('project', () => { refresh(); updateTitle(); });
   state.on('mode', () => { refresh(); updateTitle(); });
   state.on('selection', () => refresh());
   state.on('activeView', () => refresh());
+  state.on('codeSelection', () => refresh());
+  state.on('breakpoints', () => refresh());   // only fires when selected / not selected flips, so no throttle is needed
   updateTitle();
   // Saved IDE options (async; the defaults apply until they arrive)
   void backend.loadSettings<Partial<IdeOptions>>('ide').then(o => {

@@ -1,8 +1,8 @@
-// Host globals of a running program: App, Screen and the Picture objects LoadPicture returns.
+// Host globals of a running program: App, Screen and the Picture objects LoadPicture returns (Forms and Clipboard: globalObjects.ts).
 
 import type { VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
-import { toStr, type VBValue } from '../../lang/values';
+import { Nothing, toStr, type VBValue } from '../../lang/values';
 import type { PictureRef } from '../../model/types';
 
 /** Any picture value carries its asset reference; `null` is an empty picture (`LoadPicture("")`). */
@@ -60,12 +60,16 @@ export class AppObject extends PropObject {
 export class ScreenObject extends PropObject {
   readonly vbTypeName = 'Screen';
   private mousePointer: VBValue = 0;
-  constructor() {
+  /** `active` gives the form that was activated last and its control with the focus (Nothing when there is none). */
+  constructor(private active: { form(): VBValue; control(): VBValue } = { form: () => Nothing, control: () => Nothing }) {
     super();
     this.setters = { mousepointer: v => { this.mousePointer = v; } };   // accepted and ignored
   }
   protected props(): Record<string, () => VBValue> {
     const scr = typeof screen !== 'undefined' ? screen : { width: 1024, height: 768 };
-    return { width: () => (scr.width || 1024) * 15, height: () => (scr.height || 768) * 15, mousepointer: () => this.mousePointer };
+    return {
+      width: () => (scr.width || 1024) * 15, height: () => (scr.height || 768) * 15, mousepointer: () => this.mousePointer,
+      activeform: () => this.active.form(), activecontrol: () => this.active.control(),
+    };
   }
 }

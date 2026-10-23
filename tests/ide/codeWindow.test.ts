@@ -76,7 +76,7 @@ test('Auto Syntax Check off: no error', () => {
 const procItems = () => {
   const combos = cw.win.el.querySelectorAll('.cb98');
   (combos[1].querySelector('.cb98-arrow') as HTMLElement).click();
-  return [...combos[1].querySelectorAll('.cb98-item')] as HTMLElement[];
+  return [...document.querySelectorAll('.popup98-layer .cb98-item')] as HTMLElement[];
 };
 
 test('procedure dropdown bolds implemented events', () => {
@@ -102,7 +102,7 @@ test('object dropdown lists (General), Form, controls alphabetically, arrays onc
   c.name = 'Command1'; c.index = 0;
   ide.emit('project');
   (cw.win.el.querySelector('.cb98 .cb98-arrow') as HTMLElement).click();
-  expect([...cw.win.el.querySelectorAll('.cb98')[0].querySelectorAll('.cb98-item')].map(e => e.textContent))
+  expect([...document.querySelectorAll('.popup98-layer .cb98-item')].map(e => e.textContent))
     .toEqual(['(General)', 'Form', 'Command1', 'Text1']);
 });
 
@@ -211,4 +211,27 @@ test('right-click menu items per mode', async () => {
   expect(menu()).toEqual(['Copy', 'Select All']);
   ide.setMode('break');
   expect(menu()).toEqual(['Copy', 'Select All']);
+});
+
+test('a breakpoint follows its line when a line is inserted above it', () => {
+  set('Private Sub Form_Load()\n  x = 1\n  y = 2\nEnd Sub\n');
+  expect(cw.toggleBreakpoint(3)).toBe(true);
+  expect(cw.breakpointLines()).toEqual([3]);
+  expect(view.dom.querySelectorAll('.cm-vb-bp').length).toBe(1);
+  expect(ide.hasBreakpoints).toBe(true);
+  view.dispatch({ changes: { from: view.state.doc.line(2).from, insert: '  z = 0\n' } });
+  expect(cw.breakpointLines()).toEqual([4]);
+  expect(cw.toggleBreakpoint(4)).toBe(true);
+  expect(cw.breakpointLines()).toEqual([]);
+  expect(ide.hasBreakpoints).toBe(false);
+});
+
+test('F9 on a comment, blank, Dim or Sub header line does nothing', () => {
+  set("Dim a\nPrivate Sub Form_Load()\n  ' note\n\n  Dim b As Integer\n  b = 1\nEnd Sub\n");
+  const actions: IdeActions = {};
+  registerCodeActions(ide, actions, { mdiHost: host });
+  for (const n of [1, 2, 3, 4, 5, 7]) { toLine(n); actions.toggleBreakpoint(); }
+  expect(cw.breakpointLines()).toEqual([]);
+  toLine(6); actions.toggleBreakpoint();
+  expect(cw.breakpointLines()).toEqual([6]);
 });

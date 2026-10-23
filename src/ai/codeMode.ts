@@ -1,6 +1,7 @@
 // Code mode: pull code out of the model's reply and merge it into a module's source.
 import { findProcedureRange, listProcedures } from '../model/procedures';
 import { stripThinking } from './clean';
+import { hasNoCode, isOmittedStub } from './omitted';
 
 export { diffLines } from './diff';
 export { showCodePreview } from './previewDialogs';
@@ -26,7 +27,9 @@ export function extractCode(reply: string): string | null {
   return firstLine !== undefined && CODE_START.test(firstLine.trim()) ? trimBlankEdges(text) : null;
 }
 
-export interface CodeApplyResult { source: string; changes: { name: string; kind: 'replaced' | 'added' | 'body' | 'declarations' }[] }
+/** `skipped`: procedures of the reply that were left out because they are stubs without a body (the `(body omitted)` lines the model
+ *  was shown, echoed back); the module keeps its own procedure. */
+export interface CodeApplyResult { source: string; changes: { name: string; kind: 'replaced' | 'added' | 'body' | 'declarations' }[]; skipped?: string[] }
 
 const DECL = /^\s*(Option\s|Dim\s|Const\s|Public\s|Private\s|Global\s|Static\s|Type\s|Enum\s)/i;
 const DECL_ONLY = /^\s*(Dim|Const|Public|Private|Global|Static)\s/i;
@@ -110,11 +113,21 @@ export function applyCodeProposal(source: string, code: string, currentProc: str
     }
   }
 
+  const skipped: string[] = [];
+  const inner = (t: string[]): string[] => t.slice(1, TAIL.test(t[t.length - 1] ?? '') ? -1 : undefined);
   for (const p of procs) {
     const text = codeLines.slice(p.line - 1, p.endLine);
     while (text.length > 1 && text[text.length - 1].trim() === '') text.pop();
     const cur = lines.join('\n');
     const r = findProcedureRange(cur, p.name);
+    // A heading with only "' ... (body omitted)" (or only comments such as "' ... unchanged", where the module's procedure has code) is
+    // the shortened code the model was shown, not a change: replacing would empty the real procedure. An empty body is a real change.
+    const body = inner(text);
+    const commentsOnly = body.some(l => l.trim() !== '') && hasNoCode(body);
+    if (text.length > 1 && (isOmittedStub(body) || (r && commentsOnly && !hasNoCode(inner(lines.slice(r.line - 1, r.endLine)))))) {
+      skipped.push(p.name);
+      continue;
+    }
     if (p === procs[0] && procComments.length) {
       // the comment block above the first procedure goes with it (unless the source already has it right there)
       const above = r ? lines.slice(Math.max(0, r.line - 1 - procComments.length), r.line - 1) : [];
@@ -129,5 +142,11 @@ export function applyCodeProposal(source: string, code: string, currentProc: str
       changes.push({ name: p.name, kind: 'added' });
     }
   }
-  return changes.length ? { source: lines.join('\n'), changes } : null;
+  if (!changes.length && !skipped.length) return null;
+  return { source: lines.join('\n'), changes, ...(skipped.length ? { skipped } : {}) };
+}
+
+/** The problem fed back to the model (one retry) when its reply echoed procedures without their bodies. */
+export function skippedProblem(names: readonly string[]): string {
+  return `These procedures came back without their code, so they were left as they are: ${names.join(', ')}. Send only the procedures you changed, each complete.`;
 }

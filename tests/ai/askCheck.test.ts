@@ -166,3 +166,38 @@ test('cancel during the retry discards everything', async () => {
   expect(w.applyChange).not.toHaveBeenCalled();
   expect(b.aiChat).toHaveBeenCalledTimes(2);
 });
+
+test('form mode: invalid JSON gets one retry and the second answer is used', async () => {
+  const s = ide('designer');
+  const broken = '{"ops":[{"op":"add","type":"Label","name":"lblHi",}';
+  const right = '{"ops":[{"op":"add","type":"Label","name":"lblHi"}]}';
+  const b = fakeBackend([broken, right]);
+  const p = askAi(s, b, { codeWindowFor: () => null });
+  await enterPrompt('x');
+  await vi.waitFor(() => expect(text()).toContain('Add Label lblHi'));
+  expect(b.aiChat).toHaveBeenCalledTimes(2);
+  expect(b.aiChat.mock.calls[1][3].at(-1).content).toMatch(/^Your answer was not valid JSON \(.+\)\. Answer again with ONLY the JSON object\.$/);
+  click('OK');
+  await p;
+  expect(s.project.forms[0].controls.some(c => c.name === 'lblHi')).toBe(true);
+});
+
+test('a reply that echoes a procedure without its body: the real one stays, and the one retry asks for the changed procedures only', async () => {
+  const src = 'Private Sub Command1_Click()\nEnd Sub\n\nPrivate Sub Helper()\n    x = 1\nEnd Sub';
+  const w = codeWin(src);
+  const echo = "```vb\nPrivate Sub Command1_Click()\n    MsgBox \"Hi\"\nEnd Sub\n\nPrivate Sub Helper()\n' ... (body omitted)\nEnd Sub\n```";
+  const b = fakeBackend([echo, GOOD]);
+  const s = ide('code');
+  s.project.forms[0].code = src;
+  const p = askAi(s, b, { codeWindowFor: () => w as any });
+  await enterPrompt('x');
+  await vi.waitFor(() => expect(text()).toContain('AI Suggestion'));
+  expect(b.aiChat).toHaveBeenCalledTimes(2);
+  const retry = (b.aiChat.mock.calls[1][3] as { content: string }[]).at(-1)!.content;
+  expect(retry).toContain('Helper');
+  expect(retry).toContain('Send only the procedures you changed');
+  click('OK');
+  await p;
+  expect(w.src).toContain('MsgBox "Hi"');
+  expect(w.src).toContain('    x = 1');
+});

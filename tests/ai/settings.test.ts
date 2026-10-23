@@ -56,7 +56,7 @@ test('test connection fills models and reports', async () => {
   await p;
   expect(tab.controls.test.disabled).toBe(false);
   tab.content.querySelector<HTMLElement>('.cb98-arrow')!.click();
-  expect(tab.content.querySelector('.cb98-item')!.textContent).toBe('qwen2.5-coder:14b');
+  expect(document.querySelector('.popup98-layer .cb98-item')!.textContent).toBe('qwen2.5-coder:14b');
 });
 test('test connection selects first model when Model is empty, keeps a chosen one', async () => {
   const b = fakeBackend(async () => ['a', 'b']);

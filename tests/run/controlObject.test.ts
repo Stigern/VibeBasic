@@ -34,6 +34,17 @@ describe('ControlObject', () => {
     expect(() => pb.setMember('Value', [], 101)).toThrow(err(380));
     pb.setMember('Value', [], 50); expect(pb.getMember('value', [])).toBe(50);
   });
+  test('slider Value outside Min..Max is 380; Shape and Line have no Enabled; Line has no Move', () => {
+    const sl = ctl('Slider', fakeQueue(), { Max: 100 });
+    expect(() => sl.setMember('Value', [], 200)).toThrow(err(380));
+    sl.setMember('Value', [], 40); expect(sl.getMember('Value', [])).toBe(40);
+    const shape = ctl('Shape', fakeQueue()), line = ctl('Line', fakeQueue(), { X1: 0, Y1: 0, X2: 10, Y2: 10 });
+    expect(() => shape.getMember('Enabled', [])).toThrow(err(438));
+    expect(() => line.callMethod('Move', [1, 2])).toThrow(err(438));
+    const q = fakeQueue(); const l2 = ctl('Line', q, { X1: 0, Y1: 0, X2: 10, Y2: 10 });
+    l2.setMember('X2', [], 500); q.flush();
+    expect(q.sent).toEqual([['f1', { t: 'patch', id: l2.def.id, props: { X2: 500 } }]]);
+  });
   test('bool coercion, enum validity, case-insensitive names', () => {
     const chk = ctl('CheckBox', fakeQueue());
     chk.setMember('enabled', [], 0); expect(chk.props.Enabled).toBe(false);

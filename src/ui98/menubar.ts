@@ -22,6 +22,8 @@ export interface MenuDef { label: string; items: MenuItem[] }
 export function createMenubar(root: HTMLElement, menus: MenuDef[]): { refresh(): void } {
   const doc = root.ownerDocument;
   root.classList.add('mb98');
+  // clicking the menu bar must not pull keyboard focus out of the editor / designer
+  root.addEventListener('mousedown', e => e.preventDefault());
   const itemOf = new WeakMap<HTMLElement, MenuItem>();
   let openIndex = -1;
   /** The menu (top dropdown or submenu) that the keyboard currently navigates. */

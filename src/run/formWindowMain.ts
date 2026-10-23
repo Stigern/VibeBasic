@@ -1,14 +1,20 @@
 // Entry of form.html: one Tauri window of the running program. form.html#<key> shows form <key>,
 // form.html#dialog-<n> shows a MsgBox / InputBox / error dialog. Protocol: see tauriFormHost.ts.
 
+import { invoke } from '@tauri-apps/api/core';
 import { LogicalPosition, LogicalSize } from '@tauri-apps/api/dpi';
 import { emit } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { runDialog, type DialogSpec } from './dialogSpec';
 import { mountFormWindow } from './formWindow';
+import { setMediaLoader } from './mediaSource';
 import type { PropValue } from '../model/types';
 import type { FormSnapshot, ToWindow } from './protocol';
 import type { FromPayload } from './tauriFormHost';
+
+// MMControl / MediaPlayer: this window reads a file the main window opened, by its token (media_read is the only app command a
+// form window may call; capabilities/run-windows.json). The bytes come raw, never through an event.
+setMediaLoader(token => invoke<ArrayBuffer>('media_read', { token }));
 
 const key = decodeURIComponent(location.hash.slice(1));
 const win = getCurrentWebviewWindow();

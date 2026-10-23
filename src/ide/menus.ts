@@ -1,6 +1,7 @@
 // The nine VB6 menus. Items call named IdeActions; an item without a registered action is disabled, so later
 // tasks only have to add `ide.actions.<name> = ...` for their feature to light up its menu item.
 import type { MenuDef, MenuItem } from '../ui98/menubar';
+import { clipboardHasControls } from './clipboard';
 import type { IdeState } from './ideState';
 
 export type IdeAction = (...args: any[]) => void;
@@ -11,16 +12,46 @@ export const ACTION_NAMES = [
   'newProject', 'openProject', 'saveProject', 'saveProjectAs', 'makeApp', 'exit',
   'undo', 'redo', 'cut', 'copy', 'paste', 'delete', 'selectAll', 'find',
   'viewCode', 'viewObject', 'viewImmediate', 'viewProjectExplorer', 'viewProperties', 'viewToolbox',
-  'addForm', 'addModule', 'removeItem', 'projectProperties',
+  'addForm', 'addModule', 'removeItem', 'components', 'projectProperties',
   'alignLefts', 'alignCenters', 'alignRights', 'alignTops', 'alignMiddles', 'alignBottoms',
   'sameWidth', 'sameHeight', 'sameBoth', 'bringToFront', 'sendToBack', 'lockControls',
-  'stepInto', 'toggleBreakpoint',
+  'stepInto', 'stepOver', 'stepOut', 'runToCursor', 'toggleBreakpoint', 'clearAllBreakpoints',
   'start', 'startFullCompile', 'break', 'end', 'restart',
-  'askAi', 'options', 'about',
+  'askAi', 'askAiAboutError', 'options', 'about',
 ] as const;
 export type IdeActionName = (typeof ACTION_NAMES)[number];
 
-export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
+export type EditCommand = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll';
+
+/**
+ * Enabled state of the Edit commands (menu and toolbar). Cut / Copy / Delete need a selection (selected controls in the
+ * designer, selected text in code); Paste needs controls on the designer clipboard, or is always on in code (the system
+ * clipboard cannot be read cheaply). Without an IdeState everything is enabled.
+ */
+export function editEnabled(state: IdeState | undefined, cmd: EditCommand): boolean {
+  if (!state) return true;
+  const v = state.activeView;
+  const editable = state.mode === 'design';
+  if (v.kind === 'code') {
+    switch (cmd) {
+      case 'copy': return state.codeHasSelection;
+      case 'cut': case 'delete': return editable && state.codeHasSelection;
+      case 'paste': return editable;
+      case 'selectAll': return true;
+    }
+  }
+  if (v.kind === 'designer' && editable) {
+    switch (cmd) {
+      case 'cut': case 'copy': case 'delete': return state.selection?.formId === v.formId && state.selection.ids.length > 0;
+      case 'paste': return clipboardHasControls();
+      case 'selectAll': return true;
+    }
+  }
+  return false;
+}
+
+/** `breakOnError`: the program is stopped on an unhandled error (enables Tools > Ask AI about this error). */
+export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?: () => boolean } = {}): MenuDef[] {
   const projectName = () => state?.project.name ?? 'Project1';
   const activeItemName = (): string => {
     const id = state?.currentItemId();
@@ -36,9 +67,11 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
   });
   const sep = (): MenuItem => ({ label: '-', separator: true });
   const sub = (label: string, items: MenuItem[]): MenuItem => ({ label, submenu: items });
-  const never = () => false;
   const design = () => (state?.mode ?? 'design') === 'design';
   const idle = () => !state?.busy;
+  const inCode = () => !state || state.activeView.kind === 'code';
+  // stepping starts the program in design mode and goes on in break mode; never while it runs
+  const canStep = () => idle() && (state?.mode ?? 'design') !== 'run';
 
   return [
     { label: 'File', items: [
@@ -56,14 +89,14 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
       mk('Undo', 'undo', 'Ctrl+Z', () => design() && (state?.activeView.kind === 'code' || (state?.stack.canUndo ?? true))),
       mk('Redo', 'redo', 'Ctrl+Y', () => design() && (state?.activeView.kind === 'code' || (state?.stack.canRedo ?? true))),
       sep(),
-      mk('Cut', 'cut', 'Ctrl+X'),
-      mk('Copy', 'copy', 'Ctrl+C'),
-      mk('Paste', 'paste', 'Ctrl+V'),
-      mk('Delete', 'delete', 'Del'),
+      mk('Cut', 'cut', 'Ctrl+X', () => editEnabled(state, 'cut')),
+      mk('Copy', 'copy', 'Ctrl+C', () => editEnabled(state, 'copy')),
+      mk('Paste', 'paste', 'Ctrl+V', () => editEnabled(state, 'paste')),
+      mk('Delete', 'delete', 'Del', () => editEnabled(state, 'delete')),
       sep(),
-      mk('Select All', 'selectAll', 'Ctrl+A'),
+      mk('Select All', 'selectAll', 'Ctrl+A', () => editEnabled(state, 'selectAll')),
       sep(),
-      mk('Find...', 'find', 'Ctrl+F'),
+      mk('Find...', 'find', 'Ctrl+F', inCode),
     ] },
     { label: 'View', items: [
       mk('Code', 'viewCode', 'F7'),
@@ -80,6 +113,8 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
       sep(),
       mk(() => `Remove ${activeItemName()}`, 'removeItem', undefined, design),
       sep(),
+      mk('Components...', 'components', 'Ctrl+T', design),
+      sep(),
       mk(() => `${projectName()} Properties...`, 'projectProperties', undefined, design),
     ] },
     { label: 'Format', items: [
@@ -93,8 +128,13 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
       mk('Lock Controls', 'lockControls', undefined, undefined, { checked: () => state?.controlsLocked ?? false }),
     ] },
     { label: 'Debug', items: [
-      mk('Step Into', 'stepInto', 'F8', never),
-      mk('Toggle Breakpoint', 'toggleBreakpoint', 'F9', never),
+      mk('Step Into', 'stepInto', 'F8', canStep),
+      mk('Step Over', 'stepOver', 'Shift+F8', canStep),
+      mk('Step Out', 'stepOut', 'Ctrl+Shift+F8', () => state?.mode === 'break'),
+      mk('Run To Cursor', 'runToCursor', 'Ctrl+F8', () => canStep() && inCode()),
+      sep(),
+      mk('Toggle Breakpoint', 'toggleBreakpoint', 'F9', inCode),
+      mk('Clear All Breakpoints', 'clearAllBreakpoints', 'Ctrl+Shift+F9', () => state?.hasBreakpoints ?? true),
     ] },
     { label: 'Run', items: [
       mk(() => (state?.mode === 'break' ? 'Continue' : 'Start'), 'start', 'F5', () => idle() && (state?.mode ?? 'design') !== 'run'),
@@ -105,6 +145,7 @@ export function buildMenus(ide: IdeActions, state?: IdeState): MenuDef[] {
     ] },
     { label: 'Tools', items: [
       mk('Ask AI...', 'askAi', 'Ctrl+I', design),
+      mk('Ask AI about this error', 'askAiAboutError', undefined, () => state?.mode === 'break' && !!o.breakOnError?.()),
       sep(),
       mk('Options...', 'options'),
     ] },

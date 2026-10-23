@@ -167,7 +167,8 @@ describe('break on errors', () => {
     };
     await prog.runEvent('Module1', 'Main');
     // 32766, 32767, overflow; i = 32766 → increment again → 32767 runs once more → overflow
-    expect(seen).toEqual(['6@3', '6@3', ' 3  32767 ']);
+    // (the increment belongs to Next, so the error is on the Next line, as in VB6)
+    expect(seen).toEqual(['6@5', '6@5', ' 3  32767 ']);
   });
 });
 

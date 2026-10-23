@@ -179,6 +179,10 @@ describe('statements', () => {
     const s = one('MsgBox "x", , "t"') as any;
     expect(s.args.map(ex)).toEqual(['"x"', '<missing>', '"t"']);
   });
+  test('paren-less call with an omitted first argument', () => {
+    const s = one('Panels.Add , "k", "t"') as any;
+    expect(s.args.map(ex)).toEqual(['<missing>', '"k"', '"t"']);
+  });
   test('call stops at colon, comment and Else', () => {
     expect(body('Foo 1: Bar 2').map(s => s.kind)).toEqual(['call', 'call']);
     expect((one("Foo 1 ' note") as any).args).toHaveLength(1);

@@ -44,6 +44,9 @@ const ERROR_TEXTS: Record<number, string> = {
   424: 'Object required',
   438: "Object doesn't support this property or method",
   450: 'Wrong number of arguments or invalid property assignment',
+  32755: 'Cancel was selected',
+  35600: 'Index out of bounds',
+  35602: 'Key is not unique in collection',
 };
 
 /** The VB6 description of run-time error `n`. */

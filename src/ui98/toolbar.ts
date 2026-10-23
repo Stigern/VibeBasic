@@ -29,6 +29,8 @@ export function createToolbar(root: HTMLElement, items: ToolbarItem[]): { refres
       } else el.appendChild(h('img', { class: 'tb98-icon', src: item.icon, alt: '', draggable: false }));
     }
     if (item.label) el.appendChild(h('span', { class: 'tb98-label' }, item.label));
+    // a click must not pull keyboard focus out of the editor / designer
+    el.addEventListener('mousedown', e => e.preventDefault());
     el.addEventListener('click', () => {
       if (item.enabled && !item.enabled()) return;
       item.action?.();

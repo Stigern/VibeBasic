@@ -1,0 +1,32 @@
+/* Colour picker and font dialog (Properties window and CommonDialog); loaded by propertyEditors.ts so form windows get it too. */
+.pw98-popup { position: absolute; z-index: 20; top: 100%; right: 0; width: 190px; background: var(--w98-face); box-shadow: var(--w98-outset, 1px 1px #000); }
+.pw98-palette { display: grid; grid-template-columns: repeat(8, 20px); gap: 2px; padding: 4px; }
+.pw98-swatch { width: 20px; height: 16px; border: 1px solid #808080; }
+.pw98-syslist { max-height: 160px; overflow: auto; background: #fff; }
+.pw98-sysitem { display: flex; align-items: center; gap: 4px; padding: 1px 3px; white-space: nowrap; }
+.pw98-sysitem:hover { background: #000080; color: #fff; }
+.pw98-swatch-sm { width: 12px; height: 10px; border: 1px solid #000; flex: none; }
+.pw98-fontdlg { display: flex; gap: 8px; }
+.pw98-fontdlg > div { display: flex; flex-direction: column; gap: 4px; }
+.pw98-fontlist { min-width: 140px; }
+.pw98-fontsize { width: 50px; }
+.pw98-fontsample { border: 1px solid #808080; padding: 8px; min-width: 90px; background: #fff; }
+/* the colour picker as a dialog of its own (CommonDialog.ShowColor) */
+.pw98-colordlg .pw98-popup { position: static; box-shadow: none; }
+.pw98-colorpreview { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.pw98-colorpreview .pw98-swatch { width: 40px; height: 16px; }
+/* ImageList (Custom) editor (imageListEditor.ts) */
+.pw98-btn.pw98-wide { width: auto; padding: 0 6px; line-height: 12px; }
+.il98 { display: flex; gap: 8px; }
+.il98-left { display: flex; flex-direction: column; gap: 4px; }
+.il98-list { width: 150px; height: 170px; overflow: auto; background: #fff; box-shadow: inset 1px 1px #808080, inset -1px -1px #fff, inset 2px 2px #0a0a0a; outline: none; }
+.il98-item { display: flex; align-items: center; gap: 4px; padding: 1px 3px; white-space: pre; cursor: default; }
+.il98-item.sel { background: #000080; color: #fff; }
+.il98-thumb { flex: none; width: 16px; height: 16px; object-fit: contain; }
+.il98-right { display: flex; flex-direction: column; gap: 4px; min-width: 170px; }
+.il98-right label { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.il98-index { width: 50px; }
+.il98-field { width: 110px; }
+.il98-btns { display: flex; gap: 4px; }
+.il98-preview { min-height: 48px; max-height: 80px; overflow: auto; background: #fff; box-shadow: inset 1px 1px #808080, inset -1px -1px #fff; padding: 4px; }
+.il98-img { image-rendering: pixelated; }

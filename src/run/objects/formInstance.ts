@@ -4,14 +4,17 @@
 import type { VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
 import type { Program } from '../../lang/interp/program';
-import { Empty, VBArray, VBRef, coerce, toBool, type VBValue } from '../../lang/values';
+import { Empty, Nothing, VBArray, VBRef, coerce, toBool, type VBValue } from '../../lang/values';
 import { formScaleSize } from '../../controls/render';
 import { CONTROL_TYPES, getPropDef } from '../../model/controls';
 import type { ControlDef, FormDef, PictureRef, PropValue } from '../../model/types';
 import type { FormHost, FormWindow } from '../formHost';
+import { localMedia } from '../mediaSource';
 import type { PatchQueue } from '../patchQueue';
+import type { NetSession } from '../net';
 import type { FormSnapshot, FromWindow, ToWindow } from '../protocol';
-import { ControlArrayObject, ControlObject, type RunContext } from './controlObject';
+import { ControlArrayObject, ControlObject, type ElementFactory, type RunContext } from './controlObject';
+import { ObjectList } from './globalObjects';
 
 /** What a form needs from its run session. */
 export interface FormSession {
@@ -19,6 +22,8 @@ export interface FormSession {
   readonly queue: PatchQueue;
   readonly formHost: FormHost;
   readonly mode: 'ide' | 'app';
+  /** The folder of the project (App.Path): where DirListBox and FileListBox start. */
+  readonly appPath: string;
   readonly assets: Record<string, string>;
   readonly ended: boolean;
   resolveAsset(ref: PictureRef): string | null;
@@ -27,9 +32,17 @@ export interface FormSession {
   fire(moduleName: string, proc: string, args: VBRef[]): Promise<void>;
   syncTimer(form: FormInstance, timer: ControlObject): void;
   formUnloaded(form: FormInstance): void;
+  /** The form became the active one (shown, or the user focused it): Screen.ActiveForm. */
+  formActivated(form: FormInstance): void;
   pushModal(form: FormInstance): void;
   popModal(form: FormInstance): void;
   updateBlocked(): void;
+  /** Inet, Winsock, WebBrowser: the run's network (made on first use; throws when the host has none). */
+  net(): NetSession;
+  /** MMControl and MediaPlayer: a file of the program (relative to App.Path); error 53 when it cannot be read. */
+  readFile(path: string): Promise<Uint8Array>;
+  /** The full path of a file of the program. */
+  resolvePath(path: string): string;
 }
 
 interface FormState {
@@ -40,6 +53,9 @@ interface FormState {
 
 const lc = (s: string): string => s.toLowerCase();
 const FORM_METHODS = new Set(['show', 'hide', 'refresh', 'move', 'setfocus', 'zorder']);
+/** Members every form has besides its registry properties: Controls, ActiveControl and Count (the number of controls). */
+const FORM_OBJECTS = new Set(['controls', 'activecontrol', 'count']);
+let loadCounter = 0;
 const copyProps = (p: Record<string, PropValue>): Record<string, PropValue> =>
   Object.fromEntries(Object.entries(p).map(([k, v]) => [k, Array.isArray(v) ? [...v] : v]));
 
@@ -57,6 +73,12 @@ export class FormInstance implements VBObject {
   private unloading = false;
   private modalWaiters: (() => void)[] = [];
   private readonly controlNames: Set<string>;
+  /** The control with the focus (Me.ActiveControl), by id. */
+  private activeId: string | null = null;
+  /** Order of loading (the Forms collection lists the loaded forms in it). */
+  loadOrder = 0;
+  private readonly controlList = new ObjectList('Object', () => this.controls(), o => (o as ControlObject).name,
+    n => new VBRuntimeError(730, `Control '${n}' not found`));
 
   constructor(readonly def: FormDef, private s: FormSession) {
     this.controlNames = new Set(def.controls.map(c => lc(c.name)));
@@ -73,6 +95,44 @@ export class FormInstance implements VBObject {
       loadPicture: p => this.s.loadPicture(p),
       timerChanged: c => this.s.syncTimer(this, c),
       propChanged: (c, p, old) => this.propChanged(c, p, old),
+      dialogs: this.s.formHost,
+      controlByName: n => this.state().byName.get(lc(n)),
+      files: { listVolumes: () => this.s.formHost.listVolumes(), listDir: p => this.s.formHost.listDir(p), defaultPath: this.s.appPath },
+      net: () => this.s.net(),
+      // MMControl / MediaPlayer: a window of its own reads the file itself (FormHost.openMedia); the inline host shares this document
+      openMedia: async (p, mime) => {
+        const host = this.s.formHost;
+        if (host.openMedia) return host.openMedia(this.s.resolvePath(p), mime);
+        return localMedia(await this.s.readFile(p), mime);
+      },
+      raise: (c, event, args) => (this.st?.byId.get(c.def.id) === c && !this.s.ended ? this.fireControl(c, event, args) : Promise.resolve()),
+      focused: c => this.setActive(c.def.id),
+    };
+    // Load Name(i) / Unload Name(i). A control without a view (Winsock, Timer ...) starts from the design-time properties
+    // of the lowest element; a visible one from its current properties, hidden (Visible = False) and last in the tab
+    // order, and the form window gets it as a new control.
+    const elements: ElementFactory = {
+      spawn: (t, index) => {
+        const invisible = CONTROL_TYPES[t.def.type].invisibleAtRuntime;
+        const props = copyProps(invisible ? t.def.props : t.props);
+        if (!invisible) {
+          props.Visible = false;
+          if ('TabIndex' in props) props.TabIndex = Math.max(-1, ...[...this.state().byId.values()].map(o => Number(o.props.TabIndex ?? -1))) + 1;
+        }
+        const def: ControlDef = { ...t.def, id: `${t.def.id}~${index}`, index, props };
+        const c = new ControlObject(def, this.key, this.s.queue, ctx);
+        this.state().byId.set(def.id, c);
+        if (def.type === 'Timer') this.s.syncTimer(this, c);
+        if (!invisible) this.s.queue.send(this.key, { t: 'addControl', def: { ...def, props: copyProps(c.props) }, handled: this.handledEvents(def) });
+        return c;
+      },
+      drop: c => {
+        c.dispose();
+        this.st?.byId.delete(c.def.id);
+        if (this.activeId === c.def.id) this.activeId = null;
+        if (c.def.type === 'Timer') { c.props.Enabled = false; this.s.syncTimer(this, c); }
+        if (!CONTROL_TYPES[c.def.type].invisibleAtRuntime) this.s.queue.send(this.key, { t: 'removeControl', id: c.def.id });
+      },
     };
     const formDef = { id: 'form', type: 'Form', name: this.def.name, index: null, parentId: null, props: this.def.props } as unknown as ControlDef;
     const st: FormState = { form: new ControlObject(formDef, this.key, this.s.queue, ctx), byId: new Map(), byName: new Map() };
@@ -82,7 +142,7 @@ export class FormInstance implements VBObject {
       if (d.index === null) st.byName.set(lc(d.name), c);
       else {
         let arr = st.byName.get(lc(d.name));
-        if (!(arr instanceof ControlArrayObject)) st.byName.set(lc(d.name), arr = new ControlArrayObject(d.name));
+        if (!(arr instanceof ControlArrayObject)) st.byName.set(lc(d.name), arr = new ControlArrayObject(d.name, [], elements));
         arr.add(c);
       }
     }
@@ -92,6 +152,21 @@ export class FormInstance implements VBObject {
   /** A control (or control array) of this form by name; undefined for other names. */
   control(name: string): ControlObject | ControlArrayObject | undefined {
     return this.controlNames.has(lc(name)) ? this.state().byName.get(lc(name)) : undefined;
+  }
+
+  /** Every control of the form (control array elements too, loaded ones last): Me.Controls. */
+  controls(): ControlObject[] {
+    return [...this.state().byId.values()];
+  }
+
+  /** The control with the focus, Nothing when none has it. */
+  activeControl(): VBValue {
+    return (this.activeId !== null ? this.st?.byId.get(this.activeId) : undefined) ?? Nothing;
+  }
+
+  private setActive(id: string | null): void {
+    this.activeId = id;
+    if (this.visible) this.s.formActivated(this);
   }
 
   timers(): ControlObject[] {
@@ -104,6 +179,7 @@ export class FormInstance implements VBObject {
   load(): Promise<void> {
     if (this.loaded) return this.loadDone ?? Promise.resolve();
     this.loaded = true;
+    this.loadOrder = ++loadCounter;
     const st = this.state();
     st.form.props.Visible = false;
     for (const t of this.timers()) this.s.syncTimer(this, t);
@@ -136,7 +212,10 @@ export class FormInstance implements VBObject {
       if (!wasVisible) this.deliver({ t: 'show' });
       if (modal) this.s.pushModal(this);
     }
-    if (!wasVisible && this.loaded) await this.s.fire(this.name, 'Form_Activate', []);
+    if (!wasVisible && this.loaded) {
+      this.s.formActivated(this);
+      await this.s.fire(this.name, 'Form_Activate', []);
+    }
     if (modal && this.visible && this.loaded) await new Promise<void>(r => this.modalWaiters.push(r));
   }
 
@@ -188,7 +267,9 @@ export class FormInstance implements VBObject {
     this.visible = false;
     this.blocked = false;
     this.loadDone = null;
+    this.activeId = null;
     for (const t of timers) this.s.syncTimer(this, t);
+    for (const c of this.st?.byId.values() ?? []) c.dispose();   // sockets close, requests stop
     this.st = null;
     const w = this.window;
     this.window = null;
@@ -212,16 +293,23 @@ export class FormInstance implements VBObject {
 
   hasWindow(): boolean { return this.window !== null; }
 
+  /** The events of a control that have code. */
+  private handledEvents(d: ControlDef): string[] {
+    return CONTROL_TYPES[d.type].events.map(e => e.name).filter(e => this.s.program.hasProcedure(this.name, `${d.name}_${e}`));
+  }
+
   snapshot(): FormSnapshot {
     const st = this.state();
     const handled: Record<string, string[]> = {};
-    const has = (proc: string) => this.s.program.hasProcedure(this.name, proc);
-    handled.form = CONTROL_TYPES.Form.events.map(e => e.name).filter(e => has(`Form_${e}`));
-    for (const d of this.def.controls) handled[d.id] = CONTROL_TYPES[d.type].events.map(e => e.name).filter(e => has(`${d.name}_${e}`));
+    handled.form = CONTROL_TYPES.Form.events.map(e => e.name).filter(e => this.s.program.hasProcedure(this.name, `Form_${e}`));
+    // the design-time controls and the visible elements made by Load (those without a view stay in the session)
+    const design = new Set(this.def.controls.map(d => d.id));
+    const controls = [...st.byId.values()].filter(c => design.has(c.def.id) || !CONTROL_TYPES[c.def.type].invisibleAtRuntime);
+    for (const c of controls) handled[c.def.id] = this.handledEvents(c.def);
     const form: FormDef = {
       id: this.def.id, name: this.def.name, code: '',
       props: { ...copyProps(st.form.props), Visible: true },
-      controls: this.def.controls.map(d => ({ ...d, props: copyProps(st.byId.get(d.id)!.props) })),
+      controls: controls.map(c => ({ ...c.def, props: copyProps(c.props) })),
     };
     return { key: this.key, form, assets: this.s.assets, handled, mode: this.s.mode };
   }
@@ -231,6 +319,7 @@ export class FormInstance implements VBObject {
     if (!st) return;
     switch (m.t) {
       case 'ready': this.s.queue.flush(); break;
+      case 'focused': this.setActive(m.id); break;
       case 'state': st.byId.get(m.id)?.applyState(m.props); break;
       case 'resized':
         st.form.applyState({ Width: m.width, Height: m.height });
@@ -241,7 +330,8 @@ export class FormInstance implements VBObject {
         const target = m.id === 'form' ? st.form : st.byId.get(m.id);
         if (!target) return;
         if (m.state) target.applyState(m.state);
-        const args = m.args.map(a => new VBRef(a));
+        if (m.event === 'GotFocus' && m.id !== 'form') this.setActive(m.id);
+        const args = (m.id === 'form' ? m.args : target.eventArgs(m.event, m.args)).map(a => new VBRef(a));
         const done = m.id === 'form' ? this.s.fire(this.name, `Form_${m.event}`, args) : this.fireControl(target, m.event, args);
         if (m.requestId !== undefined) {
           const requestId = m.requestId, ref = args[args.length - 1];
@@ -268,13 +358,28 @@ export class FormInstance implements VBObject {
     }
     let ev: string | null = null;
     switch (c.def.type) {
-      case 'TextBox': if (prop === 'Text' && changed) ev = 'Change'; break;
+      case 'TextBox': case 'MaskedEdit': if (prop === 'Text' && changed) ev = 'Change'; break;
+      case 'DTPicker': if (prop === 'Value' && changed) ev = 'Change'; break;
       case 'ComboBox':
         if (prop === 'Text' && changed) ev = 'Change';
         else if (prop === 'ListIndex' && changed) ev = 'Click';
         break;
       case 'ListBox': if (prop === 'ListIndex' && changed) ev = 'Click'; break;
       case 'HScrollBar': case 'VScrollBar': if (prop === 'Value' && changed) ev = 'Change'; break;
+      case 'RichTextBox':
+        if (prop === 'Text' && changed) ev = 'Change';
+        else if ((prop === 'SelStart' || prop === 'SelLength') && changed) ev = 'SelChange';
+        break;
+      case 'DriveListBox': if (prop === 'Drive' && changed) ev = 'Change'; break;
+      case 'DirListBox': if (prop === 'Path' && changed) ev = 'Change'; break;
+      case 'FileListBox':
+        if (prop === 'Path' && changed) ev = 'PathChange';
+        else if (prop === 'Pattern' && changed) ev = 'PatternChange';
+        else if (prop === 'ListIndex' && changed) ev = 'Click';
+        break;
+      case 'MSFlexGrid': if ((prop === 'Row' || prop === 'Col') && changed) ev = 'RowColChange'; break;
+      case 'TabStrip': if (prop === 'SelectedTab' && changed) ev = 'Click'; break;
+      case 'SSTab': if (prop === 'Tab' && changed) { void this.fireControl(c, 'Click', [new VBRef(old as number)]); return; } break;
       case 'CheckBox': if (prop === 'Value' && changed) ev = 'Click'; break;
       case 'Label': if (prop === 'Caption' && changed) ev = 'Change'; break;
       case 'OptionButton':
@@ -296,7 +401,7 @@ export class FormInstance implements VBObject {
 
   hasMember(name: string): boolean {
     const l = lc(name);
-    if (this.controlNames.has(l) || l === 'scalewidth' || l === 'scaleheight' || l === 'name' || FORM_METHODS.has(l)) return true;
+    if (this.controlNames.has(l) || l === 'scalewidth' || l === 'scaleheight' || l === 'name' || FORM_METHODS.has(l) || FORM_OBJECTS.has(l)) return true;
     const pd = getPropDef('Form', name);
     if (pd) return pd.runtime !== 'none';
     // Public variables are properties; Public Subs/Functions go through callMethod (they may wait)
@@ -331,6 +436,11 @@ export class FormInstance implements VBObject {
     }
     if (l === 'visible') return this.visible;
     if (FORM_METHODS.has(l)) return this.callSync(l, args);
+    if (FORM_OBJECTS.has(l) && !getPropDef('Form', name)) {
+      if (l === 'controls') return args.length ? this.controlList.getMember('Item', args) : this.controlList;
+      if (args.length) throw new VBRuntimeError(450);
+      return l === 'count' ? this.controls().length : this.activeControl();
+    }
     if (!getPropDef('Form', name)) {
       const pm = this.publicMember(name);
       if (pm === 'var') {
@@ -354,7 +464,7 @@ export class FormInstance implements VBObject {
       target.setMember(target.defaultMember, [], value);
       return;
     }
-    if (l === 'scalewidth' || l === 'scaleheight') throw new VBRuntimeError(383);
+    if (l === 'scalewidth' || l === 'scaleheight' || (FORM_OBJECTS.has(l) && !getPropDef('Form', name))) throw new VBRuntimeError(383);
     if (l === 'visible') {
       if (toBool(value)) void this.show(false); else this.hide();
       return;
@@ -391,6 +501,6 @@ export class FormInstance implements VBObject {
       case 'setfocus': case 'zorder': case 'refresh': return Empty;
       case 'show': void this.show(false); return Empty;
     }
-    return this.state().form.callMethod(l, args);
+    return this.state().form.callMethod(l, args) as VBValue;   // the form's own object has no async methods
   }
 }

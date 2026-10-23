@@ -5,13 +5,15 @@
 // If `root.dataset.vbWindow` is set, root fills a native window: size changes of root resize the form and send `resized`.
 
 import { renderFormSurface, type ControlView } from '../controls/render';
+import { encodeRuns, readRuns } from '../controls/richText';
+import { userClickButton } from '../model/toolbar';
 import type { ControlDef, PropValue } from '../model/types';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
 
 type Props = Record<string, PropValue>;
 type Target = { id: string; def: ControlDef | null };
 
-const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame']);
+const CLICK_TYPES = new Set(['CommandButton', 'Label', 'Image', 'PictureBox', 'Frame', 'StatusBar', 'Toolbar', 'DTPicker', 'MSChart', 'TreeView', 'ListView', 'MSFlexGrid', 'RichTextBox']);
 const KEY_CODES: Record<string, number> = {
   Backspace: 8, Tab: 9, Enter: 13, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34, End: 35, Home: 36,
   ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46,
@@ -30,6 +32,11 @@ function keyAscii(e: KeyboardEvent): number | null {
   if (e.key === 'Enter') return 13;
   if (e.key === 'Backspace') return 8;
   return e.key.length === 1 ? e.key.charCodeAt(0) : null;
+}
+
+/** One RichTextBox change of an RtfOps list (props in the order the program set them). */
+function parseOp(o: string): Props {
+  try { const v: unknown = JSON.parse(o); return v && typeof v === 'object' ? v as Props : {}; } catch { return {}; }
 }
 
 function isTextField(el: EventTarget | null): el is HTMLInputElement | HTMLTextAreaElement {
@@ -78,7 +85,9 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   }
   /** Applies props to the mirror and the DOM (also keeps text typed by the user across rebuilds of the control). */
   function apply(id: string, props: Props): void {
-    Object.assign(propsOf(id), props);
+    const { RtfOps: ops, ...plain } = props;
+    Object.assign(propsOf(id), plain);
+    if (Array.isArray(ops)) for (const o of ops) Object.assign(propsOf(id), parseOp(o));   // the mirror ends where the replay ends
     surface.update(id, props);
     if (id === 'form') return;
     if ('TabIndex' in props) { computeTabOrder(); for (const k of defs.keys()) retab(k); } else retab(id);
@@ -100,6 +109,12 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     if (el && surface.el.contains(el)) { const id = el.dataset.controlId!; return { id, def: defs.get(id) ?? null }; }
     return surface.clientEl.contains(t) ? { id: 'form', def: null } : null;
   }
+  /** Like targetOf(e.target), but also for a click whose target a handler has already replaced (a list or grid repaints on click). */
+  function clickTarget(e: Event): Target | null {
+    if (e.target instanceof Node && e.target.isConnected) return targetOf(e.target);
+    const el = e.composedPath().find((n): n is HTMLElement => n instanceof HTMLElement && n.dataset?.controlId !== undefined && surface.el.contains(n));
+    return el ? targetOf(el) : null;
+  }
   const viewOf = (id: string): ControlView | undefined => surface.views.get(id);
   const usable = (id: string): boolean => { const p = propsOf(id); return p.Enabled !== false && p.Visible !== false; };
 
@@ -107,7 +122,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   on<MouseEvent>('click', e => {
     const closeBtn = (e.target as Element).closest?.('.title-bar-controls button[aria-label="Close"]');
     if (closeBtn) { if (!blocked) send({ t: 'closeRequest' }); return; }
-    const tg = targetOf(e.target);
+    const tg = clickTarget(e);
     if (blocked || !tg) return;
     if (tg.id === 'form') { emit('form', 'Click'); return; }
     const type = tg.def!.type;
@@ -125,7 +140,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
       if (was) apply(tg.id, { Value: true }); else emit(tg.id, 'Click', [], { Value: true });
     }
   });
-  on<MouseEvent>('dblclick', e => { const tg = targetOf(e.target); if (!blocked && tg && usable(tg.id)) emit(tg.id, 'DblClick'); });
+  on<MouseEvent>('dblclick', e => { const tg = clickTarget(e); if (!blocked && tg && usable(tg.id)) emit(tg.id, 'DblClick'); });
 
   // --- mouse ---
   function mouse(event: string) {
@@ -145,7 +160,8 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   on<FocusEvent>('focusin', e => {
     const tg = targetOf(e.target);
     if (blocked || !tg?.def || targetOf(e.relatedTarget)?.id === tg.id) return;
-    emit(tg.id, 'GotFocus');
+    if (handles(tg.id, 'GotFocus')) emit(tg.id, 'GotFocus');
+    else send({ t: 'focused', id: tg.id });   // the run session keeps ActiveControl
   });
   on<FocusEvent>('focusout', e => {
     const tg = targetOf(e.target);
@@ -158,16 +174,109 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     const tg = targetOf(e.target);
     if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl) return;
     const type = tg.def.type, el = e.target as HTMLElement;
-    if (type === 'TextBox' || (type === 'ComboBox' && !(el as HTMLInputElement).readOnly)) {
+    if (type === 'TextBox' || type === 'MaskedEdit' || (type === 'ComboBox' && !(el as HTMLInputElement).readOnly)) {
       emit(tg.id, 'Change', [], { Text: (el as HTMLInputElement).value });
-    } else if (type === 'HScrollBar' || type === 'VScrollBar') emit(tg.id, 'Scroll', [], { Value: Number(el.dataset.value) || 0 });
+    } else if (type === 'RichTextBox') {
+      emit(tg.id, 'Change', [], { Text: el.textContent ?? '', Runs: encodeRuns(readRuns(el)) });
+    } else if (type === 'HScrollBar' || type === 'VScrollBar' || type === 'Slider') emit(tg.id, 'Scroll', [], { Value: Number(el.dataset.value) || 0 });
   });
   on<Event>('change', e => {
     const tg = targetOf(e.target);
     if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl) return;
     const type = tg.def.type, el = e.target as HTMLElement;
-    if (type === 'ListBox') emit(tg.id, 'Click', [], { ListIndex: (el as HTMLSelectElement).selectedIndex });
-    else if (type === 'HScrollBar' || type === 'VScrollBar') emit(tg.id, 'Change', [], { Value: Number(el.dataset.value) || 0 });
+    if (type === 'ListBox' || type === 'FileListBox') emit(tg.id, 'Click', [], { ListIndex: (el as HTMLSelectElement).selectedIndex });
+    else if (type === 'HScrollBar' || type === 'VScrollBar' || type === 'Slider' || type === 'UpDown') emit(tg.id, 'Change', [], { Value: Number(el.dataset.value) || 0 });
+    else if (type === 'DTPicker') emit(tg.id, 'Change', [], { Value: el.dataset.value ? Number(el.dataset.value) : null });
+  });
+  // UpDown arrows: UpClick / DownClick (then Change, from the `change` event above)
+  for (const [dom, event] of [['vbupclick', 'UpClick'], ['vbdownclick', 'DownClick']] as const) {
+    on<Event>(dom, e => {
+      const tg = targetOf(e.target);
+      if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl) return;
+      emit(tg.id, event, [], { Value: Number((e.target as HTMLElement).dataset.value) || 0 });
+    });
+  }
+  // StatusBar panel click (PanelClick gets the panel's 1-based index; the run session turns it into the Panel object)
+  on<CustomEvent>('vbpanelclick', e => {
+    const tg = targetOf(e.target);
+    if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl || !usable(tg.id)) return;
+    emit(tg.id, 'PanelClick', [Number(e.detail.index)]);
+  });
+  // Toolbar: a click on a button toggles a check button or presses a group button (the new lines carry the state), then ButtonClick(Button)
+  on<CustomEvent>('vbbuttonclick', e => {
+    const tg = targetOf(e.target);
+    if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl || !usable(tg.id)) return;
+    const index = Number(e.detail.index), cur = propsOf(tg.id).Buttons;
+    const lines = userClickButton(Array.isArray(cur) ? cur.map(String) : [], index);
+    if (lines) emit(tg.id, 'ButtonClick', [index], { Buttons: lines });
+  });
+  // TabStrip: a click on a tab selects it, then Click
+  on<CustomEvent>('vbtabclick', e => {
+    const tg = targetOf(e.target);
+    if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl || !usable(tg.id)) return;
+    emit(tg.id, 'Click', [], { SelectedTab: Number(e.detail.index) });
+  });
+  // SSTab: a click on another tab shows it, then Click(PreviousTab)
+  on<CustomEvent>('vbsstabclick', e => {
+    const tg = targetOf(e.target);
+    if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl || !usable(tg.id)) return;
+    emit(tg.id, 'Click', [Number(e.detail.previous)], { Tab: Number(e.detail.index) });
+  });
+  // TreeView / ListView / MSFlexGrid: the renderer reports clicks by 1-based collection index (the run session maps them to objects)
+  const custom = (type: string, fn: (id: string, d: Record<string, number | boolean | string>) => void) => on<CustomEvent>(type, e => {
+    const tg = targetOf(e.target);
+    if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl || !usable(tg.id)) return;
+    fn(tg.id, e.detail);
+  });
+  custom('vbnodeclick', (id, d) => emit(id, 'NodeClick', [Number(d.index)], { SelectedNode: Number(d.index) }));
+  custom('vbnodetoggle', (id, d) => emit(id, d.expanded ? 'Expand' : 'Collapse', [Number(d.index)], { Toggled: `${d.index}|${d.expanded ? 1 : 0}` }));
+  custom('vbitemclick', (id, d) => emit(id, 'ItemClick', [Number(d.index)], { SelectedIndex: Number(d.index) }));
+  // DriveListBox / DirListBox: the drive picked, a folder clicked (its ListIndex) or opened by a double click (the new Path)
+  custom('vbdrive', (id, d) => emit(id, 'Change', [], { Drive: String(d.drive) }));
+  custom('vbdropdown', id => emit(id, 'DropDown'));
+  // DTPicker closed its calendar; MonthView: a selection by the user (then DateClick on the mouse release) and a double click on a day
+  custom('vbcloseup', id => emit(id, 'CloseUp'));
+  custom('vbmvselect', (id, d) => {
+    const cur = propsOf(id);
+    if (cur.SelStart === d.start && cur.SelEnd === d.end) return;
+    emit(id, 'SelChange', [Number(d.start), Number(d.end)], { SelStart: Number(d.start), SelEnd: Number(d.end), Value: Number(d.start) });
+  });
+  custom('vbdateclick', (id, d) => emit(id, 'DateClick', [Number(d.serial)]));
+  custom('vbdatedblclick', (id, d) => emit(id, 'DateDblClick', [Number(d.serial)]));
+  // MaskedEdit: a character the mask refuses, and a full mask with AutoTab (the focus moves on)
+  custom('vbvalidationerror', (id, d) => emit(id, 'ValidationError', [String(d.text), Number(d.pos)]));
+  custom('vbautotab', id => focusNext(id));
+  // MSChart: a click on a bar, point or slice (1-based series = column, data point = row; MouseFlags 0; Cancel is not used)
+  custom('vbpointselect', (id, d) => emit(id, 'PointSelected', [Number(d.series), Number(d.point), Number(d.flags), 0]));
+  // MMControl / MediaPlayer buttons, Agent characters clicked or dragged: the run session decides what happens (and which events follow)
+  custom('vbuseraction', (id, d) => send({ t: 'state', id, props: { UserAction: JSON.stringify(d) } }));
+  // MMControl / MediaPlayer: the media element ended or knows its length (reported even while the form is blocked or disabled: a
+  // Play with Wait or Notify waits for it)
+  on<CustomEvent>('vbmediastate', e => {
+    const tg = targetOf(e.target);
+    if (tg?.def && e.target === viewOf(tg.id)?.inputEl) send({ t: 'state', id: tg.id, props: { UserAction: JSON.stringify(e.detail) } });
+  });
+  custom('vbdirclick', (id, d) => emit(id, 'Click', [], { ListIndex: Number(d.index) }));
+  custom('vbdiropen', (id, d) => emit(id, 'Change', [], { Path: String(d.path), List: [], ListIndex: -1 }));
+  // WebBrowser: the page of a Navigate has loaded (reported even while the form is blocked: the run session raises the events)
+  on<CustomEvent>('vbwebload', e => {
+    const tg = targetOf(e.target);
+    if (tg?.def?.type === 'WebBrowser') send({ t: 'state', id: tg.id, props: { Loaded: Number(e.detail.seq), LoadedTitle: String(e.detail.title ?? '') } });
+  });
+  custom('vbcolclick', (id, d) => emit(id, 'ColumnClick', [Number(d.index)]));
+  custom('vbcellclick', (id, d) => {
+    const cur = propsOf(id);
+    if (cur.Row === d.row && cur.Col === d.col) return;
+    emit(id, 'RowColChange', [], { Row: Number(d.row), Col: Number(d.col) });
+    emit(id, 'SelChange');
+  });
+  // RichTextBox: the selection (and the format of it) changed; SelChange only when something differs from what the program knows
+  on<CustomEvent>('vbselchange', e => {
+    const tg = targetOf(e.target);
+    if (blocked || !tg?.def || e.target !== viewOf(tg.id)?.inputEl) return;
+    const st = e.detail as Props, cur = propsOf(tg.id);
+    if (Object.keys(st).every(k => cur[k] === st[k])) return;
+    emit(tg.id, 'SelChange', [], st);
   });
   on<CustomEvent>('vbselect', e => {
     const tg = targetOf(e.target);
@@ -177,7 +286,19 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
   });
 
   // --- keyboard ---
+  /** The next control in tab order that can take the focus (MaskedEdit AutoTab). */
+  function focusNext(id: string): void {
+    const order = [...tabRank].sort((a, b) => a[1] - b[1]).map(([i]) => i);
+    const at = order.indexOf(id);
+    for (let k = 1; k < order.length; k++) {
+      const n = order[(at + k) % order.length];
+      if (usable(n) && (viewOf(n)?.inputEl?.tabIndex ?? -1) >= 0) { viewOf(n)!.inputEl!.focus(); return; }
+    }
+  }
+  /** A MaskedEdit with a Mask puts typed characters in itself (see calendar.ts). */
+  const isMasked = (el: EventTarget | null): el is HTMLInputElement => el instanceof HTMLInputElement && el.dataset.mask === '1';
   function insertKey(el: EventTarget | null, ascii: number): void {
+    if (isMasked(el)) { if (!el.readOnly) el.dispatchEvent(new CustomEvent('vbmaskkey', { detail: { ascii } })); return; }
     if (!isTextField(el) || el.readOnly) return;
     const start = el.selectionStart ?? el.value.length, end = el.selectionEnd ?? start;
     let text = String.fromCharCode(ascii), from = start;
@@ -214,7 +335,8 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
     const ascii = keyAscii(e);
     const pc = ascii === null ? [] : chain.filter(id => handles(id, 'KeyPress'));
     if (pc.length) { if (isTextField(e.target)) e.preventDefault(); sendKeyPress(pc, ascii!, e.target); }
-    if (e.key === 'Enter' && !prevented && tg.def?.type !== 'CommandButton' && !(e.target instanceof HTMLTextAreaElement)) clickButton('Default');
+    else if (ascii !== null && isMasked(e.target)) { e.preventDefault(); insertKey(e.target, ascii); }
+    if (e.key === 'Enter' && !prevented && tg.def?.type !== 'CommandButton' && tg.def?.type !== 'RichTextBox' && !(e.target instanceof HTMLTextAreaElement)) clickButton('Default');
     else if (e.key === 'Escape' && !prevented) clickButton('Cancel');
   });
   on<KeyboardEvent>('keyup', e => {
@@ -264,6 +386,22 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
         case 'patch': if (m.id === 'form' || defs.has(m.id)) apply(m.id, m.props); break;
         case 'patches': for (const p of m.items) if (p.id === 'form' || defs.has(p.id)) apply(p.id, p.props); break;
         case 'focus': viewOf(m.id)?.inputEl?.focus(); break;
+        case 'addControl':
+          if (defs.has(m.def.id)) break;
+          defs.set(m.def.id, m.def);
+          state.set(m.def.id, { ...m.def.props });
+          s.handled[m.def.id] = m.handled;
+          surface.addControl(m.def);
+          computeTabOrder();
+          for (const k of defs.keys()) retab(k);
+          break;
+        case 'removeControl':
+          if (!defs.has(m.id)) break;
+          surface.removeControl(m.id);
+          defs.delete(m.id);
+          state.delete(m.id);
+          computeTabOrder();
+          break;
         case 'show': surface.el.style.display = ''; focusInitial(); break;
         case 'hide': surface.el.style.display = 'none'; break;
         case 'blocked': setBlocked(m.blocked); break;
@@ -283,6 +421,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, send: (m: Fr
       observer?.disconnect();
       // an open combo list holds a document listener until it is closed
       for (const v of surface.views.values()) v.inputEl?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      surface.dispose();   // media Blob URLs
       surface.el.remove();
     },
   };

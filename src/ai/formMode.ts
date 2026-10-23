@@ -1,6 +1,7 @@
 // Form mode: the model answers with JSON ops (add / set / delete / form) and optional event code.
 // parseFormOps is tolerant (fences, thinking, trailing commas, comments, type aliases); nothing is applied on failure.
 import { setCodeCmd, addControlsCmd, compositeCmd, deleteControlsCmd, setPropertyCmd, type Command } from '../model/commands';
+import { addComponentsCmd } from '../model/components';
 import { CONTROL_TYPES, getPropDef, newControl, nextDefaultName, validateName } from '../model/controls';
 import type { ControlDef, ControlType, FormDef, Project, PropValue } from '../model/types';
 import { parsePropertyInput } from '../ide/propertyEditors';
@@ -10,13 +11,14 @@ import { stripThinking } from './clean';
 export { setCodeCmd };
 
 export type FormOp =
-  | { op: 'add'; type: Exclude<ControlType, 'Form'>; name: string; index: number | null; container: string | null; props: Record<string, PropValue> }
+  | { op: 'add'; type: Exclude<ControlType, 'Form'>; name: string; index: number | null; container: string | null; props: Record<string, PropValue>;
+      /** SSTab container: the 0-based tab (default: its current tab). */ tab?: number }
   | { op: 'set'; name: string; index: number | null; props: Record<string, PropValue> }
   | { op: 'delete'; name: string; index: number | null }
   | { op: 'form'; props: Record<string, PropValue> };
 export type ParsedFormOps =
-  | { ok: true; ops: FormOp[]; code: string | null; warnings: string[]; codeChanges?: CodeApplyResult['changes']; codeText?: string }
-  | { ok: false; error: string; raw: string };
+  | { ok: true; ops: FormOp[]; code: string | null; warnings: string[]; codeChanges?: CodeApplyResult['changes']; codeText?: string; codeSkipped?: string[] }
+  | { ok: false; error: string; raw: string; /** Why the reply was not usable JSON (sent back to the model). */ reason: string };
 type Ok = Extract<ParsedFormOps, { ok: true }>;
 
 export const NOT_UNDERSTOOD = 'The AI answer could not be understood. Try again or rephrase.';
@@ -55,21 +57,26 @@ function sanitizeJson(s: string): string {
   return out;
 }
 
-function parseJsonLoose(reply: string): unknown {
+/** The JSON in a reply (fences, thinking and loose syntax tolerated), or why there is none. */
+function parseJsonLoose(reply: string): { value: unknown } | { reason: string } {
   const text = stripThinking(reply);
   const o = text.indexOf('{'), q = text.indexOf('[');
   // a bare top-level array of ops is accepted too
   const [open, close] = q >= 0 && (o < 0 || q < o) ? ['[', ']'] : ['{', '}'];
   const a = text.indexOf(open), b = text.lastIndexOf(close);
-  if (a < 0 || b <= a) return undefined;
-  try { return JSON.parse(sanitizeJson(text.slice(a, b + 1))); } catch { return undefined; }
+  if (a < 0 || b <= a) return { reason: 'no JSON object found' };
+  try { return { value: JSON.parse(sanitizeJson(text.slice(a, b + 1))) }; }
+  catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { reason: msg.length > 100 ? `${msg.slice(0, 97)}...` : msg };
+  }
 }
 
 /** Op names small models use instead of add / set / delete / form. */
 const OP_ALIASES: Record<string, string> = {
   remove: 'delete', update: 'set', modify: 'set', change: 'set', move: 'set', edit: 'set', create: 'add', insert: 'add',
 };
-const OP_KEYS = new Set(['op', 'type', 'name', 'container', 'index', 'props']);
+const OP_KEYS = new Set(['op', 'type', 'name', 'container', 'index', 'props', 'tab']);
 /** The op's props; without a `props` object, loose top-level keys (e.g. {"op":"set","name":"X","Caption":"y"}) count. */
 function propsOf(raw: Record<string, unknown>): Record<string, unknown> {
   if (isObj(raw.props)) return raw.props;
@@ -116,10 +123,12 @@ const GEO = ['Left', 'Top', 'Width', 'Height'];
 
 /** `fixCode` may rewrite the AI's code text (before it is merged into the form's code). */
 export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: string) => string): ParsedFormOps {
-  const fail: ParsedFormOps = { ok: false, error: NOT_UNDERSTOOD, raw: reply };
-  const parsedJson = parseJsonLoose(reply);
+  const loose = parseJsonLoose(reply);
+  if ('reason' in loose) return { ok: false, error: NOT_UNDERSTOOD, raw: reply, reason: loose.reason };
+  const parsedJson = loose.value;
   const json: Record<string, unknown> | undefined = Array.isArray(parsedJson) ? { ops: parsedJson } : isObj(parsedJson) ? parsedJson : undefined;
-  if (!json) return fail;
+  if (!json) return { ok: false, error: NOT_UNDERSTOOD, raw: reply, reason: 'the JSON is not an object' };
+  const fail: ParsedFormOps = { ok: false, error: NOT_UNDERSTOOD, raw: reply, reason: 'it has no usable "ops" and no "code"' };
   const rawOps = Array.isArray(json.ops) ? json.ops : [];
   const warnings: string[] = [];
   const ops: FormOp[] = [];
@@ -169,12 +178,13 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
       let container: string | null = null;
       if (typeof raw.container === 'string' && raw.container.trim()) {
         const parent = find(splitName(raw.container).name, splitName(raw.container).index)[0];
-        if (parent && (parent.type === 'Frame' || parent.type === 'PictureBox')) container = label(parent.name, parent.index);
+        if (parent && CONTROL_TYPES[parent.type].isContainer) container = label(parent.name, parent.index);
         else warnings.push(`Ignored unknown container ${raw.container} for ${name}.`);
       }
       const parent = container ? find(splitName(container).name, splitName(container).index)[0] : undefined;
       work.controls.push({ id: `w${work.controls.length}`, type, name, index, parentId: parent?.id ?? null, props: {} });
-      ops.push({ op: 'add', type, name, index, container, props });
+      const tab = parent?.type === 'SSTab' && typeof raw.tab === 'number' && raw.tab >= 0 ? Math.floor(raw.tab) : undefined;
+      ops.push({ op: 'add', type, name, index, container, props, ...(tab !== undefined ? { tab } : {}) });
     } else if (kind === 'set' || kind === 'delete') {
       const s = splitName(typeof raw.name === 'string' ? raw.name : '');
       if (s.index === null && typeof raw.index === 'number' && raw.index >= 0) s.index = Math.floor(raw.index);
@@ -197,15 +207,17 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
 
   let code: string | null = null;
   let codeChanges: CodeApplyResult['changes'] | undefined;
+  let codeSkipped: string[] | undefined;
   let text: string | undefined;
   if (typeof json.code === 'string' && json.code.trim()) {
     const extracted = json.code.includes('```') ? extractCode(json.code) ?? json.code : json.code;
     text = fixCode ? fixCode(extracted) : extracted;
     const r = applyCodeProposal(form.code, text, null);
-    if (r) { code = r.source; codeChanges = r.changes; } else warnings.push('Ignored code that could not be merged into the form.');
+    if (r?.skipped) { codeSkipped = r.skipped; warnings.push(`Kept ${r.skipped.join(', ')} as they are: the answer had them without their code.`); }
+    if (r && r.changes.length) { code = r.source; codeChanges = r.changes; } else if (!r) warnings.push('Ignored code that could not be merged into the form.');
   }
   if (!ops.length && code === null) return warnings.length ? { ...fail, raw: `${reply}\n\nIgnored:\n${warnings.join('\n')}` } : fail;
-  return { ok: true, ops, code, warnings, ...(codeChanges ? { codeChanges } : {}), ...(code !== null && text !== undefined ? { codeText: text } : {}) };
+  return { ok: true, ops, code, warnings, ...(codeChanges ? { codeChanges } : {}), ...(code !== null && text !== undefined ? { codeText: text } : {}), ...(codeSkipped ? { codeSkipped } : {}) };
 }
 
 const quote = (s: string) => `"${s.replace(/"/g, '""')}"`;
@@ -248,6 +260,7 @@ function buildCommands(form: FormDef, p: Ok): Command[] {
     } else {
       const parent = o.container ? find(splitContainer(o.container).name, splitContainer(o.container).index)[0] : undefined;
       const def: ControlDef = newControl(work, o.type, { left: 240, top: 240 }, parent?.id ?? null);
+      if (parent?.type === 'SSTab') def.tab = o.tab ?? (Number(parent.props.Tab) || 0);
       const generated = def.name;
       def.name = o.name; def.index = o.index;
       // newControl names the caption/text after the generated default name; follow the real name instead
@@ -266,13 +279,15 @@ const splitContainer = splitName;
 export function formOpsToCommand(proj: Project, formId: string, parsed: Ok, title: string): Command {
   const form = proj.forms.find(f => f.id === formId);
   if (!form) throw new Error(`Form not found: ${formId}`);
-  return compositeCmd(title, buildCommands(form, parsed));
+  // a control whose component is not checked yet checks it, in the same undo step
+  const comps = addComponentsCmd(proj, parsed.ops.flatMap(o => (o.op === 'add' ? [o.type] : [])));
+  return compositeCmd(title, [...(comps ? [comps] : []), ...buildCommands(form, parsed)]);
 }
 
 /** A modified copy of the form for the preview. */
 export function applyFormOpsToClone(form: FormDef, parsed: Ok): FormDef {
   const clone = structuredClone(form);
   const cmd = compositeCmd('preview', buildCommands(clone, parsed));
-  cmd.do({ name: '', title: '', startupForm: '', forms: [clone], modules: [], assets: {}, iconAsset: null });
+  cmd.do({ name: '', title: '', startupForm: '', forms: [clone], modules: [], assets: {}, iconAsset: null, components: [] });
   return clone;
 }

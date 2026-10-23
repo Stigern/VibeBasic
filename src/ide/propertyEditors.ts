@@ -2,10 +2,13 @@
 // editors, and picture loading helpers.
 import { PALETTE_48, SYSTEM_COLORS, vbColorToCss } from '../model/colors';
 import type { PropDef } from '../model/controls';
+import { generalDateText, localeDateParser } from '../lang/builtins/format';
+import { parseDate } from '../lang/values';
 import type { FontValue, PropValue } from '../model/types';
 import { showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
 import { createTabs } from '../ui98/tabs';
+import './pickers.css';
 
 export type ParseResult = { ok: true; value: PropValue } | { ok: false };
 const FAIL: ParseResult = { ok: false };
@@ -61,6 +64,11 @@ export function parsePropertyInput(def: PropDef, text: string): ParseResult {
       return def.enumValues?.some(e => e.value === n) ? { ok: true, value: n } : FAIL;
     }
     case 'color': return parseColor(text);
+    case 'date': {   // a date or time as CDate reads it; blank is no date (a DTPicker with CheckBox)
+      if (text.trim() === '') return { ok: true, value: null };
+      const d = parseDate(text, localeDateParser(Intl.DateTimeFormat().resolvedOptions().locale));
+      return d ? { ok: true, value: d.serial } : FAIL;
+    }
     default: return FAIL;
   }
 }
@@ -72,9 +80,10 @@ export function formatPropertyValue(def: PropDef, value: PropValue | undefined):
     case 'bool': return v ? 'True' : 'False';
     case 'enum': return def.enumValues?.find(e => e.value === v)?.label ?? String(v);
     case 'color': return typeof v === 'number' ? formatColor(v) : '';
+    case 'date': return typeof v === 'number' ? generalDateText(v, Intl.DateTimeFormat().resolvedOptions().locale) : '';
     case 'font': return typeof v === 'object' && v && 'name' in v ? v.name : '';
     case 'picture': return v ? '(Bitmap)' : '(None)';
-    case 'list': return Array.isArray(v) ? v.join(', ') : '';
+    case 'list': return def.name === 'ListImages' ? '(Collection)' : Array.isArray(v) ? v.join(', ') : '';
     case 'text': return typeof v === 'string' ? v.replace(/\r?\n/g, ' ') : '';
     default: return v === null ? '' : String(v);
   }
@@ -105,11 +114,29 @@ export function createColorPopup(onPick: (n: number) => void, close: () => void)
   return h('div', { class: 'pw98-popup' }, tabs.el);
 }
 
+/** The colour picker as a dialog (CommonDialog.ShowColor). Resolves with the chosen colour, or null when cancelled. */
+export async function showColorDialog(doc: Document, cur: number): Promise<number | null> {
+  let picked = cur;
+  const preview = h('span', { class: 'pw98-swatch', style: { background: vbColorToCss(cur) } });
+  const text = h('span', {}, formatColor(cur));
+  const popup = createColorPopup(n => {
+    picked = n;
+    preview.style.background = vbColorToCss(n);
+    text.textContent = formatColor(n);
+  }, () => {});
+  const content = h('div', { class: 'pw98-colordlg' }, popup, h('div', { class: 'pw98-colorpreview' }, 'Color:', preview, text));
+  const r = await showDialog98(doc, { title: 'Color', content, buttons: [
+    { label: 'OK', value: 'ok', default: true }, { label: 'Cancel', value: 'cancel', cancel: true }] });
+  return r === 'ok' ? picked : null;
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Font dialog
 
 export const FONT_NAMES = ['MS Sans Serif', 'Arial', 'Courier New', 'Times New Roman', 'Tahoma', 'Verdana', 'Georgia',
   'Comic Sans MS', 'Helvetica', 'Geneva', 'Monaco'];
+
+let chkSeq = 0;
 
 /** Resolves with the chosen font, or null when cancelled. */
 export async function showFontDialog(doc: Document, cur: FontValue): Promise<FontValue | null> {
@@ -117,9 +144,11 @@ export async function showFontDialog(doc: Document, cur: FontValue): Promise<Fon
   const fontList = h('select', { size: '7', class: 'pw98-fontlist', 'data-autofocus': '' },
     ...names.map(n => h('option', { value: n, selected: n === cur.name }, n)));
   const size = h('input', { type: 'number', min: '1', max: '999', step: '1', class: 'pw98-fontsize', value: String(cur.size) });
+  // 98.css draws a checkbox only as `input + label[for]`
   const chk = (label: string, on: boolean) => {
-    const box = h('input', { type: 'checkbox', checked: on });
-    return { box, el: h('label', { class: 'pw98-fontchk' }, box, label) };
+    const id = `pw98-font-${label.toLowerCase()}-${++chkSeq}`;
+    const box = h('input', { type: 'checkbox', checked: on, id });
+    return { box, el: h('div', { class: 'pw98-fontchk' }, box, h('label', { for: id }, label)) };
   };
   const bold = chk('Bold', cur.bold), italic = chk('Italic', cur.italic), underline = chk('Underline', cur.underline);
   const sample = h('div', { class: 'pw98-fontsample' }, 'AaBbYyZz');
