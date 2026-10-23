@@ -89,7 +89,11 @@ export function* execFileStmt(f: Frame, s: Stmt): Gen<void> {
       const num = yield* fileNum(f, s.file);
       files.column(num);   // Bad file mode before the items are evaluated
       const parts: string[] = [];
-      for (const it of s.items) if (it.expr) parts.push(writeItemText(yield* evalExpr(f, it.expr)));
+      // an omitted item (`Write #1, a, , b`) is an empty field
+      for (const it of s.items) {
+        if (it.expr) parts.push(writeItemText(yield* evalExpr(f, it.expr)));
+        else if (!it.fn) parts.push('');
+      }
       const last = s.items[s.items.length - 1];
       const newline = last === undefined || last.sep === undefined;
       const text = parts.join(',') + (newline ? '\r\n' : ',');

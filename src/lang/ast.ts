@@ -14,10 +14,10 @@ export interface NothingLit { kind: 'nothing'; line: number }
  * (`Date`, `String`, `Error`, `Load`) are also NameExprs; the interpreter
  * resolves them. `name` is as written, without the type suffix.
  */
-export interface NameExpr { kind: 'name'; name: string; suffix?: TypeSuffix; line: number }
-export interface MemberExpr { kind: 'member'; object: Expr; name: string; line: number }
+export interface NameExpr { kind: 'name'; name: string; suffix?: TypeSuffix; line: number; paren?: boolean }
+export interface MemberExpr { kind: 'member'; object: Expr; name: string; line: number; paren?: boolean }
 /** `a(1)`: whether this is a procedure call or an array/default-member index is decided at run time. */
-export interface CallOrIndex { kind: 'call'; target: Expr; args: (Expr | MissingArg)[]; line: number }
+export interface CallOrIndex { kind: 'call'; target: Expr; args: (Expr | MissingArg)[]; line: number; paren?: boolean }
 /** An omitted argument, as in `MsgBox("x", , "t")`. */
 export interface MissingArg { kind: 'missing'; line: number }
 export type UnaryOp = 'neg' | 'not';
@@ -28,12 +28,18 @@ export type BinaryOp =
   | 'and' | 'or' | 'xor' | 'eqv' | 'imp';
 export interface BinaryExpr { kind: 'binary'; op: BinaryOp; left: Expr; right: Expr; line: number }
 /** `.Text` inside a `With` block. */
-export interface WithMemberExpr { kind: 'withMember'; name: string; line: number }
+export interface WithMemberExpr { kind: 'withMember'; name: string; line: number; paren?: boolean }
+/** The object of the innermost `With` block: the `X` of `!Name` (`X("Name")`) inside it. */
+export interface WithObjectExpr { kind: 'withObject'; line: number }
 export interface NewExpr { kind: 'new'; typeName: string; line: number }
+/*
+ * `paren` on a name, member, call/index or With member: the expression was written in its own parentheses (`Foo (x)`,
+ * `Call Foo((x))`). It is then a value, never a variable: a ByRef parameter gets a copy.
+ */
 
 export type Expr =
   | NumberLit | StringLit | DateLit | BoolLit | NothingLit | NameExpr | MemberExpr
-  | CallOrIndex | UnaryExpr | BinaryExpr | WithMemberExpr | NewExpr;
+  | CallOrIndex | UnaryExpr | BinaryExpr | WithMemberExpr | WithObjectExpr | NewExpr;
 
 /** S-expression rendering of an expression, used by tests. */
 export function exprToString(e: Expr | MissingArg): string {
@@ -50,6 +56,7 @@ export function exprToString(e: Expr | MissingArg): string {
     case 'unary': return `(${e.op} ${exprToString(e.operand)})`;
     case 'binary': return `(${e.op} ${exprToString(e.left)} ${exprToString(e.right)})`;
     case 'withMember': return `(with. ${e.name})`;
+    case 'withObject': return '(with)';
     case 'new': return `(new ${e.typeName})`;
   }
 }
@@ -114,6 +121,8 @@ export interface ProcDecl {
   params: Param[];
   /** Functions only: `As Type` or a type suffix on the name. */
   returnType?: VBTypeName;
+  /** Functions only: `As Type()`, the function returns an array. */
+  returnsArray?: boolean;
   body: Stmt[];
   line: number;
   /** Line of `End Sub` / `End Function`. */
@@ -173,6 +182,12 @@ export interface GotoStmt { kind: 'goto'; label: string; line: number }
 /** `Retry:` or a bare line number (`10`); `name` is the text. */
 export interface LabelStmt { kind: 'label'; name: string; line: number }
 export interface EndStmt { kind: 'end'; line: number }
+/** `Error n`: raises run-time error n (like `Err.Raise n`). */
+export interface ErrorStmt { kind: 'error'; number: Expr; line: number }
+/** `Mid(s, start[, length]) = value` (also `Mid$`, `MidB`): replaces characters of the variable `target` in place. */
+export interface MidStmt { kind: 'mid'; target: Expr; start: Expr; length?: Expr; value: Expr; line: number }
+/** `LSet s = value` / `RSet s = value`: `value` left/right aligned in the current length of the string variable. */
+export interface AlignStmt { kind: 'lset' | 'rset'; target: Expr; value: Expr; line: number }
 export interface StopStmt { kind: 'stop'; line: number }
 export interface UnloadStmt { kind: 'unload'; target: Expr; line: number }
 export interface LoadStmt { kind: 'load'; target: Expr; line: number }
@@ -205,5 +220,5 @@ export interface NameStmt { kind: 'name'; from: Expr; to: Expr; line: number }
 export type Stmt =
   | DimStmt | ConstStmt | ReDimStmt | EraseStmt | AssignStmt | CallStmt | IfStmt | SelectStmt
   | ForStmt | ForEachStmt | DoStmt | WhileStmt | ExitStmt | WithStmt | OnErrorStmt | ResumeStmt
-  | GotoStmt | LabelStmt | EndStmt | StopStmt | UnloadStmt | LoadStmt | DebugPrintStmt
+  | GotoStmt | LabelStmt | EndStmt | StopStmt | UnloadStmt | LoadStmt | DebugPrintStmt | ErrorStmt | MidStmt | AlignStmt
   | OpenStmt | CloseStmt | FilePrintStmt | FileInputStmt | GetPutStmt | SeekStmt | NameStmt;

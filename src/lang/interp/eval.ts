@@ -6,6 +6,7 @@
 import type { CallOrIndex, Expr, MemberExpr, MissingArg, NameExpr, TypeSuffix, VBTypeName } from '../ast';
 import { VBRuntimeError } from '../errors';
 import { BUILTINS, CONSTANTS } from '../builtins';
+import { VBCollection } from '../builtins/collection';
 import { Empty, Null, Nothing, NothingT, VBArray, VBRecord, VBRef, isObject, parseDate, toNumber, type VBValue } from '../values';
 import { localeDateParser } from '../builtins/format';
 import { EndSignal, SubCall, runSync, type Gen } from './driver';
@@ -145,7 +146,7 @@ export function* formMethod(f: Frame, name: string, args: (Expr | MissingArg)[])
   const notDefined = (e: unknown) => (e instanceof VBRuntimeError && e.number === 438 ? compileError('Sub or Function not defined') : e);
   let r: VBValue | Promise<VBValue>;
   try {
-    r = me.callMethod(name, methodArgs(argv), yield* hostRefs(f, me, name, args));
+    r = me.callMethod(name, methodArgs(argv, me), yield* hostRefs(f, me, name, args));
   } catch (e) {
     throw notDefined(e);
   }
@@ -277,6 +278,7 @@ export function* evalExpr(f: Frame, e: Expr): Gen<VBValue> {
     }
     case 'member': return yield* evalMember(f, e, null);
     case 'withMember': return yield* memberGet(f, withObject(f), e.name, null);
+    case 'withObject': return withObject(f);
     case 'call': return yield* evalCall(f, e);
     case 'unary': return unaryOp(e.op, yield* evalExpr(f, e.operand));
     case 'binary': {
@@ -284,8 +286,21 @@ export function* evalExpr(f: Frame, e: Expr): Gen<VBValue> {
       const b = yield* evalExpr(f, e.right);
       return binaryOp(e.op, a, b);
     }
-    case 'new': throw compileError('Not supported in VibeBasic: New');
+    case 'new': return objectFactory(f.rt, { objectType: e.typeName }, f.module)();
   }
+}
+
+/**
+ * How `New T` makes an object (`Set c = New Collection`, `Dim c As New Collection`): a Collection. VB6 does not allow
+ * New with a user-defined type or a plain type (compile error "Invalid use of New keyword"); any other class would be
+ * a class module or a COM class, which VibeBasic does not have (compile error).
+ */
+export function objectFactory(rt: Runtime, type: VBTypeName, module: ModuleScope): () => VBObject {
+  const t = typeof type === 'object' && 'objectType' in type ? rt.resolveType(type, module) : type;
+  if (typeof t !== 'object' || 'userType' in t) throw compileError('Invalid use of New keyword');
+  const name = lc(t.objectType);
+  if (name === 'collection' || name === 'vba.collection') return () => new VBCollection();
+  throw compileError(`Not supported in VibeBasic: New ${t.objectType} (there are no class modules; New can create a Collection)`);
 }
 
 /** The value of a name's binding (calls a parameterless Function or built-in). */
@@ -351,7 +366,8 @@ export function* awaitHost(f: Frame, p: Promise<VBValue>): Gen<VBValue> {
  * that value (`List1.AddItem Text1` adds Text1.Text); objects without one (a
  * Form as owner, a Picture) and Nothing are passed as they are.
  */
-export function methodArgs(argv: VBValue[]): VBValue[] {
+export function methodArgs(argv: VBValue[], obj?: VBObject): VBValue[] {
+  if (obj?.rawArgs) return argv;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a !== undefined && isObject(a) && a.defaultMember !== undefined) argv[i] = plain(a);
@@ -430,7 +446,7 @@ export function* memberGet(f: Frame, base: VBValue | EnumRef | ModuleRef, name: 
     if (args === null) r = base.getMember(name, []);
     else {
       const argv = yield* evalArgValues(f, args);
-      r = base.hasMember(name) ? base.getMember(name, argv) : base.callMethod(name, methodArgs(argv), yield* hostRefs(f, base, name, args));
+      r = base.hasMember(name) ? base.getMember(name, argv) : base.callMethod(name, methodArgs(argv, base), yield* hostRefs(f, base, name, args));
     }
     if (r instanceof Promise) return yield* awaitHost(f, r);
     yield* afterHostCall(f);
@@ -554,6 +570,7 @@ function* bindArgs(f: Frame, ref: ProcRef, args: (Expr | MissingArg)[]): Gen<Bou
 
 /** A by-reference argument: the slot of a variable, array element or record field; null for other expressions. */
 function* refOf(f: Frame, e: Expr): Gen<BoundArg | null> {
+  if ((e as { paren?: boolean }).paren) return null;   // `Foo (x)`: a value
   if (e.kind === 'name') {
     let b = bindingOf(f, e);
     if (b === undefined) b = implicitVariable(f, e);

@@ -41,7 +41,7 @@ const KEYWORD_SPELLING: Record<string, string> = {
 };
 
 /** Names that are neither keywords nor registered built-ins but have a fixed VB6 spelling. */
-const EXTRA_NAMES = ['Debug', 'Print', 'Tab', 'Spc'];
+const EXTRA_NAMES = ['Debug', 'Print', 'Tab', 'Spc', 'LSet', 'RSet'];
 
 /** Identifiers that are keywords inside a file statement (VB6 colours them): the statement word, and Open's clauses. */
 const FILE_STATEMENT_WORDS = new Set(['print', 'write', 'input', 'get', 'put', 'seek']);

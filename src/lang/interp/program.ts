@@ -262,12 +262,13 @@ export class Runtime {
     return undefined;
   }
 
-  newArray(t: VBTypeName, bounds: [number, number][], fixed: boolean): VBArray {
-    return new VBArray(t, bounds, fixed, this.elementInit(t));
+  /** `init` makes each element (`Dim a(3) As New Collection`); by default the type's default value. */
+  newArray(t: VBTypeName, bounds: [number, number][], fixed: boolean, init?: () => VBValue): VBArray {
+    return new VBArray(t, bounds, fixed, init ?? this.elementInit(t));
   }
 
-  unallocatedArray(t: VBTypeName): VBArray {
-    return VBArray.unallocated(t, this.elementInit(t));
+  unallocatedArray(t: VBTypeName, init?: () => VBValue): VBArray {
+    return VBArray.unallocated(t, init ?? this.elementInit(t));
   }
 
   /** Initial value of a variable of type `t` (`String * n` starts as n spaces). */

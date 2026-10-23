@@ -248,11 +248,17 @@ export class Parser {
           this.advance();
           const inner = this.parseExpression();
           this.expectOp(')');
-          return inner;
+          return parenthesised(inner);
         }
         if (t.text === '.') {
           this.advance();
           return { kind: 'withMember', name: this.parseMemberName(), line: t.line };
+        }
+        if (t.text === '!' && (this.peek(1).kind === 'ident' || this.peek(1).kind === 'keyword')) {
+          // `!Name` inside `With rs`: `rs("Name")`, the default member of the With object with the name as a string
+          this.advance();
+          const name: Expr = { kind: 'string', value: this.parseMemberName(), line: t.line };
+          return { kind: 'call', target: { kind: 'withObject', line: t.line }, args: [name], line: t.line };
         }
         break;
       case 'keyword': {
@@ -270,7 +276,10 @@ export class Parser {
           const n = this.peek();
           if (n.kind !== 'ident') this.fail('Expected: class name');
           this.advance();
-          return { kind: 'new', typeName: stripSuffix(n), line: t.line };
+          let typeName = stripSuffix(n);
+          // `New ADODB.Recordset`: a library-qualified class name
+          while (this.isOp('.') && this.peek(1).kind === 'ident') { this.advance(); typeName += '.' + this.advance().text; }
+          return { kind: 'new', typeName, line: t.line };
         }
         if (KEYWORD_NAMES.has(w)) {
           this.advance();
@@ -286,6 +295,14 @@ export class Parser {
     return t.suffix
       ? { kind: 'name', name: stripSuffix(t), suffix: t.suffix as TypeSuffix, line: t.line }
       : { kind: 'name', name: t.text, line: t.line };
+  }
+}
+
+/** `(e)`: a name, member, call/index or With member in its own parentheses is marked as a value (see `paren` in ast.ts). */
+export function parenthesised(e: Expr): Expr {
+  switch (e.kind) {
+    case 'name': case 'member': case 'call': case 'withMember': return { ...e, paren: true };
+    default: return e;
   }
 }
 

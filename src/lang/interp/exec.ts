@@ -11,17 +11,17 @@
 // Exit For/Do/Sub and GoTo travel as completion values, not exceptions.
 
 import type {
-  ArrayBound, CaseTest, ConstDecl, Expr, ForEachStmt, ForStmt, MissingArg, ProcDecl, SelectStmt, Stmt, VarDecl, VBTypeName,
+  ArrayBound, CaseTest, ConstDecl, Expr, ForEachStmt, ForStmt, LabelStmt, MissingArg, ProcDecl, SelectStmt, Stmt, VarDecl, VBTypeName,
 } from '../ast';
 import { VBRuntimeError, internalError } from '../errors';
 import { PrintLine } from '../printFormat';
-import { Empty, NothingT, NullT, VBArray, VBRef, compare, isObject, toNumber, type VBValue } from '../values';
+import { Empty, NothingT, NullT, VBArray, VBRecord, VBRef, bankers, compare, isObject, toNumber, toStr, type VBValue } from '../values';
 import { EndSignal, nextTick, type Gen } from './driver';
 import { execFileStmt, printItems } from './fileStmts';
-import { Frame, ProcRef, Run, Variable, lc, storeValue, type Slot } from './scope';
+import { AutoNewSlot, Frame, ProcRef, Run, Variable, lc, storeValue, type Slot } from './scope';
 import {
   afterHostCall, assign, awaitHost, callBuiltin, callProc, constExpr, evalArgValues, evalExpr, formMethod, hostRefs, lookup, memberGet,
-  methodArgs, variableOf, withObject,
+  methodArgs, objectFactory, variableOf, withObject,
 } from './eval';
 import { compareResult, plain, truthy } from './operators';
 import { BuiltinRef, EnumRef, MemberRef, ModuleRef } from './scope';
@@ -87,6 +87,9 @@ function labelsOf(body: Stmt[]): Map<string, number> {
   return m;
 }
 
+/** A label that is a line number (`20`), which `Erl` reports. */
+const isLineNumber = (name: string): boolean => name.charCodeAt(0) <= 57;
+
 const procLabelCache = new WeakMap<ProcDecl, Set<string>>();
 
 /** All label names anywhere in a procedure. */
@@ -117,7 +120,12 @@ export function* execBlock(f: Frame, body: Stmt[], start = 0): Gen<Completion> {
     if (c === undefined) { i++; continue; }
     if (c instanceof GotoJump) {
       const target = labelsOf(body).get(c.label);
-      if (target !== undefined) { i = target + 1; continue; }
+      if (target !== undefined) {
+        const name = (body[target] as LabelStmt).name;
+        if (isLineNumber(name)) f.lastLine = +name;
+        i = target + 1;
+        continue;
+      }
     }
     return c;
   }
@@ -265,7 +273,7 @@ export function* handleError(f: Frame, e: unknown): Gen<ErrorOutcome> {
  * - Exit Sub/Function or reaching End Sub/Function ends the procedure.
  */
 function* runHandler(f: Frame, err: VBRuntimeError): Gen<ErrorOutcome> {
-  f.rt.err.setFrom(err);
+  f.rt.err.setFrom(err, f.lastLine);
   if (f.onError === 'resumeNext') return RESUME_NEXT;
   const body = f.proc!.body;
   const at = labelsOf(body).get(f.handlerLabel)!;
@@ -298,7 +306,7 @@ export function isStackOverflow(e: unknown): boolean {
 function* unhandledError(f: Frame, err: VBRuntimeError): Gen<ErrorOutcome> {
   const rt = f.run.rt;
   if (rt.stopping) throw END;
-  rt.err.setFrom(err);
+  rt.err.setFrom(err, f.lastLine);
   let answer: 'end' | 'debug';
   // no event pump while the error is reported (events are dropped, like in break mode)
   rt.eventsSuspended++;
@@ -432,7 +440,9 @@ export function* invokeProc(run: Run, ref: ProcRef, args: BoundArg[]): Gen<VBVal
   }
   if (proc.kind === 'function') {
     const t = rt.resolveType(proc.returnType, module);
-    f.returnVar = new Variable(proc.name, t, new VBRef(rt.defaultFor(t)));
+    f.returnVar = proc.returnsArray
+      ? new Variable(proc.name, t, new VBRef(rt.unallocatedArray(t)), { isArray: true })
+      : new Variable(proc.name, t, new VBRef(rt.defaultFor(t)));
     f.locals.set(lc(proc.name), f.returnVar);
   }
   run.frames.push(f);
@@ -470,13 +480,16 @@ export function* evalBounds(f: Frame, bounds: ArrayBound[]): Gen<[number, number
 export function* declareVariable(f: Frame, d: VarDecl): Gen<Variable> {
   const rt = f.run.rt;
   const type = rt.resolveType(d.type, f.module);
+  // `As New T`: each element / the variable makes its object when it is first used
+  const create = d.isNew ? objectFactory(rt, d.type ?? 'Variant', f.module) : undefined;
   if (d.isArray) {
     if (d.bounds) {
-      const arr = rt.newArray(type, yield* evalBounds(f, d.bounds), true);
+      const arr = rt.newArray(type, yield* evalBounds(f, d.bounds), true, create);
       return new Variable(d.name, type, new VBRef(arr), { isArray: true, fixedArray: true });
     }
-    return new Variable(d.name, type, new VBRef(rt.unallocatedArray(type)), { isArray: true });
+    return new Variable(d.name, type, new VBRef(rt.unallocatedArray(type, create)), { isArray: true });
   }
+  if (create) return new Variable(d.name, type, new AutoNewSlot(create));
   return new Variable(d.name, type, new VBRef(rt.defaultFor(type, d.fixedLength)), { fixedLength: d.fixedLength });
 }
 
@@ -655,7 +668,34 @@ function* execInner(f: Frame, s: Stmt): Gen<Completion> {
         f.withStack.pop();
       }
     }
-    case 'label': return;
+    case 'label':
+      if (isLineNumber(s.name)) f.lastLine = +s.name;
+      return;
+    case 'error': {
+      // `Error n`: like Err.Raise n (VB's description for n)
+      const n = bankers(toNumber(yield* evalExpr(f, s.number)));
+      if (!(n >= 1 && n <= 65535)) throw new VBRuntimeError(5);
+      throw new VBRuntimeError(n);
+    }
+    case 'mid': {
+      const cur = toStr(plain(yield* evalExpr(f, s.target)));
+      const start = bankers(toNumber(yield* evalExpr(f, s.start)));
+      let n = s.length ? bankers(toNumber(yield* evalExpr(f, s.length))) : Infinity;
+      const value = toStr(plain(yield* evalExpr(f, s.value)));
+      if (start < 1 || start > cur.length || n < 0) throw new VBRuntimeError(5);
+      n = Math.min(n, value.length, cur.length - start + 1);
+      yield* assign(f, s.target, cur.slice(0, start - 1) + value.slice(0, n) + cur.slice(start - 1 + n), false);
+      return;
+    }
+    case 'lset': case 'rset': {
+      const cur = yield* evalExpr(f, s.target);
+      if (cur instanceof VBRecord) throw compileError(`Not supported in VibeBasic: ${s.kind === 'lset' ? 'LSet' : 'RSet'} of a user-defined type`);
+      const n = toStr(plain(cur)).length;
+      const v = toStr(plain(yield* evalExpr(f, s.value)));
+      const out = v.length >= n ? v.slice(0, n) : s.kind === 'lset' ? v.padEnd(n, ' ') : v.padStart(n, ' ');
+      yield* assign(f, s.target, out, false);
+      return;
+    }
     case 'goto': {
       const label = lc(s.label);
       if (!f.proc || !procLabels(f.proc).has(label)) throw compileError('Label not defined');
@@ -761,7 +801,7 @@ function* execCall(f: Frame, target: Expr, args: (Expr | MissingArg)[]): Gen<Com
 /** `obj.name args` as a statement: `callMethod` (a Promise result is awaited). */
 function* callObjectMethod(f: Frame, obj: VBObject, name: string, args: (Expr | MissingArg)[]): Gen<void> {
   const argv = yield* evalArgValues(f, args);
-  const r = obj.callMethod(name, methodArgs(argv), yield* hostRefs(f, obj, name, args));
+  const r = obj.callMethod(name, methodArgs(argv, obj), yield* hostRefs(f, obj, name, args));
   if (r instanceof Promise) yield* awaitHost(f, r);
   else yield* afterHostCall(f);
 }

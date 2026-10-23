@@ -5,7 +5,7 @@ import type { ConstDecl, EnumDecl, ModuleAst, ProcDecl, TypeDecl, VBTypeName } f
 import type { CodeLocation, VBObject } from '../host';
 import type { Builtin } from '../builtins';
 import { VBRuntimeError } from '../errors';
-import { VBArray, VBRecord, coerce, type VBValue } from '../values';
+import { Nothing, NothingT, VBArray, VBRecord, coerce, type VBValue } from '../values';
 import type { Runtime } from './program';
 
 const LOWER = new Map<string, string>();
@@ -35,6 +35,20 @@ export class FieldSlot implements Slot {
   constructor(readonly rt: Runtime, readonly record: VBRecord, readonly key: string) {}
   get value(): VBValue { return this.record.fields.get(this.key)!; }
   set value(v: VBValue) { setField(this.rt, this.record, this.key, v); }
+}
+
+/**
+ * The slot of `Dim x As New T`: reading it while it holds Nothing creates a new object first (VB6 auto-instantiation,
+ * also after `Set x = Nothing`).
+ */
+export class AutoNewSlot implements Slot {
+  private v: VBValue = Nothing;
+  constructor(private readonly create: () => VBValue) {}
+  get value(): VBValue {
+    if (this.v instanceof NothingT) this.v = this.create();
+    return this.v;
+  }
+  set value(v: VBValue) { this.v = v; }
 }
 
 /** Pads or truncates to a `String * n` length. */
@@ -248,6 +262,8 @@ export class Frame {
   handlerLabel = '';
   /** True while the `GoTo` handler runs (until Resume or the procedure ends); a new error then goes to the caller. */
   inHandler = false;
+  /** The last line number label (`20 x = 1`) passed, for `Erl`; 0 when there is none. */
+  lastLine = 0;
 
   constructor(
     readonly run: Run,
