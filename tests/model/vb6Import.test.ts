@@ -2,7 +2,7 @@
 import { expect, test } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { decodeBmp } from '../../src/model/vb6Image';
-import { importVb6File, importVbp } from '../../src/model/vb6Import';
+import { importVb6File, importVbp, parseValue } from '../../src/model/vb6Import';
 import type { ControlDef, FormDef } from '../../src/model/types';
 
 const DIR = 'tests/fixtures/vb6';
@@ -22,7 +22,7 @@ test('a .vbp with two forms, a module and a class', async () => {
   ]));
   expect(warnings.some(w => /OLE Automation/.test(w))).toBe(false);
   expect(warnings.some(w => /^Konto/.test(w))).toBe(false);   // class modules are supported: no code warnings
-  expect(p.versionInfo).toEqual({ major: 1, minor: 2, revision: 3, autoIncrement: false, companyName: 'Eksempel' });
+  expect(p.versionInfo).toEqual({ major: 1, minor: 2, revision: 3, companyName: 'Eksempel' });   // AutoIncrementVer=0 is absent
   expect(p.subMain).toBeUndefined();
   expect(p.commandLine).toBeUndefined();
 });
@@ -63,6 +63,60 @@ test('a BMP from the .frx decodes to its pixels', () => {
   const frx = readFileSync(`${DIR}/Form1.frx`);
   const img = decodeBmp(new Uint8Array(frx).subarray(12, 12 + 70));
   expect([...img.rgba]).toEqual([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255]);
+});
+
+test('a crafted BMP header neither hangs nor allocates: palette, data length and size are checked first', () => {
+  // BITMAPFILEHEADER + BITMAPINFOHEADER (pixels at 54), then `extra` bytes
+  const bmp = (w: number, h: number, bpp: number, clrUsed: number, extra: number): Uint8Array => {
+    const b = new Uint8Array(54 + extra), v = new DataView(b.buffer);
+    b[0] = 0x42; b[1] = 0x4d; v.setUint32(10, 54, true); v.setUint32(14, 40, true);
+    v.setInt32(18, w, true); v.setInt32(22, h, true); v.setUint16(26, 1, true); v.setUint16(28, bpp, true);
+    v.setUint32(46, clrUsed, true);
+    return b;
+  };
+  const t0 = performance.now();
+  expect(() => decodeBmp(bmp(1, 1, 8, 0xffffffff, 10))).toThrow('cut short');   // 2^32-1 palette entries claimed
+  expect(() => decodeBmp(bmp(8000, 8000, 1, 0, 100))).toThrow('cut short');     // 8 MB of pixels claimed, none there
+  expect(() => decodeBmp(bmp(8193, 1, 24, 0, 8193 * 3 + 3))).toThrow('the picture is too big');
+  expect(performance.now() - t0).toBeLessThan(200);
+  expect(decodeBmp(bmp(1, 1, 1, 5, 2 * 4 + 4)).width).toBe(1);   // biClrUsed 5 on a 1-bit bitmap: 2 entries are read
+});
+
+test('a .frm value with a long run of digits is parsed in linear time', () => {
+  const t0 = performance.now();
+  expect(parseValue(`${'1'.repeat(200_000)}x`).kind).toBe('raw');
+  expect(performance.now() - t0).toBeLessThan(200);
+  expect(['1.5', '.5', '12.', '-3E2'].map(v => parseValue(v))).toEqual([1.5, 0.5, 12, -300].map(n => ({ kind: 'num', n })));
+});
+
+test('a .vbp follows the name rules: invalid and taken names, controls sharing a name, a second MDI form', async () => {
+  const frm = (cls: string, name: string, body = '') => `VERSION 5.00\r\nBegin VB.${cls} ${name}\r\n${body}End\r\nAttribute VB_Name = "${name}"\r\n`;
+  const button = (caption: string) => `   Begin VB.CommandButton Command1\r\n      Caption = "${caption}"\r\n   End\r\n`;
+  const files: Record<string, string> = {
+    'P.vbp': 'Type=Exe\r\nForm=A.frm\r\nForm=B.frm\r\nForm=M1.frm\r\nForm=M2.frm\r\nModule=Module1; Mod.bas\r\nClass=Bad; Bad.cls\r\nName="Proj"\r\n',
+    'A.frm': frm('Form', 'Form1', button('a') + button('b')),
+    'B.frm': frm('Form', 'Form1'),
+    'M1.frm': frm('MDIForm', 'MDIForm1'),
+    'M2.frm': frm('MDIForm', 'MDIForm2'),
+    'Mod.bas': 'Attribute VB_Name = "Form1"\r\n',
+    'Bad.cls': 'VERSION 1.0 CLASS\r\nBEGIN\r\n  MultiUse = -1\r\nEND\r\nAttribute VB_Name = "Bad Name"\r\n',
+  };
+  const readMem = async (path: string) => {
+    const t = files[path.split('/').pop()!];
+    if (t === undefined) throw new Error('ENOENT');
+    return new TextEncoder().encode(t);
+  };
+  const { project: p, warnings } = await importVbp('/p/P.vbp', readMem);
+  expect(p.forms.map(f => f.name)).toEqual(['Form1', 'Form1_2', 'MDIForm1']);
+  expect(p.modules.map(m => m.name)).toEqual(['Form1_3', 'Class1']);
+  expect(p.forms[0].controls.map(c => [c.name, c.index, c.props.Caption])).toEqual([['Command1', 0, 'b'], ['Command1', 1, 'a']]);
+  expect(warnings).toEqual(expect.arrayContaining([
+    'A.frm: more than one control is named Command1; they became the control array Command1.',
+    'M2.frm: a project can have only one MDI form; it was left out.',
+    'The name Form1 is already used; the form was renamed Form1_2.',
+    'The name Form1 is already used; the module was renamed Form1_3.',
+    '"Bad Name" is not a valid name; the class module was renamed Class1.',
+  ]));
 });
 
 test('a .cls becomes a class module with its Instancing', async () => {

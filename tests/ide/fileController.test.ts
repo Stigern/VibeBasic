@@ -149,7 +149,7 @@ test('a VB6 .vbp opens as an unsaved project, then the import report', async () 
   expect(ide.stack.isDirty).toBe(true);
 });
 
-test('Add File adds a .frm as one undoable step; a name conflict is refused', async () => {
+test('Add File adds a .frm as one undoable step; a name the project has is changed, with a warning', async () => {
   backend.openFileDialog = vi.fn(async () => 'tests/fixtures/vb6/Form2.frm');
   backend.readBinaryFile = vi.fn(readFixture);
   const added = vi.fn();
@@ -158,9 +158,10 @@ test('Add File adds a .frm as one undoable step; a name conflict is refused', as
   expect(ide.project.forms.map(f => f.name)).toEqual(['Form1', 'Form2']);
   expect(added).toHaveBeenCalledWith(ide.project.forms[1].id);
   const again = fc.addFile(); await vi.waitFor(() => expect(dialogs()).toBe(1));   // a second Form2
-  expect(document.querySelector('.dlg98')!.textContent).toContain('Name conflicts');
+  expect(document.querySelector('.dlg98')!.textContent).toContain('The name Form2 is already used; the form was renamed Form2_2.');
   press('OK'); await again;
-  expect(ide.project.forms.length).toBe(2);
+  expect(ide.project.forms.map(f => f.name)).toEqual(['Form1', 'Form2', 'Form2_2']);
+  ide.stack.undo();
   ide.stack.undo();
   expect(ide.project.forms.map(f => f.name)).toEqual(['Form1']);
 });

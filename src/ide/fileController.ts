@@ -71,20 +71,16 @@ export class FileController {
     if (this.ide.mode !== 'design') return;
     const path = await this.backend.openFileDialog([VB6_FILES]);
     if (!path) return;
+    const p = this.ide.project;
     let r;
     try {
-      r = await importVb6File(path, p => this.backend.readBinaryFile(p));
+      // an invalid name, or one the project has already, is changed (the import report says so)
+      r = await importVb6File(path, f => this.backend.readBinaryFile(f), [p.name, ...p.forms.map(f => f.name), ...p.modules.map(m => m.name)]);
     } catch (e) {
       await this.error(errText(e));
       return;
     }
-    const p = this.ide.project;
-    const taken = new Set([p.name, ...p.forms.map(f => f.name), ...p.modules.map(m => m.name)].map(n => n.toLowerCase()));
     const item = r.forms[0] ?? r.modules[0];
-    if (taken.has(item.name.toLowerCase())) {
-      await messageBox98(this.doc, { prompt: `Name conflicts with existing module, project, or object library: ${item.name}`, title: 'VibeBasic', buttons: VB_EXCLAMATION });
-      return;
-    }
     if (r.forms[0]?.mdi && p.forms.some(f => f.mdi)) {
       await messageBox98(this.doc, { prompt: 'Only one MDI Form allowed', title: 'VibeBasic', buttons: VB_EXCLAMATION });
       return;

@@ -7,6 +7,8 @@ export interface RgbaImage { width: number; height: number; rgba: Uint8Array }
 const u16 = (b: Uint8Array, o: number): number => b[o] | (b[o + 1] << 8);
 const u32 = (b: Uint8Array, o: number): number => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
 const i32 = (b: Uint8Array, o: number): number => u32(b, o) | 0;
+/** The largest width and height of an imported picture (a larger one is skipped with a warning). */
+const MAX_SIDE = 8192;
 
 /** The image type of `b` by its signature, or null when unknown. */
 export function imageKind(b: Uint8Array): ImageKind | null {
@@ -37,7 +39,9 @@ function decodeDib(b: Uint8Array, off: number, pixelsAt: number | null, icon: bo
   if (icon) height = Math.floor(height / 2);
   const topDown = height < 0;
   height = Math.abs(height);
-  if (width <= 0 || height <= 0 || width > 16384 || height > 16384) throw new Error('bad bitmap size');
+  if (width <= 0 || height <= 0) throw new Error('bad bitmap size');
+  if (width > MAX_SIDE || height > MAX_SIDE) throw new Error(`the picture is too big (over ${MAX_SIDE} x ${MAX_SIDE} pixels)`);
+  if (![1, 4, 8, 16, 24, 32].includes(bpp)) throw new Error(`${bpp}-bit bitmaps are not supported`);
   let p = off + hs;
   let masks: [number, number, number] | null = null;
   if (compression === 3) {
@@ -45,13 +49,16 @@ function decodeDib(b: Uint8Array, off: number, pixelsAt: number | null, icon: bo
     if (hs < 52) p += 12;
   } else if (bpp === 16) masks = [0x7c00, 0x03e0, 0x001f];
   const clrUsed = core ? 0 : u32(b, off + 32);
-  const nColors = bpp <= 8 ? clrUsed || 1 << bpp : 0;
+  // biClrUsed comes from the file: never more entries than the bit depth can index
+  const nColors = bpp <= 8 ? Math.min(clrUsed || 1 << bpp, 1 << bpp) : 0;
   const entry = core ? 3 : 4;
+  if (p + nColors * entry > b.length) throw new Error('the bitmap is cut short');
   const palette: number[][] = [];
   for (let i = 0; i < nColors; i++) palette.push([b[p + i * entry + 2], b[p + i * entry + 1], b[p + i * entry]]);
   p += nColors * entry;
   const data = pixelsAt ?? p;
   const stride = ((width * bpp + 31) >>> 5) * 4;
+  if (data + stride * height > b.length) throw new Error('the bitmap is cut short');   // before the pixels are allocated
   const rgba = new Uint8Array(width * height * 4);
   const chan = (v: number, m: number): number => {
     if (!m) return 0;

@@ -32,6 +32,8 @@ abstract class PropObject implements VBObject {
   protected abstract props(): Record<string, () => VBValue>;
   protected setters: Record<string, (v: VBValue) => void> = {};
   hasMember(name: string): boolean { return name.toLowerCase() in this.props(); }
+  /** Stored values only (App.Title, Screen.Width ...): the debugger may read them. */
+  peekMember(name: string): VBValue | undefined { return this.hasMember(name) ? this.getMember(name, []) : undefined; }
   getMember(name: string, args: VBValue[]): VBValue {
     const g = this.props()[name.toLowerCase()];
     if (!g) throw new VBRuntimeError(438);

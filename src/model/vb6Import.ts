@@ -100,7 +100,7 @@ export function parseValue(src: string): RawValue {
   if (q >= 0) t = t.slice(0, q).trim();
   const hex = /^&H([0-9A-Fa-f]+)&?$/i.exec(t);
   if (hex) return { kind: 'num', n: parseInt(hex[1], 16) | 0 };
-  if (/^[-+]?(\d+\.?\d*|\.\d+)(E[-+]?\d+)?$/i.test(t)) return { kind: 'num', n: Number(t) };
+  if (/^[-+]?(\d+(\.\d*)?|\.\d+)(E[-+]?\d+)?$/i.test(t)) return { kind: 'num', n: Number(t) };
   if (/^true$/i.test(t)) return { kind: 'num', n: -1 };
   if (/^false$/i.test(t)) return { kind: 'num', n: 0 };
   return { kind: 'raw', s: t };
@@ -406,6 +406,7 @@ function parseFrm(text: string, ctx: FormContext): ParsedForm {
   };
   addNodes(root.children, null, scaleOf(ctx, root, 1), false);
   form.controls = [...controls, ...menus];
+  uniqueControls(form.controls, ctx);
 
   // outer size and position from the client area (VB6 stores the client area; VibeBasic's Width/Height are the window's)
   const BIG = 150000;
@@ -418,6 +419,69 @@ function parseFrm(text: string, ctx: FormContext): ParsedForm {
   if (cl !== null) form.props.Left = Math.max(0, Math.round(cl - border));
   if (ct !== null) form.props.Top = Math.max(0, Math.round(ct - (BIG - client.height - border)));
   return { form, components };
+}
+
+/**
+ * Controls that share a name without being one control array (VB6 refuses to load such a form): those of the first one's
+ * type become its control array (the next free indexes), any other type gets a free name. Each case is a warning.
+ */
+function uniqueControls(controls: ControlDef[], ctx: FormContext): void {
+  const groups = new Map<string, ControlDef[]>();
+  for (const c of controls) groups.set(lc(c.name), [...groups.get(lc(c.name)) ?? [], c]);
+  const names = new Set(groups.keys());
+  for (const group of groups.values()) {
+    const first = group[0];
+    if (group.every((c, i) => c.type === first.type && (group.length === 1 || (c.index !== null && group.findIndex(o => o.index === c.index) === i)))) continue;
+    const used = new Set<number>();
+    const free = (): number => { let i = 0; while (used.has(i)) i++; return i; };
+    let arrayed = false;
+    for (const c of group) {
+      if (c.type !== first.type) {
+        const name = freeName(first.name, names);
+        names.add(lc(name));
+        ctx.warn(`${ctx.file}: ${c.name} is also the name of a ${first.type}; this ${c.type} was renamed ${name}.`);
+        c.name = name;
+      } else if (c.index === null || used.has(c.index)) {
+        c.index = free();
+        arrayed = true;
+      }
+      if (c.type === first.type) used.add(c.index!);
+    }
+    if (arrayed) ctx.warn(`${ctx.file}: more than one control is named ${first.name}; they became the control array ${first.name}.`);
+  }
+}
+
+/** `name` with the first free `_2`, `_3` ... suffix (at most 40 characters); `taken` is lower case. */
+function freeName(name: string, taken: ReadonlySet<string>): string {
+  for (let n = 2; ; n++) {
+    const suffix = `_${n}`, v = name.slice(0, 40 - suffix.length) + suffix;
+    if (!taken.has(lc(v))) return v;
+  }
+}
+
+/**
+ * The project's name rules for imported forms, modules and classes: an invalid name becomes the next free Form<n> /
+ * MDIForm<n> / Module<n> / Class<n>, a name already taken gets a `_2` suffix (each with a warning). `taken`: the names in
+ * the project already (lower case); the new names are added to it.
+ */
+export function applyNameRules(items: readonly (FormDef | ModuleDef)[], taken: Set<string>, warn: (m: string) => void): void {
+  for (const it of items) {
+    const isForm = 'controls' in it;
+    const base = isForm ? (it.mdi ? 'MDIForm' : 'Form') : it.kind === 'class' ? 'Class' : 'Module';
+    const what = isForm ? (it.mdi ? 'MDI form' : 'form') : it.kind === 'class' ? 'class module' : 'module';
+    let name = it.name;
+    if (!validateName(name)) {
+      let n = 1;
+      while (taken.has(lc(`${base}${n}`))) n++;
+      name = `${base}${n}`;
+      warn(`"${it.name}" is not a valid name; the ${what} was renamed ${name}.`);
+    } else if (taken.has(lc(name))) {
+      name = freeName(name, taken);
+      warn(`The name ${it.name} is already used; the ${what} was renamed ${name}.`);
+    }
+    it.name = name;
+    taken.add(lc(name));
+  }
 }
 
 /** Imports a .frm file: the form, its pictures as assets and the components its controls need. */
@@ -484,8 +548,9 @@ async function readFormFile(path: string, read: ReadBytes, warn: (m: string) => 
   return importFrm(text, f => frxFiles.get(lc(f)) ?? null, baseName(path), warn);
 }
 
-/** Project > Add File: one .frm, .bas or .cls. The caller checks name conflicts. */
-export async function importVb6File(path: string, read: ReadBytes): Promise<Vb6FileImport> {
+/** Project > Add File: one .frm, .bas or .cls. `taken`: the project's names (an invalid or taken name is changed, with a
+ *  warning). The caller checks for a second MDI form. */
+export async function importVb6File(path: string, read: ReadBytes, taken: readonly string[] = []): Promise<Vb6FileImport> {
   const warnings: string[] = [];
   const warn = (m: string) => { warnings.push(m); };
   const ext = lc(path.split('.').pop() ?? '');
@@ -497,6 +562,7 @@ export async function importVb6File(path: string, read: ReadBytes): Promise<Vb6F
     const text = decode1252(await read(path));
     out.modules.push(ext === 'cls' ? importCls(text, path) : importBas(text, path));
   } else throw new Error(`${baseName(path)}: only .frm, .bas and .cls files can be added.`);
+  applyNameRules([...out.forms, ...out.modules], new Set(taken.map(lc)), warn);
   codeWarnings([...out.forms, ...out.modules], warn);
   out.warnings = [...new Set(warnings)];
   return out;
@@ -549,7 +615,7 @@ export function parseVbp(text: string): VbpInfo {
       case 'majorver': info.version.major = ver(v); break;
       case 'minorver': info.version.minor = ver(v); break;
       case 'revisionver': info.version.revision = ver(v); break;
-      case 'autoincrementver': info.version.autoIncrement = ver(v) !== 0; break;
+      case 'autoincrementver': if (ver(v) !== 0) info.version.autoIncrement = true; break;   // off is absent, as the Make tab stores it
       case 'command32': info.commandLine = unq(v); break;
       case 'condcomp': info.condComp = unq(v); break;
       case 'reference': {
@@ -591,6 +657,10 @@ export async function importVbp(path: string, read: ReadBytes): Promise<Vb6Proje
     if (!r) continue;
     try {
       const imp = await readFormFile(r.path, async p => (p === r.path ? r.bytes : read(p)), warn);
+      if (imp.form.mdi && forms.some(x => x.mdi)) {
+        warn(`${baseName(f)}: a project can have only one MDI form; it was left out.`);
+        continue;
+      }
       forms.push(imp.form); Object.assign(assets, imp.assets); components.push(...imp.components);
     } catch (e) { warn(`${baseName(f)}: ${(e as Error).message}`); }
   }
@@ -606,15 +676,18 @@ export async function importVbp(path: string, read: ReadBytes): Promise<Vb6Proje
   }
   for (const u of info.unsupported) warn(`${u}: ${u.split('=')[0]} files are not supported; it was left out.`);
   for (const r of info.references) warn(`The reference "${r}" is not supported.`);
+  const name = validateName(info.name) ? info.name : validateName(stem(path)) ? stem(path) : 'Project1';
+  applyNameRules([...forms, ...modules], new Set([lc(name)]), warn);
   if (!forms.length) {
-    forms.push(newForm('Form1'));
-    warn('The project has no form that could be read; a blank Form1 was added.');
+    let blank = 1;
+    while (modules.some(m => lc(m.name) === `form${blank}`)) blank++;
+    forms.push(newForm(`Form${blank}`));
+    warn(`The project has no form that could be read; a blank Form${blank} was added.`);
   }
   // Startup="Sub Main": the Startup Object is Sub Main; startupForm stays a form (the one shown when Sub Main is switched off)
   const subMain = /^sub main$/i.test(info.startup);
   const startup = forms.find(f => lc(f.name) === lc(info.startup))?.name
     ?? (forms.find(f => !f.mdi && f.props.MDIChild !== true) ?? forms[0]).name;
-  const name = validateName(info.name) ? info.name : validateName(stem(path)) ? stem(path) : 'Project1';
   const iconForm = forms.find(f => lc(f.name) === lc(info.iconForm || startup));
   const icon = iconForm?.props.Icon;
   const project: Project = {

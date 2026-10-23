@@ -806,6 +806,15 @@ export class ControlObject implements VBObject, DataConsumer {
     return CONTROL_TYPES[this.def.type].methods.some(m => m.name.toLowerCase() === l);
   }
 
+  /** The debugger's read: a property's value, never a method (Point, OpenURL, Find ...) or one that would wait. */
+  peekMember(name: string): VBValue | undefined {
+    const l = name.toLowerCase();
+    if (!this.hasMember(name) || GFX_FUNCTIONS.has(l) || RTF_FUNCTIONS.has(l)) return undefined;
+    if (!getPropDef(this.def.type, name) && l !== 'name' && l !== 'index') return undefined;   // a method
+    const v = this.getMember(name, []) as VBValue | Promise<VBValue>;
+    return v instanceof Promise ? undefined : v;
+  }
+
   getMember(name: string, args: VBValue[]): VBValue {
     const l = name.toLowerCase();
     if (l === 'name') return this.def.name;
@@ -1708,6 +1717,8 @@ export class ControlArrayObject implements VBObject {
   items(): VBObject[] { return this.sorted(); }
 
   hasMember(name: string): boolean { return ['count', 'lbound', 'ubound'].includes(name.toLowerCase()); }
+
+  peekMember(name: string): VBValue | undefined { return this.hasMember(name) ? this.getMember(name, []) : undefined; }
 
   getMember(name: string, args: VBValue[]): VBValue {
     if (args.length) throw new VBRuntimeError(450);

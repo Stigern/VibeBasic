@@ -47,8 +47,19 @@ export interface VBObject {
   asType?(typeName: string, strict?: boolean): VBObject | undefined;
   /** A property written by code (a form's Property Let/Set): an assignment does not read it first. */
   codeProperty?(name: string): boolean;
+  /**
+   * The debugger's read (data tips, Locals and Watch property rows): a member's value now, without running any program
+   * code, starting a method or loading a form. Undefined when it has no such value (a method, a Property Get, a Public
+   * Sub, a value that would wait); throws NotLoaded for a property of a form that is not loaded. Absent: no value.
+   */
+  peekMember?(name: string): VBValue | undefined;
   /** Print, PSet, Line, Circle and Scale on this object (Form, PictureBox, Printer); absent: error 438. */
   graphics?(call: GraphicsCall): void | Promise<void>;
+}
+
+/** Thrown by `peekMember` for a property of an unloaded form: reading it in code would load the form. */
+export class NotLoaded extends Error {
+  constructor() { super('not loaded'); }
 }
 
 /** One piece of a Print statement on an object: text (numbers already formatted), `Spc(n)`, `Tab(n)` or the next print zone (`,`). */

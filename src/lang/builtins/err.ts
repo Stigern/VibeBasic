@@ -58,6 +58,8 @@ export class ErrObject implements VBObject {
     return PROPERTIES.has(name.toLowerCase());
   }
 
+  peekMember(name: string): VBValue | undefined { return this.hasMember(name) ? this.getMember(name, []) : undefined; }
+
   getMember(name: string, args: VBValue[]): VBValue {
     if (args.length > 0) throw new VBRuntimeError(450);
     switch (name.toLowerCase()) {

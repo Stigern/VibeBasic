@@ -86,10 +86,14 @@ fn other_executables() -> Vec<PathBuf> {
 }
 
 /// App.PrevInstance: another process of the same app (the same bundle identifier) is running. False outside a bundle.
+/// Off the main thread: it lists every process and reads the Info.plist of each bundle (a slow volume would freeze the UI).
 #[tauri::command]
-pub fn app_prev_instance() -> bool {
-  let Some(id) = current_bundle().ok().and_then(|b| bundle_id(&b)) else { return false };
-  other_instance_of(&id, other_executables())
+pub async fn app_prev_instance() -> Result<bool, String> {
+  crate::io_util::off_main(|| {
+    let Some(id) = current_bundle().ok().and_then(|b| bundle_id(&b)) else { return Ok(false) };
+    Ok(other_instance_of(&id, other_executables()))
+  })
+  .await
 }
 
 /// The log file of App.LogEvent: `<data folder>/<bundle id>/<app name>.log` (~/Library/Application Support/...).
@@ -110,14 +114,25 @@ pub fn append_line(file: &Path, line: &str) -> Result<(), String> {
   writeln!(f, "{line}").map_err(|e| format!("{}: {e}", file.display()))
 }
 
+/// App.LogEvent: file I/O, so off the main thread (files.rs).
 #[tauri::command]
-pub fn app_log_event<R: Runtime>(app: AppHandle<R>, line: String) -> Result<(), String> {
-  append_line(&log_file(&app)?, &line)
+pub async fn app_log_event<R: Runtime>(app: AppHandle<R>, line: String) -> Result<(), String> {
+  crate::io_util::off_main(move || append_line(&log_file(&app)?, &line)).await
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// Review 0.9 #6: the commands that list processes or write files run off the main thread (async + off_main).
+  #[test]
+  fn blocking_commands_are_async() {
+    let src = include_str!("appinfo.rs");
+    for name in ["app_prev_instance", "app_log_event"] {
+      assert!(src.contains(&format!("pub async fn {name}")), "{name} must be async");
+      assert!(!src.contains(&format!("pub fn {name}")), "{name} must not be a sync command");
+    }
+  }
 
   #[test]
   fn command_line_from_args_or_opened_files() {

@@ -206,6 +206,11 @@ export abstract class ClassValue extends Counted implements VBObject {
     return arr.get(args.map(a => coerce(a, 'Long') as number));
   }
 
+  /** The debugger's read: a Public variable, never a Property Get or method (they run code). */
+  peekMember(name: string): VBValue | undefined {
+    return this.iface ? undefined : this.inst.publicVar(lc(name))?.value;
+  }
+
   setMember(name: string, args: VBValue[], value: VBValue): void {
     const v = this.iface || args.length ? undefined : this.inst.publicVar(lc(name));
     if (!v) {

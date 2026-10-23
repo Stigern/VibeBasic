@@ -1,7 +1,7 @@
 // A form of the running program (its default instance): properties, controls as members, and the VB6
 // life cycle — Initialize → Load → (shown) → Resize → Activate; QueryUnload → Unload; Show [vbModal] / Hide.
 
-import type { GraphicsCall, VBObject } from '../../lang/host';
+import { NotLoaded, type GraphicsCall, type VBObject } from '../../lang/host';
 import { VBRuntimeError } from '../../lang/errors';
 import type { Program } from '../../lang/interp/program';
 import { Empty, Nothing, VBArray, VBRef, coerce, toBool, type VBValue } from '../../lang/values';
@@ -715,6 +715,18 @@ export class FormInstance implements VBObject {
     }
     if (!formHasProp(this.def, name) && getPropDef('Form', name)) throw new VBRuntimeError(438);   // ScrollBars on a Form, KeyPreview on an MDIForm
     return st.form.getMember(name, args);
+  }
+
+  /** The debugger's read: a Public variable, or a property or control of the loaded form. Never a method, a procedure of
+   *  the form's code or a load (a property of an unloaded form throws NotLoaded). */
+  peekMember(name: string): VBValue | undefined {
+    const l = lc(name);
+    const pm = this.codeMember(name);
+    if (pm === 'var') return this.s.program.getPublicVar(this.key, name);
+    if (pm || FORM_METHODS.has(l) || (this.isMdi && MDI_MEMBERS.has(l)) || !this.hasMember(name)) return undefined;
+    if (!this.loaded) throw new NotLoaded();
+    const v = this.getMember(name, []) as VBValue | Promise<VBValue>;
+    return v instanceof Promise ? undefined : v;
   }
 
   setMember(name: string, args: VBValue[], value: VBValue): void | Promise<void> {
