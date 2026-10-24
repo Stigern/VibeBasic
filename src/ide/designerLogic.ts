@@ -55,6 +55,8 @@ export function absoluteRect(form: FormDef, id: string): Rect {
   const seen = new Set<string>();
   while (c && !seen.has(c.id)) {
     seen.add(c.id);
+    // a docked container (a PictureBox with Align) sits at its edge, not at its stored Left and Top
+    if (isDocked(c)) { const d = dockedRect(form, c); left += d.left; top += d.top; break; }
     const pos = controlPos(c);
     left += pos.left;
     top += pos.top;

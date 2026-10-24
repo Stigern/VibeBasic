@@ -9,21 +9,23 @@ import { listProcedures } from '../model/procedures';
 import { messageBox98, showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
 import { createAiAnimation } from './aiAnimation';
+import { thinkingOnly } from './clean';
 import { type CodeSelection, applyCodeProposal, extractCode, skippedProblem } from './codeMode';
 import { buildCodeRequest, buildFixRequest, buildFormRequest, type FixError } from './context';
 import { detectServer, isVisionError, withDetected } from './detect';
+import { effortFor, retryEffort } from './effort';
 import { renderFormImage } from './formImage';
 import { layoutProblems } from './layoutCheck';
 import { LoopWatch } from './loopDetect';
 import { addAiLogEntry, describeRequest, finishAiLogEntry, type AiLogEntry, type AiLogMode } from './aiLog';
-import { isProse, isQuestion, showAnswer } from './answerDialog';
-import { FORM_RESPONSE_FORMAT, FORM_STRUCTURED_OUTPUTS, NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
+import { isProse, questionMode, showAnswer } from './answerDialog';
+import { FORM_RESPONSE_FORMAT, FORM_STRUCTURED_OUTPUTS, NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, growForOverflow, parseFormOps } from './formMode';
 import { type PreviewResult, showCodePreview, showFormPreview } from './previewDialogs';
 import { type AiSettings, type Thinking, loadAiSettings } from './settings';
 import { AI_CUT_OFF, type AiChatOptions, type AiUsage } from './sse';
 import { StreamLog } from './streamLog';
 import { type ChatMessage, type ContentPart, contentChars, contentText } from './types';
-import { autoFixEventNames, validateCode } from './validate';
+import { autoFixEventNames, isSyntaxProblem, validateCode } from './validate';
 
 const VB_EXCLAMATION = 48;
 const TITLE = 'VibeBasic';
@@ -79,7 +81,7 @@ type Waited = { kind: 'reply'; text: string; metrics: string } | { kind: 'error'
  * A reply carries the measurement line (token counts from the server, and the time taken).
  */
 type Start = (o: AiChatOptions, ui: { setLabel(text: string): void }) => Promise<string>;
-async function waitForReply(doc: Document, model: string, start: Start, log: StreamLog, label = `Waiting for ${model}...`): Promise<Waited> {
+async function waitForReply(doc: Document, model: string, start: Start, log: StreamLog, label = `Waiting for ${model}...`, hold?: Hold | null): Promise<Waited> {
   const block = h('div', { style: 'position:absolute;top:1px;bottom:1px;left:0;width:40px;background:#000080' });
   const bar = h('div', { class: 'ai-progress', style: 'position:relative;height:16px;margin-top:8px;overflow:hidden;box-shadow:inset -1px -1px #fff,inset 1px 1px #808080' }, block);
   const box = h('div', {
@@ -111,6 +113,7 @@ async function waitForReply(doc: Document, model: string, start: Start, log: Str
   const answered = request.then<Waited, Waited>(text => ({ kind: 'reply', text, metrics: formatMetrics(usage, Date.now() - t0) }), e => ({ kind: 'error', message: e instanceof Error ? e.message : String(e) }));
   const cancelled = showDialog98(doc, { title: TITLE, content, buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }] })
     .then<Waited>(() => ({ kind: 'cancel' }));
+  hold?.close();   // this dialog is up now: the one that covered the time before it goes
   try {
     const res = await Promise.race([answered, cancelled]);
     if (res.kind !== 'cancel') content.closest('.dlg98-overlay')?.dispatchEvent(new Event('dlg98-abort'));
@@ -119,8 +122,38 @@ async function waitForReply(doc: Document, model: string, start: Start, log: Str
   } finally { clearInterval(timer); anim.dispose(); log.detach(); }
 }
 
-export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor(itemId: string): CodeWindow | null }, doc: Document = document): Promise<void> {
-  if (ide.mode !== 'design') return;
+/**
+ * A modal "Connecting..." dialog with Cancel that covers the time before the first waiting dialog (finding what the server can
+ * do, making the form picture), so the IDE cannot be used meanwhile. `close` takes it away; `result` says how it went.
+ */
+interface Hold { result: Promise<'cancel' | 'closed'>; cancelled(): boolean; close(): void }
+function holdDialog(doc: Document, label: string): Hold {
+  let closing = false, wasCancelled = false;
+  const content = h('div', { style: 'min-width:420px' }, h('div', { class: 'ai-wait-label' }, label));
+  const result = showDialog98(doc, { title: TITLE, content, buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }] })
+    .then((): 'cancel' | 'closed' => { wasCancelled = !closing; return wasCancelled ? 'cancel' : 'closed'; });
+  return {
+    result, cancelled: () => wasCancelled,
+    close: () => { if (closing) return; closing = true; content.closest('.dlg98-overlay')?.dispatchEvent(new Event('dlg98-abort')); },
+  };
+}
+
+/**
+ * Runs `task` as the one AI request of the IDE: none starts while another one runs, and the program cannot be started meanwhile
+ * (IdeState.busy, which Start and Make respect).
+ */
+async function exclusive(ide: IdeState, task: () => Promise<void>): Promise<void> {
+  if (ide.busy) return;
+  ide.setBusy(true);
+  try { await task(); } finally { ide.setBusy(false); }
+}
+
+export function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor(itemId: string): CodeWindow | null }, doc: Document = document): Promise<void> {
+  if (ide.mode !== 'design') return Promise.resolve();
+  return exclusive(ide, () => askAiNow(ide, backend, ui, doc));
+}
+
+async function askAiNow(ide: IdeState, backend: Backend, ui: { codeWindowFor(itemId: string): CodeWindow | null }, doc: Document): Promise<void> {
   const view = ide.activeView;
   const itemId = view.kind === 'code' ? view.itemId : view.kind === 'designer' ? view.formId : null;
   const item = itemId ? ide.project.forms.find(f => f.id === itemId) ?? ide.project.modules.find(m => m.id === itemId) : undefined;
@@ -136,7 +169,19 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   const codeMode = view.kind === 'code';
   const prompt = await promptDialog(doc, `Ask AI - ${item.name} (${codeMode ? 'Code' : 'Form'})`);
   if (prompt === null) return;
-  const settings = await withDetected(stored, detecting);
+  // a modal dialog from here on, until the conversation's own dialogs take over
+  const hold = holdDialog(doc, `Connecting to ${stored.model}...`);
+  try {
+    const settings = await Promise.race([withDetected(stored, detecting), hold.result.then(() => null)]);
+    // cancelled, or the IDE changed meanwhile (another project, the program started, the code window closed)
+    if (!settings || hold.cancelled() || ide.mode !== 'design' || ide.project !== project || (codeMode && ui.codeWindowFor(itemId) !== codeWin)) return;
+    await converseAbout(ide, backend, doc, { settings, hold, project, itemId, codeMode, codeWin, prompt });
+  } finally { hold.close(); }
+}
+
+async function converseAbout(ide: IdeState, backend: Backend, doc: Document, o: { settings: AiSettings; hold: Hold; project: IdeState['project']; itemId: string;
+  codeMode: boolean; codeWin: CodeWindow | null; prompt: string }): Promise<void> {
+  const { settings, hold, project, itemId, codeMode, codeWin, prompt } = o;
 
   // Code mode with a selection: the request is about it, and a bare-body answer replaces exactly it.
   const sel = codeMode ? codeWin!.getSelection?.() ?? null : null;
@@ -144,8 +189,8 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   const opts = { contextTokens: settings.contextTokens, selection: selection?.text };
   const first = (() => { try { return codeMode ? buildCodeRequest(project, itemId, codeWin!.getCursorLine(), prompt, opts) : buildFormRequest(project, itemId, prompt, opts); } catch { return null; } })();
   if (!first) { await warn(doc, 'Could not build the request.'); return; }
-  const session: AiSession = { ide, backend, settings, doc };
-  if (codeMode) await runCodeConversation(session, { first, itemId, codeWin: codeWin!, selection, question: isQuestion(prompt) });
+  const session: AiSession = { ide, backend, settings, doc, hold };
+  if (codeMode) await runCodeConversation(session, { first, itemId, codeWin: codeWin!, selection, question: questionMode(prompt) });
   else await runFormConversation(session, { first, itemId });
 }
 
@@ -159,27 +204,33 @@ async function settingsOrSetup(ide: IdeState, backend: Backend, doc: Document): 
 }
 
 /** An error to fix with AI: where it happened and, for a run-time error, the variables of the stopped frame. */
-export interface ErrorToFix { itemId: string; error: FixError; vars: { name: string; value: string }[] }
+export interface ErrorToFix { itemId: string; error: FixError; vars: { name: string; value: string }[];
+  /** The failing line's operands with their values (`Text1.Text = "twelve"`). */ lineValues?: string[] }
 
 /**
  * Ask AI on a run-time or compile error (the error dialog's Ask AI, Tools > Ask AI about this error): code mode with
  * the error, the line and the variable values. The program stays in break mode until OK; OK ends it (`end` resolves
  * once it has stopped), applies the fix to the module or form as one undo step and shows the code window at the line.
  */
-export async function askAiAboutError(ide: IdeState, backend: Backend, fix: ErrorToFix,
+export function askAiAboutError(ide: IdeState, backend: Backend, fix: ErrorToFix,
   ui: { openCode(itemId: string): CodeWindow; end(): Promise<void> }, doc: Document = document): Promise<void> {
+  return exclusive(ide, () => askAboutErrorNow(ide, backend, fix, ui, doc));
+}
+
+async function askAboutErrorNow(ide: IdeState, backend: Backend, fix: ErrorToFix, ui: { openCode(itemId: string): CodeWindow; end(): Promise<void> }, doc: Document): Promise<void> {
   if (!ide.project.forms.some(f => f.id === fix.itemId) && !ide.project.modules.some(m => m.id === fix.itemId)) return;
   const settings = await settingsOrSetup(ide, backend, doc);
   if (!settings) return;
   const win = ui.openCode(fix.itemId);
   win.gotoLine(fix.error.line);   // the cursor marks the failing procedure for the merge
-  const first = (() => { try { return buildFixRequest(ide.project, fix.itemId, fix.error, fix.error.compile ? [] : fix.vars, { contextTokens: settings.contextTokens }); } catch { return null; } })();
+  const first = (() => { try { return buildFixRequest(ide.project, fix.itemId, fix.error, fix.error.compile ? [] : fix.vars, { contextTokens: settings.contextTokens, lineValues: fix.lineValues }); } catch { return null; } })();
   if (!first) { await warn(doc, 'Could not build the request.'); return; }
   const applied = await runCodeConversation({ ide, backend, settings, doc }, { first, itemId: fix.itemId, codeWin: win, beforeApply: ui.end, mode: 'fix' });
   if (applied) ui.openCode(fix.itemId).gotoLine(fix.error.line);
 }
 
-export interface AiSession { ide: IdeState; backend: Backend; settings: AiSettings; doc: Document }
+/** `hold`: the dialog that covers the time until the first waiting dialog is up (it closes it). */
+export interface AiSession { ide: IdeState; backend: Backend; settings: AiSettings; doc: Document; hold?: Hold | null }
 
 /** How form pictures are made (tests replace it: jsdom has no canvas). */
 export const formPictures = { render: (form: FormDef): Promise<string> => renderFormImage(form) };
@@ -319,18 +370,22 @@ export const LOOP_PENALTY = 0.3;
 const noPenalties = new Set<string>();
 const rejectsPenalties = (message: string): boolean => /\b(400|422)\b/.test(message) && /presence_penalty|penalt/i.test(message);
 
+/** Whether a request is a question (questionMode): its reply is shown as text; 'unless-code': unless it has usable code. */
+type Question = boolean | 'unless-code';
+
 /** A structured output schema, sent as `structured_outputs` to vLLM and as `response_format` to other (and unknown) servers. */
 export interface StructuredOutput { responseFormat: unknown; structuredOutputs: unknown }
 
 const changeRequest = (wish: string): ChatMessage => ({ role: 'user', content: `Change your last answer: ${wish}\nAnswer with the complete result again, in exactly the same format.` });
 
 /** One answer, understood (or `result` null), the conversation up to and including it, and the measurement line. `answer`: show it as text. */
-type Done<A> = { kind: 'done'; result: A | null; reply: string; metrics: string; messages: ChatMessage[]; answer: boolean };
+type Done<A> = { kind: 'done'; result: A | null; reply: string; metrics: string; messages: ChatMessage[]; answer: boolean; details?: string };
 type Round<A> = Done<A> | { kind: 'error'; message: string } | { kind: 'cancel' };
-type Understood<A> = { result: A | null; jsonReason: string | null };
+/** `refused`: code that could not be merged safely, with the problems for the retry and the reason shown under Details. */
+type Understood<A> = { result: A | null; jsonReason: string | null; refused?: { problems: string[]; details: string } };
 
 /** How a conversation runs: its log mode, its structured output (form mode), whether answers in prose are shown (code mode). */
-interface ConverseOptions<A = unknown> { mode: AiLogMode; structured?: StructuredOutput; answers?: boolean; question?: boolean;
+interface ConverseOptions<A = unknown> { mode: AiLogMode; structured?: StructuredOutput; answers?: boolean; question?: Question;
   /** A picture for the check-and-fix round (form mode: the proposed form when the layout check found problems), or null. */
   complaintPicture?: (a: A) => Promise<string | null> }
 
@@ -419,14 +474,17 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
      */
     const capped = async (messages: ChatMessage[], x: AiChatOptions, m: AiLogMode): Promise<string> => {
       const maxTokens = noMaxTokens.has(server) ? undefined : maxTokensFor(level ?? 'server', settings.contextTokens, messages.reduce((n, y) => n + contentChars(y.content), 0));
-      try { return await attempt(messages, level, { ...x, ...penalties, maxTokens }, m, partial); }
+      // a level the server does not take goes as the nearest one it does (learnt from its 400, kept for the session)
+      const sent = effortFor(settings.baseUrl, level);
+      try { return await attempt(messages, sent, { ...x, ...penalties, maxTokens }, m, partial); }
       catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         if (o.signal?.aborted) throw e;
+        if (retryEffort(settings.baseUrl, sent, message)) return capped(messages, x, 'retry');
         if (penalties.presencePenalty !== undefined && rejectsPenalties(message)) { noPenalties.add(server); penalties = {}; return capped(messages, x, 'retry'); }
         if (maxTokens === undefined || !rejectsMaxTokens(message)) throw e;
         noMaxTokens.add(server);
-        return attempt(messages, level, { ...x, ...penalties, maxTokens: undefined }, 'retry', partial);
+        return attempt(messages, sent, { ...x, ...penalties, maxTokens: undefined }, 'retry', partial);
       }
     };
     const plain = async (messages: ChatMessage[], m: AiLogMode): Promise<string> => {
@@ -488,21 +546,26 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     }
   };
 
-  const round = async (messages: ChatMessage[], later: boolean, mode: AiLogMode, question = false): Promise<Round<A>> => {
-    const res = await waitForReply(doc, settings.model, send(messages, later, mode), log);
+  const round = async (messages: ChatMessage[], later: boolean, mode: AiLogMode, question: Question = false): Promise<Round<A>> => {
+    const res = await waitForReply(doc, settings.model, send(messages, later, mode), log, undefined, s.hold);
     if (res.kind !== 'reply') return res;
     if (ide.project !== project) return { kind: 'cancel' };   // a different project was opened meanwhile
     let reply = res.text, metrics = res.metrics;
+    // A question is answered in words: no checks, no retry. A reply that is only thinking (no answer text) is shown as the
+    // answer here, and only here: code mode never takes code from the thinking.
+    if (co.answers && question && (question !== 'unless-code' || !analyse(reply).result)) {
+      const said = thinkingOnly(reply) ?? reply;
+      return { kind: 'done', result: null, reply: said, metrics, messages: [...messages, { role: 'assistant', content: said }], answer: true };
+    }
     let convo: ChatMessage[] = [...messages, { role: 'assistant', content: reply }];
-    // A question is answered in words: no checks, no retry.
-    if (co.answers && question) return { kind: 'done', result: null, reply, metrics, messages: convo, answer: true };
     const firstEntry = lastEntry;
     let got = analyse(reply);
     const garbled = (u: Understood<A>, text: string) => !u.result && !(co.answers && isProse(text));
     if (garbled(got, reply) && firstEntry) firstEntry.status = 'not understood';
     // One retry at most: for the problems the checks found, or (form mode) for an answer that was not usable JSON.
-    const complaint = got.result?.problems.length
-      ? `Your answer has these problems:\n${got.result.problems.map(p => `- ${p}`).join('\n')}\nFix them and answer again in exactly the same format.`
+    const problems = got.result?.problems.length ? got.result.problems : !got.result ? got.refused?.problems : undefined;
+    const complaint = problems?.length
+      ? `Your answer has these problems:\n${problems.map(p => `- ${p}`).join('\n')}\nFix them and answer again in exactly the same format.`
       : !got.result && got.jsonReason !== null ? `Your answer was not valid JSON (${got.jsonReason}). Answer again with ONLY the JSON object.` : null;
     if (complaint) {
       // Keep the first answer if the second is no better understood. Layout problems come with a picture of the proposal.
@@ -518,10 +581,11 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
         const second = analyse(again.text);
         if (garbled(second, again.text) && lastEntry) lastEntry.status = 'not understood';
         if (second.result) { got = second; reply = again.text; metrics = again.metrics; convo = [...followUp, { role: 'assistant', content: again.text }]; }
-        else if (!got.result) reply = again.text;   // neither was understood: Details shows the latest
+        else if (!got.result) { reply = again.text; got = second; }   // neither was understood: Details shows the latest
       }
     }
-    return { kind: 'done', result: got.result, reply, metrics, messages: convo, answer: !got.result && !!co.answers && isProse(reply) };
+    return { kind: 'done', result: got.result, reply, metrics, messages: convo, answer: !got.result && !!co.answers && isProse(reply) && !got.refused,
+      ...(!got.result && got.refused ? { details: got.refused.details } : {}) };
   };
 
   const copy = (text: string) => backend.clipboardSetText(text);
@@ -534,9 +598,9 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     if (next.kind === 'error') await warn(doc, next.message);
     else if (next.kind === 'done' && next.answer) {
       const a = await showAnswer(doc, next.reply, next.metrics, copy);
-      if (a !== 'ok') { next = await round(trimConversation([...next.messages, { role: 'user', content: a.more }], budget), true, 'change', isQuestion(a.more)); continue; }
+      if (a !== 'ok') { next = await round(trimConversation([...next.messages, { role: 'user', content: a.more }], budget), true, 'change', questionMode(a.more)); continue; }
     }
-    else if (next.kind === 'done' && !next.result) await showNotUnderstood(doc, next.reply);
+    else if (next.kind === 'done' && !next.result) await showNotUnderstood(doc, next.details ? `${next.reply}\n\n${next.details}` : next.reply);
     else if (next.kind === 'done') shown = next;
     // Without a proposal the conversation ends; otherwise (a failed Change... too) the last proposal stays.
     if (!shown) return false;
@@ -556,7 +620,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
  * when the request was made), an answer without a procedure heading replaces exactly that. True when a proposal was applied.
  */
 export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[]; itemId: string; codeWin: CodeWindow; beforeApply?: () => Promise<void>; selection?: CodeSelection | null;
-  /** The request asks about the code (the answer is shown as text). */ question?: boolean; mode?: AiLogMode }): Promise<boolean> {
+  /** The request asks about the code (the answer is shown as text; see questionMode). */ question?: Question; mode?: AiLogMode }): Promise<boolean> {
   const { ide, doc } = s;
   const project = ide.project;
   const win = o.codeWin;
@@ -573,14 +637,21 @@ export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[
     const code = fixEventNames(form, raw, notes);
     const before = win.getSource();
     const proc = listProcedures(before).find(p => win.getCursorLine() >= p.line && win.getCursorLine() <= p.endLine)?.name ?? null;
-    const applied = applyCodeProposal(before, code, proc, o.selection);
+    const out: { refused?: string } = {};
+    const applied = applyCodeProposal(before, code, proc, o.selection, out);
+    if (!applied && out.refused) {
+      // a merge that would break the module is never shown or applied; the retry asks for whole procedures
+      const problems = validateCode(code, { moduleName, form, project });
+      return { ...none, refused: { problems: problems.length ? problems : [`${out.refused.split('\n')[0]} Send each changed procedure complete, from its first line to its End line, and declarations above the first procedure.`], details: out.refused } };
+    }
     if (!applied) return none;
     const problems = validateCode(code, { moduleName, form, project });
     if (applied.skipped) problems.push(skippedProblem(applied.skipped));   // the retry asks for the changed procedures only
     return { result: { applied, notes, problems }, jsonReason: null };
   };
   return converse<A>(s, o.first, analyse,
-    (a, _reply, metrics) => showCodePreview(doc, win.getSource().replace(/\r\n?/g, '\n'), a.applied.source, a.applied.changes, [...a.notes, ...a.problems], metrics),
+    (a, _reply, metrics) => showCodePreview(doc, win.getSource().replace(/\r\n?/g, '\n'), a.applied.source, a.applied.changes,
+      [...a.notes, ...a.problems.filter(p => !isSyntaxProblem(p))], metrics, true, a.problems.filter(isSyntaxProblem)),
     async a => { await o.beforeApply?.(); win.applyChange(0, win.getSource().length, a.applied.source); },
     { mode: o.mode ?? 'code', answers: true, question: o.question });
 }
@@ -599,8 +670,9 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
   const before = new Set(layoutProblems(form).map(p => p.key));
   const analyse = (text: string): Understood<A> => {
     const notes: string[] = [];
-    const parsed = parseFormOps(text, form, code => fixEventNames(form, code, notes));
-    if (!parsed.ok) return { result: null, jsonReason: parsed.reason };
+    let parsed = parseFormOps(text, form, code => fixEventNames(form, code, notes));
+    // usable JSON whose every op was dropped: the retry hears why, as problems (not as "not valid JSON")
+    if (!parsed.ok) return parsed.issues?.length ? { result: null, jsonReason: null, refused: { problems: parsed.issues, details: parsed.issues.join('\n') } } : { result: null, jsonReason: parsed.reason };
     const extra = parsed.ops.filter((o): o is Extract<typeof o, { op: 'add' }> => o.op === 'add').map(o => ({ name: o.name, type: o.type }));
     const problems = parsed.codeText === undefined ? [] : validateCode(parsed.codeText, { moduleName: form.name, form, extraControls: extra, project });
     if (parsed.codeSkipped) problems.push(skippedProblem(parsed.codeSkipped));
@@ -609,9 +681,20 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
         problems.push(`The form already has a control named ${r.from}, so your new one was renamed to ${r.to}; your code uses ${r.from}, which is the existing control. Give the new control a name that is not taken and use that name in the code.`);
       }
     }
+    // values the answer gave that could not be used (with the valid ones), placements that name no control, forms it cannot add
+    problems.push(...parsed.issues ?? []);
     // the layout check of the proposed form: new problems of the controls the answer adds or changes (all of them when it resizes the form)
     let proposed: FormDef | null = null;
     try { proposed = applyFormOpsToClone(form, parsed); } catch { /* the preview reports it */ }
+    // controls a little past the right or bottom edge: the form grows, instead of a model round
+    const grow = proposed ? growForOverflow(proposed, touchedNames(parsed.ops, proposed)) : null;
+    if (grow) {
+      // the grown size replaces the one the answer gave (one line in the preview)
+      const ops = parsed.ops.map(op => (op.op === 'form' ? { ...op, props: Object.fromEntries(Object.entries(op.props).filter(([k]) => !(k in grow.props))) } : op))
+        .filter(op => op.op !== 'form' || Object.keys(op.props).length);
+      parsed = { ...parsed, ops: [...ops, { op: 'form', props: grow.props }], warnings: [...parsed.warnings, grow.note] };
+      try { proposed = applyFormOpsToClone(form, parsed); } catch { proposed = null; }
+    }
     const layout = proposed ? layoutProblems(proposed, touchedNames(parsed.ops, proposed)).filter(p => !before.has(p.key)).map(p => p.text).slice(0, MAX_LAYOUT_PROBLEMS) : [];
     problems.push(...layout);
     return { result: { parsed, notes, problems, proposed, layout: layout.length > 0 }, jsonReason: null };
@@ -619,13 +702,16 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
   const pictureOf = async (f: FormDef): Promise<string | null> => { try { return await formPictures.render(f); } catch { return null; } };
   // the first request carries the picture of the form as it is, after the text
   const shot = picturesOn(s.settings) ? await pictureOf(form) : null;
+  if (s.hold?.cancelled()) return false;
   const first = shot ? withPicture(o.first, shot) : o.first;
   return converse<A>(s, first, analyse,
     (a, _reply, metrics) => {
       const { parsed } = a;
       const code = parsed.code === null ? undefined
         : { before: form.code.replace(/\r\n?/g, '\n'), after: parsed.code, changes: parsed.codeChanges ?? [] };
-      return showFormPreview(doc, applyFormOpsToClone(form, parsed), describeOps(parsed), [...parsed.warnings, ...a.notes, ...a.problems], project.assets, code, metrics);
+      const shown = [...parsed.warnings, ...a.notes];
+      return showFormPreview(doc, applyFormOpsToClone(form, parsed), describeOps(parsed), [...shown, ...a.problems.filter(p => !shown.includes(p) && !isSyntaxProblem(p))], project.assets, code, metrics,
+        a.problems.filter(isSyntaxProblem));
     },
     async a => {
       try { ide.stack.execute(formOpsToCommand(ide.project, o.itemId, a.parsed, 'AI changes')); }
@@ -643,9 +729,9 @@ function touchedNames(ops: Extract<ReturnType<typeof parseFormOps>, { ok: true }
 }
 
 /** Fixes wrong event-procedure names in AI code (Form1_Load etc.) and records what it did in `notes`. */
-function fixEventNames(form: { name: string } | null, code: string, notes: string[]): string {
+function fixEventNames(form: { name: string; mdi?: boolean } | null, code: string, notes: string[]): string {
   if (!form) return code;
-  const r = autoFixEventNames(code, form.name);
+  const r = autoFixEventNames(code, form);
   notes.push(...r.notes);
   return r.code;
 }

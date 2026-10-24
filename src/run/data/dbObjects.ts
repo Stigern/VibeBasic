@@ -83,6 +83,10 @@ export class DatabaseObject implements VBObject {
 }
 
 /** An ADO Connection: an Adodc's (open from the start) or one code made (`New ADODB.Connection`, then Open). */
+/** Every member an ADO Connection answers (lower case): its properties and Open, Close, Execute and the transactions. */
+export const ADO_CONNECTION_MEMBERS: readonly string[] = ['connectionstring', 'state', 'version', 'errors', 'provider', 'commandtimeout', 'connectiontimeout',
+  'cursorlocation', 'mode', 'defaultdatabase', 'open', 'close', 'execute', 'begintrans', 'committrans', 'rollbacktrans'];
+
 export class ConnectionObject implements VBObject {
   readonly vbTypeName = 'Connection';
   /** BeginTrans levels open. */

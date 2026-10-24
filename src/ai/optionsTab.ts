@@ -5,8 +5,9 @@ import { field } from '../ide/projectDialogs';
 import { createCombo } from '../ui98/combo';
 import { messageBox98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
-import { addAiLogEntry } from './aiLog';
+import { addAiLogEntry, redactUrl } from './aiLog';
 import { probeVision } from './detect';
+import { nearestEffort, probeEfforts } from './effort';
 import { THINKING_LEVELS, defaultAiSettings, loadAiSettings, updateAiSettings } from './settings';
 import type { AiModel, FormPicture, ServerKind, Thinking } from './types';
 
@@ -63,16 +64,37 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
       if (backend.aiChat && tested.has(chosen.toLowerCase())) {
         const v = await probeVision(backend as Pick<Backend, 'aiChat'>, baseUrl.value.trim(), apiKey.value, chosen);
         if (v !== undefined) { visionTested.set(chosen.toLowerCase(), v); seeing = v ? ` ${chosen} can see pictures.` : ` ${chosen} cannot see pictures.`; }
+        seeing += await thinkingLevels(chosen);
       }
       await messageBox98(doc, { prompt: `Connected. ${models.length} models found.${seeing}`, title: 'VibeBasic', buttons: 64 });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       addAiLogEntry({ mode: 'test', model: model.getValue().trim(), seconds: Math.round((Date.now() - t0) / 100) / 10, status: 'error',
-        sent: `GET ${baseUrl.value.trim().replace(/\/+$/, '')}/models`, reply: '', reasoning: '', error: message }, apiKey.value);
+        sent: `GET ${redactUrl(baseUrl.value)}/models`, reply: '', reasoning: '', error: message }, apiKey.value);
       await messageBox98(doc, { prompt: message, title: 'VibeBasic', buttons: 48 });
     } finally { test.disabled = false; }
   };
   test.addEventListener('click', () => { void testConnection(); });
+
+  /**
+   * The thinking levels the server takes, as a sentence for the Test Connection box (empty when it does not say). A model that
+   * takes reasoning_effort while Thinking is still Server default (the new-user default, which on Qwen means its slowest level)
+   * gets Low selected; OK keeps it.
+   */
+  const thinkingLevels = async (chosen: string): Promise<string> => {
+    const found = await probeEfforts(backend as Pick<Backend, 'aiChat'>, baseUrl.value.trim(), apiKey.value, chosen);
+    if (!found) return '';
+    const shown = found.levels.map(l => (l === found.default ? `${l} (default)` : l)).join(', ');
+    let text = ` Thinking levels it accepts: ${shown}.`;
+    const high = nearestEffort('high', found.levels);
+    if (high && high !== 'high') text += ` High is sent as ${high}.`;
+    if (thinkingOf(thinking.getValue()) === 'server' && found.levels.includes('low')) {
+      thinking.setValue(THINKING_LABELS.low);
+      dirty.thinking = true;
+      text += ` Thinking is now set to Low (fast); Server default${found.default ? ` thinks at ${found.default}, which` : ''} is much slower. Press OK to keep it.`;
+    }
+    return text;
+  };
 
   /** The context size and server kind to store for `m` at `url`: what the last Test Connection reported (owned_by "vllm" is vLLM,
    *  any other model a server found is "openai"), else the stored ones if nothing changed. */

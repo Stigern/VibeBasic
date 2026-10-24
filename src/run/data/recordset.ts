@@ -170,6 +170,8 @@ const DAO_METHODS = ['movefirst', 'movelast', 'movenext', 'moveprevious', 'move'
   'requery', 'close', 'findfirst', 'findlast', 'findnext', 'findprevious', 'getrows'];
 const ADO_METHODS = ['movefirst', 'movelast', 'movenext', 'moveprevious', 'move', 'addnew', 'update', 'cancelupdate', 'delete',
   'requery', 'close', 'find', 'getrows', 'open', 'clone', 'supports'];
+/** Every member an ADO Recordset answers (lower case): what the AI code check knows about `CreateObject("ADODB.Recordset")`. */
+export const ADO_RECORDSET_MEMBERS: readonly string[] = [...ADO_PROPS, ...ADO_METHODS];
 /** Supports: what every recordset can do, and what an updatable one can do too. */
 const SUPPORTS_READ = 0x100 | 0x200 | 0x2000 | 0x4000 | 0x80000;   // adHoldRecords adMovePrevious adBookmark adApproxPosition adFind
 const SUPPORTS_WRITE = 0x1000400 | 0x1000800 | 0x1008000;          // adAddNew adDelete adUpdate

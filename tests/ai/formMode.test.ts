@@ -42,7 +42,9 @@ test('unknown prop, type, invalid value and missing control warn', () => {
   const { p } = setup();
   const r = parseFormOps('{"ops":[{"op":"add","type":"Label","props":{"Foo":1}},{"op":"add","type":"Gizmo"},{"op":"add","type":"CommandButton","name":"cmdOK","props":{"Left":"abc"}},{"op":"delete","name":"Label9"}]}', p.forms[0]) as any;
   expect(r.warnings).toEqual(['Ignored unknown property Foo on Label.', 'Ignored unknown control type Gizmo.',
-    'Ignored invalid value for Left on cmdOK.', 'Ignored change to missing control Label9.']);
+    'Ignored invalid value "abc" for Left on cmdOK (a whole number).', 'Ignored delete of missing control Label9.']);
+  // every one is also a problem for the check-and-fix round
+  expect(r.issues).toEqual(r.warnings);
 });
 test('taken name is renamed', () => {
   const { p } = setup();
@@ -168,7 +170,7 @@ test('the menu op adds menus in order (one undo step); describeForm lists them a
   const r = parseFormOps(reply, p.forms[0]);
   if (!r.ok) throw new Error('not parsed');
   expect(describeOps(r).slice(0, 3)).toEqual(['Add Menu mnuFile', 'Add Menu mnuOpen', 'Add Menu mnuRecent(0)']);
-  expect(r.warnings).toEqual(['Ignored menu mnuLost: there is no menu mnuNothing.']);
+  expect(r.warnings).toEqual(['Ignored menu mnuLost: there is no menu mnuNothing; add the parent menu first.']);
   stack.execute(formOpsToCommand(p, p.forms[0].id, r, 'AI'));
   const tree = menuTree(p.forms[0].controls);
   expect(tree.map(n => [n.def.name, n.children.map(c => [c.def.name, c.def.index, c.def.props.Shortcut, c.def.props.Checked])]))

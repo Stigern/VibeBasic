@@ -92,7 +92,7 @@ test('syntax error triggers exactly one retry and the fixed reply is used', asyn
   const msgs = b.aiChat.mock.calls[1][3];
   expect(msgs.at(-2)).toEqual({ role: 'assistant', content: BAD_SYNTAX });
   expect(msgs.at(-1).role).toBe('user');
-  expect(msgs.at(-1).content).toMatch(/^Your answer has these problems:\n- Line \d+: .*\nFix them and answer again in exactly the same format\.$/);
+  expect(msgs.at(-1).content).toMatch(/^Your answer has these problems:\n- Code line \d+ \(`.+`\): .*\nFix them and answer again in exactly the same format\.$/);
   expect(document.querySelector('.ai-warning')).toBeNull();
   click('OK');
   await p;
@@ -133,7 +133,13 @@ test('still broken after the retry: warnings shown, nothing applied without OK',
   await enterPrompt('x');
   await vi.waitFor(() => expect(text()).toContain('AI Suggestion'));
   expect(b.aiChat).toHaveBeenCalledTimes(2);
-  expect(document.querySelector('.ai-warning')!.textContent).toMatch(/^Line \d+: /);
+  // the code does not compile: said in red, and Cancel is the default button (Enter does not apply it)
+  const errors = [...document.querySelectorAll('.ai-error')].map(e => e.textContent);
+  expect(errors[0]).toBe('This code does not compile; OK applies it anyway:');
+  expect(errors[1]).toMatch(/^Code line \d+ \(`.+`\): /);
+  const buttons = [...document.querySelectorAll('button')];
+  expect(buttons.find(b => b.textContent === 'Cancel')!.classList.contains('default')).toBe(true);
+  expect(buttons.find(b => b.textContent === 'OK')!.classList.contains('default')).toBe(false);
   expect(w.applyChange).not.toHaveBeenCalled();
   click('Cancel');
   await p;

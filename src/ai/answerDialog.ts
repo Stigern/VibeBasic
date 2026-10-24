@@ -4,9 +4,19 @@ import { showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
 import { stripThinking } from './clean';
 
-/** A request that asks about the code rather than for a change. */
-export const isQuestion = (prompt: string): boolean =>
-  /^\s*(what|what's|whats|why|explain|describe|how does|how is|is there|are there)\b/i.test(prompt);
+/** A request that asks about the code rather than for a change (also "Can you ...", which may be either; see questionMode). */
+export const isQuestion = (prompt: string): boolean => questionMode(prompt) !== false;
+
+/**
+ * How a request is answered: true for a question (what, why, explain, how do I, can I, is this ...: the reply is shown as
+ * text), 'unless-code' for "Can you / Could you ..." (a question or a polite request: a reply with usable code is a proposal,
+ * one in words an answer), false for a request for a change.
+ */
+export function questionMode(prompt: string): boolean | 'unless-code' {
+  const p = prompt.trim();
+  if (/^(can|could|would|will) you\b/i.test(p)) return /^\w+ you (please )?(explain|tell|describe|say|help me understand)\b/i.test(p) ? true : 'unless-code';
+  return /^(what|what's|whats|why|explain|describe|how (does|do|is|can|should|would)|can i|could i|should i|is (this|that|it|there)|are there|does (this|it|that))\b/i.test(p);
+}
 
 /**
  * A reply that reads as plain prose: some words, closed code fences, mostly letters, and not the start of JSON or code.

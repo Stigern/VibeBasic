@@ -2,11 +2,12 @@ import type { Backend, MakeAppOptions, CommEvent, CommLines, SysInfoData, DbExec
 import { guessPlatform, type Platform } from '../platform';
 import type { AiModel, ChatMessage } from '../ai/types';
 import { AI_CUT_OFF, readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
+import { redactUrl } from '../ai/aiLog';
 import { MemoryFs } from '../lang/fileio/memoryFs';
 import type { FileAccess, FileMode, FileStat } from '../lang/fileio/fsApi';
 
 const AI_CONNECT_ERROR = (baseUrl: string) =>
-  `Could not connect to ${baseUrl}. Check that the AI server is running and can be reached from this computer. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0.`;
+  `Could not connect to ${redactUrl(baseUrl)}. Check that the AI server is running and can be reached from this computer. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0.`;
 const AI_UNREADABLE = 'The AI server sent an answer VibeBasic could not read.';
 
 function aiEndpoint(baseUrl: string, path: string): string {
@@ -49,20 +50,27 @@ function httpError(res: Response, text: string, url: string): Error {
   const status = `${res.status}${res.statusText ? ` ${res.statusText}` : ''}`;
   const message = errorMessage(text);
   if (message) return new Error(`The AI server answered ${status}: ${message}`);
-  if (res.status === 404) return new Error(`The AI server answered 404 Not Found for ${url}. Check the base URL. For Ollama it usually ends with /v1.`);
+  if (res.status === 404) return new Error(`The AI server answered 404 Not Found for ${redactUrl(url)}. Check the base URL. For Ollama it usually ends with /v1.`);
   return new Error(`The AI server answered ${status}: ${text.slice(0, 200)}`);
 }
 
 const STREAM_IDLE_SECS = 90;
 const STREAM_TOTAL_SECS = 20 * 60;
 
-/** The answer text from the parts of a reply: content, else the thinking, else the "unreadable" error. Cut off at max_tokens: the error. */
+/**
+ * The answer text from the parts of a reply: content, else the thinking marked as such (`<think>...</think>`, which every
+ * extractor drops, so code or JSON drafted while thinking is never taken for the answer), else the "unreadable" error.
+ * Cut off at max_tokens: the error. Same as reply_text in src-tauri/src/ai.rs.
+ */
 function answerText(content: string, reasoning: string, finish: string | undefined): string {
   if (finish === 'length') throw new Error(AI_CUT_OFF);
   if (content.trim()) return content.trim();
-  if (reasoning.trim()) return reasoning.trim();
+  if (reasoning.trim()) return `<think>${reasoning.trim()}</think>`;
   throw new Error(`${AI_UNREADABLE} (Details: the reply had no text; finish_reason = ${finish ?? 'none'}.)`);
 }
+
+/** An error the server sent inside the stream: passed on as it is (as src-tauri/src/ai.rs does), never taken for a lost connection. */
+class ServerError extends Error {}
 
 /** Streaming chat request (SSE). Idle timeout instead of a total one, plus a 20 minute safety cap. */
 async function aiStream(baseUrl: string, apiKey: string, body: string, opts: AiChatOptions): Promise<string> {
@@ -97,7 +105,7 @@ async function aiStream(baseUrl: string, apiKey: string, body: string, opts: AiC
     let done = false;
     const handle = (payload: string) => {
       const ev = readSseEvent(payload);
-      if (ev.error) throw new Error(ev.error);
+      if (ev.error) throw new ServerError(ev.error);
       if (ev.done) { done = true; return; }
       if (ev.finish) finish = ev.finish;
       if (ev.usage) opts.onUsage?.(ev.usage);
@@ -121,7 +129,7 @@ async function aiStream(baseUrl: string, apiKey: string, body: string, opts: AiC
     if (reason === 'cancel') throw new Error('cancelled');
     if (reason === 'idle') throw new Error(`The AI server stopped sending for ${STREAM_IDLE_SECS} seconds.`);
     if (reason === 'total') throw new Error(`The AI server did not finish within ${STREAM_TOTAL_SECS / 60} minutes.`);
-    if (e instanceof Error && (e.message.startsWith('The AI server') || e.message === AI_CUT_OFF)) throw e;
+    if (e instanceof ServerError || (e instanceof Error && (e.message.startsWith('The AI server') || e.message === AI_CUT_OFF))) throw e;
     throw new Error(AI_CONNECT_ERROR(baseUrl));
   } finally {
     clearTimeout(idleTimer);

@@ -86,3 +86,16 @@ test('exact duplicate ops are dropped (the first counts) and the schema caps the
   expect(FORM_OPS_SCHEMA.properties.ops.maxItems).toBe(MAX_OPS);
   expect(MAX_OPS).toBe(300);
 });
+
+test('#18 intended identical ops are kept: three nameless adds, an autosize again after a caption change', () => {
+  const form = newProject().forms[0];
+  const ok = (ops: unknown[]) => { const r = parseFormOps(JSON.stringify({ ops }), form); if (!r.ok) throw new Error(r.reason); return r; };
+  const three = ok([{ op: 'add', type: 'CommandButton' }, { op: 'add', type: 'CommandButton' }, { op: 'add', type: 'CommandButton' }]);
+  expect(three.ops.filter(o => o.op === 'add')).toHaveLength(3);
+  expect(three.warnings.join()).not.toContain('repeated');
+  const again = ok([{ op: 'add', type: 'Label', name: 'lblA' }, { op: 'autosize', names: ['lblA'] }, { op: 'set', name: 'lblA', props: { Caption: 'A much longer caption' } }, { op: 'autosize', names: ['lblA'] }]);
+  expect(again.warnings.join()).not.toContain('repeated');
+  // a named add twice would make a second control: dropped
+  expect(ok([{ op: 'add', type: 'Label', name: 'lblB' }, { op: 'set', name: 'lblB', props: { Caption: 'x' } }, { op: 'add', type: 'Label', name: 'lblB' }]).warnings)
+    .toContain('Ignored 1 repeated operation (exact copies of an earlier one).');
+});

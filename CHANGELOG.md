@@ -2,11 +2,24 @@
 
 All notable changes to VibeBasic. Format follows Keep a Changelog.
 
-## [0.8.3] - 2026-10-23
+## [0.10.1] - 2026-10-24
+
+A bug hunt in the AI assistant, measured against a real local model (Qwen 27B on vLLM). Tasks solved at Thinking Low rose from 82% to 96%: form layouts from 64% to 91%, Ask AI on run-time errors from 80% to 100%.
 
 ### Fixed
-- An Ask AI answer that loops could loop again on the retry, in the same place ("The AI got stuck repeating itself" every time). The retry after a loop now goes without the form picture and without the structured output (the JSON grammar); the layout map and the nudge are still sent.
-- Dropdown arrows in dialogs (Tools > Options > AI: Model, Thinking, Send form picture) did nothing; only a click on the text opened the list. The row around the box is a label, which passed the arrow's click on to the text box, and that second click closed the list again.
+- AI code merges never break your code: declarations no longer land inside a Type, Enum or #If block or in the middle of a continued line, multi-line procedure headers and Attribute lines are kept, End Sub is not doubled, a changed Dim replaces the old one, and #If blocks stay whole. A merge that would add syntax errors is refused and explained instead of applied.
+- Thinking High failed on servers that only take low, medium and xhigh. A rejected level is now retried with the nearest one the server accepts, and Test Connection shows the levels the server takes (and picks Low for a new setup).
+- Form mode no longer drops values silently: a value it cannot use goes back to the model with the valid ones (StartUpPosition, SSTab tabs, Boolean values, form-level changes), and clear intent is accepted as is.
+- Syntax complaints quote the statement and show the expected form (Scale, Line, Circle, PSet, ListItems.Add). Code that still has syntax errors after the retry is marked in red and Cancel is the default.
+- Ask AI on a run-time error now sees the values on the failing line and is told to handle them, not to hide the error.
+- There was a gap of up to 3 seconds between the prompt and the waiting dialog in which you could start the program or a second Ask AI; a "Connecting..." dialog now covers it, and only one AI request runs at a time.
+- The code check knows ListItem, ADODB.Recordset and ADODB.Connection members, read-only properties (WindowList, MDIChild) and Implements methods; the MDI event-name fix renames to MDIForm_.
+- Placement and the layout check follow docked containers (a docked PictureBox on an MDI form).
+- Small overflows (up to 240 twips) grow the form instead of costing another round; truncated answers are rejected.
+- The preview diff uses bounded memory on big modules. The AI Log no longer shows a user name and password from the server address. Error texts say "this computer" on Windows and Linux.
+
+### Added
+- `tests-live/`: a live evaluation of the AI assistant against an OpenAI-compatible server (33 tasks, behaviour checks in the real run time), with a report.
 
 ## [0.10.0] - 2026-10-24
 
@@ -39,6 +52,12 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 
 ### Fixed
 - A thorough review of all of the above fixed 48 more issues, among them: objects in Collections and arrays are released, each ADO Connection has its own transaction, data tips never run code, crafted pictures in .frx files cannot hang an import, controls follow their container's ScaleMode, docked PictureBoxes know their size, Font* properties work everywhere, menu shortcuts follow the typed letter, and New form instances are freed after Unload.
+
+## [0.8.3] - 2026-10-23
+
+### Fixed
+- An Ask AI answer that loops could loop again on the retry, in the same place ("The AI got stuck repeating itself" every time). The retry after a loop now goes without the form picture and without the structured output (the JSON grammar); the layout map and the nudge are still sent.
+- Dropdown arrows in dialogs (Tools > Options > AI: Model, Thinking, Send form picture) did nothing; only a click on the text opened the list. The row around the box is a label, which passed the arrow's click on to the text box, and that second click closed the list again.
 
 ## [0.8.2] - 2026-10-23
 

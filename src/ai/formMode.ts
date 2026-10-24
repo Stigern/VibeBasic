@@ -3,11 +3,11 @@
 // Relative placement ("place" on add and set, "arrange", "autosize") is resolved to absolute Left/Top/Width/Height while parsing, in op order.
 import { setCodeCmd, addControlsCmd, compositeCmd, deleteControlsCmd, setPropertyCmd, type Command } from '../model/commands';
 import { addComponentsCmd } from '../model/components';
-import { CONTROL_TYPES, getPropDef, newControl, nextDefaultName, validateName } from '../model/controls';
+import { CONTROL_TYPES, getPropDef, newControl, nextDefaultName, validateName, type PropDef } from '../model/controls';
 import type { ControlDef, ControlType, FormDef, Project, PropValue } from '../model/types';
 import { absoluteRect, sizeOf } from '../ide/designerLogic';
-import { isDocked, isLine } from '../model/geometry';
-import { SHORTCUT_LABELS, isMenu, shortcutValue } from '../model/menus';
+import { formClientTwips, isDocked, isLine } from '../model/geometry';
+import { SHORTCUT_LABELS, hasMenuBar, isMenu, shortcutValue } from '../model/menus';
 import { formHasProp, formObjectName, mdiAllows } from '../model/mdi';
 import { parsePropertyInput } from '../ide/propertyEditors';
 import { applyCodeProposal, extractCode, type CodeApplyResult } from './codeMode';
@@ -24,26 +24,42 @@ export type FormOp =
   | { op: 'form'; props: Record<string, PropValue> };
 export type ParsedFormOps =
   | { ok: true; ops: FormOp[]; code: string | null; warnings: string[]; codeChanges?: CodeApplyResult['changes']; codeText?: string; codeSkipped?: string[];
+      /** What the answer asked for but could not be done (also in `warnings`), with what would be valid: problems for the check-and-fix round. */
+      issues?: string[];
       /** Added controls renamed because their name was taken: `from` (what the answer asked for, still the existing control) to `to`. */
       renamed?: { from: string; to: string }[] }
-  | { ok: false; error: string; raw: string; /** Why the reply was not usable JSON (sent back to the model). */ reason: string };
+  | { ok: false; error: string; raw: string; /** Why the reply was not usable JSON (sent back to the model). */ reason: string;
+      /** Usable JSON whose every op was dropped: why (sent back to the model instead of `reason`). */ issues?: string[] };
 type Ok = Extract<ParsedFormOps, { ok: true }>;
 
+/**
+ * Bounds of the schema: they keep a number or a name from running away inside the grammar ("top":2400000000... was seen live)
+ * and cut off an answer that has lost its way. Positions and sizes are twips; a property number may be a color (up to &HFFFFFFFF,
+ * or a negative system color). Only names (and the shortcut) get a maxLength: on vLLM 0.28 (xgrammar) a string with maxLength
+ * allows no escapes, so code and text lost their \n and \" (measured live: "Private Sub A()n    MsgBox 'x'nEnd Sub").
+ */
+export const SCHEMA_LIMITS = { twips: 100000, index: 32767, name: 64, listItems: 1000 } as const;
+const STR = (maxLength: number) => ({ type: 'string', maxLength });
+/** A string that may need escapes (code, captions, text): no maxLength (see SCHEMA_LIMITS). */
+const TEXT = { type: 'string' };
 /** A property value as parseProps reads it: text, a number, True/False, or a List's items. */
-const PROP_VALUE = { anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }, { type: 'array', items: { type: 'string' } }] };
+const PROP_VALUE = { anyOf: [TEXT, { type: 'number', minimum: -2147483648, maximum: 4294967295 }, { type: 'boolean' },
+  { type: 'array', items: TEXT, maxItems: SCHEMA_LIMITS.listItems }] };
 const PROPS = { type: 'object', additionalProperties: PROP_VALUE };
 const opSchema = (op: string, properties: Record<string, unknown>, required: string[]) =>
   ({ type: 'object', properties: { op: { type: 'string', enum: [op] }, ...properties }, required: ['op', ...required], additionalProperties: false });
-const NAME = { type: 'string' }, INDEX = { type: 'integer', minimum: 0 }, INT = { type: 'integer' }, NAMES = { type: 'array', items: NAME }, BOOL = { type: 'boolean' };
+const NAME = STR(SCHEMA_LIMITS.name), INDEX = { type: 'integer', minimum: 0, maximum: SCHEMA_LIMITS.index };
+const TWIPS = { type: 'integer', minimum: 0, maximum: SCHEMA_LIMITS.twips }, BOOL = { type: 'boolean' };
 /** "place": next to another control, `gap` twips away (default 120). */
 const PLACE = {
   type: 'object',
-  properties: { below: NAME, above: NAME, rightOf: NAME, leftOf: NAME, gap: INT, align: { type: 'string', enum: ['left', 'top', 'center'] } },
+  properties: { below: NAME, above: NAME, rightOf: NAME, leftOf: NAME, gap: TWIPS, align: { type: 'string', enum: ['left', 'top', 'center'] } },
   additionalProperties: false,
 };
 
 /** The most ops one answer may have (the schema's maxItems). */
 export const MAX_OPS = 300;
+const NAMES = { type: 'array', items: NAME, maxItems: MAX_OPS };
 
 /**
  * The JSON schema of a form-mode answer, `{ops:[...], code?}`, sent as `response_format` (json_schema "form_ops").
@@ -58,18 +74,18 @@ export const FORM_OPS_SCHEMA = {
       maxItems: MAX_OPS,
       items: {
         anyOf: [
-          opSchema('add', { type: { type: 'string' }, name: NAME, index: INDEX, container: { anyOf: [{ type: 'string' }, { type: 'null' }] }, tab: INDEX, props: PROPS, place: PLACE }, ['type', 'name']),
+          opSchema('add', { type: NAME, name: NAME, index: INDEX, container: { anyOf: [NAME, { type: 'null' }] }, tab: { type: 'integer', minimum: 0, maximum: 999 }, props: PROPS, place: PLACE }, ['type', 'name']),
           opSchema('set', { name: NAME, index: INDEX, props: PROPS, place: PLACE }, ['name']),
           opSchema('delete', { name: NAME, index: INDEX }, ['name']),
           opSchema('form', { props: PROPS }, ['props']),
-          opSchema('arrange', { names: NAMES, as: { type: 'string', enum: ['row', 'column', 'grid'] }, columns: { type: 'integer', minimum: 1 }, gap: INT, left: INT, top: INT }, ['names', 'as']),
+          opSchema('arrange', { names: NAMES, as: { type: 'string', enum: ['row', 'column', 'grid'] }, columns: { type: 'integer', minimum: 1, maximum: 100 }, gap: TWIPS, left: TWIPS, top: TWIPS }, ['names', 'as']),
           opSchema('autosize', { names: NAMES }, ['names']),
-          opSchema('menu', { name: NAME, caption: { type: 'string' }, parent: { anyOf: [{ type: 'string' }, { type: 'null' }] }, index: INDEX,
-            shortcut: { type: 'string' }, checked: BOOL, enabled: BOOL, visible: BOOL, windowList: BOOL }, ['name']),
+          opSchema('menu', { name: NAME, caption: TEXT, parent: { anyOf: [NAME, { type: 'null' }] }, index: INDEX,
+            shortcut: STR(32), checked: BOOL, enabled: BOOL, visible: BOOL, windowList: BOOL }, ['name']),
         ],
       },
     },
-    code: { type: 'string' },
+    code: TEXT,
   },
   required: ['ops'],
   additionalProperties: false,
@@ -119,6 +135,22 @@ function sanitizeJson(s: string): string {
   return out;
 }
 
+/**
+ * Whether the JSON that starts at `from` stops before it is closed (an answer cut off, or one the model ended early): the
+ * brackets left open at the end of the text, outside strings. An unterminated string counts as cut off too.
+ */
+export function isTruncatedJson(text: string, from = 0): boolean {
+  let depth = 0, inString = false;
+  for (let i = from; i < text.length; i++) {
+    const c = text[i];
+    if (inString) { if (c === '\\') i++; else if (c === '"') inString = false; continue; }
+    if (c === '"') inString = true;
+    else if (c === '{' || c === '[') depth++;
+    else if (c === '}' || c === ']') { depth--; if (depth === 0) return false; }
+  }
+  return depth > 0 || inString;
+}
+
 /** The JSON in a reply (fences, thinking and loose syntax tolerated), or why there is none. */
 function parseJsonLoose(reply: string): { value: unknown } | { reason: string } {
   const text = stripThinking(reply);
@@ -126,6 +158,7 @@ function parseJsonLoose(reply: string): { value: unknown } | { reason: string } 
   // a bare top-level array of ops is accepted too
   const [open, close] = q >= 0 && (o < 0 || q < o) ? ['[', ']'] : ['{', '}'];
   const a = text.indexOf(open), b = text.lastIndexOf(close);
+  if (a >= 0 && isTruncatedJson(text, a)) return { reason: 'the JSON stops before it is complete (cut off); answer with the whole JSON object' };
   if (a < 0 || b <= a) return { reason: 'no JSON object found' };
   try { return { value: JSON.parse(sanitizeJson(text.slice(a, b + 1))) }; }
   catch (e) {
@@ -161,6 +194,8 @@ function toValue(def: NonNullable<ReturnType<typeof getPropDef>>, v: unknown): P
   if (v === null || v === undefined) return undefined;
   if (def.kind === 'list' && Array.isArray(v)) return v.every(x => typeof x === 'string') ? (v as string[]) : undefined;
   let text: string;
+  // 1 / 0 (and "1") for a Boolean: True / False (-1 and "0" parse as they are)
+  if (def.kind === 'bool' && (v === 1 || v === '1')) return true;
   if (typeof v === 'string') text = v;
   else if (typeof v === 'boolean') text = v ? 'True' : 'False';
   else if (typeof v === 'number') text = String(def.kind === 'int' ? Math.round(v) : v);
@@ -169,15 +204,54 @@ function toValue(def: NonNullable<ReturnType<typeof getPropDef>>, v: unknown): P
   return r.ok ? r.value : undefined;
 }
 
-function parseProps(type: ControlType, rawProps: unknown, owner: string, warnings: string[]): Record<string, PropValue> {
+/** What a property takes, for the message about an invalid value ("0 Manual, 1 CenterOwner, ..."). */
+export function validValues(def: PropDef): string {
+  switch (def.kind) {
+    case 'enum': return def.enumValues?.length ? `valid: ${def.enumValues.map(e => `${e.value} ${e.label.replace(/^-?\d+ - /, '')}`).join(', ')}` : '';
+    case 'bool': return 'True or False';
+    case 'int': return `a whole number${def.min !== undefined && def.max !== undefined ? ` from ${def.min} to ${def.max}` : def.min !== undefined ? ` of at least ${def.min}` : ''}`;
+    case 'color': return 'a VB6 color number, e.g. 255 red, 16711680 blue';
+    case 'list': return 'a list of strings';
+    case 'date': return 'a date like "2026-10-22"';
+    default: return '';
+  }
+}
+const shownValue = (v: unknown): string => { const t = JSON.stringify(v) ?? String(v); return t.length > 60 ? `${t.slice(0, 57)}...` : t; };
+
+/** SSTab Tabs given as the captions ("General\nView", or a list): the captions go into TabCaption and their count into Tabs. */
+function tabsAsCaptions(v: unknown): string[] | null {
+  const items = Array.isArray(v) ? v.map(String) : typeof v === 'string' && !/^\s*-?\d+\s*$/.test(v) ? v.split(/\r?\n|\|/) : null;
+  const caps = items?.map(c => c.trim()).filter(Boolean) ?? [];
+  return caps.length ? caps : null;
+}
+
+/** Messages of parsing: `warn` only shows one in the preview, `drop` also makes it a problem for the check-and-fix round. */
+interface Report { warn(msg: string): void; drop(msg: string): void }
+
+function parseProps(type: ControlType, rawProps: unknown, owner: string, r: Report): Record<string, PropValue> {
   const out: Record<string, PropValue> = {};
   if (!isObj(rawProps)) return out;
   for (const [k, v] of Object.entries(rawProps)) {
     if (k.toLowerCase() === 'name' || k.toLowerCase() === 'index') continue;
     const def = getPropDef(type, k);
-    if (!def || !def.designTime) { warnings.push(`Ignored unknown property ${k} on ${type}.`); continue; }
+    if (!def) {
+      r.drop(`Ignored unknown property ${k} on ${type}.${k.toLowerCase() === 'tab' ? ' A control goes on a tab of an SSTab with "tab" in its add op (beside "container"), not in "props".' : ''}`);
+      continue;
+    }
+    if (!def.designTime) { r.drop(`Ignored ${def.name} on ${owner}: it can only be set in code at run time, not in "props".`); continue; }
+    const caps = type === 'SSTab' && def.name === 'Tabs' ? tabsAsCaptions(v) : null;
+    if (caps) {
+      if (!Array.isArray(out.TabCaption)) out.TabCaption = caps;
+      out.Tabs = caps.length;
+      r.warn(`Put the tab captions of ${owner} into TabCaption (Tabs is their number, ${caps.length}).`);
+      continue;
+    }
     const val = toValue(def, v);
-    if (val === undefined) { warnings.push(`Ignored invalid value for ${def.name} on ${owner}.`); continue; }
+    if (val === undefined) {
+      const valid = validValues(def);
+      r.drop(`Ignored invalid value ${shownValue(v)} for ${def.name} on ${owner}${valid ? ` (${valid})` : ''}.`);
+      continue;
+    }
     out[def.name] = val;
   }
   return out;
@@ -195,7 +269,17 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
   const fail: ParsedFormOps = { ok: false, error: NOT_UNDERSTOOD, raw: reply, reason: 'it has no usable "ops" and no "code"' };
   const rawOps = Array.isArray(json.ops) ? json.ops : [];
   const warnings: string[] = [];
+  /** What the answer asked for but could not be done: shown, and a problem for the check-and-fix round. */
+  const issues: string[] = [];
+  const r: Report = { warn: m => { warnings.push(m); }, drop: m => { warnings.push(m); issues.push(m); } };
   const ops: FormOp[] = [];
+  /** "set" naming the form itself (Form1, Me, Form, MDIForm) when no control has that name: a "form" op. */
+  const isFormItself = (raw: unknown): boolean => {
+    if (typeof raw !== 'string') return false;
+    const n = splitName(raw).name.toLowerCase();
+    return [form.name.toLowerCase(), 'me', 'form', formObjectName(form).toLowerCase()].includes(n) && !work.controls.some(c => c.name.toLowerCase() === n);
+  };
+  const noForms = (what: string) => r.drop(`Ignored ${what}: form mode changes only ${form.name} and cannot add a form. Leave it out and do the rest; the user adds a form with Project > Add Form (or Add MDI Form).`);
   // Working picture of the form's controls while the ops are read (names, types, containers).
   const work: FormDef = { ...form, controls: form.controls.map(c => ({ ...c, props: { ...c.props } })) };
   /** The props of the add op of a control added in this reply (by working id): later placement goes into them. */
@@ -229,20 +313,26 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
     return work.controls.filter(c => c.name.toLowerCase() === to.toLowerCase());
   };
 
-  // an answer that repeated itself: exact duplicates of an op are dropped, the first one counts
+  // An answer that repeated itself: an exact copy of an op is dropped when it would make a second control or menu of the same
+  // name, or when it repeats the op right before it. Nameless adds are kept (three of them are three buttons), and so is a copy
+  // further on (an autosize after a caption change is meant).
   const seen = new Set<string>();
-  let repeated = 0;
+  let repeated = 0, prevKey: string | null = null;
   for (const raw of rawOps) {
     if (!isObj(raw) || typeof raw.op !== 'string') continue;
     const key = JSON.stringify(raw);
-    if (seen.has(key)) { repeated++; continue; }
-    seen.add(key);
     const low = raw.op.trim().toLowerCase();
-    const kind = OP_ALIASES[low] ?? low;
+    let kind = OP_ALIASES[low] ?? low;
+    if (kind === 'set' && isFormItself(raw.name)) kind = 'form';
+    const creates = kind === 'add' || kind === 'menu';
+    const copy = creates ? typeof raw.name === 'string' && raw.name.trim() !== '' && seen.has(key) : key === prevKey;
+    prevKey = key;
+    if (copy) { repeated++; continue; }
+    seen.add(key);
     if (kind === 'form') {
-      const props = parseProps('Form', propsOf(raw), 'Form', warnings);
+      const props = parseProps('Form', propsOf(raw), form.name, r);
       for (const k of Object.keys(props)) {
-        if (!formHasProp(form, k)) { delete props[k]; warnings.push(`Ignored ${k}: ${form.mdi ? 'an MDI form' : 'a form that is not the MDI form'} has no ${k}.`); }
+        if (!formHasProp(form, k)) { delete props[k]; r.drop(`Ignored ${k}: ${form.mdi ? 'an MDI form' : 'a form that is not the MDI form'} has no ${k}.`); }
       }
       if (Object.keys(props).length) ops.push({ op: 'form', props });
     } else if (kind === 'menu') {
@@ -251,20 +341,20 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
       for (const [k, v] of Object.entries(raw)) { const pn = MENU_KEYS[k.toLowerCase()]; if (pn && v !== undefined && v !== null) rawProps[pn] = v; }
       if (typeof raw.shortcut === 'string' && raw.shortcut.trim()) {
         const sc = shortcutValue(raw.shortcut);
-        if (sc === null) warnings.push(`Ignored unknown shortcut ${raw.shortcut} for ${String(raw.name)}.`); else rawProps.Shortcut = SHORTCUT_LABELS[sc];
+        if (sc === null) r.drop(`Ignored unknown shortcut ${raw.shortcut} for ${String(raw.name)} (write it like Ctrl+O, Ctrl+Shift+S, F5 or Del).`); else rawProps.Shortcut = SHORTCUT_LABELS[sc];
       }
       let parent: ControlDef | undefined;
       if (typeof raw.parent === 'string' && raw.parent.trim()) {
         const want = splitName(raw.parent);
         const plain = (c: ControlDef) => String(c.props.Caption ?? '').replace(/&(?!&)/g, '').toLowerCase();
         parent = find(want.name, want.index).find(isMenu) ?? work.controls.find(c => isMenu(c) && plain(c) === want.name.replace(/&(?!&)/g, '').toLowerCase());
-        if (!parent) { warnings.push(`Ignored menu ${String(raw.name)}: there is no menu ${raw.parent}.`); continue; }
+        if (!parent) { r.drop(`Ignored menu ${String(raw.name)}: there is no menu ${raw.parent}; add the parent menu first.`); continue; }
       }
-      if (typeof raw.name !== 'string' || !raw.name.trim()) { warnings.push('Ignored a menu without a name.'); continue; }
+      if (typeof raw.name !== 'string' || !raw.name.trim()) { r.drop('Ignored a menu without a name.'); continue; }
       let { name, index } = splitName(raw.name);
       if (index === null && typeof raw.index === 'number' && raw.index >= 0) index = Math.floor(raw.index);
-      if (!validateName(name) || clashes(name, index, 'Menu')) { warnings.push(`Ignored menu ${label(name, index)}: the name is not valid or taken.`); continue; }
-      const props = parseProps('Menu', rawProps, label(name, index), warnings);
+      if (!validateName(name) || clashes(name, index, 'Menu')) { r.drop(`Ignored menu ${label(name, index)}: the name is not valid or taken.`); continue; }
+      const props = parseProps('Menu', rawProps, label(name, index), r);
       if (props.Caption === undefined) props.Caption = name;
       const added = newControl(work, 'Menu', { left: 0, top: 0 }, parent?.id ?? null);
       Object.assign(added, { name, index });
@@ -274,8 +364,15 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
     } else if (kind === 'add') {
       const typeName = typeof raw.type === 'string' ? raw.type : '';
       const type = resolveType(typeName);
-      if (!type) { warnings.push(`Ignored unknown control type ${typeName}.`); continue; }
-      const rawProps = propsOf(raw);
+      if (!type && /^(mdi)?form$|^mdichild$/i.test(typeName.trim())) { noForms(`the new ${typeName.trim()} ${typeof raw.name === 'string' ? raw.name : ''}`.trim()); continue; }
+      if (!type) { r.drop(`Ignored unknown control type ${typeName}.`); continue; }
+      const rawProps = { ...propsOf(raw) };
+      // {"props":{"tab":1}} on a control that has no Tab property of its own: the SSTab tab it goes on
+      let rawTab: unknown = raw.tab;
+      if (!getPropDef(type, 'Tab')) {
+        for (const k of Object.keys(rawProps)) if (k.toLowerCase() === 'tab') { if (rawTab === undefined) rawTab = rawProps[k]; delete rawProps[k]; }
+      }
+      if (typeof rawTab === 'string' && /^\s*\d+\s*$/.test(rawTab)) rawTab = Number(rawTab);
       const given = typeof raw.name === 'string' && raw.name.trim() ? raw.name : typeof rawProps.Name === 'string' ? rawProps.Name : '';
       let { name, index } = splitName(given);
       let renamedFrom: { key: string; from: string; to: string } | null = null;
@@ -293,7 +390,7 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
         renamedFrom = { key: nameKey(name, index), from: label(name, index), to: `${name}${n}` };
         name = `${name}${n}`; index = null;
       }
-      const props = parseProps(type, rawProps, label(name, index), warnings);
+      const props = parseProps(type, rawProps, label(name, index), r);
       // a real size under 200 x 60 twips (13 x 4 px) is useless, so small numbers must be pixels
       if (typeof props.Width === 'number' && typeof props.Height === 'number' && props.Width < 200 && props.Height < 60) {
         for (const k of GEO) if (typeof props[k] === 'number') props[k] = (props[k] as number) * 15;
@@ -304,15 +401,15 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
         const parent = find(splitName(raw.container).name, splitName(raw.container).index)[0];
         // a Menu goes in a menu, any other control in a container
         if (parent && (type === 'Menu' ? isMenu(parent) : CONTROL_TYPES[parent.type].isContainer)) container = label(parent.name, parent.index);
-        else warnings.push(`Ignored unknown container ${raw.container} for ${name}.`);
+        else r.drop(`Ignored unknown container ${raw.container} for ${name}${parent ? `: a ${parent.type} holds no controls (use a Frame, PictureBox or SSTab)` : ''}.`);
       }
       const parent = container ? find(splitName(container).name, splitName(container).index)[0] : undefined;
       if (form.mdi && !parent && !mdiAllows(type)) {
-        warnings.push(`Ignored ${type} ${name}: an MDI form holds only aligned controls (PictureBox, Toolbar, StatusBar, CoolBar) and invisible ones; put it on a child form (MDIChild = True) or in a PictureBox.`);
+        r.drop(`Ignored ${type} ${name}: an MDI form holds only aligned controls (PictureBox, Toolbar, StatusBar, CoolBar) and invisible ones; put it on a child form (MDIChild = True) or in a PictureBox.`);
         continue;
       }
       if (form.mdi && !parent && type === 'PictureBox' && !props.Align) props.Align = 1;   // VB6: a PictureBox on an MDI form aligns
-      const tab = parent?.type === 'SSTab' && typeof raw.tab === 'number' && raw.tab >= 0 ? Math.floor(raw.tab) : undefined;
+      const tab = parent?.type === 'SSTab' && typeof rawTab === 'number' && rawTab >= 0 ? Math.floor(rawTab) : undefined;
       // the working control starts where buildCommands puts it (240, 240, default size), so placement relative to it is right
       const added = newControl(work, type, { left: 240, top: 240 }, parent?.id ?? null);
       const generated = added.name;
@@ -323,7 +420,7 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
       Object.assign(added.props, props);
       work.controls.push(added);
       addedProps.set(added.id, props);
-      if (raw.place !== undefined) Object.assign(props, resolvePlace(work, added, raw.place, byName, warnings, props));
+      if (raw.place !== undefined) Object.assign(props, resolvePlace(work, added, raw.place, byName, r, props));
       Object.assign(added.props, props);
       ops.push({ op: 'add', type, name, index, container, props, ...(tab !== undefined ? { tab } : {}) });
       if (renamedFrom) { alias.set(renamedFrom.key, renamedFrom.to); renamed.push({ from: renamedFrom.from, to: renamedFrom.to }); }
@@ -331,7 +428,7 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
       const s = splitName(typeof raw.name === 'string' ? raw.name : '');
       if (s.index === null && typeof raw.index === 'number' && raw.index >= 0) s.index = Math.floor(raw.index);
       const targets = s.name ? find(s.name, s.index) : [];
-      if (!targets.length) { warnings.push(`Ignored change to missing control ${label(s.name, s.index)}.`); continue; }
+      if (!targets.length) { r.drop(`Ignored ${kind === 'delete' ? 'delete of' : 'change to'} missing control ${label(s.name, s.index)}${kind === 'set' ? ' (a new control needs "add")' : ''}.`); continue; }
       if (kind === 'delete') {
         const gone = new Set<string>(targets.map(t => t.id));
         for (let grew = true; grew;) {
@@ -341,16 +438,16 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
         work.controls = work.controls.filter(c => !gone.has(c.id));
         ops.push({ op: 'delete', name: targets[0].name, index: s.index });
       } else {
-        const props = parseProps(targets[0].type, propsOf(raw), label(targets[0].name, s.index), warnings);
+        const props = parseProps(targets[0].type, propsOf(raw), label(targets[0].name, s.index), r);
         for (const t of targets) Object.assign(t.props, props);
         if (raw.place !== undefined && targets.length > 1) {
           // a whole control array: its members in a column (in their current order) placed as one block
           if (Object.keys(props).length) ops.push({ op: 'set', name: targets[0].name, index: s.index, props });
-          for (const [c, geo] of placeGroup(work, targets, raw.place, byName, warnings, props)) setGeometry(c, geo);
+          for (const [c, geo] of placeGroup(work, targets, raw.place, byName, r, props)) setGeometry(c, geo);
           continue;
         }
         if (raw.place !== undefined) {
-          const geo = resolvePlace(work, targets[0], raw.place, byName, warnings, props);
+          const geo = resolvePlace(work, targets[0], raw.place, byName, r, props);
           Object.assign(props, geo);
           for (const t of targets) Object.assign(t.props, geo);
         }
@@ -362,11 +459,12 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
       for (const n of names) {
         const c = byName(n);
         if (c && !ctrls.includes(c)) ctrls.push(c);
-        else if (!c) warnings.push(`Ignored ${kind} of missing control ${String(n)}.`);
+        else if (!c) r.drop(`Ignored ${kind} of missing control ${String(n)}.`);
       }
-      if (kind === 'autosize') for (const c of ctrls) { const geo = autosize(c, warnings); if (geo) setGeometry(c, geo); }
-      else for (const [c, geo] of arrange(ctrls, raw, warnings)) setGeometry(c, geo);
-    } else warnings.push(`Ignored unknown operation ${raw.op}.`);
+      if (kind === 'autosize') for (const c of ctrls) { const geo = autosize(c, r); if (geo) setGeometry(c, geo); }
+      else for (const [c, geo] of arrange(ctrls, raw, r)) setGeometry(c, geo);
+    } else if (/form/i.test(kind)) noForms(`operation ${raw.op}`);
+    else r.drop(`Ignored unknown operation ${raw.op} (the ops are add, set, delete, form, menu, arrange and autosize).`);
   }
 
   if (repeated) warnings.push(`Ignored ${repeated} repeated ${repeated === 1 ? 'operation' : 'operations'} (exact copies of an earlier one).`);
@@ -378,13 +476,48 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
   if (typeof json.code === 'string' && json.code.trim()) {
     const extracted = json.code.includes('```') ? extractCode(json.code) ?? json.code : json.code;
     text = fixCode ? fixCode(extracted) : extracted;
-    const r = applyCodeProposal(form.code, text, null);
-    if (r?.skipped) { codeSkipped = r.skipped; warnings.push(`Kept ${r.skipped.join(', ')} as they are: the answer had them without their code.`); }
-    if (r && r.changes.length) { code = r.source; codeChanges = r.changes; } else if (!r) warnings.push('Ignored code that could not be merged into the form.');
+    const refusal: { refused?: string } = {};
+    const merged = applyCodeProposal(form.code, text, null, null, refusal);
+    if (merged?.skipped) { codeSkipped = merged.skipped; warnings.push(`Kept ${merged.skipped.join(', ')} as they are: the answer had them without their code.`); }
+    if (merged && merged.changes.length) { code = merged.source; codeChanges = merged.changes; }
+    else if (!merged) r.drop(refusal.refused ? `Ignored the code: ${refusal.refused.replace(/\n/g, ' ')} Send each changed procedure complete, from its first line to its End line.` : 'Ignored code that could not be merged into the form.');
   }
-  if (!ops.length && code === null) return warnings.length ? { ...fail, raw: `${reply}\n\nIgnored:\n${warnings.join('\n')}` } : fail;
+  if (!ops.length && code === null) {
+    return warnings.length ? { ...fail, raw: `${reply}\n\nIgnored:\n${warnings.join('\n')}`, ...(issues.length ? { issues } : {}) } : fail;
+  }
   return { ok: true, ops, code, warnings, ...(codeChanges ? { codeChanges } : {}), ...(code !== null && text !== undefined ? { codeText: text } : {}), ...(codeSkipped ? { codeSkipped } : {}),
-    ...(renamed.length ? { renamed } : {}) };
+    ...(renamed.length ? { renamed } : {}), ...(issues.length ? { issues } : {}) };
+}
+
+/** The most a control may stick out past the form's right or bottom edge for the form to grow instead of a model round. */
+export const AUTO_GROW_MAX = 240;
+/** The margin the grown form leaves after the control that stuck out furthest. */
+const GROW_MARGIN = 240;
+
+/**
+ * Width / Height that make `form` (a proposal) big enough when its controls stick out past the right or bottom edge by at most
+ * AUTO_GROW_MAX twips (each edge on its own), with GROW_MARGIN to spare; null when nothing needs it. With `only` (lower-case
+ * names), just those controls count: a control the answer did not touch is not a reason to resize the form. The MDI form is
+ * left alone.
+ */
+export function growForOverflow(form: FormDef, only?: Set<string>): { props: Record<string, number>; note: string } | null {
+  if (form.mdi) return null;
+  const client = formClientTwips(form.props, hasMenuBar(form.controls));
+  let right = 0, bottom = 0, rightName = '', bottomName = '';
+  for (const c of form.controls) {
+    if (c.parentId || isMenu(c) || isLine(c) || isDocked(c) || c.props.Visible === false || CONTROL_TYPES[c.type].invisibleAtRuntime) continue;
+    if (only && !only.has(c.name.toLowerCase()) && !only.has(label(c.name, c.index).toLowerCase())) continue;
+    const r = rectOf(c);
+    if (r.left + r.width > right) { right = r.left + r.width; rightName = label(c.name, c.index); }
+    if (r.top + r.height > bottom) { bottom = r.top + r.height; bottomName = label(c.name, c.index); }
+  }
+  const overX = right - client.width, overY = bottom - client.height;
+  const props: Record<string, number> = {};
+  const notes: string[] = [];
+  const outer = (k: 'Width' | 'Height', d: number) => (typeof form.props[k] === 'number' ? form.props[k] as number : d);
+  if (overX > 0 && overX <= AUTO_GROW_MAX) { const by = roundUp(overX + GROW_MARGIN); props.Width = outer('Width', 4800) + by; notes.push(`${by} twips wider so that ${rightName} fits`); }
+  if (overY > 0 && overY <= AUTO_GROW_MAX) { const by = roundUp(overY + GROW_MARGIN); props.Height = outer('Height', 3600) + by; notes.push(`${by} twips higher so that ${bottomName} fits`); }
+  return notes.length ? { props, note: `Made the form ${notes.join(' and ')}.` } : null;
 }
 
 const DEFAULT_GAP = 120;
@@ -398,27 +531,28 @@ const PLACE_KEYS: Record<string, 'below' | 'above' | 'rightOf' | 'leftOf'> = { b
  * the middles). A Left (below/above) or Top (rightOf/leftOf) given in the same op's `given` props is kept unless "align" is set.
  * Works across containers (the position is converted to the target's container).
  */
-function resolvePlace(work: FormDef, target: ControlDef, place: unknown, byName: (n: unknown) => ControlDef | undefined, warnings: string[],
+function resolvePlace(work: FormDef, target: ControlDef, place: unknown, byName: (n: unknown) => ControlDef | undefined, r: Report,
   given: Record<string, PropValue>, size: { width: number; height: number } = sizeOf(target)): Record<string, number> {
   if (!isObj(place)) return {};
-  if (!movable(target, 'place', warnings)) return {};
+  if (!movable(target, 'place', r)) return {};
   const entry = Object.entries(place).find(([k]) => PLACE_KEYS[k.toLowerCase()]);
-  if (!entry) { warnings.push(`Ignored "place" of ${target.name} without below, above, rightOf or leftOf.`); return {}; }
+  // a placement that names no control (or the control itself) is a broken answer, not something to guess
+  if (!entry) { r.drop(`Ignored "place" of ${target.name} without below, above, rightOf or leftOf.`); return {}; }
   const ref = byName(entry[1]);
-  if (!ref || ref === target) { warnings.push(`Ignored "place" of ${target.name}: no control ${String(entry[1])}.`); return {}; }
+  if (!ref || ref === target) { r.drop(`Ignored "place" of ${target.name}: ${ref ? 'it cannot be placed next to itself' : `there is no control ${String(entry[1])}`}; name an existing control or one added before it.`); return {}; }
   const dir = PLACE_KEYS[entry[0].toLowerCase()];
   const gap = Math.max(0, num(place.gap) ?? DEFAULT_GAP);
   const align = typeof place.align === 'string' ? place.align.toLowerCase() : '';
-  const r = absoluteRect(work, ref.id);
+  const at = absoluteRect(work, ref.id);
   const { width: w, height: h } = size;
   const origin = target.parentId ? absoluteRect(work, target.parentId) : { left: 0, top: 0 };
   let left: number, top: number;
   if (dir === 'below' || dir === 'above') {
-    top = dir === 'below' ? r.top + r.height + gap : r.top - gap - h;
-    left = align === 'center' ? r.left + (r.width - w) / 2 : align === 'right' ? r.left + r.width - w : r.left;
+    top = dir === 'below' ? at.top + at.height + gap : at.top - gap - h;
+    left = align === 'center' ? at.left + (at.width - w) / 2 : align === 'right' ? at.left + at.width - w : at.left;
   } else {
-    left = dir === 'rightOf' ? r.left + r.width + gap : r.left - gap - w;
-    top = align === 'center' || align === 'middle' ? r.top + (r.height - h) / 2 : align === 'bottom' ? r.top + r.height - h : r.top;
+    left = dir === 'rightOf' ? at.left + at.width + gap : at.left - gap - w;
+    top = align === 'center' || align === 'middle' ? at.top + (at.height - h) / 2 : align === 'bottom' ? at.top + at.height - h : at.top;
   }
   const out = { Left: Math.round(left - origin.left), Top: Math.round(top - origin.top) };
   const cross = dir === 'below' || dir === 'above' ? 'Left' : 'Top';
@@ -427,25 +561,25 @@ function resolvePlace(work: FormDef, target: ControlDef, place: unknown, byName:
 }
 
 /** Whether place/arrange can move `c` by Left/Top: not a Line (X1..Y2) and not a docked control (its edge decides); else a warning. */
-function movable(c: ControlDef, what: string, warnings: string[]): boolean {
-  if (isMenu(c)) { warnings.push(`Ignored ${what} of ${label(c.name, c.index)}: a menu has no position.`); return false; }
-  if (isLine(c)) { warnings.push(`Ignored ${what} of ${label(c.name, c.index)}: a Line is placed by X1, Y1, X2 and Y2.`); return false; }
-  if (isDocked(c)) { warnings.push(`Ignored ${what} of ${label(c.name, c.index)}: it is docked (Align), so it sits at its edge.`); return false; }
+function movable(c: ControlDef, what: string, r: Report): boolean {
+  if (isMenu(c)) { r.warn(`Ignored ${what} of ${label(c.name, c.index)}: a menu has no position.`); return false; }
+  if (isLine(c)) { r.warn(`Ignored ${what} of ${label(c.name, c.index)}: a Line is placed by X1, Y1, X2 and Y2.`); return false; }
+  if (isDocked(c)) { r.warn(`Ignored ${what} of ${label(c.name, c.index)}: it is docked (Align), so it sits at its edge.`); return false; }
   return true;
 }
 
 /** "place" for all members of a control array: a column of them (current order, top to bottom) placed as one block. */
-function placeGroup(work: FormDef, members: ControlDef[], place: unknown, byName: (n: unknown) => ControlDef | undefined, warnings: string[],
+function placeGroup(work: FormDef, members: ControlDef[], place: unknown, byName: (n: unknown) => ControlDef | undefined, r: Report,
   given: Record<string, PropValue>): [ControlDef, Record<string, number>][] {
   const order = [...members].sort((a, b) => rectOf(a).top - rectOf(b).top || rectOf(a).left - rectOf(b).left || (a.index ?? 0) - (b.index ?? 0));
   const gap = isObj(place) ? Math.max(0, num(place.gap) ?? DEFAULT_GAP) : DEFAULT_GAP;
-  const column = arrange(order, { as: 'column', left: 0, top: 0, gap }, warnings);
+  const column = arrange(order, { as: 'column', left: 0, top: 0, gap }, r);
   if (!column.length) return [];
   const block = {
     width: Math.max(...column.map(([c]) => sizeOf(c).width)),
     height: Math.max(...column.map(([c, g]) => g.Top + sizeOf(c).height)),
   };
-  const at = resolvePlace(work, column[0][0], place, byName, warnings, given, block);
+  const at = resolvePlace(work, column[0][0], place, byName, r, given, block);
   if (at.Left === undefined || at.Top === undefined) return [];
   return column.map(([c, g]) => [c, { Left: at.Left + g.Left, Top: at.Top + g.Top }]);
 }
@@ -455,11 +589,11 @@ function placeGroup(work: FormDef, members: ControlDef[], place: unknown, byName
  * `left`/`top` (default: where the first one is). A grid's columns are as wide as their widest control; in a row or a grid each control
  * is centred vertically in its row, so a Label next to a TextBox lines up with its text.
  */
-function arrange(all: ControlDef[], raw: Record<string, unknown>, warnings: string[]): [ControlDef, Record<string, number>][] {
-  const ctrls = all.filter(c => movable(c, 'arrange', warnings));
+function arrange(all: ControlDef[], raw: Record<string, unknown>, r: Report): [ControlDef, Record<string, number>][] {
+  const ctrls = all.filter(c => movable(c, 'arrange', r));
   if (!ctrls.length) return [];
   const same = ctrls.filter(c => c.parentId === ctrls[0].parentId);
-  if (same.length < ctrls.length) warnings.push(`Ignored arrange of ${ctrls.filter(c => !same.includes(c)).map(c => c.name).join(', ')}: in another container than ${ctrls[0].name}.`);
+  if (same.length < ctrls.length) r.warn(`Ignored arrange of ${ctrls.filter(c => !same.includes(c)).map(c => c.name).join(', ')}: in another container than ${ctrls[0].name}.`);
   const as = String(raw.as ?? 'row').toLowerCase();
   const gap = Math.max(0, num(raw.gap) ?? DEFAULT_GAP);
   const first = rectOf(same[0]);
@@ -482,9 +616,9 @@ function arrange(all: ControlDef[], raw: Record<string, unknown>, warnings: stri
 
 const roundUp = (twips: number) => Math.ceil(twips / 15) * 15;
 /** "autosize": Width (and a Label's Height) that fit the caption; a CommandButton gets some room around it and at least 375 height. */
-function autosize(c: ControlDef, warnings: string[]): Record<string, number> | null {
+function autosize(c: ControlDef, r: Report): Record<string, number> | null {
   const pad = CAPTION_PAD[c.type];
-  if (pad === undefined || c.type === 'Frame') { warnings.push(`Ignored autosize of ${c.name}: only Labels, CommandButtons, CheckBoxes and OptionButtons are sized to their caption.`); return null; }
+  if (pad === undefined || c.type === 'Frame') { r.warn(`Ignored autosize of ${c.name}: only Labels, CommandButtons, CheckBoxes and OptionButtons are sized to their caption.`); return null; }
   const caption = typeof c.props.Caption === 'string' ? c.props.Caption : c.name;
   const textW = textWidthPx(captionText(caption), c.props.Font);
   const lines = Math.max(1, caption.split(/\r?\n/).length);
@@ -544,6 +678,9 @@ function buildCommands(form: FormDef, p: Ok): Command[] {
       if (def.props.Caption === generated) def.props.Caption = o.name;
       if (def.props.Text === generated) def.props.Text = o.name;
       Object.assign(def.props, structuredClone(o.props));
+      // linked properties in step, as when they are set one by one (SSTab Caption follows TabCaption, MaskedEdit Text its Mask)
+      const hook = CONTROL_TYPES[o.type].onPropSet;
+      if (hook) for (const k of Object.keys(o.props)) hook(def.props, k);
       work.controls.push(def);
       cmds.push(addControlsCmd(form.id, [def]));
     }

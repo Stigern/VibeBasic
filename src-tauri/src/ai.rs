@@ -148,7 +148,7 @@ fn map_send_error(e: &reqwest::Error, base_url: &str, timeout_secs: u64) -> Stri
   let base_url = base_url.as_str();
   if e.is_connect() {
     format!(
-      "Could not connect to {base_url}. Check that the AI server is running and can be reached from this Mac. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0. (Details: {})",
+      "Could not connect to {base_url}. Check that the AI server is running and can be reached from this computer. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0. (Details: {})",
       root_cause(e)
     )
   } else if e.is_timeout() {
@@ -159,7 +159,7 @@ fn map_send_error(e: &reqwest::Error, base_url: &str, timeout_secs: u64) -> Stri
     unreadable()
   } else {
     format!(
-      "Could not connect to {base_url}. Check that the AI server is running and can be reached from this Mac. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0. (Details: {})",
+      "Could not connect to {base_url}. Check that the AI server is running and can be reached from this computer. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0. (Details: {})",
       root_cause(e)
     )
   }
@@ -422,7 +422,8 @@ async fn chat_stream_with(
       return Ok(true);
     }
     let Ok(v) = serde_json::from_str::<Value>(payload) else { return Ok(false) };
-    if v.get("error").is_some() {
+    // `"error": null` (some proxies send it with every chunk) is no error
+    if v.get("error").is_some_and(|e| !e.is_null()) {
       return Err(body_message(payload).unwrap_or_else(unreadable));
     }
     if let Some(u) = read_usage(&v) {
@@ -489,9 +490,10 @@ async fn chat_stream_with(
   reply_text(&json!({ "choices": [{ "message": { "content": content, "reasoning": reasoning }, "finish_reason": finish }] }))
 }
 
-/// The answer text of a chat reply. Reasoning models served with a reasoning parser (vLLM `--reasoning-parser`)
-/// sometimes put the whole answer in `reasoning`/`reasoning_content` and leave `content` null; then that text is
-/// used, since the code/JSON extractors find the answer inside it.
+/// The answer text of a chat reply. A reply with only `reasoning`/`reasoning_content` (no `content`: the model never
+/// finished thinking, or the reasoning parser took everything) gives that text inside `<think>...</think>`: the code and
+/// JSON extractors drop thinking, so a draft from the thinking is never applied, and a question can still show it.
+/// Same as answerText in src/backend/browserBackend.ts.
 fn reply_text(v: &Value) -> Result<String, String> {
   let finish = v.pointer("/choices/0/finish_reason").and_then(Value::as_str);
   if finish == Some("length") {
@@ -505,7 +507,7 @@ fn reply_text(v: &Value) -> Result<String, String> {
     return Ok(c);
   }
   if let Some(r) = field("reasoning").or_else(|| field("reasoning_content")) {
-    return Ok(r);
+    return Ok(format!("<think>{r}</think>"));
   }
   let finish = finish.unwrap_or("none");
   Err(format!("{} (Details: the reply had no text; finish_reason = {finish}.)", unreadable()))
@@ -665,11 +667,12 @@ mod tests {
   }
 
   #[test]
-  fn reply_text_falls_back_to_reasoning() {
+  fn reply_text_marks_a_reasoning_only_reply_as_thinking() {
     let v = json!({"choices":[{"message":{"content":null,"reasoning":"think...\n```vb\nPrivate Sub A()\nEnd Sub\n```"},"finish_reason":"stop"}]});
-    assert!(reply_text(&v).unwrap().contains("Private Sub A()"));
+    let t = reply_text(&v).unwrap();
+    assert!(t.starts_with("<think>think...") && t.ends_with("```</think>"), "{t}");
     let v = json!({"choices":[{"message":{"content":"","reasoning_content":"r"}}]});
-    assert_eq!(reply_text(&v).unwrap(), "r");
+    assert_eq!(reply_text(&v).unwrap(), "<think>r</think>");
     let v = json!({"choices":[{"message":{"content":"  hei "}}]});
     assert_eq!(reply_text(&v).unwrap(), "hei");
   }
@@ -784,6 +787,23 @@ mod tests {
     assert_eq!(e, "The AI server answered 404 Not Found: model \"x\" not found, try pulling it first");
     let e = list_models(&server.url("/v1"), &None).await.unwrap_err();
     assert_eq!(e, "The AI server answered 500 Internal Server Error: out of memory");
+  }
+
+  /// A reasoning effort the server does not take: the 400's message (with the levels it lists) reaches the frontend whole,
+  /// streamed or not, which retries with the nearest level (src/ai/effort.ts).
+  #[tokio::test]
+  async fn reasoning_effort_400_keeps_the_supported_levels() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions").json_body_partial(r#"{"chat_template_kwargs":{"reasoning_effort":"high"}}"#);
+      then.status(400).json_body(json!({"error":{"message":"Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low.","type":"BadRequestError","code":400}}));
+    });
+    let want = "The AI server answered 400 Bad Request: Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low.";
+    let e = chat(&server.url("/v1"), &None, "m", &msgs(), &Some("high".into()), &NONE).await.unwrap_err();
+    assert_eq!(e, want);
+    let (_, cb) = collect();
+    let e = chat_stream(&server.url("/v1"), &None, "m", &msgs(), &Some("high".into()), &NONE, &cb, &no_usage).await.unwrap_err();
+    assert_eq!(e, want);
   }
 
   #[tokio::test]
@@ -902,14 +922,14 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn stream_falls_back_to_reasoning_and_reports_finish_reason() {
+  async fn stream_marks_reasoning_only_and_reports_finish_reason() {
     let server = MockServer::start();
     server.mock(|when, then| {
       when.method(POST).path("/v1/chat/completions");
       then.status(200).header("content-type", "text/event-stream").body(sse(&[&delta("reasoning", "only thoughts"), "data: [DONE]\n\n"]));
     });
     let (_, cb) = collect();
-    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap(), "only thoughts");
+    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap(), "<think>only thoughts</think>");
 
     let server2 = MockServer::start();
     server2.mock(|when, then| {
@@ -980,6 +1000,14 @@ mod tests {
       then.status(200).header("content-type", "text/event-stream").body("data: {\"error\":{\"message\":\"boom\"}}\n\n");
     });
     assert_eq!(chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap_err(), "boom");
+    // "error": null in every chunk is no error
+    let server3 = MockServer::start();
+    server3.mock(|when, then| {
+      when.any_request();
+      then.status(200).header("content-type", "text/event-stream")
+        .body("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}],\"error\":null}\n\ndata: [DONE]\n\n");
+    });
+    assert_eq!(chat_stream(&server3.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap(), "Hi");
   }
 
   #[test]
@@ -998,6 +1026,7 @@ mod tests {
     let e = chat(base, &None, "m", &msgs(), &None, &NONE).await.unwrap_err();
     assert!(!e.contains("sekret"), "{e}");
     assert!(e.contains("127.0.0.1:1"), "{e}");
+    assert!(e.contains("reached from this computer"), "{e}");   // not "this Mac": the text is shown on every system
     // 404 text echoes the url
     let server = MockServer::start();
     server.mock(|when, then| {

@@ -134,6 +134,9 @@ export function nodeLines(roots: TreeNode[]): string[] {
 // ---------------------------------------------------------------------------------------------------------------
 // ListView
 
+/** Every member a ListItem answers (lower case): what the AI code check knows about `Set it = ListView1.ListItems.Add(...)`. */
+export const LIST_ITEM_MEMBERS: readonly string[] = ['text', 'key', 'tag', 'icon', 'smallicon', 'index', 'subitems', 'selected'];
+
 /** A ListItem: Text (default), Key, Tag, Icon, SmallIcon (index or key into the ListView's Icons / SmallIcons), SubItems(i), Selected, Index. */
 export class ListItem extends ItemObject {
   subs: string[] = [];

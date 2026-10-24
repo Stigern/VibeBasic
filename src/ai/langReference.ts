@@ -38,7 +38,7 @@ function constantGroups(): string[] {
     groups.set(p, [...groups.get(p) ?? [], name]);
   }
   return [...groups.entries()].sort(([a], [b]) => byName(a, b)).map(([p, names]) => {
-    const shown = names.length <= 10 ? names.length : Math.max(4, Math.min(12, Math.ceil(names.length / 10)));
+    const shown = names.length <= 8 ? names.length : Math.max(4, Math.min(12, Math.ceil(names.length / 10)));
     const examples = [...names].sort((a, b) => a.length - b.length || byName(a, b)).slice(0, shown);
     return `${p}* (${names.length}): ${examples.join(', ')}${shown < names.length ? ', ...' : ''}`;
   });
@@ -61,6 +61,11 @@ const STATEMENTS = 'Option Explicit; Dim / Private / Public / Static x As Type, 
   + ' Option Base 1, Option Compare Text; Global = Public; GoSub label ... Return; On n GoTo|GoSub a, b; Debug.Assert cond;'
   + ' #Const X = 1, #If X Then ... #ElseIf ... #Else ... #End If. App.Major, Minor, Revision, PrevInstance, LogEvent s.';
 
+/** What the live evaluation showed the model gets wrong about the controls' objects (kept short: the card's budget). */
+const IDIOMS = 'Set it = ListView1.ListItems.Add(, , "Ann"): it.SubItems(1) = "x" (ListItems(1) is the first; no ListSubItems);'
+  + ' TabStrip1.SelectedItem is a Tab: Select Case TabStrip1.SelectedItem.Index (1-based);'
+  + ' WindowList only on a top-level menu, set at design time (not in code); a Data control set up in code needs Data1.Refresh.';
+
 /** Builds the card from the language's tables (exported for the stability test). */
 export function buildLanguageReference(): string {
   const types = Object.values(TYPE_KEYWORDS).map(String).sort(byName);
@@ -75,7 +80,8 @@ export function buildLanguageReference(): string {
     `CreateObject(ProgID) or New: ${[...new Set([...PROG_IDS.values()].map(c => c.name))].sort(byName).join(', ')}. ADO on SQLite files:`
       + ' cn.Open "Data Source=x.db", cn.Execute sql[, n], BeginTrans / CommitTrans / RollbackTrans; rs.Open sql, cn, adOpenStatic, adLockOptimistic;'
       + ' rs.Filter = "A > 1 And B Like \'x*\'", rs.Sort = "B DESC". FSO: OpenTextFile / CreateTextFile -> ReadLine, WriteLine, AtEndOfStream, Close.',
-    `Drawing on a Form, PictureBox or Printer (NewPage, EndDoc prints, KillDoc): ${drawing.join(', ')} (Line (x1, y1)-(x2, y2)[, c][, B[F]]), Cls, Point, PaintPicture; AutoRedraw or Paint.`,
+    `Drawing on a Form, PictureBox or Printer (NewPage, EndDoc prints, KillDoc): ${drawing.join(', ')} (Line (x1, y1)-(x2, y2)[, c][, B[F]]; Scale (x1, y1)-(x2, y2), two corners), Cls, Point, PaintPicture; AutoRedraw or Paint.`,
+    `Idioms: ${IDIOMS}`,
     'Built-in functions by argument count (String functions also have a $ form, e.g. Left$):',
     ...functionLines(),
     `Financial: ${FINANCIAL.join(', ')} (VB6 argument order).`,

@@ -107,7 +107,9 @@ export function layoutProblems(form: FormDef, only?: Set<string>): LayoutProblem
     const parent = c.parentId ? byId.get(c.parentId) : undefined;
     // outside the container's client area
     if (!isDocked(c)) {
-      const pw = parent ? sizeOf(parent).width : client.width, ph = parent ? sizeOf(parent).height : client.height;
+      // a docked container (a PictureBox with Align) is as wide or high as its edge, whatever its stored size
+      const ps = parent ? (isDocked(parent) ? dockedRect(form, parent) : sizeOf(parent)) : client;
+      const pw = ps.width, ph = ps.height;
       const where = parent ? `${parent.type} ${nameOf(parent)} (Width ${pw}, Height ${ph})` : `the form (client area ${client.width} x ${client.height})`;
       if (it.left < 0) add([name], `${name} (Left ${it.left}) starts left of ${where}.`, 'out-left');
       if (it.top < 0) add([name], `${name} (Top ${it.top}) starts above ${where}.`, 'out-top');
