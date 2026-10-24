@@ -127,21 +127,22 @@ test('form mode: a JSON answer that stops before it is complete is not taken', (
   expect(!r.ok && r.reason).toMatch(/stops before it is complete/);
 });
 
-test('the form schema bounds numbers and strings (no runaway inside the grammar)', () => {
+test('the form schema bounds numbers and names (no runaway inside the grammar); text keeps its escapes', () => {
   const json = JSON.stringify(FORM_OPS_SCHEMA);
   const add = (FORM_OPS_SCHEMA.properties.ops.items.anyOf[0] as { properties: Record<string, any> }).properties;
   expect(add.name).toEqual({ type: 'string', maxLength: 64 });
   expect(add.index).toEqual({ type: 'integer', minimum: 0, maximum: 32767 });
   expect(add.place.properties.gap).toEqual({ type: 'integer', minimum: 0, maximum: 100000 });
-  expect(FORM_OPS_SCHEMA.properties.code).toEqual({ type: 'string', maxLength: 60000 });
+  // no maxLength where escapes are needed: xgrammar then allows none (code lost its \n live)
+  expect(FORM_OPS_SCHEMA.properties.code).toEqual({ type: 'string' });
+  expect(json).toContain('"anyOf":[{"type":"string"},{"type":"number"');
   expect(json).toContain('"type":"number","minimum":-2147483648,"maximum":4294967295');
-  // every integer and string of the schema has its bound
+  // every number of the schema has its bound
   const walk = (v: unknown): void => {
     if (Array.isArray(v)) { v.forEach(walk); return; }
     if (!v || typeof v !== 'object') return;
     const o = v as Record<string, unknown>;
     if (o.type === 'integer' || o.type === 'number') expect(o.maximum).toBeTypeOf('number');
-    if (o.type === 'string' && !o.enum) expect(o.maxLength).toBeTypeOf('number');
     Object.values(o).forEach(walk);
   };
   walk(FORM_OPS_SCHEMA);

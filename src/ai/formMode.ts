@@ -33,15 +33,18 @@ export type ParsedFormOps =
 type Ok = Extract<ParsedFormOps, { ok: true }>;
 
 /**
- * Bounds of the schema: they keep a number or a string from running away inside the grammar ("top":2400000000... was seen live)
+ * Bounds of the schema: they keep a number or a name from running away inside the grammar ("top":2400000000... was seen live)
  * and cut off an answer that has lost its way. Positions and sizes are twips; a property number may be a color (up to &HFFFFFFFF,
- * or a negative system color).
+ * or a negative system color). Only names (and the shortcut) get a maxLength: on vLLM 0.28 (xgrammar) a string with maxLength
+ * allows no escapes, so code and text lost their \n and \" (measured live: "Private Sub A()n    MsgBox 'x'nEnd Sub").
  */
-export const SCHEMA_LIMITS = { twips: 100000, index: 32767, name: 64, text: 4000, code: 60000, listItems: 1000 } as const;
+export const SCHEMA_LIMITS = { twips: 100000, index: 32767, name: 64, listItems: 1000 } as const;
 const STR = (maxLength: number) => ({ type: 'string', maxLength });
+/** A string that may need escapes (code, captions, text): no maxLength (see SCHEMA_LIMITS). */
+const TEXT = { type: 'string' };
 /** A property value as parseProps reads it: text, a number, True/False, or a List's items. */
-const PROP_VALUE = { anyOf: [STR(SCHEMA_LIMITS.text), { type: 'number', minimum: -2147483648, maximum: 4294967295 }, { type: 'boolean' },
-  { type: 'array', items: STR(SCHEMA_LIMITS.text), maxItems: SCHEMA_LIMITS.listItems }] };
+const PROP_VALUE = { anyOf: [TEXT, { type: 'number', minimum: -2147483648, maximum: 4294967295 }, { type: 'boolean' },
+  { type: 'array', items: TEXT, maxItems: SCHEMA_LIMITS.listItems }] };
 const PROPS = { type: 'object', additionalProperties: PROP_VALUE };
 const opSchema = (op: string, properties: Record<string, unknown>, required: string[]) =>
   ({ type: 'object', properties: { op: { type: 'string', enum: [op] }, ...properties }, required: ['op', ...required], additionalProperties: false });
@@ -77,12 +80,12 @@ export const FORM_OPS_SCHEMA = {
           opSchema('form', { props: PROPS }, ['props']),
           opSchema('arrange', { names: NAMES, as: { type: 'string', enum: ['row', 'column', 'grid'] }, columns: { type: 'integer', minimum: 1, maximum: 100 }, gap: TWIPS, left: TWIPS, top: TWIPS }, ['names', 'as']),
           opSchema('autosize', { names: NAMES }, ['names']),
-          opSchema('menu', { name: NAME, caption: STR(SCHEMA_LIMITS.text), parent: { anyOf: [NAME, { type: 'null' }] }, index: INDEX,
+          opSchema('menu', { name: NAME, caption: TEXT, parent: { anyOf: [NAME, { type: 'null' }] }, index: INDEX,
             shortcut: STR(32), checked: BOOL, enabled: BOOL, visible: BOOL, windowList: BOOL }, ['name']),
         ],
       },
     },
-    code: STR(SCHEMA_LIMITS.code),
+    code: TEXT,
   },
   required: ['ops'],
   additionalProperties: false,
