@@ -115,7 +115,7 @@ export function describeControlTypes(): string {
     + ' TextBox, Label, CheckBox, ComboBox, ListBox, DTPicker and MaskedEdit bind with DataSource (the data control\'s Name) and DataField; their edits are saved when the record changes.'
     + ' Data1.Recordset: MoveFirst/MoveNext/MovePrevious/MoveLast, BOF, EOF, RecordCount, Fields("Name") or rs!Name, AddNew/Edit/Update (ADO: no Edit)/CancelUpdate/Delete, FindFirst "Name = \'x\'" (ADO: Find), Requery;'
     + ' events Data1_Validate(Action, Save) and Data1_Reposition, Adodc1_WillMove and Adodc1_MoveComplete. SQL from code: Data1.Database.Execute "CREATE TABLE IF NOT EXISTS ..."'
-    + ' (Data1.Database.OpenRecordset("SELECT ...")) or Adodc1.Recordset.ActiveConnection.Execute sql; there is no New ADODB.Connection.'
+    + ' (Data1.Database.OpenRecordset("SELECT ...")) or Adodc1.Recordset.ActiveConnection.Execute sql, or Dim cn As New ADODB.Connection: cn.Open "Data Source=x.db".'
     + ' A DataGrid shows the DataSource\'s records (Columns(0) is the first column: Caption, Width, Value).'
     + ' DataList and DataCombo list the ListField of the RowSource\'s records; BoundText is the BoundColumn of the chosen one, bound to DataSource / DataField.'
     + ' The Sheridan 3D controls: an SSPanel (or SSFrame) is a container like a Frame (BevelOuter 0 none, 1 inset, 2 raised, BevelWidth, Font3D 0-4; FloodType 1 left to right ... 5 circle with FloodPercent makes a progress bar);'

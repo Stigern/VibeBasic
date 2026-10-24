@@ -204,3 +204,13 @@ test('the selection goes into the code request', () => {
   expect(u.indexOf('Selected code')).toBeLessThan(u.indexOf('Request: REQ'));
   expect(buildCodeRequest(p, 'm1', 1, 'REQ')[1].content).not.toContain('Selected code');
 });
+
+test('#12 the system prompt never says a class that New and CreateObject make does not exist', async () => {
+  const { PROG_IDS } = await import('../../src/lang/builtins/collection');
+  const sys = buildCodeRequest(project(), 'm1', 1, 'a')[0].content;
+  expect(sys).toContain('New ADODB.Connection: cn.Open');
+  expect(PROG_IDS.size).toBeGreaterThan(0);
+  for (const c of new Set([...PROG_IDS.values()].map(v => v.name))) {
+    expect(sys).not.toMatch(new RegExp(`(no|not|never)\\s+(New\\s+)?${c.replace('.', '\\.')}\\b`, 'i'));
+  }
+});
