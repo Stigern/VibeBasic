@@ -8,6 +8,18 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 - An Ask AI answer that loops could loop again on the retry, in the same place ("The AI got stuck repeating itself" every time). The retry after a loop now goes without the form picture and without the structured output (the JSON grammar); the layout map and the nudge are still sent.
 - Dropdown arrows in dialogs (Tools > Options > AI: Model, Thinking, Send form picture) did nothing; only a click on the text opened the list. The row around the box is a label, which passed the arrow's click on to the text box, and that second click closed the list again.
 
+## [0.10.0] - 2026-10-24
+
+### Added
+- Windows and Linux support. VibeBasic runs on Windows 10/11 (WebView2) and Linux (WebKitGTK 4.1) as well as macOS.
+  - Windows: real drive letters and backslash paths as in VB6, DriveListBox with "c: [label]", ChDrive, COM ports for MSComm (CommPort 3 is COM3), the Windows printer list, power status for SysInfo, and Ctrl as Ctrl.
+  - Linux: /dev/ttyUSB* and /dev/ttyACM* serial ports, CUPS printers, battery status from /sys, and mounted drives under /media and /mnt.
+- Make app on Windows produces a single <Name>.exe with the project inside, the project icon and the version information (Properties > Details). On Linux it produces an executable plus a .desktop launcher and icon.
+- Downloads for every platform are built by GitHub Actions on each release: a Windows installer and portable zip, a Linux .deb and AppImage, and a macOS zip. Every push is tested on macOS, Windows and Linux.
+
+### Changed
+- The clipboard uses a cross-platform library off macOS; macOS behaves as before.
+
 ## [0.9.0] - 2026-10-24
 
 ### Added

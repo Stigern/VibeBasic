@@ -2,7 +2,7 @@
 
 # VibeBasic
 
-A Visual Basic 6 clone for macOS, with the authentic Windows 98 look and a built-in AI assistant that runs on your own local model.
+A Visual Basic 6 clone for macOS, Windows and Linux, with the authentic Windows 98 look and a built-in AI assistant that runs on your own local model.
 
 ![VibeBasic 0.7.0](docs/images/screenshot.png)
 
