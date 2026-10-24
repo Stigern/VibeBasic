@@ -72,7 +72,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   };
   actions.askAi = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc); };
   // the AI Wizard of the New Project dialog: Ask AI on the new Form1 with the wizard's own dialog (description and improvements)
-  actions.aiWizard = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc, { prompt: () => wizardDialog(doc) }); };
+  actions.aiWizard = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc, { prompt: () => wizardDialog(doc, { copy: t => backend.clipboardSetText(t) }) }); };
   actions.aiLog = () => { void showAiLog(doc, text => backend.clipboardSetText(text)); };
   const recent = new RecentProjects(backend);
   const fc = new FileController(state, backend, doc, recent);
