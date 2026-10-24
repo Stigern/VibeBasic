@@ -324,7 +324,7 @@ export function codeBudget(contextTokens: number | undefined): number | undefine
 /**
  * The code as the model should see it. Up to `budgetChars` characters (unknown budget: up to 400 lines) it is unchanged.
  * Above that: everything outside procedures (declarations), the whole current procedure, the whole procedures it calls
- * or the request names (case-insensitive), and only the heading line plus `' ... (body omitted)` for the rest.
+ * or the request names (case-insensitive), and only the heading (all its lines) plus `' ... (body omitted)` for the rest.
  */
 export function codeForPrompt(code: string, focus: { procName: string | null; mention: string }, budgetChars?: number): string {
   const lines = code.split(LINE_BREAK);
@@ -340,7 +340,11 @@ export function codeForPrompt(code: string, focus: { procName: string | null; me
   for (const p of procs) {
     while (next < p.line) out.push(lines[next++ - 1]);
     if (keep.has(p.name.toLowerCase())) out.push(...lines.slice(p.line - 1, p.endLine));
-    else out.push(lines[p.line - 1], BODY_OMITTED);
+    else {
+      let head = p.line;   // a continued header is shown whole
+      while (head < p.endLine && /\s_\s*$/.test(lines[head - 1])) head++;
+      out.push(...lines.slice(p.line - 1, head), BODY_OMITTED);
+    }
     next = p.endLine + 1;
   }
   while (next <= lines.length) out.push(lines[next++ - 1]);

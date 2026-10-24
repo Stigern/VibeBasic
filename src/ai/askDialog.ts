@@ -325,9 +325,10 @@ export interface StructuredOutput { responseFormat: unknown; structuredOutputs: 
 const changeRequest = (wish: string): ChatMessage => ({ role: 'user', content: `Change your last answer: ${wish}\nAnswer with the complete result again, in exactly the same format.` });
 
 /** One answer, understood (or `result` null), the conversation up to and including it, and the measurement line. `answer`: show it as text. */
-type Done<A> = { kind: 'done'; result: A | null; reply: string; metrics: string; messages: ChatMessage[]; answer: boolean };
+type Done<A> = { kind: 'done'; result: A | null; reply: string; metrics: string; messages: ChatMessage[]; answer: boolean; details?: string };
 type Round<A> = Done<A> | { kind: 'error'; message: string } | { kind: 'cancel' };
-type Understood<A> = { result: A | null; jsonReason: string | null };
+/** `refused`: code that could not be merged safely, with the problems for the retry and the reason shown under Details. */
+type Understood<A> = { result: A | null; jsonReason: string | null; refused?: { problems: string[]; details: string } };
 
 /** How a conversation runs: its log mode, its structured output (form mode), whether answers in prose are shown (code mode). */
 interface ConverseOptions<A = unknown> { mode: AiLogMode; structured?: StructuredOutput; answers?: boolean; question?: boolean;
@@ -501,8 +502,9 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     const garbled = (u: Understood<A>, text: string) => !u.result && !(co.answers && isProse(text));
     if (garbled(got, reply) && firstEntry) firstEntry.status = 'not understood';
     // One retry at most: for the problems the checks found, or (form mode) for an answer that was not usable JSON.
-    const complaint = got.result?.problems.length
-      ? `Your answer has these problems:\n${got.result.problems.map(p => `- ${p}`).join('\n')}\nFix them and answer again in exactly the same format.`
+    const problems = got.result?.problems.length ? got.result.problems : !got.result ? got.refused?.problems : undefined;
+    const complaint = problems?.length
+      ? `Your answer has these problems:\n${problems.map(p => `- ${p}`).join('\n')}\nFix them and answer again in exactly the same format.`
       : !got.result && got.jsonReason !== null ? `Your answer was not valid JSON (${got.jsonReason}). Answer again with ONLY the JSON object.` : null;
     if (complaint) {
       // Keep the first answer if the second is no better understood. Layout problems come with a picture of the proposal.
@@ -518,10 +520,11 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
         const second = analyse(again.text);
         if (garbled(second, again.text) && lastEntry) lastEntry.status = 'not understood';
         if (second.result) { got = second; reply = again.text; metrics = again.metrics; convo = [...followUp, { role: 'assistant', content: again.text }]; }
-        else if (!got.result) reply = again.text;   // neither was understood: Details shows the latest
+        else if (!got.result) { reply = again.text; got = second; }   // neither was understood: Details shows the latest
       }
     }
-    return { kind: 'done', result: got.result, reply, metrics, messages: convo, answer: !got.result && !!co.answers && isProse(reply) };
+    return { kind: 'done', result: got.result, reply, metrics, messages: convo, answer: !got.result && !!co.answers && isProse(reply) && !got.refused,
+      ...(!got.result && got.refused ? { details: got.refused.details } : {}) };
   };
 
   const copy = (text: string) => backend.clipboardSetText(text);
@@ -536,7 +539,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
       const a = await showAnswer(doc, next.reply, next.metrics, copy);
       if (a !== 'ok') { next = await round(trimConversation([...next.messages, { role: 'user', content: a.more }], budget), true, 'change', isQuestion(a.more)); continue; }
     }
-    else if (next.kind === 'done' && !next.result) await showNotUnderstood(doc, next.reply);
+    else if (next.kind === 'done' && !next.result) await showNotUnderstood(doc, next.details ? `${next.reply}\n\n${next.details}` : next.reply);
     else if (next.kind === 'done') shown = next;
     // Without a proposal the conversation ends; otherwise (a failed Change... too) the last proposal stays.
     if (!shown) return false;
@@ -573,7 +576,13 @@ export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[
     const code = fixEventNames(form, raw, notes);
     const before = win.getSource();
     const proc = listProcedures(before).find(p => win.getCursorLine() >= p.line && win.getCursorLine() <= p.endLine)?.name ?? null;
-    const applied = applyCodeProposal(before, code, proc, o.selection);
+    const out: { refused?: string } = {};
+    const applied = applyCodeProposal(before, code, proc, o.selection, out);
+    if (!applied && out.refused) {
+      // a merge that would break the module is never shown or applied; the retry asks for whole procedures
+      const problems = validateCode(code, { moduleName, form, project });
+      return { ...none, refused: { problems: problems.length ? problems : [`${out.refused.split('\n')[0]} Send each changed procedure complete, from its first line to its End line, and declarations above the first procedure.`], details: out.refused } };
+    }
     if (!applied) return none;
     const problems = validateCode(code, { moduleName, form, project });
     if (applied.skipped) problems.push(skippedProblem(applied.skipped));   // the retry asks for the changed procedures only
@@ -643,9 +652,9 @@ function touchedNames(ops: Extract<ReturnType<typeof parseFormOps>, { ok: true }
 }
 
 /** Fixes wrong event-procedure names in AI code (Form1_Load etc.) and records what it did in `notes`. */
-function fixEventNames(form: { name: string } | null, code: string, notes: string[]): string {
+function fixEventNames(form: { name: string; mdi?: boolean } | null, code: string, notes: string[]): string {
   if (!form) return code;
-  const r = autoFixEventNames(code, form.name);
+  const r = autoFixEventNames(code, form);
   notes.push(...r.notes);
   return r.code;
 }

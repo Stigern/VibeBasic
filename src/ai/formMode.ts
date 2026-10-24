@@ -378,9 +378,11 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
   if (typeof json.code === 'string' && json.code.trim()) {
     const extracted = json.code.includes('```') ? extractCode(json.code) ?? json.code : json.code;
     text = fixCode ? fixCode(extracted) : extracted;
-    const r = applyCodeProposal(form.code, text, null);
+    const refusal: { refused?: string } = {};
+    const r = applyCodeProposal(form.code, text, null, null, refusal);
     if (r?.skipped) { codeSkipped = r.skipped; warnings.push(`Kept ${r.skipped.join(', ')} as they are: the answer had them without their code.`); }
-    if (r && r.changes.length) { code = r.source; codeChanges = r.changes; } else if (!r) warnings.push('Ignored code that could not be merged into the form.');
+    if (r && r.changes.length) { code = r.source; codeChanges = r.changes; }
+    else if (!r) warnings.push(refusal.refused ? `Ignored the code: ${refusal.refused.replace(/\n/g, ' ')}` : 'Ignored code that could not be merged into the form.');
   }
   if (!ops.length && code === null) return warnings.length ? { ...fail, raw: `${reply}\n\nIgnored:\n${warnings.join('\n')}` } : fail;
   return { ok: true, ops, code, warnings, ...(codeChanges ? { codeChanges } : {}), ...(code !== null && text !== undefined ? { codeText: text } : {}), ...(codeSkipped ? { codeSkipped } : {}),
