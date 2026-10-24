@@ -20,6 +20,12 @@ import { showOptions } from './optionsDialog';
 import { showMenuEditor } from './menuEditor';
 import { makeAppFlow } from '../build/makeApp';
 import { FileController } from './fileController';
+import { showNewProjectDialog } from './newProjectDialog';
+import { projectLabel, RecentProjects } from './recentProjects';
+import type { MenuItem } from '../ui98/menubar';
+
+/** The recent projects at the end of the File menu (VB6 showed four). */
+const MENU_RECENT = 4;
 import { RunController, type ErrorToFix } from './runController';
 import { createImmediateWindow } from './immediate';
 import { registerDebugActions, type CodeTarget } from './debugWindows';
@@ -30,7 +36,8 @@ import { h } from '../ui98/dom';
 
 export interface Ide { state: IdeState; layout: IdeLayout; actions: IdeActions; menus: ReturnType<typeof buildMenus>; run: RunController; refresh(): void }
 
-export function startIde(backend: Backend, root: HTMLElement = document.getElementById('app') ?? document.body): Ide {
+/** `prompt`: the New Project dialog at start (when Options > General, Prompt for project is on); the app's own start asks for it. */
+export function startIde(backend: Backend, root: HTMLElement = document.getElementById('app') ?? document.body, o: { prompt?: boolean } = {}): Ide {
   const state = new IdeState(newProject());
   const layout = buildLayout(root);
   const doc = root.ownerDocument;
@@ -64,7 +71,8 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   };
   actions.askAi = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc); };
   actions.aiLog = () => { void showAiLog(doc, text => backend.clipboardSetText(text)); };
-  const fc = new FileController(state, backend, doc);
+  const recent = new RecentProjects(backend);
+  const fc = new FileController(state, backend, doc, recent);
   fc.onProjectReplaced = () => {
     const id = state.project.forms.find(f => f.name === state.project.startupForm)?.id ?? state.project.forms[0]?.id;
     if (id) openDesigner(state, id, env);
@@ -75,8 +83,32 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   // a value typed in the Properties window but not yet entered goes into the project first (false: it was invalid). New, Open,
   // Exit and closing the window do so too, so "Save changes?" asks about it instead of the value being lost.
   const committed = (): boolean => propsWin?.commitPendingEdit() ?? true;
-  actions.newProject = () => { if (state.mode === 'design' && committed()) void fc.newProject(); };
+  /** The New Project dialog: a new project of a type (the AI Wizard then asks the AI), or (at start) an existing or recent one. */
+  const chooseProject = async (startup: boolean): Promise<void> => {
+    if (startup) await recent.ready();
+    const r = await showNewProjectDialog(doc, { startup, recent: recent.list });
+    if (r.dontShow && state.options.promptForProject) {
+      state.setOptions({ promptForProject: false });
+      void backend.saveSettings('ide', state.options).catch(() => {});
+    }
+    const c = r.choice;
+    if (!c) return;
+    if (c.kind === 'new') { if ((await fc.newProject(c.template)) && c.template === 'aiWizard') actions.askAi?.(); }
+    else await fc.open(c.kind === 'recent' ? c.path : undefined);
+  };
+  actions.newProject = () => { if (state.mode === 'design' && committed()) void chooseProject(false); };
   actions.openProject = () => { if (state.mode === 'design' && committed()) void fc.open(); };
+  actions.openRecent = (path: string) => { if (state.mode === 'design' && committed()) void fc.open(path); };
+  // the File menu ends with the recent projects before Exit (built each time it opens, as the list changes)
+  const fileItems = menus[0].items;
+  Object.defineProperty(menus[0], 'items', {
+    get: (): MenuItem[] => {
+      const r = recent.list.slice(0, MENU_RECENT).map((p, i): MenuItem => ({
+        label: `&${i + 1} ${projectLabel(p)}`, action: () => actions.openRecent?.(p), enabled: () => state.mode === 'design',
+      }));
+      return r.length ? [...fileItems.slice(0, -1), ...r, { label: '-', separator: true }, ...fileItems.slice(-1)] : fileItems;
+    },
+  });
   actions.addFile = () => { if (state.mode === 'design' && committed()) void fc.addFile(); };
   actions.saveProject = () => { if (committed()) void fc.save(); };
   actions.saveProjectAs = () => { if (committed()) void fc.saveAs(); };
@@ -153,7 +185,10 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     state.setOptions(o);
     const f = state.project.forms[0];   // the untouched startup project follows the saved option too
     if (o.requireVariableDeclaration && f && f.code === '' && !state.stack.isDirty) f.code = OPTION_EXPLICIT;
-  }).catch(() => {});
+  }).catch(() => {}).finally(() => {
+    // the New Project dialog at start: once the saved options are known, and only while the startup project is untouched
+    if (o.prompt && state.options.promptForProject && !state.stack.isDirty && state.mode === 'design') void chooseProject(true);
+  });
 
   openDesigner(state, state.project.forms[0].id, { mdiHost: layout.mdiHost, actions });
   return { state, layout, actions, menus, run: rc, refresh };

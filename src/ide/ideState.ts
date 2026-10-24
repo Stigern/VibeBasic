@@ -11,12 +11,14 @@ export interface IdeOptions {
   showGrid: boolean; gridWidth: number; gridHeight: number; alignToGrid: boolean;
   /** Code window (Tools > Options > Editor / Editor Format). */
   procedureSeparator: boolean; codePalette: 'vs' | 'vb6'; codeFontSize: number;
+  /** The New Project dialog when VibeBasic starts (Options > General, Prompt for project), else a Standard EXE. */
+  promptForProject: boolean;
 }
 /** Code a new form/module starts with when "Require Variable Declaration" is on. */
 export const OPTION_EXPLICIT = 'Option Explicit\n';
 export const DEFAULT_OPTIONS: IdeOptions = {
   autoSyntaxCheck: true, requireVariableDeclaration: false, showGrid: true, gridWidth: 120, gridHeight: 120, alignToGrid: true,
-  procedureSeparator: true, codePalette: 'vs', codeFontSize: 13,
+  procedureSeparator: true, codePalette: 'vs', codeFontSize: 13, promptForProject: true,
 };
 
 export class IdeState {

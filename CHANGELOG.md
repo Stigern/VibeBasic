@@ -5,6 +5,8 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- The New Project dialog, as in VB6: when VibeBasic starts it offers New (Standard EXE, MDI Application, Sub Main, Data Project and an AI Wizard that has the AI build the form from your description), Existing (open a .vbb or .vbp) and Recent. File > New Project shows the New tab. "Don't show this dialog in the future" turns it off; Tools > Options > General, Prompt for project at startup, turns it on again.
+- The projects you open or save last: the Recent tab, and the last four at the end of the File menu.
 - A splash window when VibeBasic starts, in the spirit of the VB6 one: it shows while the IDE loads (about two seconds), then the IDE comes up. The version on it comes from the app. Programs made with Make have none.
 
 ## [0.10.1] - 2026-10-24

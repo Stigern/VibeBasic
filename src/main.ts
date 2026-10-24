@@ -9,7 +9,7 @@ blockBrowserKeys(window);
 const backend = getBackend();
 registerAiOptionsTab(backend);
 void boot(backend, {
-  startIde,
+  startIde: b => { startIde(b, undefined, { prompt: true }); },
   startRuntime,
   onQuit: requestQuit,
   showError: t => showErrorBox(t).catch(() => {}),

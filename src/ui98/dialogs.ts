@@ -21,6 +21,8 @@ export interface DialogOptions {
   resizable?: boolean;
   /** Where the user left the dialog (moved or resized), kept under this key and used again the next time (in this session). */
   placeKey?: string;
+  /** Shown across the whole dialog between the title bar and the content (a banner). */
+  header?: HTMLElement;
 }
 
 /** The place and size the user gave a dialog, by DialogOptions.placeKey. */
@@ -71,7 +73,8 @@ export function showDialog98(doc: Document, o: DialogOptions): Promise<string> {
     });
     const buttonRow = h('div', { class: o.buttonsSide ? 'dlg98-buttons side' : 'dlg98-buttons' }, ...buttonEls.values());
     const body = h('div', { class: o.buttonsSide ? 'window-body dlg98-body side' : 'window-body dlg98-body' }, o.content, buttonRow);
-    const win = h('div', { class: o.resizable ? 'window dlg98 dlg98-resizable' : 'window dlg98', role: 'dialog', 'aria-modal': 'true' }, title.bar, body);
+    const win = h('div', { class: o.resizable ? 'window dlg98 dlg98-resizable' : 'window dlg98', role: 'dialog', 'aria-modal': 'true' },
+      title.bar, ...(o.header ? [o.header] : []), body);
     const overlay = h('div', { class: 'dlg98-overlay' }, win);
     overlay.addEventListener('dlg98-abort', abort);
     // Swallow pointer events outside the dialog so the document below cannot be used.

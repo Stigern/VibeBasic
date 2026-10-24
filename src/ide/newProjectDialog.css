@@ -1,0 +1,26 @@
+/* The New Project dialog (newProjectDialog.ts). */
+.np-banner { margin: 4px 4px 0; box-shadow: inset -1px -1px #fff, inset 1px 1px #808080; padding: 1px; }
+.np-banner svg { display: block; }
+.np { display: flex; flex-direction: column; gap: 8px; }
+.np .tabs98-panel { padding: 8px; }
+.np-pane { width: 300px; }
+.np-list { height: 196px; background: #fff; overflow-y: auto; box-sizing: border-box; outline: none;
+  box-shadow: inset -1px -1px #fff, inset 1px 1px #808080, inset -2px -2px #dfdfdf, inset 2px 2px #0a0a0a;
+  display: grid; grid-template-columns: repeat(4, 1fr); align-content: start; padding: 6px 2px; row-gap: 4px; }
+.np-item { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 3px; padding: 2px; cursor: default; }
+.np-item span { padding: 0 2px; line-height: 13px; }
+.np-item.sel span { background: #000080; color: #fff; }
+.np-list:focus .np-item.sel span { outline: 1px dotted #fff; outline-offset: -1px; }
+.np-icon { flex: none; }
+.np-desc { margin-top: 6px; min-height: 26px; }
+.np-existing { display: grid; grid-template-columns: auto 1fr; gap: 8px 10px; align-items: start; min-height: 222px; align-content: start; }
+.np-existing button { grid-column: 2; justify-self: start; min-width: 75px; }
+.np-recent { display: block; padding: 2px; }
+.np-row { display: grid; grid-template-columns: 32px auto; grid-template-rows: auto auto; column-gap: 6px; padding: 2px 4px; cursor: default; }
+.np-row .np-icon { grid-row: 1 / 3; }
+.np-row .np-name { align-self: end; }
+.np-row .np-folder { color: #555; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np-row.sel { background: #000080; }
+.np-row.sel .np-name, .np-row.sel .np-folder { color: #fff; }
+.np-empty { padding: 8px; color: #555; }
+.np-dont { margin-top: 2px; }

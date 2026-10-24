@@ -3,12 +3,14 @@
 import type { Backend } from '../backend/backend';
 import { addAssetCmd, addFormCmd, addModuleCmd, compositeCmd, type Command } from '../model/commands';
 import { normalizeComponents, setComponentsCmd } from '../model/components';
-import { newProject } from '../model/controls';
+import type { newProject } from '../model/controls';
+import { projectFromTemplate, type ProjectTemplate } from '../model/templates';
 import { parseProject, serializeProject } from '../model/serialize';
 import { importVb6File, importVbp } from '../model/vb6Import';
 import { h } from '../ui98/dom';
 import { messageBox98, showDialog98 } from '../ui98/dialogs';
 import { OPTION_EXPLICIT, type IdeState } from './ideState';
+import type { RecentProjects } from './recentProjects';
 
 const VB_CRITICAL = 16;
 const VB_EXCLAMATION = 48;
@@ -22,7 +24,7 @@ export class FileController {
   /** Called after Project > Add File added a form or module; main.ts opens its designer / code window. */
   onItemAdded: ((id: string) => void) | null = null;
 
-  constructor(private ide: IdeState, private backend: Backend, private doc: Document = document) {}
+  constructor(private ide: IdeState, private backend: Backend, private doc: Document = document, private recent?: RecentProjects) {}
 
   private fileName(): string {
     const p = this.ide.filePath;
@@ -39,26 +41,29 @@ export class FileController {
     this.updateTitle();
   }
 
-  async newProject(): Promise<void> {
-    if (!(await this.confirmDiscard())) return;
-    const p = newProject();
-    if (this.ide.options.requireVariableDeclaration) p.forms[0].code = OPTION_EXPLICIT;
-    this.replace(p, null);
+  /** A new project of the type (New Project dialog). False when the user kept the old one ("Save changes?" cancelled). */
+  async newProject(template: ProjectTemplate = 'standard'): Promise<boolean> {
+    if (!(await this.confirmDiscard())) return false;
+    this.replace(projectFromTemplate(template, this.ide.options.requireVariableDeclaration ? OPTION_EXPLICIT : ''), null);
     this.onProjectReplaced?.();
+    return true;
   }
 
-  async open(): Promise<void> {
+  /** Open Project: the file dialog, or `path` (the Recent list). A recent project that cannot be read leaves the list. */
+  async open(path?: string): Promise<void> {
     if (!(await this.confirmDiscard())) return;
-    const path = await this.backend.openProjectDialog();
+    path ??= (await this.backend.openProjectDialog()) ?? undefined;
     if (!path) return;
     let project, warnings: string[] = [];
     try {
       if (isVbp(path)) ({ project, warnings } = await importVbp(path, p => this.backend.readBinaryFile(p)));
       else project = parseProject(await this.backend.readTextFile(path));
     } catch (e) {
+      this.recent?.remove(path);
       await this.error(errText(e));
       return;
     }
+    this.recent?.add(path);
     // an imported VB6 project opens as a new, unsaved .vbb (Save asks for its name)
     this.replace(project, isVbp(path) ? null : path);
     if (isVbp(path)) this.ide.stack.markDirtyExternal();
@@ -129,6 +134,7 @@ export class FileController {
       return false;
     }
     this.ide.filePath = path;
+    this.recent?.add(path);
     this.ide.stack.markSaved();
     this.updateTitle();
     return true;

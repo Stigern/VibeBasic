@@ -19,6 +19,7 @@ export async function showOptions(ide: IdeState, backend: Pick<Backend, 'saveSet
   const w = h('input', { type: 'text', value: String(o.gridWidth), class: 'dlgform98-num' });
   const hh = h('input', { type: 'text', value: String(o.gridHeight), class: 'dlgform98-num' });
   const align = check('Align Controls to Grid', o.alignToGrid);
+  const prompt = check('Prompt for project at startup', o.promptForProject);
   const procSep = check('Procedure Separator', o.procedureSeparator);
   const palette = h('select', { class: 'dlgform98-select' },
     h('option', { value: 'vs' }, 'Visual Studio (default)'), h('option', { value: 'vb6' }, 'Classic VB6'));
@@ -30,7 +31,7 @@ export async function showOptions(ide: IdeState, backend: Pick<Backend, 'saveSet
   const format: DialogTab = { label: 'Editor Format', content: h('div', { class: 'dlgform98' }, field('Colors:', palette), field('Size:', size)) };
   const general: DialogTab = {
     label: 'General',
-    content: h('div', { class: 'dlgform98' }, grid.el, field('Grid Width (twips):', w), field('Grid Height (twips):', hh), align.el),
+    content: h('div', { class: 'dlgform98' }, grid.el, field('Grid Width (twips):', w), field('Grid Height (twips):', hh), align.el, prompt.el),
     validate: () => (positiveInt(w.value) && positiveInt(hh.value) ? null : 'Invalid property value'),
   };
   const tabs = [editor, format, general, ...optionsTabs.map(b => b(ide, doc))];
@@ -39,6 +40,7 @@ export async function showOptions(ide: IdeState, backend: Pick<Backend, 'saveSet
       autoSyntaxCheck: syntax.input.checked, requireVariableDeclaration: reqDecl.input.checked,
       showGrid: grid.input.checked, gridWidth: Number(w.value), gridHeight: Number(hh.value), alignToGrid: align.input.checked,
       procedureSeparator: procSep.input.checked, codePalette: palette.value === 'vb6' ? 'vb6' : 'vs', codeFontSize: Number(size.value),
+      promptForProject: prompt.input.checked,
     });
     void backend.saveSettings('ide', ide.options);
   }, Math.max(0, tabs.findIndex(t => t.label === initialTab)));
