@@ -229,16 +229,21 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
     return work.controls.filter(c => c.name.toLowerCase() === to.toLowerCase());
   };
 
-  // an answer that repeated itself: exact duplicates of an op are dropped, the first one counts
+  // An answer that repeated itself: an exact copy of an op is dropped when it would make a second control or menu of the same
+  // name, or when it repeats the op right before it. Nameless adds are kept (three of them are three buttons), and so is a copy
+  // further on (an autosize after a caption change is meant).
   const seen = new Set<string>();
-  let repeated = 0;
+  let repeated = 0, prevKey: string | null = null;
   for (const raw of rawOps) {
     if (!isObj(raw) || typeof raw.op !== 'string') continue;
     const key = JSON.stringify(raw);
-    if (seen.has(key)) { repeated++; continue; }
-    seen.add(key);
     const low = raw.op.trim().toLowerCase();
     const kind = OP_ALIASES[low] ?? low;
+    const creates = kind === 'add' || kind === 'menu';
+    const copy = creates ? typeof raw.name === 'string' && raw.name.trim() !== '' && seen.has(key) : key === prevKey;
+    prevKey = key;
+    if (copy) { repeated++; continue; }
+    seen.add(key);
     if (kind === 'form') {
       const props = parseProps('Form', propsOf(raw), 'Form', warnings);
       for (const k of Object.keys(props)) {
