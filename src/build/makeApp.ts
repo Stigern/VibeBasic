@@ -1,5 +1,7 @@
-// File > Make <name>.app...: asks for a target and hands the project to the backend.
+// File > Make <name>.app... (.exe on Windows): asks for a target and hands the project to the backend.
 import type { Backend } from '../backend/backend';
+import { platform, type Platform } from '../platform';
+import { appNameOf, appTarget } from './appTarget';
 import type { IdeState } from '../ide/ideState';
 import { setProjectOptionsCmd } from '../model/commands';
 import { serializeProject } from '../model/serialize';
@@ -8,12 +10,18 @@ import { messageBox98 } from '../ui98/dialogs';
 
 const vbCritical = 16;
 
-/** Mirrors the Rust sanitizer: drops control characters, `/` and `:`, trims whitespace and leading dots. */
-export function sanitizeAppFileName(name: string): string {
-  const cleaned = [...name].filter(c => !/[\u0000-\u001f\u007f-\u009f/:]/.test(c)).join('');
-  const t = cleaned.trim().replace(/^\.+/, '').trim();
+/** Mirrors the Rust sanitizer: drops control characters, `/` and `:`, trims whitespace and leading dots. On Windows also the
+ *  other characters a file name cannot have (`\ * ? " < > |`) and trailing dots. */
+export function sanitizeAppFileName(name: string, p: Platform = platform()): string {
+  const bad = p === 'windows' ? /[\u0000-\u001f\u007f-\u009f/:\\*?"<>|]/ : /[\u0000-\u001f\u007f-\u009f/:]/;
+  const cleaned = [...name].filter(c => !bad.test(c)).join('');
+  let t = cleaned.trim().replace(/^\.+/, '').trim();
+  if (p === 'windows') t = t.replace(/[. ]+$/, '');
   return t === '' ? 'Project1' : t;
 }
+
+/** The file name of a path the save dialog gave (Windows also separates folders with "\"). */
+const fileOf = (path: string): string => (platform() === 'windows' ? path.split(/[\\/]/) : path.split('/')).pop() ?? path;
 
 export async function makeAppFlow(ide: IdeState, backend: Backend, doc: Document = document): Promise<void> {
   if (ide.mode !== 'design') {
@@ -28,10 +36,9 @@ export async function makeAppFlow(ide: IdeState, backend: Backend, doc: Document
   const p = ide.project;
   try {
     await backend.canMakeApp();
-    const target = await backend.saveAppDialog(sanitizeAppFileName(p.title || p.name) + '.app');
+    const target = await backend.saveAppDialog(sanitizeAppFileName(p.title || p.name) + appTarget().ext);
     if (target === null) return;
-    const file = target.split('/').pop() ?? target;
-    const appName = file.replace(/\.app$/i, '');
+    const appName = appNameOf(fileOf(target));
     // Auto Increment: as VB6, every Make adds 1 to the Revision (the project is changed, and the made app has the new number)
     const old = p.versionInfo ?? DEFAULT_VERSION;
     if (old.autoIncrement && old.revision < 9999) ide.stack.execute(setProjectOptionsCmd({ versionInfo: { ...old, revision: old.revision + 1 } }, 'Auto Increment'));
@@ -39,7 +46,8 @@ export async function makeAppFlow(ide: IdeState, backend: Backend, doc: Document
     const icon = p.iconAsset ? p.assets[p.iconAsset]?.dataBase64 ?? null : null;
     await backend.makeApp({
       targetPath: target, appName, projectJson: serializeProject(ide.project), iconPngBase64: icon, overwrite: true,
-      version: { major: v.major, minor: v.minor, revision: v.revision, copyright: v.legalCopyright ?? '' },
+      version: { major: v.major, minor: v.minor, revision: v.revision, copyright: v.legalCopyright ?? '',
+        companyName: v.companyName, fileDescription: v.fileDescription, productName: v.productName, comments: v.comments, legalTrademarks: v.legalTrademarks },
       fileTypes: ide.project.fileTypes ?? [],
     });
   } catch (e) {

@@ -15,6 +15,11 @@ import type { PrintJob } from './printing';
 import { mountPrintPreview } from './printView';
 import type { FromPayload } from './tauriFormHost';
 import type { FileDrag } from './dragDrop';
+import { ctrlLike, guessPlatform, isMac, setPlatform } from '../platform';
+
+// A form window may call no app command (not even `platform`): its own webview's user agent names the OS. Its paths are the
+// system's (DirListBox, FileListBox).
+setPlatform(guessPlatform());
 
 // MMControl / MediaPlayer: this window reads a file the main window opened, by its token (media_read is the only app command a
 // form window may call; capabilities/run-windows.json). The bytes come raw, never through an event.
@@ -50,8 +55,9 @@ function formPatch(m: ToWindow): Record<string, PropValue> | null {
 
 const twips = (v: PropValue | undefined): number | null => (typeof v === 'number' && Number.isFinite(v) ? v / 15 : null);
 
-/** Cmd+W / Ctrl+W when no menu item delivers it as a close request. */
-const isCloseKey = (e: KeyboardEvent) => (e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'w';
+/** Cmd+W / Ctrl+W on a Mac when no menu item delivers it as a close request. Windows and Linux close a window with Alt+F4 (the
+ *  system's own close request); Ctrl+W is the program's key there, as in VB6. */
+const isCloseKey = (e: KeyboardEvent) => isMac() && (e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'w';
 
 async function startForm(): Promise<void> {
   let mounted: ReturnType<typeof mountFormWindow> | null = null;
@@ -118,7 +124,7 @@ async function startForm(): Promise<void> {
     if (ws === 1 || ws === 2) await applyWindowState(ws).catch(() => {});
   });
   await win.listen<ToWindow>('vb:to', e => { if (mounted) handle(e.payload); else early.push(e.payload); });
-  // files dragged from Finder: Tauri's drag-drop events of this window (core:event:default lets it listen) go to the form, which
+  // files dragged from Finder / Explorer: Tauri's drag-drop events of this window (core:event:default lets it listen) go to the form, which
   // tells the run session (OLEDragOver / OLEDragDrop). On macOS the position is in points of the webview, i.e. CSS pixels.
   await getCurrentWebview().onDragDropEvent(e => {
     const p = e.payload;
@@ -161,7 +167,7 @@ async function startPrint(): Promise<void> {
   const print = () => void send({ key, result: 'print' });
   await win.onCloseRequested(e => { e.preventDefault(); close(); });
   window.addEventListener('keydown', e => {
-    if (isCloseKey(e)) { e.preventDefault(); close(); } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') { e.preventDefault(); print(); }
+    if (isCloseKey(e)) { e.preventDefault(); close(); } else if (ctrlLike(e) && e.key.toLowerCase() === 'p') { e.preventDefault(); print(); }
   }, true);
   await win.listen('vb:print-self', () => window.print());
   await win.listen<PrintJob>('vb:print', async e => {

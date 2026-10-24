@@ -18,6 +18,7 @@ import { GfxLayer } from '../gfx/dom';
 import { parseMnemonic } from '../ui98/dom';
 import { installDragDrop, type FileDrag } from './dragDrop';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
+import { isMac } from '../platform';
 
 type Props = Record<string, PropValue>;
 type Target = { id: string; def: ControlDef | null };
@@ -54,6 +55,11 @@ function keyAscii(e: KeyboardEvent): number | null {
   if (e.key === 'Enter') return 13;
   if (e.key === 'Backspace') return 8;
   return e.key.length === 1 ? e.key.charCodeAt(0) : null;
+}
+/** Windows: a bare Alt the page leaves alone goes on to the window's system menu, which then takes the keys (the form's menu bar
+ *  and the Alt+letter accelerators are the page's own). AltGr (Ctrl+Alt) is left alone. */
+function keepAltFromSystem(e: KeyboardEvent): void {
+  if (!isMac() && e.key === 'Alt' && !e.ctrlKey) e.preventDefault();
 }
 /** A KeyAscii that puts something in a text field (the control characters of Escape and Ctrl+letter do not). */
 const typable = (ascii: number): boolean => ascii >= 32 || ascii === 8 || ascii === 13;
@@ -592,13 +598,14 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   const chainOf = (id: string): string[] => (id !== 'form' && formState.KeyPreview === true ? ['form', id] : [id]);
 
   on<KeyboardEvent>('keydown', e => {
+    keepAltFromSystem(e);
     if (inChild(e.target)) return;   // an MDI child's own
     const tg = targetOf(e.target) ?? { id: 'form', def: null };
     if (blocked) { e.preventDefault(); return; }
     // VB6: the menu bar's own keys first (Alt, F10, Alt+letter of a menu, a menu's Shortcut; an MDI child's: the MDI form's bar, see
     // mdiWorkspace.ts), then the Alt+letter of a control's Caption
     if (!opts.mdiChild && surface.menuBar.keyDown(e)) return;
-    if (e.altKey && !e.ctrlKey && !e.metaKey && accelerate(e)) { e.preventDefault(); return; }   // Option+O would type a special character
+    if (e.altKey && !e.ctrlKey && !e.metaKey && accelerate(e)) { e.preventDefault(); return; }   // Option+O (Mac) would type a special character
     const prevented = e.defaultPrevented;   // e.g. an open combo list closing on Escape
     const chain = chainOf(tg.id);
     const code = vbKeyCode(e), shift = shiftBits(e);
@@ -612,6 +619,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
     else if (e.key === 'Escape' && !prevented) clickButton('Cancel');
   });
   on<KeyboardEvent>('keyup', e => {
+    keepAltFromSystem(e);
     if (inChild(e.target)) return;
     const tg = targetOf(e.target) ?? { id: 'form', def: null };
     if (blocked) return;

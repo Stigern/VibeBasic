@@ -84,6 +84,7 @@
     "allow-app-prev-instance",
     "allow-app-log-event",
     "allow-printer-list",
-    "allow-print-window"
+    "allow-print-window",
+    "allow-platform"
   ]
 }

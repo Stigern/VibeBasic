@@ -1,5 +1,6 @@
 // Builds the text the AI sees: control type reference, form descriptions and chat messages.
 import type { Expr, ModuleAst, Param, ProcDecl, VarDecl, VBTypeName } from '../lang/ast';
+import { fileManagerName, isMac, osName, winPaths } from '../platform';
 import { parseModuleLenient } from '../lang/parser';
 import { CONTROL_TYPES, FONT_ALIASES, type PropDef } from '../model/controls';
 import { absoluteRect, shownInDesign } from '../ide/designerLogic';
@@ -71,7 +72,7 @@ export function describeControlTypes(): string {
     + ' Visible controls and the Form have MousePointer (and MouseIcon), Screen.MousePointer too. Those with Font also have FontName, FontSize, FontBold, FontItalic, FontUnderline, FontStrikethru.'
     + ' In code, a control\'s Left, Top, Width, Height and its mouse X, Y are in the ScaleMode of its Form or PictureBox.'
     + ' +focus controls have CausesValidation and Validate(Cancel As Boolean). A & in a Caption: Alt+letter.'
-    + ' Drag: DragMode (vbAutomatic, or Ctl.Drag), DragDrop(Source As Control, X, Y), DragOver(Source, X, Y, State); OLEDropMode 1: OLEDragDrop(Data As DataObject, Effect, Button, Shift, X, Y), also Finder files (Data.Files(1)).'
+    + ` Drag: DragMode (vbAutomatic, or Ctl.Drag), DragDrop(Source As Control, X, Y), DragOver(Source, X, Y, State); OLEDropMode 1: OLEDragDrop(Data As DataObject, Effect, Button, Shift, X, Y), also ${fileManagerName()} files (Data.Files(1)).`
     + ' In the events, +focus is GotFocus and LostFocus, +keys KeyPress, KeyDown and KeyUp, +mouse MouseDown, MouseMove and MouseUp (VB6 parameters).'
     + ' Exceptions: Shape has no Enabled, TabIndex or SetFocus; Line has X1, Y1, X2, Y2 (twips) instead of Left, Top, Width, Height, and no Enabled, TabIndex, Move or SetFocus.'
     + ' A StatusBar always sits at the bottom of the form, full width (only its Height matters). Its Panels and a TabStrip\'s Tabs are one item per line,'
@@ -81,7 +82,9 @@ export function describeControlTypes(): string {
     + ' Its Filter looks like "Text (*.txt)|*.txt|All (*.*)|*.*".'
     + ' With Flags = cdlOFNAllowMultiselect Or cdlOFNExplorer, FileName is the folder, Chr(0), then the names separated by Chr(0); DefaultExt is added to a ShowSave name.'
     + ' A RichTextBox formats with SelBold, SelColor, SelAlignment ... and reads or writes RTF with TextRTF and SelRTF; LoadFile path[, rtfText] and SaveFile path[, rtfText] use a file; Find(text, [start], [end], [options]) selects the match and returns its position (-1 if none).'
-    + ' DriveListBox, DirListBox and FileListBox show the Mac\'s volumes, folders and files: Drive1.Drive is the path of a volume ("/" is the startup disk), Dir1.Path a folder, File1.Pattern "*.txt;*.bas".'
+    + (winPaths()
+      ? ' DriveListBox, DirListBox and FileListBox show the drives, folders and files: Drive1.Drive is a drive as "c: [label]", Dir1.Path a folder ("C:\\Temp"), File1.Pattern "*.txt;*.bas".'
+      : ` DriveListBox, DirListBox and FileListBox show the ${isMac() ? 'Mac\'s ' : ''}volumes, folders and files: Drive1.Drive is the path of a volume ("/" is the ${isMac() ? 'startup disk' : 'root'}), Dir1.Path a folder, File1.Pattern "*.txt;*.bas".`)
     + ' The usual link is Drive1_Change: Dir1.Path = Drive1.Drive, and Dir1_Change: File1.Path = Dir1.Path; File1.FileName is the selected file. The lists are filled asynchronously, so a read of ListCount or List(i) waits for the folder.'
     + ' An SSTab is a container with Tabs tabs (Tab is the current one, 0-based); TabCaption is one caption per line. A control added with "container" set to an SSTab goes on the tab given by "tab" (0-based, default the current tab); Top must leave room for the tabs (TabHeight, 520).'
     + ' A Toolbar sits at the top of the form, full width (Align = 1; only its Height matters); its Buttons are one per line "Caption|Key|Style|Image|ToolTipText"'
@@ -93,7 +96,7 @@ export function describeControlTypes(): string {
     + ' Inet and Winsock are invisible at run time (Left, Top, Tag only). Inet: s = Inet1.OpenURL(url) waits and returns the page; Inet1.Execute url, "GET" returns at once and raises StateChanged(State) with icResponseCompleted (then GetChunk(1024, icString) in a loop) or icError.'
     + ' Winsock: a client sets RemoteHost/RemotePort and calls Connect (Connect event, then SendData); a server sets LocalPort, calls Listen and in ConnectionRequest(requestID) calls Close and Accept requestID (or Load a new element of a Winsock control array and Accept there);'
     + ' in DataArrival(bytesTotal) Winsock1.GetData strData reads the text into a variable. Protocol sckUDPProtocol uses Bind and SendData with RemoteHost/RemotePort.'
-    + ' MSComm and SysInfo are invisible at run time. MSComm: set CommPort (n = the n-th /dev/cu.* serial device) or PortName = "/dev/cu.usbmodem1101", Settings = "9600,n,8,1", RThreshold = 1, then PortOpen = True;'
+    + ` MSComm and SysInfo are invisible at run time. MSComm: set CommPort (${winPaths() ? 'n = COMn' : isMac() ? 'n = the n-th /dev/cu.* serial device' : 'n = the n-th serial device'}) or PortName = "${winPaths() ? 'COM3' : isMac() ? '/dev/cu.usbmodem1101' : '/dev/ttyUSB0'}", Settings = "9600,n,8,1", RThreshold = 1, then PortOpen = True;`
     + ' MSComm1.Output = "text" sends; in MSComm1_OnComm check CommEvent = comEvReceive and read s = MSComm1.Input (InputLen 0 = all); PortOpen = False closes. SysInfo1.WorkAreaWidth ... are twips.'
     + ' An ImageCombo lists ComboItems "Text|Key|Image|SelImage|Indentation" (Image is an index or key into the ImageList named by its ImageList property); code: ImageCombo1.ComboItems.Add , "k", "Text", "imgkey".'
     + ' A CoolBar docks at the top (Align = 1) and its Bands are lines "Caption|Key|Image|NewRow(1)|Style|Child|MinWidth|Width"'
@@ -349,8 +352,10 @@ export interface RequestOptions { contextTokens?: number; selection?: string | n
 
 let codeSystem: string | undefined, formSystem: string | undefined;
 /** The system prompts, built once: byte-identical for every request (the server's prefix cache). */
-const codeSystemPrompt = (): string => codeSystem ??= `${CODE_SYSTEM_PROMPT}${describeControlTypes()}\n${LANGUAGE_REFERENCE}`;
-const formSystemPrompt = (): string => formSystem ??= `${FORM_SYSTEM_PROMPT}${describeControlTypes()}\n${LANGUAGE_REFERENCE}`;
+/** The prompt names the system the app runs on (the constants say macOS). */
+const forOs = (prompt: string): string => prompt.replace('a Visual Basic 6 clone for macOS', `a Visual Basic 6 clone for ${osName()}`);
+const codeSystemPrompt = (): string => codeSystem ??= `${forOs(CODE_SYSTEM_PROMPT)}${describeControlTypes()}\n${LANGUAGE_REFERENCE}`;
+const formSystemPrompt = (): string => formSystem ??= `${forOs(FORM_SYSTEM_PROMPT)}${describeControlTypes()}\n${LANGUAGE_REFERENCE}`;
 
 /** The form description (or, for a module, the project's forms) followed by the project symbols, when there are any. */
 function projectContext(p: Project, itemId: string, form: FormDef | undefined, map = false): string {

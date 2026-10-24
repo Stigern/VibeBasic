@@ -91,11 +91,13 @@ fn sort_names(v: &mut [String]) {
   v.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b)));
 }
 
-/// "/" (the startup disk, named after the /Volumes entry that points back to it when there is one) and every other /Volumes/* entry.
-fn volumes_in(volumes_dir: &Path) -> Vec<Volume> {
+/// "/" (the startup disk, named after the entry that points back to it when there is one) and every other folder in
+/// `volume_dirs` (/Volumes on macOS; /media/$USER, /run/media/$USER and /mnt on Linux), sorted by name.
+#[cfg_attr(windows, allow(dead_code))]
+fn volumes_in(volume_dirs: &[PathBuf]) -> Vec<Volume> {
   let mut root_name = "/".to_string();
   let mut others: Vec<Volume> = Vec::new();
-  if let Ok(rd) = std::fs::read_dir(volumes_dir) {
+  for rd in volume_dirs.iter().filter_map(|d| std::fs::read_dir(d).ok()) {
     for e in rd.flatten() {
       let name = e.file_name().to_string_lossy().to_string();
       let path = e.path();
@@ -114,9 +116,83 @@ fn volumes_in(volumes_dir: &Path) -> Vec<Volume> {
   out
 }
 
+/// A Windows drive as VB6's DriveListBox shows it: "c: [label]" (just "a:" without a label); `path` is its root (C:\).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn drive_volume(letter: char, label: &str) -> Volume {
+  let l = letter.to_ascii_lowercase();
+  let name = if label.is_empty() { format!("{l}:") } else { format!("{l}: [{label}]") };
+  Volume { name, path: format!("{}:\\", letter.to_ascii_uppercase()) }
+}
+
+/// The drives there are (GetLogicalDrives), A: to Z:. The label is read for fixed, network and RAM drives only: an empty
+/// floppy or card reader is not touched (it could be slow or ask for a disk).
+#[cfg(windows)]
+fn windows_volumes() -> Vec<Volume> {
+  use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW};
+  const DRIVE_FIXED: u32 = 3;
+  const DRIVE_REMOTE: u32 = 4;
+  const DRIVE_RAMDISK: u32 = 6;
+  // SAFETY: no arguments.
+  let mask = unsafe { GetLogicalDrives() };
+  (0..26u8)
+    .filter(|i| mask & (1 << i) != 0)
+    .map(|i| {
+      let letter = (b'A' + i) as char;
+      let root: Vec<u16> = format!("{letter}:\\").encode_utf16().chain([0]).collect();
+      // SAFETY: `root` is NUL-terminated; the label buffer's size is passed.
+      let label = unsafe {
+        let kind = GetDriveTypeW(root.as_ptr());
+        let mut buf = [0u16; 261];
+        let ok = matches!(kind, DRIVE_FIXED | DRIVE_REMOTE | DRIVE_RAMDISK)
+          && GetVolumeInformationW(root.as_ptr(), buf.as_mut_ptr(), buf.len() as u32, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), 0) != 0;
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(0);
+        if ok { String::from_utf16_lossy(&buf[..len]) } else { String::new() }
+      };
+      drive_volume(letter, &label)
+    })
+    .collect()
+}
+
+/// Where Linux mounts other disks: udisks2 under /media/$USER (Debian, Ubuntu) or /run/media/$USER (Fedora, Arch), and /mnt.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn linux_volume_dirs() -> Vec<PathBuf> {
+  let mut dirs = vec![];
+  if let Some(user) = std::env::var_os("USER").filter(|u| !u.is_empty()) {
+    dirs.push(Path::new("/media").join(&user));
+    dirs.push(Path::new("/run/media").join(&user));
+  }
+  dirs.push(PathBuf::from("/mnt"));
+  dirs
+}
+
 #[tauri::command]
 pub async fn list_volumes() -> Result<Vec<Volume>, String> {
-  off_main(|| Ok(volumes_in(Path::new("/Volumes")))).await
+  #[cfg(target_os = "macos")]
+  return off_main(|| Ok(volumes_in(&[PathBuf::from("/Volumes")]))).await;
+  #[cfg(windows)]
+  return off_main(|| Ok(windows_volumes())).await;
+  #[cfg(all(unix, not(target_os = "macos")))]
+  off_main(|| Ok(volumes_in(&linux_volume_dirs()))).await
+}
+
+/// A hidden file: the hidden attribute on Windows (`windows_attributes`), a name that starts with "." elsewhere.
+pub fn is_hidden(name: &str, windows_attributes: Option<u32>) -> bool {
+  const FILE_ATTRIBUTE_HIDDEN: u32 = 2;
+  match windows_attributes {
+    Some(a) => a & FILE_ATTRIBUTE_HIDDEN != 0,
+    None => name.starts_with('.'),
+  }
+}
+
+/// The Windows file attributes of `meta` (None elsewhere).
+pub fn windows_attributes(meta: &std::fs::Metadata) -> Option<u32> {
+  #[cfg(windows)]
+  return Some(std::os::windows::fs::MetadataExt::file_attributes(meta));
+  #[cfg(not(windows))]
+  {
+    let _ = meta;
+    None
+  }
 }
 
 /// Lists one folder (one level: nothing is followed further). A symlink to a folder is a folder, a symlink to a file a file.
@@ -137,7 +213,9 @@ pub fn list(path: &str) -> Result<DirListing, String> {
     if ft.is_dir() || (ft.is_symlink() && std::fs::metadata(e.path()).is_ok_and(|m| m.is_dir())) {
       dirs.push(name);
     } else if ft.is_file() || (ft.is_symlink() && std::fs::metadata(e.path()).is_ok_and(|m| m.is_file())) {
-      files.push(FileEntry { hidden: name.starts_with('.'), name });
+      // Windows: the entry's own attributes (a link's, not its target's), as Explorer shows them
+      let attrs = if cfg!(windows) { e.metadata().ok().and_then(|m| windows_attributes(&m)) } else { None };
+      files.push(FileEntry { hidden: is_hidden(&name, attrs), name });
     }
   }
   sort_names(&mut dirs);
@@ -196,10 +274,12 @@ mod tests {
     let l = list(&dir.to_string_lossy()).unwrap();
     assert_eq!(l.dirs, vec!["Alpha", "beta"]);
     let files: Vec<(&str, bool)> = l.files.iter().map(|f| (f.name.as_str(), f.hidden)).collect();
-    assert_eq!(files, vec![(".secret", true), ("A.bas", false), ("b.txt", false)]);
+    // a dot file is hidden on macOS and Linux; on Windows only the Hidden attribute counts
+    assert_eq!(files, vec![(".secret", !cfg!(windows)), ("A.bas", false), ("b.txt", false)]);
     std::fs::remove_dir_all(dir).ok();
   }
 
+  #[cfg(unix)]
   #[test]
   fn list_dir_lists_symlinked_folders_and_files() {
     let dir = unique_dir("sym");
@@ -222,13 +302,14 @@ mod tests {
     std::fs::remove_dir_all(dir).ok();
   }
 
+  #[cfg(unix)]
   #[test]
   fn volumes_start_with_the_startup_disk_and_skip_the_entry_that_points_back() {
     let dir = unique_dir("vol");
     std::fs::create_dir(dir.join("Zeta")).unwrap();
     std::fs::create_dir(dir.join("alpha")).unwrap();
     std::os::unix::fs::symlink("/", dir.join("Macintosh HD")).unwrap();
-    let v = volumes_in(&dir);
+    let v = volumes_in(&[dir.clone(), dir.join("missing")]);
     let got: Vec<(String, String)> = v.into_iter().map(|v| (v.name, v.path)).collect();
     assert_eq!(got[0], ("Macintosh HD".to_string(), "/".to_string()));
     assert_eq!(got.len(), 3);
@@ -238,7 +319,34 @@ mod tests {
     std::fs::remove_dir_all(dir).ok();
   }
 
+  #[cfg(unix)]
+  #[test]
+  fn linux_volumes_come_from_several_folders() {
+    let (media, mnt) = (unique_dir("media"), unique_dir("mnt"));
+    std::fs::create_dir(media.join("USB STICK")).unwrap();
+    std::fs::create_dir(mnt.join("backup")).unwrap();
+    let names: Vec<String> = volumes_in(&[media.clone(), mnt.clone()]).into_iter().map(|v| v.name).collect();
+    assert_eq!(names, ["/", "backup", "USB STICK"]);
+    std::fs::remove_dir_all(media).ok();
+    std::fs::remove_dir_all(mnt).ok();
+  }
+
+  #[test]
+  fn windows_drives_show_as_in_vb6() {
+    assert_eq!(drive_volume('C', "Windows"), Volume { name: "c: [Windows]".into(), path: "C:\\".into() });
+    assert_eq!(drive_volume('a', ""), Volume { name: "a:".into(), path: "A:\\".into() });
+  }
+
+  #[test]
+  fn hidden_is_the_attribute_on_windows_and_a_dot_elsewhere() {
+    assert!(is_hidden(".profile", None));
+    assert!(!is_hidden("a.txt", None));
+    assert!(is_hidden("desktop.ini", Some(2 | 4)));
+    assert!(!is_hidden(".gitignore", Some(32)));
+  }
+
   /// M1/M2: a FIFO is refused at once (not read forever), and a file over the cap is "7|".
+  #[cfg(unix)]
   #[test]
   fn fifos_are_refused_and_big_files_capped() {
     let dir = unique_dir("fifo");

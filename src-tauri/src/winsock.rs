@@ -555,6 +555,9 @@ mod tests {
   }
 
   /// M4: a send to a peer that stopped reading ends when the socket is closed, and on its own after the stall timeout.
+  /// Not on Windows: its loopback buffers take the whole 64 MB at once, so the send never blocks there (the stall
+  /// logic itself is plain tokio and the same on every platform).
+  #[cfg(not(windows))]
   #[tokio::test(flavor = "multi_thread")]
   async fn a_blocked_send_ends_on_close_or_after_the_stall_timeout() {
     let s = Sockets::default();

@@ -1,0 +1,153 @@
+# Release builds for a version tag (v1.2.3): the Windows installer and portable exe, the Linux .deb and AppImage, and an
+# ad hoc signed macOS zip, uploaded to the GitHub release of the tag.
+#
+# It works alongside the local release (`gh release create vX.Y.Z` with the locally signed macOS zip):
+# - a release that already exists keeps its notes; the CI files are uploaded to it with --clobber;
+# - a release that does not exist yet is created, titled "VibeBasic X.Y.Z", with the tag's CHANGELOG section as notes;
+# - the macOS zip has the same name as the local one (VibeBasic-X.Y.Z-macos-arm64.zip). If the release already has it, the
+#   CI one is left out, so the local signed build wins. If CI was first, `gh release upload vX.Y.Z <zip> --clobber` replaces it.
+# CI has no signing secrets: the Windows and Linux files are unsigned, the macOS app is signed ad hoc.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bundles: nsis
+          # The oldest supported Ubuntu: the .deb and the AppImage need the glibc they were built with or newer.
+          - os: ubuntu-22.04
+            bundles: deb,appimage
+          - os: macos-latest
+            bundles: app
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: The tag matches package.json
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          p="$(node -p "require('./package.json').version")"
+          if [ "$v" != "$p" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $p"
+            exit 1
+          fi
+
+      - name: Linux packages for Tauri (WebKitGTK, libsoup)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev build-essential file patchelf
+
+      - name: Rust (stable)
+        run: rustup toolchain install stable --profile minimal --no-self-update && rustup default stable
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      # tauri.conf.json lists only the macOS "app" bundle (the local build); --bundles picks this platform's.
+      - name: Build
+        run: npx tauri build --bundles ${{ matrix.bundles }}
+        env:
+          # linuxdeploy (the AppImage) runs without FUSE
+          APPIMAGE_EXTRACT_AND_RUN: 1
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          v="${GITHUB_REF_NAME#v}"
+          b=src-tauri/target/release/bundle
+          out=release-files
+          mkdir -p "$out"
+          case "$RUNNER_OS" in
+            Windows)
+              cp "$b"/nsis/*-setup.exe "$out/VibeBasic-$v-windows-x64-setup.exe"
+              exe=src-tauri/target/release/VibeBasic.exe
+              [ -f "$exe" ] || exe=src-tauri/target/release/app.exe
+              mkdir -p portable
+              cp "$exe" portable/VibeBasic.exe
+              pwsh -NoProfile -Command "Compress-Archive -Path portable/VibeBasic.exe -DestinationPath '$out/VibeBasic-$v-windows-x64.zip'"
+              ;;
+            Linux)
+              cp "$b"/deb/*.deb "$out/VibeBasic-$v-linux-x64.deb"
+              cp "$b"/appimage/*.AppImage "$out/VibeBasic-$v-linux-x64.AppImage"
+              ;;
+            macOS)
+              app="$b/macos/VibeBasic.app"
+              codesign --force --deep --sign - "$app"
+              codesign --verify --deep --strict "$app"
+              ditto -c -k --keepParent "$app" "$out/VibeBasic-$v-macos-arm64.zip"
+              ;;
+          esac
+          ls -l "$out"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ runner.os }}
+          path: release-files/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: assets
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          v="${tag#v}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            # the tag's section of CHANGELOG.md, without the heading
+            awk -v v="$v" '/^## \[/ { if (on) exit; on = index($0, "## [" v "]") == 1; next } on' CHANGELOG.md \
+              | sed -e '/./,$!d' > notes.md
+            [ -s notes.md ] || echo "See [CHANGELOG.md](CHANGELOG.md)." > notes.md
+            # if the local release was made in the meantime, use that one
+            gh release create "$tag" --verify-tag --title "VibeBasic $v" --notes-file notes.md || gh release view "$tag" >/dev/null
+          fi
+          mac="VibeBasic-$v-macos-arm64.zip"
+          if gh release view "$tag" --json assets --jq '.assets[].name' | grep -qxF "$mac"; then
+            echo "The release already has $mac (the local signed build): the CI one is left out."
+            rm -f "assets/$mac"
+          fi
+          ls -l assets
+          gh release upload "$tag" assets/* --clobber

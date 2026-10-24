@@ -144,6 +144,7 @@ mod tests {
   }
 
   /// M1: a FIFO swapped in for an opened media file is refused, not read forever.
+  #[cfg(unix)]
   #[test]
   fn a_fifo_in_place_of_the_file_is_refused() {
     let dir = tempfile::tempdir().unwrap();

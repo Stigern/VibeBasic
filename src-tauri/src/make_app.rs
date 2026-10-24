@@ -1,10 +1,22 @@
-//! Make app: builds a standalone .app by copying VibeBasic.app itself.
+//! Make app: on macOS builds a standalone .app by copying VibeBasic.app itself; on Windows and Linux a copy of the
+//! executable with the project appended (make_exe.rs). The bundle code still compiles everywhere.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
-/// Removes control characters, `/` and `:`, trims whitespace and leading dots.
+/// Removes control characters, `/` and `:`, trims whitespace and leading dots (Windows rules on Windows: see sanitize_for).
 /// Empty names (and `.`/`..`) become `Project1`.
 pub fn sanitize_app_file_name(name: &str) -> String {
-  let cleaned: String = name.chars().filter(|c| !c.is_control() && *c != '/' && *c != ':').collect();
-  let trimmed = cleaned.trim().trim_start_matches('.').trim();
+  sanitize_for(name, cfg!(windows))
+}
+
+/// sanitize_app_file_name; `windows` also drops the other characters a Windows file name cannot have (`\ * ? " < > |`) and
+/// trailing dots and blanks, as sanitizeAppFileName in makeApp.ts.
+pub fn sanitize_for(name: &str, windows: bool) -> String {
+  let bad = |c: char| c.is_control() || c == '/' || c == ':' || (windows && matches!(c, '\\' | '*' | '?' | '"' | '<' | '>' | '|'));
+  let cleaned: String = name.chars().filter(|c| !bad(*c)).collect();
+  let mut trimmed = cleaned.trim().trim_start_matches('.').trim();
+  if windows {
+    trimmed = trimmed.trim_end_matches(['.', ' ']);
+  }
   if trimmed.is_empty() {
     "Project1".to_string()
   } else {
@@ -79,7 +91,8 @@ pub struct BuildSpec {
   pub file_types: Vec<String>,
 }
 
-/// VB6's version number (Major.Minor.Revision) and the Legal Copyright of the version information.
+/// VB6's version number (Major.Minor.Revision) and the Legal Copyright of the version information. The other texts are
+/// only used on Windows (the version resource); macOS has no place for them.
 #[derive(serde::Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AppVersion {
@@ -88,6 +101,16 @@ pub struct AppVersion {
   pub revision: u32,
   #[serde(default)]
   pub copyright: String,
+  #[serde(default)]
+  pub company_name: String,
+  #[serde(default)]
+  pub file_description: String,
+  #[serde(default)]
+  pub product_name: String,
+  #[serde(default)]
+  pub comments: String,
+  #[serde(default)]
+  pub legal_trademarks: String,
 }
 
 /// An extension as a document type lists it: no leading `*.` or `.`, lower case; None when it has other characters than
@@ -373,10 +396,30 @@ pub fn normalize_target(raw: &str) -> Result<PathBuf, MakeError> {
   Ok(parent.join(format!("{}.app", sanitize_app_file_name(base))))
 }
 
-/// Ok when VibeBasic runs as a built .app (the only place Make works).
+/// Ok when VibeBasic runs as a built .app (off macOS: a built executable), the only place Make works.
 #[tauri::command]
 pub fn can_make_app() -> Result<(), String> {
+  #[cfg(not(target_os = "macos"))]
+  return crate::make_exe::current_exe_source().map(|_| ()).map_err(|e| e.message());
+  #[cfg(target_os = "macos")]
   current_bundle().map(|_| ()).map_err(|e| e.message())
+}
+
+/// macOS: a copy of the running .app bundle.
+#[cfg(target_os = "macos")]
+fn build_for_platform(target_path: &str, spec: &BuildSpec, overwrite: bool) -> Result<(), MakeError> {
+  let source = current_bundle()?;
+  let target = normalize_target(target_path)?;
+  build_app_from(&source, &target, spec, overwrite, &CodesignSigner, &SipsIconConverter)
+}
+
+/// Windows and Linux: a copy of the running executable carrying the project.
+#[cfg(not(target_os = "macos"))]
+fn build_for_platform(target_path: &str, spec: &BuildSpec, overwrite: bool) -> Result<(), MakeError> {
+  use crate::make_exe::{ExeKind, build_exe_from, current_exe_source};
+  let source = current_exe_source()?;
+  let target = crate::make_exe::normalize_target(target_path, ExeKind::current())?;
+  build_exe_from(&source, &target, spec, overwrite, ExeKind::current())
 }
 
 #[tauri::command]
@@ -399,17 +442,16 @@ pub async fn make_app(
       ),
       None => None,
     };
-    let source = current_bundle()?;
-    let target = normalize_target(&target_path)?;
     let spec = BuildSpec { app_name, project_json, icon_png, version, file_types: file_types.unwrap_or_default() };
-    build_app_from(&source, &target, &spec, overwrite, &CodesignSigner, &SipsIconConverter)
+    build_for_platform(&target_path, &spec, overwrite)
   })
   .await
   .map_err(|e| format!("Could not make the app: {e}"))?
   .map_err(|e| e.message())
 }
 
-#[cfg(test)]
+/// The bundle tests use ditto, codesign's ad-hoc signing and xattr: macOS only.
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
   use super::*;
   use std::cell::RefCell;
@@ -550,7 +592,7 @@ mod tests {
     plist::Value::Dictionary(d).to_file_xml(src.join("Contents/Info.plist")).unwrap();
     let target = tmp.path().join("T.app");
     let mut s = spec(false);
-    s.version = Some(AppVersion { major: 2, minor: 1, revision: 17, copyright: "(c) 2026 Stig".into() });
+    s.version = Some(AppVersion { major: 2, minor: 1, revision: 17, copyright: "(c) 2026 Stig".into(), ..Default::default() });
     s.file_types = vec!["*.kalk".into(), ".TXT".into(), "bad/ext".into()];
     build_app_from(&src, &target, &s, false, &FakeSigner(RefCell::new(vec![])), &FakeIcons(RefCell::new(0))).unwrap();
     let p = plist_of(&target);
@@ -568,7 +610,7 @@ mod tests {
     // no file types and no copyright: neither key is left
     let target2 = tmp.path().join("U.app");
     let mut s2 = spec(false);
-    s2.version = Some(AppVersion { major: 1, minor: 0, revision: 0, copyright: String::new() });
+    s2.version = Some(AppVersion { major: 1, minor: 0, revision: 0, copyright: String::new(), ..Default::default() });
     build_app_from(&src, &target2, &s2, false, &FakeSigner(RefCell::new(vec![])), &FakeIcons(RefCell::new(0))).unwrap();
     let p2 = plist_of(&target2);
     assert!(p2.get("CFBundleDocumentTypes").is_none());
@@ -705,6 +747,14 @@ mod tests {
     assert!(listing(&src).contains("com.apple.quarantine"), "precondition");
     assert!(!listing(&target).contains("com.apple.quarantine"));
     assert!(!listing(&target.join("Contents/Resources/x")).contains("com.apple.quarantine"));
+  }
+
+  #[test]
+  fn sanitize_windows_rules_match_the_frontend() {
+    assert_eq!(sanitize_for(r#"a\b*c?d"e<f>g|h"#, true), "abcdefgh");
+    assert_eq!(sanitize_for("Kalk. . ", true), "Kalk");
+    assert_eq!(sanitize_for("...", true), "Project1");
+    assert_eq!(sanitize_for("a*b.", false), "a*b.");
   }
 
   #[test]

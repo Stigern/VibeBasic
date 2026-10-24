@@ -2,11 +2,13 @@
 //!
 //! - `off_main`: a plain `#[tauri::command]` runs on the macOS main thread, so a slow disk, a big copy or a FIFO would freeze
 //!   every window. The commands are `async` and run their blocking body on the blocking thread pool through this.
-//! - `open_regular`: opens a file without blocking on a FIFO or a device (O_NONBLOCK) and refuses anything that is not a
-//!   regular file, so `Open "/tmp/fifo" For Input` is an error instead of a hang.
+//! - `open_regular`: opens a file without blocking on a FIFO or a device (O_NONBLOCK on Unix) and refuses anything that is
+//!   not a regular file, so `Open "/tmp/fifo" For Input` is an error instead of a hang. Windows has no FIFOs in the file
+//!   system (a named pipe that is busy fails to open rather than wait), so there it only checks the kind of file.
 
 use std::fs::{File, OpenOptions};
 use std::io::{Error, ErrorKind};
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
@@ -24,7 +26,9 @@ pub fn not_regular() -> Error {
 /// A FIFO opened for reading without a writer would otherwise block in open(2), and one opened for writing without a
 /// reader fails here (ENXIO) instead.
 pub fn open_regular(path: &Path, opts: &OpenOptions) -> std::io::Result<File> {
+  #[allow(unused_mut)]
   let mut o = opts.clone();
+  #[cfg(unix)]
   o.custom_flags(libc::O_NONBLOCK);
   let f = o.open(path)?;
   if !f.metadata()?.is_file() {
@@ -40,7 +44,7 @@ pub fn open_read(path: &Path) -> std::io::Result<File> {
   open_regular(path, &o)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) mod tests {
   use super::*;
 
