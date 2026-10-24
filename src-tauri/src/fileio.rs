@@ -215,23 +215,30 @@ pub async fn fio_reset(files: State<'_, OpenFiles>) -> Result<(), String> {
 // ---------------------------------------------------------------------------------------------------------------
 // File-system statements
 
-/// Kill: one file (a folder is 53, as in VB6).
+/// Kill: one file (a folder is 53, as in VB6). A read-only file is 75, as in VB6 (Windows itself deletes one since Rust 1.86).
 pub fn kill(path: &str) -> Result<(), String> {
   let p = Path::new(path);
   if p.is_dir() {
     return Err(vb(53));
   }
+  if std::fs::symlink_metadata(p).is_ok_and(|m| m.is_file() && m.permissions().readonly()) {
+    return Err(vb(75));
+  }
   std::fs::remove_file(p).map_err(|e| io_err(&e, p, 75))
 }
 
-/// Name old As new: 53 when old is missing, 58 when new exists.
+/// Name old As new: 53 when old is missing, 58 when new exists. A new name that differs only in case is the same file on a
+/// case-insensitive disk (Windows, macOS): renamed, as in VB6.
 pub fn rename(from: &str, to: &str) -> Result<(), String> {
   let (f, t) = (Path::new(from), Path::new(to));
-  if std::fs::symlink_metadata(f).is_err() {
+  let Ok(src) = std::fs::symlink_metadata(f) else {
     return Err(vb(if parent_missing(f) { 76 } else { 53 }));
-  }
-  if std::fs::symlink_metadata(t).is_ok() {
-    return Err(vb(58));
+  };
+  if let Ok(dst) = std::fs::symlink_metadata(t) {
+    let case_only = from != to && from.to_lowercase() == to.to_lowercase() && same_file(f, &src, t, &dst);
+    if !case_only {
+      return Err(vb(58));
+    }
   }
   if parent_missing(t) {
     return Err(vb(76));
@@ -337,6 +344,9 @@ pub struct FileStat {
   pub mtime: f64,
   pub read_only: bool,
   pub hidden: bool,
+  /// Windows: the attributes GetAttr reports (read-only 1, hidden 2, system 4, directory 16, archive 32).
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub attrs: Option<u32>,
 }
 
 /// None when nothing is there.
@@ -350,8 +360,10 @@ pub fn stat(path: &str) -> Option<FileStat> {
     .map(|d| d.as_millis() as f64)
     .unwrap_or(0.0);
   let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-  let hidden = !name.is_empty() && crate::files::is_hidden(&name, crate::files::windows_attributes(&meta));
-  Some(FileStat { is_dir: meta.is_dir(), size: if meta.is_dir() { 0 } else { meta.len() }, mtime, read_only: meta.permissions().readonly(), hidden })
+  let attrs = crate::files::windows_attributes(&meta);
+  let hidden = !name.is_empty() && crate::files::is_hidden(&name, attrs);
+  let attrs = attrs.map(|a| a & (1 | 2 | 4 | 16 | 32));
+  Some(FileStat { is_dir: meta.is_dir(), size: if meta.is_dir() { 0 } else { meta.len() }, mtime, read_only: meta.permissions().readonly(), hidden, attrs })
 }
 
 #[tauri::command]
@@ -625,6 +637,43 @@ mod tests {
     assert!(stat(&s(&b)).unwrap().read_only);
     set_attr(&s(&b), 0).unwrap();
     assert!(!stat(&s(&b)).unwrap().read_only);
+  }
+
+  #[test]
+  fn kill_of_a_read_only_file_is_75_and_a_new_case_is_a_rename() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.txt");
+    std::fs::write(&a, "x").unwrap();
+    set_attr(&s(&a), 1).unwrap();
+    assert_eq!(kill(&s(&a)).unwrap_err(), "75|Path/File access error");
+    assert!(a.exists());
+    set_attr(&s(&a), 0).unwrap();
+
+    // a.txt -> A.TXT: the same file on a case-insensitive disk, a new name on a case-sensitive one; renamed either way
+    let upper = dir.path().join("A.TXT");
+    rename(&s(&a), &s(&upper)).unwrap();
+    let names: Vec<String> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(names, ["A.TXT"]);
+    kill(&s(&upper)).unwrap();
+  }
+
+  #[cfg(windows)]
+  #[test]
+  fn getattr_has_the_windows_attributes() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.txt");
+    std::fs::write(&a, "x").unwrap();
+    assert_eq!(stat(&s(&a)).unwrap().attrs, Some(32));   // a new file: archive
+    set_attr(&s(&a), 1 | 4).unwrap();
+    assert_eq!(stat(&s(&a)).unwrap().attrs, Some(1 | 4));
+    set_attr(&s(&a), 0).unwrap();
+    assert_eq!(stat(&s(dir.path())).unwrap().attrs.map(|x| x & 16), Some(16));
+
+    // Dir: a hidden folder is listed as one; a folder named ".git" is not hidden on Windows
+    std::fs::create_dir(dir.path().join("h")).unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    set_attr(&s(&dir.path().join("h")), 2).unwrap();
+    assert_eq!(crate::files::list(&s(dir.path())).unwrap().hidden_dirs, ["h"]);
   }
 
   #[test]

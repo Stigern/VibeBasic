@@ -16,10 +16,12 @@ export interface FileStat {
   mtime: number;
   readOnly: boolean;
   hidden: boolean;
+  /** Windows: the file's attributes (vbReadOnly 1, vbHidden 2, vbSystem 4, vbDirectory 16, vbArchive 32). */
+  attrs?: number;
 }
 
 /** One folder: sub-folder names and files, each sorted (the shape of Backend.listDir). */
-export interface FsListing { dirs: string[]; files: { name: string; hidden: boolean }[] }
+export interface FsListing { dirs: string[]; files: { name: string; hidden: boolean }[]; hiddenDirs?: string[] }
 
 export interface FileSystemApi {
   /** Opens a file (full path) and keeps the handle; `len` is its size. Output truncates; Output, Append and Binary/Random create it. */

@@ -205,8 +205,9 @@ export class ControlObject implements VBObject, DataConsumer {
   private pendingName: string | null = null;
   /** The listing read while checking a new Path (the reload that follows uses it instead of reading again). */
   private prefetched: { path: string; listing: DirListing } | null = null;
-  /** DriveListBox: the volumes, once known. */
+  /** DriveListBox: the volumes, once known, and their load (reads of Drive, List, ListCount and ListIndex wait for it). */
   private volumes: Volume[] | null = null;
+  private volumesLoading: Promise<void> | null = null;
   /** Winsock, Inet, WebBrowser: their methods and network state. */
   private ext: NetControl | null = null;
   /** MMControl, MediaPlayer, Agent: their properties, methods and state (see richControl.ts). */
@@ -529,20 +530,43 @@ export class ControlObject implements VBObject, DataConsumer {
   // -- DriveListBox, DirListBox and FileListBox ----------------------------------------------------------------
 
   private loadVolumes(): void {
-    this.ctx.files?.listVolumes().then(v => {
+    const files = this.ctx.files;
+    if (!files) return;
+    const p: Promise<void> = files.listVolumes().then(v => {
       if (!v.length) return;
       this.volumes = v;
+      this.props.List = v.map(x => this.volumeValue(x));
       if (winPaths()) {
         // VB6: each drive as "c: [label]", which is also the Drive value; it starts as the drive of the current folder
         this.props.Drives = v.map(x => joinFields([winDriveText(x), winDriveText(x)]));
-        const cur = this.props.Drive === '/' ? findVolume(v, this.ctx.files?.defaultPath ?? '') ?? v[0] : undefined;
+        const cur = this.props.Drive === '/' ? findVolume(v, files.defaultPath ?? '') ?? v[0] : undefined;
         if (cur) this.props.Drive = winDriveText(cur);
         this.send({ Drives: this.props.Drives, Drive: String(this.props.Drive) });
         return;
       }
       this.props.Drives = v.map(x => joinFields([x.path, x.name]));
       this.send({ Drives: this.props.Drives });
-    }).catch(() => { /* the default drive "/" stays */ });
+    }).catch(() => { /* the default drive "/" stays */ })
+      .finally(() => { if (this.volumesLoading === p) this.volumesLoading = null; });
+    this.volumesLoading = p;
+  }
+
+  /** A volume as the Drive value: "c: [label]" on Windows, else its path. */
+  private volumeValue(v: Volume): string { return winPaths() ? winDriveText(v) : v.path; }
+
+  /** DriveListBox.ListIndex: the volume that Drive names, -1 before the volumes are known. */
+  private driveIndex(): number {
+    const cur = this.volumes && findVolume(this.volumes, String(this.props.Drive));
+    return cur ? this.volumes!.indexOf(cur) : -1;
+  }
+
+  /** DriveListBox.Drive = "d:" or .ListIndex = n, once the volumes are known (the statement waits for them). */
+  private async setDrive(pd: PropDef, value: VBValue): Promise<void> {
+    await this.volumesLoading;
+    if (pd.name === 'Drive') { this.write(pd, toStr(value)); return; }
+    const n = num(value), list = this.list();
+    if (n < 0 || n >= list.length) throw new VBRuntimeError(380);
+    this.write(this.propDef('Drive'), list[n]);
   }
 
   /** Reads the folder in `Path`; the lists follow when it is there (an unreadable folder is an empty list). */
@@ -614,7 +638,7 @@ export class ControlObject implements VBObject, DataConsumer {
     if (!this.volumes) return v;
     const vol = findVolume(this.volumes, v);
     if (!vol) throw new VBRuntimeError(68);
-    return winPaths() ? winDriveText(vol) : vol.path;
+    return this.volumeValue(vol);
   }
 
   // -- TreeView, ListView and MSFlexGrid: what the window gets ---------------------------------------------------
@@ -909,6 +933,9 @@ export class ControlObject implements VBObject, DataConsumer {
     if (isBrowserType(this.def.type) && this.loading && (pd.name === 'List' || pd.name === 'ListCount')) {
       return this.settled().then(() => this.getMember(name, args)) as unknown as VBValue;   // the interpreter waits for a Promise
     }
+    if (this.def.type === 'DriveListBox' && this.volumesLoading && ['Drive', 'List', 'ListCount', 'ListIndex'].includes(pd.name)) {
+      return this.volumesLoading.then(() => this.getMember(name, args)) as unknown as VBValue;
+    }
     if (this.def.type === 'DirListBox' && pd.name === 'List') {
       if (args.length !== 1) throw new VBRuntimeError(450);
       const v = dirListItem(String(this.props.Path), this.list(), num(args[0]));
@@ -973,6 +1000,10 @@ export class ControlObject implements VBObject, DataConsumer {
     if (pd.name === 'Path' && isBrowserType(this.def.type) && this.ctx.files) {
       if (args.length) throw new VBRuntimeError(450);
       return this.setPath(toStr(this.plain(value)));
+    }
+    if (this.def.type === 'DriveListBox' && (pd.name === 'Drive' || pd.name === 'ListIndex')) {
+      if (args.length) throw new VBRuntimeError(450);
+      return this.setDrive(pd, this.plain(value));
     }
     if (pd.name === 'FileName' && this.def.type === 'FileListBox') {
       if (args.length) throw new VBRuntimeError(450);
@@ -1115,6 +1146,7 @@ export class ControlObject implements VBObject, DataConsumer {
   private read(pd: PropDef): PropValue {
     switch (pd.name) {
       case 'ListCount': return this.list().length;
+      case 'ListIndex': if (this.def.type === 'DriveListBox') return this.driveIndex(); break;
       case 'Text':
         if (this.def.type === 'ListBox') {
           const i = this.props.ListIndex as number;

@@ -10,7 +10,8 @@ export interface FileFilter { name: string; extensions: string[] }
 /** A drive of DriveListBox: `path` is what `Drive1.Drive` returns ("/" is the startup disk). */
 export interface Volume { name: string; path: string }
 /** One folder: sub-folder names (symlinked folders too, as plain names) and files, sorted. */
-export interface DirListing { dirs: string[]; files: { name: string; hidden: boolean }[] }
+/** `hiddenDirs`: the folders of `dirs` that are hidden (Windows: the attribute; elsewhere a name starting with "."). */
+export interface DirListing { dirs: string[]; files: { name: string; hidden: boolean }[]; hiddenDirs?: string[] }
 
 /** Inet (OpenURL / Execute): one HTTP(S) request; `headers` are "Name: value" lines, `timeoutSecs` 0 = none. */
 export interface InetRequest { id: string; url: string; method: string; headers: string; body: Uint8Array; timeoutSecs: number; userName: string; password: string }

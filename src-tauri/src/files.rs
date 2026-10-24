@@ -82,9 +82,13 @@ pub struct FileEntry {
 
 /// The contents of one folder: sub-folder names and files, each sorted without regard to case.
 #[derive(serde::Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct DirListing {
   pub dirs: Vec<String>,
   pub files: Vec<FileEntry>,
+  /// The hidden ones of `dirs` (Dir leaves them out without vbHidden): `$Recycle.Bin`, `System Volume Information`... on
+  /// Windows, a name that starts with "." elsewhere.
+  pub hidden_dirs: Vec<String>,
 }
 
 fn sort_names(v: &mut [String]) {
@@ -205,22 +209,27 @@ pub async fn list_dir(path: String) -> Result<DirListing, String> {
 pub fn list(path: &str) -> Result<DirListing, String> {
   let rd = std::fs::read_dir(path).map_err(|e| err(path, e))?;
   let mut dirs: Vec<String> = Vec::new();
+  let mut hidden_dirs: Vec<String> = Vec::new();
   let mut files: Vec<FileEntry> = Vec::new();
   for e in rd.flatten() {
     let name = e.file_name().to_string_lossy().to_string();
     let Ok(ft) = e.file_type() else { continue };
+    // Windows: the entry's own attributes (a link's, not its target's), as Explorer shows them
+    let attrs = || if cfg!(windows) { e.metadata().ok().and_then(|m| windows_attributes(&m)) } else { None };
     // a symlinked folder (/tmp, /var and /etc at "/") is listed like any other; DirListBox only goes one level down
     if ft.is_dir() || (ft.is_symlink() && std::fs::metadata(e.path()).is_ok_and(|m| m.is_dir())) {
+      if is_hidden(&name, attrs()) {
+        hidden_dirs.push(name.clone());
+      }
       dirs.push(name);
     } else if ft.is_file() || (ft.is_symlink() && std::fs::metadata(e.path()).is_ok_and(|m| m.is_file())) {
-      // Windows: the entry's own attributes (a link's, not its target's), as Explorer shows them
-      let attrs = if cfg!(windows) { e.metadata().ok().and_then(|m| windows_attributes(&m)) } else { None };
-      files.push(FileEntry { hidden: is_hidden(&name, attrs), name });
+      files.push(FileEntry { hidden: is_hidden(&name, attrs()), name });
     }
   }
   sort_names(&mut dirs);
+  sort_names(&mut hidden_dirs);
   files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
-  Ok(DirListing { dirs, files })
+  Ok(DirListing { dirs, files, hidden_dirs })
 }
 
 #[cfg(test)]

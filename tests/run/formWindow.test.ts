@@ -103,6 +103,19 @@ describe('mountFormWindow', () => {
     expect(sent.at(-1)).toMatchObject({ event: 'Change', state: { Text: 'X' } });
   });
 
+  test('a character typed with AltGr (Windows: Ctrl+Alt) raises KeyPress; Ctrl+Alt+letter does not', () => {
+    const t1 = mk('TextBox');
+    const get = mount([t1], { [t1.id]: ['KeyPress'] });
+    const el = inputOf(get(t1));
+    expect(key(el, 'keydown', '@', 50, { ctrlKey: true, altKey: true })).toBe(false);   // Norwegian AltGr+2
+    expect(sent.at(-1)).toMatchObject({ event: 'KeyPress', args: [64] });
+    key(el, 'keydown', '€', 69, { ctrlKey: true, altKey: true });
+    expect(sent.at(-1)).toMatchObject({ event: 'KeyPress', args: [8364] });
+    const n = sent.length;
+    key(el, 'keydown', 'a', 65, { ctrlKey: true, altKey: true });
+    expect(sent.length).toBe(n);
+  });
+
   test('without KeyPress handler typing is left alone', () => {
     const t1 = mk('TextBox');
     const get = mount([t1], {});

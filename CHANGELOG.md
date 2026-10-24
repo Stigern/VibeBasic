@@ -2,6 +2,19 @@
 
 All notable changes to VibeBasic. Format follows Keep a Changelog.
 
+## [Unreleased]
+
+### Fixed
+- Windows: F5, Ctrl+R and Shift+F5 in a running program reloaded its window, which went blank (WebView2's browser shortcuts). Those keys, and Ctrl+P, Ctrl+F, Ctrl+G, F3, F7 and Alt+Left/Right, no longer reach the browser in any window. The program still gets KeyDown for them, and F5 in the IDE still runs.
+- Windows: a double click on a DirListBox folder did nothing, and so did DblClick on a TreeView or ListView. WebView2 fires no dblclick when the first click repainted the list.
+- Windows: characters typed with AltGr (Norwegian @ £ $ { [ ] } €) raised no KeyPress, got past a MaskedEdit's mask, and did not start an edit in a DataGrid or the Properties window.
+- DriveListBox.Drive read in Form_Load was "/" on Windows; the drives had not come yet. Reads now wait for them. DriveListBox also has List, ListCount and ListIndex, as in VB6.
+- Kill of a read-only file deleted it on Windows; it is error 75, as in VB6. FileSystemObject.DeleteFile and File.Delete honour Force.
+- `Name "a.txt" As "A.TXT"` (a new case only) was error 58 on Windows and macOS.
+- GetAttr on Windows reports vbSystem and vbArchive, so it matches SetAttr. `Dir(..., vbDirectory)` leaves out hidden folders ($Recycle.Bin, System Volume Information) unless vbHidden is given; on Windows a folder named ".git" is not hidden.
+- `CurDir("D")` gave the current drive's folder instead of drive D's.
+- Make on Windows turns a device name (CON, NUL, COM1...) into "CON_", which Explorer can open and delete.
+
 ## [0.8.3] - 2026-10-23
 
 ### Fixed

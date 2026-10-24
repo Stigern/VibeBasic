@@ -17,7 +17,10 @@ export function sanitizeAppFileName(name: string, p: Platform = platform()): str
   const cleaned = [...name].filter(c => !bad.test(c)).join('');
   let t = cleaned.trim().replace(/^\.+/, '').trim();
   if (p === 'windows') t = t.replace(/[. ]+$/, '');
-  return t === '' ? 'Project1' : t;
+  if (t === '') return 'Project1';
+  // Windows: "CON" or "con.backup" is the console device, whatever follows the first dot: "CON_", "con_.backup"
+  if (p === 'windows') t = t.replace(/^(con|prn|aux|nul|com[1-9]|lpt[1-9]) *(?=\.|$)/i, (_m, d: string) => `${d}_`);
+  return t;
 }
 
 /** The file name of a path the save dialog gave (Windows also separates folders with "\"). */

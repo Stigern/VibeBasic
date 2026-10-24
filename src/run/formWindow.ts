@@ -17,8 +17,9 @@ import { domText, vbPos, vbText } from '../controls/textPos';
 import { GfxLayer } from '../gfx/dom';
 import { parseMnemonic } from '../ui98/dom';
 import { installDragDrop, type FileDrag } from './dragDrop';
+import { ensureDblClick } from './dblClick';
 import type { FormSnapshot, FromWindow, ToWindow } from './protocol';
-import { isMac } from '../platform';
+import { isAltGr, isMac } from '../platform';
 
 type Props = Record<string, PropValue>;
 type Target = { id: string; def: ControlDef | null };
@@ -48,7 +49,7 @@ function keyAscii(e: KeyboardEvent): number | null {
   if (e.isComposing || e.metaKey) return null;
   if (e.key === 'Escape') return 27;
   if (e.ctrlKey) {
-    if (e.altKey) return null;
+    if (e.altKey) return isAltGr(e) ? e.key.charCodeAt(0) : null;
     if (/^[a-z]$/i.test(e.key)) return e.key.toUpperCase().charCodeAt(0) - 64;
     return CTRL_PUNCT[e.key] ?? null;
   }
@@ -108,6 +109,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   surface.el.tabIndex = -1;   // so keys reach the form's listeners when no control has focus
   surface.el.style.outline = 'none';
   root.appendChild(surface.el);
+  ensureDblClick(root.ownerDocument);
   const ac = new AbortController();
   const on = <T extends Event>(type: string, fn: (e: T) => void) =>
     surface.el.addEventListener(type, fn as EventListener, { signal: ac.signal });

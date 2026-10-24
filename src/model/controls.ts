@@ -548,6 +548,8 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
     props: [
       ...common(), color('BackColor', WIN_BG), color('ForeColor', WIN_TEXT), font(),
       rt('Drive', 'string', '/'), p('Drives', 'list', ['/|/'], { designTime: false, runtime: 'none' }),
+      // List(i): the drives as Drive takes them ("c: [label]" on Windows); ListIndex: the one Drive names
+      p('List', 'list', [], { designTime: false, runtime: 'ro' }), rt('ListCount', 'int', 0, 'ro'), rt('ListIndex', 'int', -1),
     ],
     events: [evChange(), ev('DropDown'), ...evFocus(), ...evKeys()],
   }),

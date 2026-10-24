@@ -16,10 +16,12 @@ import { mountPrintPreview } from './printView';
 import type { FromPayload } from './tauriFormHost';
 import type { FileDrag } from './dragDrop';
 import { ctrlLike, guessPlatform, isMac, setPlatform } from '../platform';
+import { blockBrowserKeys } from '../browserKeys';
 
 // A form window may call no app command (not even `platform`): its own webview's user agent names the OS. Its paths are the
 // system's (DirListBox, FileListBox).
 setPlatform(guessPlatform());
+blockBrowserKeys(window);
 
 // MMControl / MediaPlayer: this window reads a file the main window opened, by its token (media_read is the only app command a
 // form window may call; capabilities/run-windows.json). The bytes come raw, never through an event.

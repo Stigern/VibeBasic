@@ -445,7 +445,8 @@ export class FileIO {
     const match = wildcardMatcher(mask);
     const hidden = (attr & 2) !== 0;
     const names = listing.files.filter(x => hidden || !x.hidden).map(x => x.name);
-    if (attr & vbDirectory) names.push(...listing.dirs.filter(d => hidden || !d.startsWith('.')));
+    const hiddenDir = (d: string) => (listing.hiddenDirs ? listing.hiddenDirs.includes(d) : d.startsWith('.'));
+    if (attr & vbDirectory) names.push(...listing.dirs.filter(d => hidden || !hiddenDir(d)));
     const out = names.filter(match).sort(byName);
     if (attr & vbDirectory && !isRoot(dir)) out.unshift(...['.', '..'].filter(match));
     return out;
@@ -551,10 +552,21 @@ export class FileIO {
     return st;
   }
 
-  /** GetAttr: vbReadOnly 1, vbHidden 2 (a name starting with "."), vbDirectory 16. */
+  /** GetAttr: vbReadOnly 1, vbHidden 2 (a name starting with "."), vbDirectory 16; on Windows the file's own attributes, so
+   *  also vbSystem 4 and vbArchive 32. */
   async getAttr(path: string): Promise<number> {
     const st = await this.stat(path);
+    if (st.attrs !== undefined) return st.attrs & (1 | 2 | 4 | vbDirectory | 32);
     return (st.readOnly ? 1 : 0) | (st.hidden ? 2 : 0) | (st.isDir ? vbDirectory : 0);
+  }
+
+  /** CurDir("D"): the current folder of drive D (its root until a ChDir there), the current drive's is CurDir. One folder
+   *  off Windows. */
+  curDirOf(drive: string): string {
+    const letter = drive.trim().charAt(0).toUpperCase();
+    if (!winPaths() || letter === '' || letter === winDrive(this.curDir)) return this.curDir;
+    if (!/^[A-Z]$/.test(letter)) throw new VBRuntimeError(68);
+    return this.driveDirs.get(letter) ?? `${letter}:\\`;
   }
 
   async fileLen(path: string): Promise<number> {

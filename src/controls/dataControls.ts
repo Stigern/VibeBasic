@@ -3,6 +3,7 @@
 // the recordset (run/data/dataControl.ts). DataList and DataCombo use the ListBox and ComboBox renderers.
 import { splitFields } from '../model/fieldLines';
 import { twipsToPx } from '../model/twips';
+import { isAltGr } from '../platform';
 import { h } from '../ui98/dom';
 import type { Ctx, Renderer } from './render';
 
@@ -170,7 +171,7 @@ export function dataGrid(c: Ctx): Renderer {
             if (selectedRow !== null && c.bool('AllowDelete')) { e.preventDefault(); c.fire('vbuseraction', { verb: 'delete', row: selectedRow }); selectedRow = null; }
             return;
         }
-        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && row >= 0) { e.preventDefault(); startEdit(row, col, e.key); }
+        if (e.key.length === 1 && (!e.ctrlKey || isAltGr(e)) && !e.metaKey && row >= 0) { e.preventDefault(); startEdit(row, col, e.key); }
       });
     },
     patch(k) {
