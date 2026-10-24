@@ -2,6 +2,7 @@
 // bottom. Every edit goes through IdeState.stack as one undo step. Dropdowns and editor popups are rendered in
 // the body-level popup layer (ui98/floating.ts), so the window's scrolling panes never clip them.
 import { getBackend, type Backend } from '../backend/backend';
+import { ctrlLike } from '../platform';
 import { assetOf, assetUsedElsewhere } from '../model/assetRefs';
 import { addAssetCmd, compositeCmd, removeAssetCmd, renameCmd, renameModuleCmd, setInstancingCmd, setPropertyCmd, tabIndexCmd, type Command } from '../model/commands';
 import { CONTROL_TYPES, getPropDef, newId, validateName, type PropDef } from '../model/controls';
@@ -288,7 +289,7 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
         },
       });
       ta.addEventListener('keydown', e => {
-        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); fl.close('api'); }
+        if (e.key === 'Enter' && ctrlLike(e)) { e.preventDefault(); fl.close('api'); }
       });
       closers.push(() => { discard = true; fl.close(); });   // refresh() has already run flushEdit
       ta.focus();
@@ -535,7 +536,7 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
     if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey) return move(e.shiftKey ? -1 : 1);
     // Ctrl+Shift+<letter>: next property starting with that letter
     const letter = /^Key([A-Z])$/.exec(e.code)?.[1] ?? (/^[a-z]$/i.test(e.key) ? e.key.toUpperCase() : null);
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && letter) {
+    if (ctrlLike(e) && e.shiftKey && !e.altKey && letter) {
       e.preventDefault();
       e.stopPropagation();
       const i = active ? rowOrder.indexOf(active) : -1;

@@ -36,6 +36,8 @@ import { adjustParas, decodeParas, paraIndexAt, decodeRuns, encodeRuns, formatAt
 import type { ControlDef, FontValue, PictureRef, PropValue } from '../model/types';
 import { h, mnemonicNodes } from '../ui98/dom';
 import { cursorCss } from './cursor';
+import { winPaths } from '../platform';
+import { pathChain } from '../run/objects/fileControls';
 
 export type AssetResolver = (ref: PictureRef) => string | null;   // data URL
 export type RenderMode = 'design' | 'run';
@@ -431,7 +433,11 @@ function driveListBox(c: Ctx): Renderer {
   let input: HTMLInputElement, list: HTMLElement, field: HTMLElement;
   let open = false;
   const drives = () => c.list('Drives').map(splitFields);
-  const label = (path: string): string => { const n = drives().find(d => d[0] === path)?.[1]; return path === '/' && n && n !== '/' ? `/ [${n}]` : path; };
+  const label = (path: string): string => {
+    if (path === '/' && winPaths()) return 'c:';   // the design-time default on Windows (a running one has "c: [label]")
+    const n = drives().find(d => d[0] === path)?.[1];
+    return path === '/' && n && n !== '/' ? `/ [${n}]` : path;
+  };
   const doc = () => c.el.ownerDocument;
   const onOutside = (e: Event) => { if (!c.el.contains(e.target as Node)) close(); };
   function close() { open = false; list.classList.remove('open'); doc().removeEventListener('mousedown', onOutside, true); }
@@ -498,14 +504,13 @@ function driveListBox(c: Ctx): Renderer {
 function dirListBox(c: Ctx): Renderer {
   let root: HTMLElement;
   let sel = -1;
-  const base = (p: string) => p.slice(p.lastIndexOf('/') + 1);
+  const base = (p: string) => p.slice((winPaths() ? Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) : p.lastIndexOf('/')) + 1);
   function paint() {
-    const path = c.str('Path') || '/', segs = path.split('/').filter(Boolean);
-    const chain = ['/', ...segs.map((_, i) => '/' + segs.slice(0, i + 1).join('/'))];
+    const chain = pathChain(c.str('Path') || (winPaths() ? 'C:\\' : '/'));
     const row = (p: string, level: number, index: number, name: string, isOpen: boolean) =>
       h('div', { class: index === sel ? 'dir-row sel' : 'dir-row', dataset: { path: p, index: String(index) }, style: { paddingLeft: `${level * 12 + 2}px` } },
         h('span', { class: isOpen ? 'dir-ico open' : 'dir-ico' }), h('span', { class: 'dir-text' }, name));
-    const rows = chain.map((p, i) => row(p, i, -(chain.length - i), i === 0 ? '/' : base(p), true));
+    const rows = chain.map((p, i) => row(p, i, -(chain.length - i), i === 0 ? (winPaths() ? p.toLowerCase() : '/') : base(p), true));
     for (const [i, p] of c.list('List').entries()) rows.push(row(p, chain.length, i, base(p), false));
     root.replaceChildren(...rows);
   }

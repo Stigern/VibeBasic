@@ -5,6 +5,8 @@
 // Known limit: Break cannot interrupt a handler that waits for the host (for example `Form2.Show vbModal` or a
 // MsgBox); it takes effect when that wait is over. End always works.
 import { VBSyntaxError } from '../lang/errors';
+import { winPaths } from '../platform';
+import { winDirOf } from '../lang/fileio/winPath';
 import type { BreakInfo, CodeLocation } from '../lang/host';
 import type { StackEntry } from '../lang/interp/debugger';
 import { findSyntaxErrors } from '../lang/parser';
@@ -64,6 +66,7 @@ export class RunController {
 
   private appPath(): string {
     const p = this.ide.filePath;
+    if (p && winPaths()) return winDirOf(p);   // "C:\Proj" ("C:\" for a project at the root, as VB6)
     const i = p ? Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) : -1;
     return p && i >= 0 ? p.slice(0, i) : '';
   }

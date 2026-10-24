@@ -2,12 +2,13 @@ import { AI_SETTINGS_KEY, aiSettingsTurn } from './backend/aiSettingsStore';
 import type { Backend } from './backend/backend';
 import { parseProject } from './model/serialize';
 import type { Project } from './model/types';
+import { platform, setPlatform } from './platform';
 
 export interface BootDeps {
   startIde: (b: Backend) => void;
   startRuntime: (p: Project, b: Backend) => Promise<void>;
   /** Shows an error where the user can see it (the main window is hidden in runtime mode). */
-  /** Cmd+Q from the runtime menu. */
+  /** Quit from the runtime menu (Cmd+Q on a Mac). */
   onQuit?: () => void;
   showError: (text: string) => Promise<void>;
 }
@@ -23,10 +24,18 @@ export function moveLegacyAiSettings(backend: Backend): Promise<void> {
   return aiSettingsTurn(() => backend.loadSettings(AI_SETTINGS_KEY)).then(() => {}, () => {});
 }
 
+/** Takes the platform from the backend before anything reads it (keys, paths, the Make menu item); the guess stays on failure. */
+export async function applyPlatform(backend: Backend): Promise<void> {
+  if (!backend.platform) return;
+  const p = await backend.platform().catch(() => platform());
+  setPlatform(p, backend.kind === 'tauri');
+}
+
 /** Picks the mode: a made app has an embedded project and runs it; otherwise this is the IDE. */
 export async function boot(backend: Backend, deps: BootDeps): Promise<void> {
   backend.onQuitRequested(() => deps.onQuit?.());   // before any await: an early Cmd+Q must not be lost
   const moved = moveLegacyAiSettings(backend);
+  await applyPlatform(backend);
   let text: string | null;
   try {
     text = await backend.getEmbeddedProject();

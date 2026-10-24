@@ -6,6 +6,7 @@ import { VBRuntimeError } from '../errors';
 import type { FileIO } from '../fileio/fileIO';
 import { Empty, VBArray, toStr, type VBValue } from '../values';
 import { def, intArg, optInt, type BuiltinCtx } from './util';
+import { winPaths } from '../../platform';
 
 function files(ctx: BuiltinCtx): FileIO {
   if (!ctx.files) throw new VBRuntimeError(68);
@@ -35,8 +36,8 @@ def('Kill', 1, 1, async (a, ctx) => { await files(ctx).kill(toStr(a[0])); return
 def('MkDir', 1, 1, async (a, ctx) => { await files(ctx).mkDir(toStr(a[0])); return Empty; });
 def('RmDir', 1, 1, async (a, ctx) => { await files(ctx).rmDir(toStr(a[0])); return Empty; });
 def('ChDir', 1, 1, async (a, ctx) => { await files(ctx).chDir(toStr(a[0])); return Empty; });
-/** A Mac has no drive letters: accepted and ignored. */
-def('ChDrive', 1, 1, () => Empty);
+/** Windows: the drive of the first letter becomes current. A Mac or Linux has no drive letters: accepted and ignored. */
+def('ChDrive', 1, 1, (a, ctx) => (winPaths() && ctx.files ? ctx.files.chDrive(toStr(a[0])).then(() => Empty) : Empty));
 def('FileCopy', 2, 2, async (a, ctx) => { await files(ctx).fileCopy(toStr(a[0]), toStr(a[1])); return Empty; });
 def('SetAttr', 2, 2, async (a, ctx) => { await files(ctx).setAttr(toStr(a[0]), intArg(a[1])); return Empty; });
 

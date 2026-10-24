@@ -1,5 +1,7 @@
 // The Shortcut keys a VB6 menu item can have, in the order of the Menu Editor's list (the Shortcut property's value is the
-// position in it: 0 = none). No imports: the control registry builds the Shortcut property from this table.
+// position in it: 0 = none). Imports only the platform: the control registry builds the Shortcut property from this table.
+
+import { ctrlLike } from '../platform';
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const fkeys = (prefix: string): string[] => Array.from({ length: 12 }, (_, i) => `${prefix}F${i + 1}`);
@@ -29,14 +31,14 @@ export function shortcutValue(label: string): number | null {
 /** The key event fields a shortcut is matched on. */
 export interface ShortcutKey { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }
 
-/** Whether the key event is the Shortcut `v`. Ctrl also matches Cmd (the Mac's own command key). */
+/** Whether the key event is the Shortcut `v`. On a Mac Ctrl also matches Cmd (the Mac's own command key). */
 export function shortcutMatches(v: number, e: ShortcutKey): boolean {
   const label = shortcutText(v);
   if (!label) return false;
   const parts = label.split('+');
   const key = parts[parts.length - 1];
   const ctrl = parts.includes('Ctrl'), shift = parts.includes('Shift'), alt = parts.includes('Alt');
-  if (ctrl !== (e.ctrlKey || e.metaKey) || shift !== e.shiftKey || alt !== e.altKey) return false;
+  if (ctrl !== ctrlLike(e) || shift !== e.shiftKey || alt !== e.altKey) return false;
   if (key.length === 1) {   // the letter the key types (Ctrl+Z on a German keyboard is the key QWERTY has Y on); else the key's place
     const typed = e.key.length === 1 ? e.key.toUpperCase() : '';
     return /^[A-Z]$/.test(typed) ? typed === key : e.code === `Key${key}`;

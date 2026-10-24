@@ -3,6 +3,8 @@
 // import (an unsupported control, a missing file, code VibeBasic does not run ...) becomes a warning for the import report.
 // The file reading is passed in (the backend's readBinaryFile in the IDE), so this stays pure and testable.
 import { findSyntaxErrors } from '../lang/parser';
+import { winPaths } from '../platform';
+import { winDirOf, winResolve } from '../lang/fileio/winPath';
 import { componentDef, normalizeComponents, usedComponents } from './components';
 import { CONTROL_TYPES, getPropDef, newForm, newId, validateName } from './controls';
 import { formClientTwips } from './geometry';
@@ -37,8 +39,9 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(s);
 }
 
-/** `rel` (a VB6 path, backslashes, maybe ..\) against the folder `dir` (a POSIX path, no trailing slash). */
+/** `rel` (a VB6 path, backslashes, maybe ..\) against the folder `dir` (a POSIX path, no trailing slash; on Windows a Windows path). */
 export function resolvePath(dir: string, rel: string): string {
+  if (winPaths()) return dir === '.' ? rel.replace(/\//g, '\\') : winResolve(dir, rel);
   const r = rel.replace(/\\/g, '/');
   const parts = (r.startsWith('/') ? [] : dir.split('/')).concat(r.split('/'));
   const out: string[] = [];
@@ -47,7 +50,10 @@ export function resolvePath(dir: string, rel: string): string {
   }
   return out.join('/') || '/';
 }
-const dirOf = (path: string): string => (path.includes('/') ? path.replace(/\/[^/]*$/, '') || '/' : '.');
+const dirOf = (path: string): string => {
+  if (winPaths()) return winDirOf(path) || '.';
+  return path.includes('/') ? path.replace(/\/[^/]*$/, '') || '/' : '.';
+};
 
 // ---------------------------------------------------------------------------------------------------------------
 // Control types and components

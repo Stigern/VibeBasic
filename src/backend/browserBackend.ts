@@ -1,11 +1,12 @@
 import type { Backend, MakeAppOptions, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
+import { guessPlatform, type Platform } from '../platform';
 import type { AiModel, ChatMessage } from '../ai/types';
 import { AI_CUT_OFF, readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
 import { MemoryFs } from '../lang/fileio/memoryFs';
 import type { FileAccess, FileMode, FileStat } from '../lang/fileio/fsApi';
 
 const AI_CONNECT_ERROR = (baseUrl: string) =>
-  `Could not connect to ${baseUrl}. Check that the AI server is running and can be reached from this Mac. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0.`;
+  `Could not connect to ${baseUrl}. Check that the AI server is running and can be reached from this computer. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0.`;
 const AI_UNREADABLE = 'The AI server sent an answer VibeBasic could not read.';
 
 function aiEndpoint(baseUrl: string, path: string): string {
@@ -179,6 +180,10 @@ export class BrowserBackend implements Backend {
       workLeft: s?.availLeft ?? 0, workTop: s?.availTop ?? 0, workWidth: s?.availWidth ?? 0, workHeight: s?.availHeight ?? 0,
       acStatus: 255, batteryLifePercent: 255, batteryLifeTime: -1, batteryFullTime: -1, batteryStatus: 255,
     };
+  }
+
+  async platform(): Promise<Platform> {
+    return guessPlatform();
   }
 
   async showMainWindow(): Promise<void> {

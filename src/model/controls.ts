@@ -815,7 +815,7 @@ export const CONTROL_TYPES: Record<ControlType, ControlTypeDef> = {
   }),
 
   // MSCOMM32.OCX. Invisible at run time. The serial ports of the Rust side (serialport crate). CommPort n is the n-th of the sorted
-  // /dev/cu.* devices; PortName (a VibeBasic extension) names the device itself ("/dev/cu.usbmodem1101") and wins when it is set.
+  // serial ports (commList: /dev/cu.* on a Mac, COMn on Windows, /dev/ttyUSB* / ttyACM* on Linux); PortName (a VibeBasic extension) names the device itself ("/dev/cu.usbmodem1101") and wins when it is set.
   // Settings "baud,parity,data,stop". OnComm sets CommEvent (comEvReceive once InBufferCount reaches RThreshold, comEvSend, comEvCTS ...).
   MSComm: def({
     type: 'MSComm', component: 'MSCOMM32.OCX', namePrefix: 'MSComm', defaultWidth: 480, defaultHeight: 480, invisibleAtRuntime: true, toolboxTooltip: 'MSComm',

@@ -673,7 +673,7 @@ export class Program {
 
   get state(): ProgramState { return this.rt.state; }
 
-  /** A path of the program as a full Mac path, like Open resolves it (relative to CurDir, which starts as App.Path). */
+  /** A path of the program as a full path (POSIX, or Windows on Windows), like Open resolves it (relative to CurDir, which starts as App.Path). */
   resolvePath(path: string): string { return this.rt.files.resolve(path); }
 
   /** Resolves when the files the program left open at End are written and closed. */

@@ -1,4 +1,5 @@
 import { h, mnemonicNodes } from './dom';
+import { ctrlLike, isMac } from '../platform';
 
 export interface MenuItem {
   /** Text; `&` marks the accelerator letter (underlined). */
@@ -194,7 +195,7 @@ const normKey = (k: string) => {
   return KEY_ALIASES[l] ?? l;
 };
 
-/** Parses "Ctrl+Shift+F9", "Del", "Ctrl+Break". `Ctrl` stands for Ctrl and Cmd alike. */
+/** Parses "Ctrl+Shift+F9", "Del", "Ctrl+Break". `Ctrl` stands for Ctrl (and on a Mac Cmd alike, see ctrlLike). */
 export function parseShortcut(s: string): ParsedShortcut {
   const parts = s.split('+').map(p => p.trim()).filter(p => p.length > 0);
   const sc: ParsedShortcut = { ctrl: false, shift: false, alt: false, key: '' };
@@ -211,13 +212,13 @@ export function parseShortcut(s: string): ParsedShortcut {
 }
 
 export function shortcutMatches(sc: ParsedShortcut, e: KeyboardEvent, backspaceAsDelete = false): boolean {
-  const ctrlLike = e.ctrlKey || e.metaKey;
-  if (sc.ctrl !== ctrlLike || sc.shift !== e.shiftKey || sc.alt !== e.altKey) return false;
+  const ctrl = ctrlLike(e), mac = isMac();
+  if (sc.ctrl !== ctrl || sc.shift !== e.shiftKey || sc.alt !== e.altKey) return false;
   if (normKey(e.key) === sc.key) return true;
   // Mac laptops have no Delete key: Backspace stands in for Del (callers only allow it outside text fields).
-  if (backspaceAsDelete && sc.key === 'delete' && e.key === 'Backspace') return true;
+  if (mac && backspaceAsDelete && sc.key === 'delete' && e.key === 'Backspace') return true;
   // Cmd+. is how Ctrl+Break is typed on a Mac keyboard.
-  return sc.key === 'break' && ctrlLike && e.key === '.';
+  return mac && sc.key === 'break' && ctrl && e.key === '.';
 }
 
 function isEditable(t: EventTarget | null): boolean {
@@ -241,8 +242,8 @@ function collect(menus: MenuDef[] | MenuItem[], out: { sc: ParsedShortcut; item:
 }
 
 /**
- * Binds the shortcuts of all menu items (also in submenus) to `target`. "Ctrl+X" matches Ctrl+X and Cmd+X;
- * "Ctrl+Break" also Ctrl+Pause and Cmd+. . Disabled items are skipped. Inside text fields, unmodified keys
+ * Binds the shortcuts of all menu items (also in submenus) to `target`. "Ctrl+X" matches Ctrl+X, and on a Mac also Cmd+X;
+ * "Ctrl+Break" also Ctrl+Pause (and Cmd+. on a Mac). Disabled items are skipped. Inside text fields, unmodified keys
  * (Del, ...) and clipboard/undo keys are left to the field. Returns a function that removes the binding.
  */
 export function bindShortcuts(menus: MenuDef[], target: Window): () => void {
@@ -268,6 +269,14 @@ export function bindShortcuts(menus: MenuDef[], target: Window): () => void {
     }
     if (owned) e.preventDefault();
   };
+  // Windows: a bare Alt the page leaves alone goes on to the window's system menu, which then takes the keys
+  const alt = (e: KeyboardEvent) => { if (!isMac() && e.key === 'Alt' && !e.ctrlKey) e.preventDefault(); };
   target.addEventListener('keydown', handler as EventListener);
-  return () => target.removeEventListener('keydown', handler as EventListener);
+  target.addEventListener('keydown', alt as EventListener);
+  target.addEventListener('keyup', alt as EventListener);
+  return () => {
+    target.removeEventListener('keydown', handler as EventListener);
+    target.removeEventListener('keydown', alt as EventListener);
+    target.removeEventListener('keyup', alt as EventListener);
+  };
 }

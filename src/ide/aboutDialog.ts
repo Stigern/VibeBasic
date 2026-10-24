@@ -2,8 +2,10 @@
 import changelogRaw from '../../CHANGELOG.md?raw';
 import { h } from '../ui98/dom';
 import { showDialog98 } from '../ui98/dialogs';
+import { osName } from '../platform';
 
-export const ABOUT_TEXT = 'A Visual Basic 6 style programming environment for macOS.\n\n'
+/** The About box's text, naming the system it runs on. */
+export const aboutText = (): string => `A Visual Basic 6 style programming environment for ${osName()}.\n\n`
   + "Pixel font 'MS Sans Serif' by lou (FontStruct), CC BY-SA 3.0\nWin98 look based on 98.css (MIT).";
 
 /** Simple markdown subset: headings become bold lines, "- " bullets become "• " lines. */
@@ -25,7 +27,7 @@ export function showAbout(doc: Document): Promise<string> {
   const content = h('div', { class: 'about98' },
     h('div', { class: 'about98-title' }, 'VibeBasic'),
     h('div', {}, `Version ${__APP_VERSION__}`),
-    h('div', { class: 'about98-text' }, ABOUT_TEXT),
+    h('div', { class: 'about98-text' }, aboutText()),
     h('div', {}, 'Changelog'),
     renderChangelog(changelogRaw));
   return showDialog98(doc, {
