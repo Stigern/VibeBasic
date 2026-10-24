@@ -408,7 +408,15 @@ mod tests {
     assert_eq!(w("/Apps/Kalk.EXE"), PathBuf::from(abs("/Apps/Kalk.exe")));
     assert_eq!(w("/Apps/My: App?. "), PathBuf::from(abs("/Apps/My App.exe")));
     assert_eq!(w("/Apps/Kalk"), PathBuf::from(abs("/Apps/Kalk.exe")));
+    // a device name (CON, NUL, COM1...) would make a file Explorer can't open or delete
+    assert_eq!(w("/Apps/nul.exe"), PathBuf::from(abs("/Apps/nul_.exe")));
+    assert_eq!(w("/Apps/CON"), PathBuf::from(abs("/Apps/CON_.exe")));
+    assert_eq!(w("/Apps/Com3.backup"), PathBuf::from(abs("/Apps/Com3_.backup.exe")));
+    assert_eq!(w("/Apps/LPT9 "), PathBuf::from(abs("/Apps/LPT9_.exe")));
+    assert_eq!(w("/Apps/Console"), PathBuf::from(abs("/Apps/Console.exe")));
+    assert_eq!(w("/Apps/COM0"), PathBuf::from(abs("/Apps/COM0.exe")));
     let l = |s: &str| normalize_target(&abs(s), ExeKind::Linux).unwrap();
+    assert_eq!(l("/home/s/CON"), PathBuf::from(abs("/home/s/CON")));
     assert_eq!(l("/home/s/Kalk 2.0"), PathBuf::from(abs("/home/s/Kalk 2.0")));
     assert!(normalize_target(&abs("/home/s/.."), ExeKind::Linux).is_err());
     assert!(normalize_target("rel/x", ExeKind::Linux).is_err());

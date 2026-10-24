@@ -9,7 +9,7 @@ pub fn sanitize_app_file_name(name: &str) -> String {
 }
 
 /// sanitize_app_file_name; `windows` also drops the other characters a Windows file name cannot have (`\ * ? " < > |`) and
-/// trailing dots and blanks, as sanitizeAppFileName in makeApp.ts.
+/// trailing dots and blanks, and adds `_` to a device name (CON, NUL, COM1...), as sanitizeAppFileName in makeApp.ts.
 pub fn sanitize_for(name: &str, windows: bool) -> String {
   let bad = |c: char| c.is_control() || c == '/' || c == ':' || (windows && matches!(c, '\\' | '*' | '?' | '"' | '<' | '>' | '|'));
   let cleaned: String = name.chars().filter(|c| !bad(*c)).collect();
@@ -18,10 +18,23 @@ pub fn sanitize_for(name: &str, windows: bool) -> String {
     trimmed = trimmed.trim_end_matches(['.', ' ']);
   }
   if trimmed.is_empty() {
-    "Project1".to_string()
-  } else {
-    trimmed.to_string()
+    return "Project1".to_string();
   }
+  if windows {
+    // "CON" or "con.backup" is the console device, whatever follows the first dot: "CON_", "con_.backup"
+    let (stem, rest) = trimmed.split_at(trimmed.find('.').unwrap_or(trimmed.len()));
+    if is_windows_device(stem.trim_end()) {
+      return format!("{}_{}", stem.trim_end(), rest);
+    }
+  }
+  trimmed.to_string()
+}
+
+/// A name Windows keeps for a device: CON, PRN, AUX, NUL, COM1-COM9, LPT1-LPT9 (any case).
+fn is_windows_device(stem: &str) -> bool {
+  let s = stem.to_ascii_uppercase();
+  matches!(s.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+    || (s.len() == 4 && (s.starts_with("COM") || s.starts_with("LPT")) && matches!(s.as_bytes()[3], b'1'..=b'9'))
 }
 
 fn transliterate(c: char) -> &'static str {

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, onTestFinished, test } from 'vitest';
 import type { Backend, DirListing, Volume } from '../../src/backend/backend';
 import { newControl, newForm, newProject } from '../../src/model/controls';
 import type { ControlType, PropValue } from '../../src/model/types';
@@ -189,6 +189,30 @@ test('the user: pick a drive, double-click a folder, click a file raise Change, 
 
   await click(row(1));   // the folder above: ListIndex -2
   expect(r.out.at(-1)).toBe('dirclick:-2');
+});
+
+test('a double click opens a folder although the webview fires no dblclick (Chromium, when the click repainted the rows)', async () => {
+  const r = await run(['Private Sub Dir1_Change()', '  Debug.Print "dir:" & Dir1.Path', 'End Sub'].join('\n'), ALL);
+  const row = (i: number) => r.el('Dir1').querySelectorAll('.dir-row')[i];
+  const press = (el: Element, detail: number) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, detail }));
+  // jsdom has no layout: the row under the pointer is the one at the index pressed last (each click repaints the rows)
+  let under = 3;
+  const doc = document as unknown as { elementFromPoint?: (x: number, y: number) => Element | null };
+  doc.elementFromPoint = () => row(under);
+  onTestFinished(() => { delete doc.elementFromPoint; });
+  press(row(3), 1);
+  await flush();
+  press(row(3), 2);   // WebView2: the second click (detail 2) on the new row, and no dblclick
+  await flush();
+  expect(r.out).toEqual(['dir:/Users/alice/docs']);
+
+  under = 0;
+  press(row(0), 1);
+  await flush();
+  press(row(0), 2);
+  row(0).dispatchEvent(new MouseEvent('dblclick', { bubbles: true, detail: 2 }));   // WebKit: the dblclick comes too, and counts once
+  await flush();
+  expect(r.out).toEqual(['dir:/Users/alice/docs', 'dir:/']);
 });
 
 test('Path of a folder that does not exist is error 76; Path and the list stay as they were', async () => {

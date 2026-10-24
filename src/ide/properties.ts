@@ -2,7 +2,7 @@
 // bottom. Every edit goes through IdeState.stack as one undo step. Dropdowns and editor popups are rendered in
 // the body-level popup layer (ui98/floating.ts), so the window's scrolling panes never clip them.
 import { getBackend, type Backend } from '../backend/backend';
-import { ctrlLike } from '../platform';
+import { ctrlLike, isAltGr } from '../platform';
 import { assetOf, assetUsedElsewhere } from '../model/assetRefs';
 import { addAssetCmd, compositeCmd, removeAssetCmd, renameCmd, renameModuleCmd, setInstancingCmd, setPropertyCmd, tabIndexCmd, type Command } from '../model/commands';
 import { CONTROL_TYPES, getPropDef, newId, validateName, type PropDef } from '../model/controls';
@@ -558,7 +558,7 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
       return;
     }
     if (!d || t.closest('.cb98')) return;   // dropdown lists handle their own keys (first-letter selection)
-    if (e.key === 'Enter' || (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey)) {
+    if (e.key === 'Enter' || (e.key.length === 1 && ((!e.ctrlKey && !e.altKey) || isAltGr(e)) && !e.metaKey)) {
       e.preventDefault();
       openActive?.();
     }

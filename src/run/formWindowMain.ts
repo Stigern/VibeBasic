@@ -16,10 +16,12 @@ import { mountPrintPreview } from './printView';
 import type { FromPayload } from './tauriFormHost';
 import type { FileDrag } from './dragDrop';
 import { ctrlLike, guessPlatform, isMac, setPlatform } from '../platform';
+import { blockBrowserKeys } from '../browserKeys';
 
 // A form window may call no app command (not even `platform`): its own webview's user agent names the OS. Its paths are the
 // system's (DirListBox, FileListBox).
 setPlatform(guessPlatform());
+blockBrowserKeys(window);
 
 // MMControl / MediaPlayer: this window reads a file the main window opened, by its token (media_read is the only app command a
 // form window may call; capabilities/run-windows.json). The bytes come raw, never through an event.
@@ -32,7 +34,8 @@ const send = (p: FromPayload) => emit('vb:from', p).catch(() => {});
 /** One paint, but never stuck: WKWebView may pause rAF in a hidden (visible:false) window. */
 const frame = () => new Promise<void>(r => { requestAnimationFrame(() => r()); setTimeout(r, 50); });
 
-/** Our own Win98 title bar moves the (undecorated) window (not those of the MDI children in an MDI form's workspace). */
+/** The print preview's Win98 title bar moves its (undecorated) window. A form's title bar is marked by render.ts each time it is
+ *  rebuilt (a size change rebuilds it, and Windows resizes a new window to its scaled size). */
 function markDragRegions(): void {
   for (const el of root.querySelectorAll('.title-bar, .title-bar-text, .title-bar-icon')) if (!el.closest('.vb-mdi-workspace')) el.setAttribute('data-tauri-drag-region', '');
 }
@@ -69,7 +72,6 @@ async function startForm(): Promise<void> {
     mounted!.receive(m);
     const fp = formPatch(m);
     if (fp) {
-      markDragRegions();   // title bar is rebuilt on chrome changes
       // size / position set by code move the native window (the ResizeObserver ignores the echo: same pixel size)
       if ('Width' in fp || 'Height' in fp) {
         const w = twips(fp.Width) ?? window.innerWidth, h = twips(fp.Height) ?? window.innerHeight;
@@ -113,9 +115,8 @@ async function startForm(): Promise<void> {
   });
   await win.listen<FormSnapshot>('vb:snapshot', async e => {
     if (mounted) return;
-    root.dataset.vbWindow = '';
+    root.dataset.vbWindow = '';   // also: the title bar moves this window (render.ts marks it each time it is built)
     mounted = mountFormWindow(root, e.payload, m => void send({ key, m }));
-    markDragRegions();
     for (const m of early.splice(0)) handle(m);
     await frame();                       // first paint before the window appears
     firstShown = true;

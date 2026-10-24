@@ -31,7 +31,7 @@ def('Dir', 0, 2, (a, ctx) => files(ctx).dir(a[0] === undefined ? undefined : toS
 def('FileLen', 1, 1, (a, ctx) => files(ctx).fileLen(toStr(a[0])));
 def('FileDateTime', 1, 1, (a, ctx) => files(ctx).fileDateTime(toStr(a[0])));
 def('GetAttr', 1, 1, (a, ctx) => files(ctx).getAttr(toStr(a[0])));
-def('CurDir', 0, 1, (_a, ctx) => files(ctx).curDir);
+def('CurDir', 0, 1, (a, ctx) => (a[0] === undefined ? files(ctx).curDir : files(ctx).curDirOf(toStr(a[0]))));
 def('Kill', 1, 1, async (a, ctx) => { await files(ctx).kill(toStr(a[0])); return Empty; });
 def('MkDir', 1, 1, async (a, ctx) => { await files(ctx).mkDir(toStr(a[0])); return Empty; });
 def('RmDir', 1, 1, async (a, ctx) => { await files(ctx).rmDir(toStr(a[0])); return Empty; });

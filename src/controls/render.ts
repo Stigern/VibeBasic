@@ -1732,6 +1732,8 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
   opts: { showGrid?: boolean; gridX?: number; gridY?: number; menu?: MenuBarHost;
     /** An MDI child: its menus show in the MDI form's menu bar, so its own bar never shows (nor takes room). */
     hideMenuBar?: boolean;
+    /** The form fills an undecorated native window: its title bar (rebuilt on every size change) moves that window. */
+    dragRegion?: boolean;
     /** The client area or the docked controls changed (after the layout). */
     onLayout?: () => void } = {}): FormSurface {
   const props: Record<string, PropValue> = { ...form.props };
@@ -1776,6 +1778,7 @@ export function renderFormSurface(form: { props: Record<string, PropValue>; cont
       h('div', { class: 'title-bar-text' }, str('Caption')),
       buttons.length ? h('div', { class: 'title-bar-controls' }, ...buttons) : '');
     if (mode === 'design') bar.style.pointerEvents = 'none';
+    if (opts.dragRegion) for (const e of [bar, ...bar.querySelectorAll('.title-bar-text, .title-bar-icon')]) e.setAttribute('data-tauri-drag-region', '');
     return bar;
   }
 

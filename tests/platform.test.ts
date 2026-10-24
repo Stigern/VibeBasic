@@ -108,8 +108,12 @@ describe('Windows paths', () => {
     expect(io.resolve('/x/y.txt')).toBe('C:\\x\\y.txt');
     await io.chDir('sub');
     expect(io.curDir).toBe('C:\\Proj\\sub');
+    expect(io.curDirOf('D')).toBe('D:\\');         // CurDir("D"): a drive not visited yet is at its root
     await io.chDir('D:\\Work');                   // another drive: its folder changes, the current drive stays
     expect(io.curDir).toBe('C:\\Proj\\sub');
+    expect(io.curDirOf('d')).toBe('D:\\Work');
+    expect(io.curDirOf('c:')).toBe('C:\\Proj\\sub');
+    expect(() => io.curDirOf('1')).toThrow(expect.objectContaining({ number: 68 }));
     expect(io.resolve('D:z.txt')).toBe('D:\\Work\\z.txt');
     await io.chDrive('d: [Data]');
     expect(io.curDir).toBe('D:\\Work');
@@ -198,6 +202,46 @@ describe('DriveListBox on Windows', () => {
       container.remove();
     }
   });
+
+  test('Form_Load reads Drive, List, ListCount and ListIndex before the drives have come (it waits for them); ListIndex picks one', async () => {
+    on('windows');
+    const backend = {
+      listVolumes: () => new Promise<Volume[]>(r => setTimeout(() => r([{ name: 'System', path: 'C:\\' }, { name: 'Data', path: 'D:\\' }]), 30)),
+      listDir: async () => ({ dirs: [], files: [] }),
+    };
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const p = newProject();
+    p.forms = [newForm('Form1', [
+      'Private Sub Form_Load()',
+      '  Debug.Print Drive1.Drive; "|"; Drive1.ListCount; "|"; Drive1.List(1); "|"; Drive1.ListIndex',
+      '  Drive1.ListIndex = 1',
+      '  Debug.Print Drive1.Drive; "|"; Drive1.ListIndex',
+      '  On Error Resume Next',
+      '  Drive1.ListIndex = 2',
+      '  Debug.Print "err"; Err.Number',
+      'End Sub',
+      'Private Sub Drive1_Change()', '  Debug.Print "change:"; Drive1.Drive', 'End Sub',
+    ].join('\n'))];
+    p.startupForm = 'Form1';
+    const c = newControl(p.forms[0], 'DriveListBox', { left: 120, top: 120 }, null);
+    c.name = 'Drive1';
+    p.forms[0].controls.push(c);
+    const out: string[] = [];
+    const session = new RunSession(p, new InlineFormHost(container, backend as unknown as Backend), {
+      debugPrint: t => { out.push(t); }, onBreak: async () => 'end', onEnded: () => {},
+      readFile: async () => { throw new Error('ENOENT'); }, appPath: 'C:\\Users\\alice',
+    }, 'ide');
+    try {
+      await session.start();
+      for (let i = 0; i < 10; i++) await new Promise(r => setTimeout(r, 20));
+      expect(out.map(s => s.trim()))
+        .toEqual(['c: [System]| 2 |d: [Data]| 0', 'change:d: [Data]', 'd: [Data]| 1', 'err 380']);
+    } finally {
+      session.end();
+      container.remove();
+    }
+  });
 });
 
 describe('Make', () => {
@@ -214,6 +258,14 @@ describe('Make', () => {
   test('the file name: Windows also drops \\ * ? " < > | and trailing dots', () => {
     expect(sanitizeAppFileName('A*B?.', 'mac')).toBe('A*B?.');
     expect(sanitizeAppFileName('A*B?<x>|"\\y. ', 'windows')).toBe('ABxy');
+    // device names (also before a dot), as make_app.rs
+    expect(sanitizeAppFileName('CON', 'windows')).toBe('CON_');
+    expect(sanitizeAppFileName('con.backup', 'windows')).toBe('con_.backup');
+    expect(sanitizeAppFileName('Com3 ', 'windows')).toBe('Com3_');
+    expect(sanitizeAppFileName('lpt9.x', 'windows')).toBe('lpt9_.x');
+    expect(sanitizeAppFileName('Console', 'windows')).toBe('Console');
+    expect(sanitizeAppFileName('COM0', 'windows')).toBe('COM0');
+    expect(sanitizeAppFileName('CON', 'mac')).toBe('CON');
   });
 
   test('dialog filters: Windows and Linux keep "All files" as a choice of its own', () => {

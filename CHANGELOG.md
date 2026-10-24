@@ -6,6 +6,10 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 
 A bug hunt in the AI assistant, measured against a real local model (Qwen 27B on vLLM). Tasks solved at Thinking Low rose from 82% to 96%: form layouts from 64% to 91%, Ask AI on run-time errors from 80% to 100%.
 
+### Changed
+- The Ask AI waiting window can be made bigger with the grip in its lower right corner; the box with the thinking and the answer grows with it. It keeps its place and size for the next request (until VibeBasic is closed).
+- Every dialog can be moved by its title bar, as in Windows 98.
+
 ### Fixed
 - AI code merges never break your code: declarations no longer land inside a Type, Enum or #If block or in the middle of a continued line, multi-line procedure headers and Attribute lines are kept, End Sub is not doubled, a changed Dim replaces the old one, and #If blocks stay whole. A merge that would add syntax errors is refused and explained instead of applied.
 - Thinking High failed on servers that only take low, medium and xhigh. A rejected level is now retried with the nearest one the server accepts, and Test Connection shows the levels the server takes (and picks Low for a new setup).
@@ -17,6 +21,16 @@ A bug hunt in the AI assistant, measured against a real local model (Qwen 27B on
 - Placement and the layout check follow docked containers (a docked PictureBox on an MDI form).
 - Small overflows (up to 240 twips) grow the form instead of costing another round; truncated answers are rejected.
 - The preview diff uses bounded memory on big modules. The AI Log no longer shows a user name and password from the server address. Error texts say "this computer" on Windows and Linux.
+- Windows: a running program's form could not be moved by its title bar. Windows resizes a new window to its scaled size, which rebuilt the title bar without its drag mark; the title bar now carries it each time it is built.
+- Windows: F5, Ctrl+R and Shift+F5 in a running program reloaded its window, which went blank (WebView2's browser shortcuts). Those keys, and Ctrl+P, Ctrl+F, Ctrl+G, F3, F7 and Alt+Left/Right, no longer reach the browser in any window. The program still gets KeyDown for them, and F5 in the IDE still runs.
+- Windows: a double click on a DirListBox folder did nothing, and so did DblClick on a TreeView or ListView. WebView2 fires no dblclick when the first click repainted the list.
+- Windows: characters typed with AltGr (Norwegian @ £ $ { [ ] } €) raised no KeyPress, got past a MaskedEdit's mask, and did not start an edit in a DataGrid or the Properties window.
+- DriveListBox.Drive read in Form_Load was "/" on Windows; the drives had not come yet. Reads now wait for them. DriveListBox also has List, ListCount and ListIndex, as in VB6.
+- Kill of a read-only file deleted it on Windows; it is error 75, as in VB6. FileSystemObject.DeleteFile and File.Delete honour Force.
+- `Name "a.txt" As "A.TXT"` (a new case only) was error 58 on Windows and macOS.
+- GetAttr on Windows reports vbSystem and vbArchive, so it matches SetAttr. `Dir(..., vbDirectory)` leaves out hidden folders ($Recycle.Bin, System Volume Information) unless vbHidden is given; on Windows a folder named ".git" is not hidden.
+- `CurDir("D")` gave the current drive's folder instead of drive D's.
+- Make on Windows turns a device name (CON, NUL, COM1...) into "CON_", which Explorer can open and delete.
 
 ### Added
 - `tests-live/`: a live evaluation of the AI assistant against an OpenAI-compatible server (33 tasks, behaviour checks in the real run time), with a report.

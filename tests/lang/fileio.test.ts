@@ -162,6 +162,20 @@ Debug.Print CurDir; Dir("")`, h => {
   expect(host.fs.files.has('/app/sub/d.bas')).toBe(true);
 });
 
+test('Kill of a read-only file is 75 (VB6); FSO DeleteFile with Force deletes it', async () => {
+  const { out, host } = await run(`On Error Resume Next
+SetAttr "r.txt", vbReadOnly
+Kill "r.txt"
+Debug.Print Err.Number; Dir("r.txt")
+Err.Clear
+Dim fso As Object
+Set fso = CreateObject("Scripting.FileSystemObject")
+fso.DeleteFile "r.txt", True
+Debug.Print Err.Number; Dir("r.txt") = ""`, h => h.fs.writeFile('/app/r.txt', 'x'));
+  expect(out).toEqual([' 75 r.txt', ' 0 True']);
+  expect(host.fs.files.has('/app/r.txt')).toBe(false);
+});
+
 test('SaveSetting / GetSetting round trip, the default when missing, GetAllSettings, DeleteSetting', async () => {
   const { out } = await run(`SaveSetting "MyApp", "Startup", "Top", 75
 SaveSetting "MyApp", "Startup", "Left", "50"

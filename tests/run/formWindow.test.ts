@@ -31,6 +31,21 @@ const key = (el: Element, type: 'keydown' | 'keyup', k: string, code = 0, init: 
 const typeKey = (el: Element, ch: string) => key(el, 'keydown', ch, ch.toUpperCase().charCodeAt(0));
 
 describe('mountFormWindow', () => {
+  test('in a native window the title bar moves the window, also once a size change has rebuilt it; an MDI child\'s does not', () => {
+    const marked = () => [...root.querySelectorAll('.title-bar, .title-bar-text, .title-bar-icon')].map(e => e.hasAttribute('data-tauri-drag-region'));
+    root.dataset.vbWindow = '';
+    mount([], {});
+    expect(marked()).toEqual([true, true, true]);
+    win.receive({ t: 'patch', id: 'form', props: { Width: 6000, Height: 4000 } });   // Windows resizes a new window to its scaled size
+    expect(marked()).toEqual([true, true, true]);
+    win.receive({ t: 'patch', id: 'form', props: { BorderStyle: 1 } });
+    expect(marked()).toEqual([true, true, true]);
+    win.dispose();
+    root.innerHTML = '';
+    win = mountFormWindow(root, { key: 'f', form: { id: 'f', name: 'Form2', props: {}, controls: [], code: '' }, assets: {}, handled: {}, mode: 'ide' }, m => sent.push(m), { mdiChild: true });
+    expect(marked().some(Boolean)).toBe(false);
+  });
+
   test('button click sends Click', () => {
     const b = mk('CommandButton');
     const get = mount([b], { [b.id]: ['Click'] });
@@ -101,6 +116,19 @@ describe('mountFormWindow', () => {
     win.receive({ t: 'keyResult', requestId: req.requestId!, keyAscii: 88 });
     expect(el.value).toBe('X');
     expect(sent.at(-1)).toMatchObject({ event: 'Change', state: { Text: 'X' } });
+  });
+
+  test('a character typed with AltGr (Windows: Ctrl+Alt) raises KeyPress; Ctrl+Alt+letter does not', () => {
+    const t1 = mk('TextBox');
+    const get = mount([t1], { [t1.id]: ['KeyPress'] });
+    const el = inputOf(get(t1));
+    expect(key(el, 'keydown', '@', 50, { ctrlKey: true, altKey: true })).toBe(false);   // Norwegian AltGr+2
+    expect(sent.at(-1)).toMatchObject({ event: 'KeyPress', args: [64] });
+    key(el, 'keydown', '€', 69, { ctrlKey: true, altKey: true });
+    expect(sent.at(-1)).toMatchObject({ event: 'KeyPress', args: [8364] });
+    const n = sent.length;
+    key(el, 'keydown', 'a', 65, { ctrlKey: true, altKey: true });
+    expect(sent.length).toBe(n);
   });
 
   test('without KeyPress handler typing is left alone', () => {

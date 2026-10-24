@@ -37,5 +37,12 @@ export const osName = (p: Platform = current): string => (p === 'windows' ? 'Win
 /** What the user drags files from: Finder, Explorer, the file manager. */
 export const fileManagerName = (p: Platform = current): string => (p === 'windows' ? 'Explorer' : p === 'linux' ? 'the file manager' : 'Finder');
 
+/**
+ * A character typed with AltGr: Windows reports AltGr as Ctrl+Alt (Norwegian @ £ $ { [ ] } € are AltGr keys). AltGraph when the
+ * webview names it, else a Ctrl+Alt key that gave a character other than a plain letter or digit (Ctrl+Alt+A is a shortcut).
+ */
+export const isAltGr = (e: { key: string; ctrlKey: boolean; altKey: boolean; getModifierState?: (k: string) => boolean }): boolean =>
+  e.ctrlKey && e.altKey && e.key.length === 1 && (e.getModifierState?.('AltGraph') === true || !/^[a-z0-9]$/i.test(e.key));
+
 /** Whether a key event holds the key menus call "Ctrl": Ctrl, and on a Mac also Cmd (the Mac's own command key). */
 export const ctrlLike = (e: { ctrlKey: boolean; metaKey: boolean }): boolean => e.ctrlKey || (current === 'mac' && e.metaKey);

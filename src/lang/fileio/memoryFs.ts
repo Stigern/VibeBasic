@@ -87,7 +87,9 @@ export class MemoryFs implements FileSystemApi {
   async fioReset(): Promise<void> { this.handles.clear(); }
 
   async fsKill(path: string): Promise<void> {
-    if (!this.files.has(path)) throw this.missing(path);
+    const f = this.files.get(path);
+    if (!f) throw this.missing(path);
+    if (f.readOnly) throw err(75, 'Path/File access error');   // VB6: Kill of a read-only file
     this.files.delete(path);
   }
 

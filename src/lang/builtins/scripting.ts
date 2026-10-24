@@ -258,7 +258,7 @@ class FsFile extends FsEntry {
   callMethod(name: string, args: VBValue[]): VBValue | Promise<VBValue> {
     const f = io(this.ctx);
     switch (name.toLowerCase()) {
-      case 'delete': argc(args, 0, 1); return f.kill(this.path).then(() => Empty);
+      case 'delete': argc(args, 0, 1); return deleteFile(this.ctx, this.path, args[0]);
       case 'copy': argc(args, 1, 2); return copyFile(this.ctx, this.path, toStr(args[0]), args[1]);
       case 'move': argc(args, 1, 1); return moveFile(this.ctx, this.path, toStr(args[0]));
       case 'openastextstream': argc(args, 0, 2); return openText(this.ctx, this.path, args[0], true);
@@ -424,15 +424,19 @@ async function moveFile(ctx: BuiltinCtx, from: string, to: string): Promise<VBVa
   return Empty;
 }
 
+/** DeleteFile / File.Delete: one file (Force: a read-only one too). */
+async function deleteFile(ctx: BuiltinCtx, path: string, force: VBValue | undefined): Promise<VBValue> {
+  const f = io(ctx);
+  if (given(force) && toBool(force)) await f.setAttr(path, 0).catch(() => {});
+  await f.kill(path);
+  return Empty;
+}
+
 /** DeleteFolder / Folder.Delete: the folder with everything in it (Force: read-only files too). */
 async function deleteFolder(ctx: BuiltinCtx, path: string, force: VBValue | undefined): Promise<VBValue> {
   const f = io(ctx);
   const ls = await f.listing(path);
-  for (const file of ls.files) {
-    const p = buildPath(path, file.name);
-    if (given(force) && toBool(force)) await f.setAttr(p, 0).catch(() => {});
-    await f.kill(p);
-  }
+  for (const file of ls.files) await deleteFile(ctx, buildPath(path, file.name), force);
   for (const d of ls.dirs) await deleteFolder(ctx, buildPath(path, d), force);
   await f.rmDir(path);
   return Empty;
@@ -471,7 +475,7 @@ export class FileSystemObject implements VBObject {
       });
       case 'createtextfile': argc(args, 1, 3); return createText(ctx, s(0), args[1]);
       case 'opentextfile': argc(args, 1, 4); return openText(ctx, s(0), args[1], args[2]);
-      case 'deletefile': argc(args, 1, 2); return f.kill(s(0)).then(() => Empty);
+      case 'deletefile': argc(args, 1, 2); return deleteFile(ctx, s(0), args[1]);
       case 'deletefolder': argc(args, 1, 2); return exists(ctx, s(0)).then(st => {
         if (!st?.isDir) throw new VBRuntimeError(76);
         return deleteFolder(ctx, s(0), args[1]);
