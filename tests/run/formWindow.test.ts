@@ -31,6 +31,21 @@ const key = (el: Element, type: 'keydown' | 'keyup', k: string, code = 0, init: 
 const typeKey = (el: Element, ch: string) => key(el, 'keydown', ch, ch.toUpperCase().charCodeAt(0));
 
 describe('mountFormWindow', () => {
+  test('in a native window the title bar moves the window, also once a size change has rebuilt it; an MDI child\'s does not', () => {
+    const marked = () => [...root.querySelectorAll('.title-bar, .title-bar-text, .title-bar-icon')].map(e => e.hasAttribute('data-tauri-drag-region'));
+    root.dataset.vbWindow = '';
+    mount([], {});
+    expect(marked()).toEqual([true, true, true]);
+    win.receive({ t: 'patch', id: 'form', props: { Width: 6000, Height: 4000 } });   // Windows resizes a new window to its scaled size
+    expect(marked()).toEqual([true, true, true]);
+    win.receive({ t: 'patch', id: 'form', props: { BorderStyle: 1 } });
+    expect(marked()).toEqual([true, true, true]);
+    win.dispose();
+    root.innerHTML = '';
+    win = mountFormWindow(root, { key: 'f', form: { id: 'f', name: 'Form2', props: {}, controls: [], code: '' }, assets: {}, handled: {}, mode: 'ide' }, m => sent.push(m), { mdiChild: true });
+    expect(marked().some(Boolean)).toBe(false);
+  });
+
   test('button click sends Click', () => {
     const b = mk('CommandButton');
     const get = mount([b], { [b.id]: ['Click'] });

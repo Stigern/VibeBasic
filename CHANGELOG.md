@@ -5,6 +5,7 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 ## [Unreleased]
 
 ### Fixed
+- Windows: a running program's form could not be moved by its title bar. Windows resizes a new window to its scaled size, which rebuilt the title bar without its drag mark; the title bar now carries it each time it is built.
 - Windows: F5, Ctrl+R and Shift+F5 in a running program reloaded its window, which went blank (WebView2's browser shortcuts). Those keys, and Ctrl+P, Ctrl+F, Ctrl+G, F3, F7 and Alt+Left/Right, no longer reach the browser in any window. The program still gets KeyDown for them, and F5 in the IDE still runs.
 - Windows: a double click on a DirListBox folder did nothing, and so did DblClick on a TreeView or ListView. WebView2 fires no dblclick when the first click repainted the list.
 - Windows: characters typed with AltGr (Norwegian @ £ $ { [ ] } €) raised no KeyPress, got past a MaskedEdit's mask, and did not start an edit in a DataGrid or the Properties window.

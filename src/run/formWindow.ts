@@ -104,7 +104,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   };
   const surface = renderFormSurface(s.form, 'run', ref => s.assets[ref.asset] ?? (ref.asset.startsWith('data:') ? ref.asset : null), {
     menu: { beforeOpen: id => (barHost ?? menu).beforeOpen?.(id), choose: id => (barHost ?? menu).choose(id) },
-    hideMenuBar: opts.mdiChild, onLayout: () => mdi?.relayout(),
+    hideMenuBar: opts.mdiChild, onLayout: () => mdi?.relayout(), dragRegion: root.dataset.vbWindow !== undefined && !opts.mdiChild,
   });
   surface.el.tabIndex = -1;   // so keys reach the form's listeners when no control has focus
   surface.el.style.outline = 'none';
