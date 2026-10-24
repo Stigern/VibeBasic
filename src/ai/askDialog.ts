@@ -79,7 +79,7 @@ type Waited = { kind: 'reply'; text: string; metrics: string } | { kind: 'error'
  * A reply carries the measurement line (token counts from the server, and the time taken).
  */
 type Start = (o: AiChatOptions, ui: { setLabel(text: string): void }) => Promise<string>;
-async function waitForReply(doc: Document, model: string, start: Start, log: StreamLog, label = `Waiting for ${model}...`): Promise<Waited> {
+async function waitForReply(doc: Document, model: string, start: Start, log: StreamLog, label = `Waiting for ${model}...`, hold?: Hold | null): Promise<Waited> {
   const block = h('div', { style: 'position:absolute;top:1px;bottom:1px;left:0;width:40px;background:#000080' });
   const bar = h('div', { class: 'ai-progress', style: 'position:relative;height:16px;margin-top:8px;overflow:hidden;box-shadow:inset -1px -1px #fff,inset 1px 1px #808080' }, block);
   const box = h('div', {
@@ -111,6 +111,7 @@ async function waitForReply(doc: Document, model: string, start: Start, log: Str
   const answered = request.then<Waited, Waited>(text => ({ kind: 'reply', text, metrics: formatMetrics(usage, Date.now() - t0) }), e => ({ kind: 'error', message: e instanceof Error ? e.message : String(e) }));
   const cancelled = showDialog98(doc, { title: TITLE, content, buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }] })
     .then<Waited>(() => ({ kind: 'cancel' }));
+  hold?.close();   // this dialog is up now: the one that covered the time before it goes
   try {
     const res = await Promise.race([answered, cancelled]);
     if (res.kind !== 'cancel') content.closest('.dlg98-overlay')?.dispatchEvent(new Event('dlg98-abort'));
@@ -119,8 +120,38 @@ async function waitForReply(doc: Document, model: string, start: Start, log: Str
   } finally { clearInterval(timer); anim.dispose(); log.detach(); }
 }
 
-export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor(itemId: string): CodeWindow | null }, doc: Document = document): Promise<void> {
-  if (ide.mode !== 'design') return;
+/**
+ * A modal "Connecting..." dialog with Cancel that covers the time before the first waiting dialog (finding what the server can
+ * do, making the form picture), so the IDE cannot be used meanwhile. `close` takes it away; `result` says how it went.
+ */
+interface Hold { result: Promise<'cancel' | 'closed'>; cancelled(): boolean; close(): void }
+function holdDialog(doc: Document, label: string): Hold {
+  let closing = false, wasCancelled = false;
+  const content = h('div', { style: 'min-width:420px' }, h('div', { class: 'ai-wait-label' }, label));
+  const result = showDialog98(doc, { title: TITLE, content, buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }] })
+    .then((): 'cancel' | 'closed' => { wasCancelled = !closing; return wasCancelled ? 'cancel' : 'closed'; });
+  return {
+    result, cancelled: () => wasCancelled,
+    close: () => { if (closing) return; closing = true; content.closest('.dlg98-overlay')?.dispatchEvent(new Event('dlg98-abort')); },
+  };
+}
+
+/**
+ * Runs `task` as the one AI request of the IDE: none starts while another one runs, and the program cannot be started meanwhile
+ * (IdeState.busy, which Start and Make respect).
+ */
+async function exclusive(ide: IdeState, task: () => Promise<void>): Promise<void> {
+  if (ide.busy) return;
+  ide.setBusy(true);
+  try { await task(); } finally { ide.setBusy(false); }
+}
+
+export function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor(itemId: string): CodeWindow | null }, doc: Document = document): Promise<void> {
+  if (ide.mode !== 'design') return Promise.resolve();
+  return exclusive(ide, () => askAiNow(ide, backend, ui, doc));
+}
+
+async function askAiNow(ide: IdeState, backend: Backend, ui: { codeWindowFor(itemId: string): CodeWindow | null }, doc: Document): Promise<void> {
   const view = ide.activeView;
   const itemId = view.kind === 'code' ? view.itemId : view.kind === 'designer' ? view.formId : null;
   const item = itemId ? ide.project.forms.find(f => f.id === itemId) ?? ide.project.modules.find(m => m.id === itemId) : undefined;
@@ -136,7 +167,19 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   const codeMode = view.kind === 'code';
   const prompt = await promptDialog(doc, `Ask AI - ${item.name} (${codeMode ? 'Code' : 'Form'})`);
   if (prompt === null) return;
-  const settings = await withDetected(stored, detecting);
+  // a modal dialog from here on, until the conversation's own dialogs take over
+  const hold = holdDialog(doc, `Connecting to ${stored.model}...`);
+  try {
+    const settings = await Promise.race([withDetected(stored, detecting), hold.result.then(() => null)]);
+    // cancelled, or the IDE changed meanwhile (another project, the program started, the code window closed)
+    if (!settings || hold.cancelled() || ide.mode !== 'design' || ide.project !== project || (codeMode && ui.codeWindowFor(itemId) !== codeWin)) return;
+    await converseAbout(ide, backend, doc, { settings, hold, project, itemId, codeMode, codeWin, prompt });
+  } finally { hold.close(); }
+}
+
+async function converseAbout(ide: IdeState, backend: Backend, doc: Document, o: { settings: AiSettings; hold: Hold; project: IdeState['project']; itemId: string;
+  codeMode: boolean; codeWin: CodeWindow | null; prompt: string }): Promise<void> {
+  const { settings, hold, project, itemId, codeMode, codeWin, prompt } = o;
 
   // Code mode with a selection: the request is about it, and a bare-body answer replaces exactly it.
   const sel = codeMode ? codeWin!.getSelection?.() ?? null : null;
@@ -144,7 +187,7 @@ export async function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor
   const opts = { contextTokens: settings.contextTokens, selection: selection?.text };
   const first = (() => { try { return codeMode ? buildCodeRequest(project, itemId, codeWin!.getCursorLine(), prompt, opts) : buildFormRequest(project, itemId, prompt, opts); } catch { return null; } })();
   if (!first) { await warn(doc, 'Could not build the request.'); return; }
-  const session: AiSession = { ide, backend, settings, doc };
+  const session: AiSession = { ide, backend, settings, doc, hold };
   if (codeMode) await runCodeConversation(session, { first, itemId, codeWin: codeWin!, selection, question: isQuestion(prompt) });
   else await runFormConversation(session, { first, itemId });
 }
@@ -166,8 +209,12 @@ export interface ErrorToFix { itemId: string; error: FixError; vars: { name: str
  * the error, the line and the variable values. The program stays in break mode until OK; OK ends it (`end` resolves
  * once it has stopped), applies the fix to the module or form as one undo step and shows the code window at the line.
  */
-export async function askAiAboutError(ide: IdeState, backend: Backend, fix: ErrorToFix,
+export function askAiAboutError(ide: IdeState, backend: Backend, fix: ErrorToFix,
   ui: { openCode(itemId: string): CodeWindow; end(): Promise<void> }, doc: Document = document): Promise<void> {
+  return exclusive(ide, () => askAboutErrorNow(ide, backend, fix, ui, doc));
+}
+
+async function askAboutErrorNow(ide: IdeState, backend: Backend, fix: ErrorToFix, ui: { openCode(itemId: string): CodeWindow; end(): Promise<void> }, doc: Document): Promise<void> {
   if (!ide.project.forms.some(f => f.id === fix.itemId) && !ide.project.modules.some(m => m.id === fix.itemId)) return;
   const settings = await settingsOrSetup(ide, backend, doc);
   if (!settings) return;
@@ -179,7 +226,8 @@ export async function askAiAboutError(ide: IdeState, backend: Backend, fix: Erro
   if (applied) ui.openCode(fix.itemId).gotoLine(fix.error.line);
 }
 
-export interface AiSession { ide: IdeState; backend: Backend; settings: AiSettings; doc: Document }
+/** `hold`: the dialog that covers the time until the first waiting dialog is up (it closes it). */
+export interface AiSession { ide: IdeState; backend: Backend; settings: AiSettings; doc: Document; hold?: Hold | null }
 
 /** How form pictures are made (tests replace it: jsdom has no canvas). */
 export const formPictures = { render: (form: FormDef): Promise<string> => renderFormImage(form) };
@@ -490,7 +538,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
   };
 
   const round = async (messages: ChatMessage[], later: boolean, mode: AiLogMode, question = false): Promise<Round<A>> => {
-    const res = await waitForReply(doc, settings.model, send(messages, later, mode), log);
+    const res = await waitForReply(doc, settings.model, send(messages, later, mode), log, undefined, s.hold);
     if (res.kind !== 'reply') return res;
     if (ide.project !== project) return { kind: 'cancel' };   // a different project was opened meanwhile
     let reply = res.text, metrics = res.metrics;
@@ -628,6 +676,7 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
   const pictureOf = async (f: FormDef): Promise<string | null> => { try { return await formPictures.render(f); } catch { return null; } };
   // the first request carries the picture of the form as it is, after the text
   const shot = picturesOn(s.settings) ? await pictureOf(form) : null;
+  if (s.hold?.cancelled()) return false;
   const first = shot ? withPicture(o.first, shot) : o.first;
   return converse<A>(s, first, analyse,
     (a, _reply, metrics) => {
