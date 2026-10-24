@@ -73,6 +73,7 @@ pub const APP_COMMANDS: &[&str] = &[
   "app_log_event",
   "printer_list",
   "print_window",
+  "platform",
 ];
 
 /// The app commands the form and dialog windows of a running program may call (capabilities/run-windows.json): reading a media

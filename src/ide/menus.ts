@@ -1,6 +1,7 @@
 // The nine VB6 menus. Items call named IdeActions; an item without a registered action is disabled, so later
 // tasks only have to add `ide.actions.<name> = ...` for their feature to light up its menu item.
 import type { MenuDef, MenuItem } from '../ui98/menubar';
+import { appTarget } from '../build/appTarget';
 import { clipboardHasControls } from './clipboard';
 import type { IdeState } from './ideState';
 
@@ -93,7 +94,7 @@ export function buildMenus(ide: IdeActions, state?: IdeState, o: { breakOnError?
       mk('Save Project', 'saveProject', 'Ctrl+S'),
       mk('Save Project As...', 'saveProjectAs'),
       sep(),
-      mk(() => `Make ${projectName()}.app...`, 'makeApp', undefined, () => design() && idle()),
+      mk(() => `Make ${projectName()}${appTarget().ext}...`, 'makeApp', undefined, () => design() && idle()),
       sep(),
       mk('Exit', 'exit'),
     ] },

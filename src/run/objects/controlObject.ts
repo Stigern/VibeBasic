@@ -23,7 +23,8 @@ import { PictureObject, type HasPictureRef } from './appObjects';
 import type { ChangeKind, CollectionObject, ItemObject } from './collectionObject';
 import { makePanels, makeTabs, panelLine, tabLine } from './commonCollections';
 import { DEFAULT_ALIGN, GridData } from './gridData';
-import { dirListItem, filterFiles, findVolume, joinPath, normalizePath, resolvePath, subDirs, type FileContext } from './fileControls';
+import { dirListItem, filterFiles, findVolume, joinPath, normalizePath, resolvePath, subDirs, winDriveText, type FileContext } from './fileControls';
+import { winPaths } from '../../platform';
 import { columnLine, iconLine, listLine, makeColumns, makeListItems, makeNodes, nodeLines, TreeNode, type NodesCollection, type Picker } from './listCollections';
 import { listImageItemLine, makeButtons, makeListImages, toolbarLine } from './imageCollections';
 import { parseButton, setPressed } from '../../model/toolbar';
@@ -531,6 +532,14 @@ export class ControlObject implements VBObject, DataConsumer {
     this.ctx.files?.listVolumes().then(v => {
       if (!v.length) return;
       this.volumes = v;
+      if (winPaths()) {
+        // VB6: each drive as "c: [label]", which is also the Drive value; it starts as the drive of the current folder
+        this.props.Drives = v.map(x => joinFields([winDriveText(x), winDriveText(x)]));
+        const cur = this.props.Drive === '/' ? findVolume(v, this.ctx.files?.defaultPath ?? '') ?? v[0] : undefined;
+        if (cur) this.props.Drive = winDriveText(cur);
+        this.send({ Drives: this.props.Drives, Drive: String(this.props.Drive) });
+        return;
+      }
       this.props.Drives = v.map(x => joinFields([x.path, x.name]));
       this.send({ Drives: this.props.Drives });
     }).catch(() => { /* the default drive "/" stays */ });
@@ -590,10 +599,11 @@ export class ControlObject implements VBObject, DataConsumer {
     this.prefetched = null;   // used by the reload in write(); left over when the Path did not change
   }
 
-  /** FileListBox.FileName = "x" selects the file; "folder/x" also changes Path. */
+  /** FileListBox.FileName = "x" selects the file; "folder/x" also changes Path ("folder\x" too on Windows). */
   private setFileName(name: string): void {
-    const slash = name.lastIndexOf('/');
-    if (slash >= 0) this.write(this.propDef('Path'), name.slice(0, slash) || '/');
+    const slash = winPaths() ? Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) : name.lastIndexOf('/');
+    const dir = name.slice(0, slash);   // Windows: "C:\x" and "\x" are in a root, which keeps its backslash
+    if (slash >= 0) this.write(this.propDef('Path'), winPaths() ? (/^([A-Za-z]:)?$/.test(dir) ? name.slice(0, slash + 1) : dir) : dir || '/');
     this.pendingName = slash >= 0 ? name.slice(slash + 1) : name;
     if (this.loading) return;
     this.send(this.listProps());
@@ -604,7 +614,7 @@ export class ControlObject implements VBObject, DataConsumer {
     if (!this.volumes) return v;
     const vol = findVolume(this.volumes, v);
     if (!vol) throw new VBRuntimeError(68);
-    return vol.path;
+    return winPaths() ? winDriveText(vol) : vol.path;
   }
 
   // -- TreeView, ListView and MSFlexGrid: what the window gets ---------------------------------------------------

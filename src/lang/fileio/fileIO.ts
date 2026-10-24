@@ -6,7 +6,8 @@
 //   read and written by position on every Get / Put.
 // - Text is Windows-1252 like VB6 (UTF-8 is read when the file is UTF-8, see decodeText); lines end in CRLF.
 // - Paths: "\" and "/" both separate folders, a drive letter ("C:") is dropped, and relative paths are from CurDir,
-//   which starts as App.Path.
+//   which starts as App.Path. On Windows (winPaths) they are Windows paths ("C:\a\b", see winPath.ts): CurDir has a backslash,
+//   each drive keeps its own current folder (ChDir), ChDrive changes the drive.
 
 import type { VBTypeName } from '../ast';
 import { VBRuntimeError } from '../errors';
@@ -14,6 +15,8 @@ import { dateFrom, type VBDate, type VBRecord, type VBValue } from '../values';
 import { ByteReader, NeedMore, decodeRecord, encodeRecord, type TypeSource } from './binary';
 import { fsError, type FileAccess, type FileMode, type FileStat, type FileSystemApi, type FsListing } from './fsApi';
 import { TextReader, decode1252, decodeText, encode1252, type InputField } from './textFormat';
+import { winDrive, winIsRoot, winJoin, winName, winNormalize, winParent, winResolve } from './winPath';
+import { winPaths } from '../../platform';
 
 const MAX_FILE = 511;
 const FLUSH_CHARS = 65536;
@@ -60,14 +63,17 @@ export function wildcardMatcher(mask: string): (name: string) => boolean {
 }
 
 const hasWildcard = (s: string) => /[*?]/.test(s);
-const parentOf = (p: string): string => p.slice(0, p.lastIndexOf('/')) || '/';
-const nameOf = (p: string): string => p.slice(p.lastIndexOf('/') + 1);
+const parentOf = (p: string): string => (winPaths() ? winParent(p) : p.slice(0, p.lastIndexOf('/')) || '/');
+const nameOf = (p: string): string => (winPaths() ? winName(p) : p.slice(p.lastIndexOf('/') + 1));
+const isRoot = (p: string): boolean => (winPaths() ? winIsRoot(p) : p === '/');
 const byName = (a: string, b: string): number => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0);
 
 export class FileIO {
   private readonly files = new Map<number, OpenFile>();
   /** CurDir: a full path. */
   curDir: string;
+  /** Windows: the current folder of each drive other than CurDir's (by letter), as ChDir left it. */
+  private readonly driveDirs = new Map<string, string>();
   /** What `Dir()` without arguments returns next; null before the first Dir(path) and after the last name. */
   private dirNames: string[] | null = null;
   /** closeAll ran: the program has ended. */
@@ -76,7 +82,7 @@ export class FileIO {
   private reset: Promise<void> | null = null;
 
   constructor(private readonly getApi: () => FileSystemApi | undefined, appPath: string, private readonly types: TypeSource) {
-    this.curDir = this.normalize(appPath.replace(/\\/g, '/') || '/');
+    this.curDir = winPaths() ? winNormalize(appPath || 'C:\\') : this.normalize(appPath.replace(/\\/g, '/') || '/');
   }
 
   private api(): FileSystemApi {
@@ -124,8 +130,9 @@ export class FileIO {
     return out;
   }
 
-  /** The full Mac path of a VB path. */
+  /** The full path of a VB path (a POSIX path, or on Windows a Windows path). */
   resolve(path: string): string {
+    if (winPaths()) return winResolve(this.curDir, path, d => this.driveDirs.get(d));
     let s = path.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/|$)/, '');
     if (!s.startsWith('/')) s = `${this.curDir}/${s}`;
     return this.normalize(s);
@@ -440,7 +447,7 @@ export class FileIO {
     const names = listing.files.filter(x => hidden || !x.hidden).map(x => x.name);
     if (attr & vbDirectory) names.push(...listing.dirs.filter(d => hidden || !d.startsWith('.')));
     const out = names.filter(match).sort(byName);
-    if (attr & vbDirectory && dir !== '/') out.unshift(...['.', '..'].filter(match));
+    if (attr & vbDirectory && !isRoot(dir)) out.unshift(...['.', '..'].filter(match));
     return out;
   }
 
@@ -452,7 +459,7 @@ export class FileIO {
       if (next === undefined) { this.dirNames = null; return ''; }
       return next;
     }
-    if (attr & 8) { this.dirNames = []; return ''; }   // vbVolume: a Mac volume has no label
+    if (attr & 8) { this.dirNames = []; return ''; }   // vbVolume: no volume label (a Mac volume has none)
     const raw = path === '' ? '*' : path;
     const full = this.resolve(raw);
     let names: string[];
@@ -470,7 +477,7 @@ export class FileIO {
   async kill(path: string): Promise<void> {
     const full = this.resolve(path);
     const targets = hasWildcard(nameOf(full))
-      ? (await this.matches(parentOf(full), nameOf(full), 0)).map(n => `${parentOf(full).replace(/\/$/, '')}/${n}`)
+      ? (await this.matches(parentOf(full), nameOf(full), 0)).map(n => (winPaths() ? winJoin(parentOf(full), n) : `${parentOf(full).replace(/\/$/, '')}/${n}`))
       : [full];
     if (targets.length === 0) throw new VBRuntimeError(53);
     for (const t of targets) {
@@ -506,7 +513,30 @@ export class FileIO {
     const p = this.resolve(path);
     const st = await this.call(a => a.fsStat(p));
     if (!st?.isDir) throw new VBRuntimeError(76);
-    this.curDir = p;
+    // Windows: ChDir on another drive changes that drive's folder, not the current drive (VB6)
+    if (winPaths() && winDrive(p) && winDrive(p) !== winDrive(this.curDir)) this.driveDirs.set(winDrive(p), p);
+    else this.curDir = p;
+  }
+
+  /** ChDrive: the drive of the first letter becomes current, in the folder it was left in. Windows only (no drive letters
+   *  elsewhere: accepted and ignored). 5 for an empty name, 68 (Device unavailable) for a drive that is not there. */
+  async chDrive(drive: string): Promise<void> {
+    if (!winPaths()) return;
+    const letter = drive.trim().charAt(0).toUpperCase();
+    if (letter === '') throw new VBRuntimeError(5);
+    if (!/^[A-Z]$/.test(letter)) throw new VBRuntimeError(68);
+    const cur = winDrive(this.curDir);
+    if (letter === cur) return;
+    const target = this.driveDirs.get(letter) ?? `${letter}:\\`;
+    const st = await this.api().fsStat(target).catch(() => null);
+    if (!st?.isDir) {
+      if (target === `${letter}:\\`) throw new VBRuntimeError(68);
+      this.driveDirs.delete(letter);   // the folder is gone: the drive's root
+      return this.chDrive(drive);
+    }
+    if (cur) this.driveDirs.set(cur, this.curDir);
+    this.driveDirs.delete(letter);
+    this.curDir = winNormalize(target);
   }
 
   async setAttr(path: string, attr: number): Promise<void> {

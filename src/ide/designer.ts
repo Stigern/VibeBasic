@@ -23,6 +23,7 @@ import {
   type AlignHow, type Handle, type Rect, type SnapOpts,
 } from './designerLogic';
 import type { IdeState } from './ideState';
+import { ctrlLike } from '../platform';
 import type { IdeActions } from './menus';
 import './designer.css';
 
@@ -451,7 +452,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     }
     const ids = selectedIds();
     const parentOf = (id: string) => form.controls.find(c => c.id === id)?.parentId ?? null;
-    if (e.ctrlKey || e.shiftKey || e.metaKey) {
+    if (ctrlLike(e) || e.shiftKey) {
       select(ids.includes(hit) ? ids.filter(i => i !== hit)
         : [...ids.filter(i => parentOf(i) === parentOf(hit)), hit]);
       return;
@@ -474,7 +475,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     const form = getForm();
     if (!form || ide.mode !== 'design' || isEditable(ev.target) || ide.controlsLocked) return;
     const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[ev.key];
-    const ctrl = ev.ctrlKey || ev.metaKey;
+    const ctrl = ctrlLike(ev);
     if (!dir || (!ctrl && !ev.shiftKey)) return;
     const ids = topLevelOf(form, selectedIds());
     if (!ids.length) return;

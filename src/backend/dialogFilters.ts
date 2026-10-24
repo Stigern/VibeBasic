@@ -1,6 +1,7 @@
 // The CommonDialog filters as the Tauri dialog plugin gets them.
 
 import type { FileFilter } from './backend';
+import type { Platform } from '../platform';
 
 /**
  * On macOS the plugin (rfd) shows no filter menu: the extensions of every filter are merged into one list of allowed
@@ -8,7 +9,9 @@ import type { FileFilter } from './backend';
  * filters; otherwise the plain extensions (empty filters dropped). The order is kept: `*` filters come last
  * (runFileDialog), so a platform with a filter menu would show "All files" as a choice of its own.
  */
-export function dialogFilters(filters: FileFilter[]): FileFilter[] {
+export function dialogFilters(filters: FileFilter[], platform: Platform = 'mac'): FileFilter[] {
+  // Windows and Linux show the filters as a menu: each one is a choice of its own, "All files" (`*`) among them
+  if (platform !== 'mac') return filters.map(f => ({ name: f.name, extensions: f.extensions.filter(x => x !== '') })).filter(f => f.extensions.length > 0);
   if (filters.some(f => f.extensions.includes('*'))) return [];
   return filters.map(f => ({ name: f.name, extensions: f.extensions.filter(x => x !== '') })).filter(f => f.extensions.length > 0);
 }

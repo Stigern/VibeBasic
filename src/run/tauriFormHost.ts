@@ -284,7 +284,7 @@ export class TauriFormHost implements FormHost {
   /** MSComm: the serial ports belong to this (main) window, which runs the program; SysInfo reads from here too. */
   serial(): SerialApi { return getBackend(); }
   system(): SystemApi { return getBackend(); }
-  /** Clipboard: from this (main) window, through the backend (pbcopy / pbpaste). */
+  /** Clipboard: from this (main) window, through the backend (the system clipboard on the Rust side). */
   clipboard(): ClipboardApi {
     const b = getBackend();
     return { getText: () => b.clipboardGetText(), setText: t => b.clipboardSetText(t) };

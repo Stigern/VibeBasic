@@ -2,7 +2,7 @@
 // reads and writes to the object here (see richControl.ts). MSComm's port calls go through the run's CommSession (the main
 // window's backend); OnComm is raised with `raise`, which runs the VB handler and resolves when it has finished.
 //
-// MSComm: CommPort n is the n-th of the sorted /dev/cu.* devices. PortName (a VibeBasic extension) names the device itself
+// MSComm: CommPort n is the n-th serial port of the backend's list (the sorted /dev/cu.* devices on a Mac, COMn on Windows). PortName (a VibeBasic extension) names the device itself
 // ("/dev/cu.usbmodem1101") and wins over CommPort when it is not empty; setting CommPort clears it.
 
 import type { SysInfoData, SystemApi } from '../../backend/backend';
@@ -145,7 +145,7 @@ export class MSCommControl implements RichControl {
     return false;
   }
 
-  /** PortOpen = True: the port named by PortName, else the CommPort-th /dev/cu.* device. Errors: 8005 open, 8002 no such port. */
+  /** PortOpen = True: the port named by PortName, else the CommPort-th port of the backend's list. Errors: 8005 open, 8002 no such port. */
   private async openPort(): Promise<void> {
     if (this.isOpen || this.opening) throw commErr(8005);
     const comm = this.h.comm();

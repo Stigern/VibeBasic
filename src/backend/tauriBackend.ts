@@ -9,6 +9,8 @@ import type { PrinterInfo } from '../run/printing';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
 import type { FileAccess, FileMode, FileStat } from '../lang/fileio/fsApi';
 import { AI_SETTINGS_KEY, loadAiSettingsFrom, saveAiSettingsTo, type AiSettingsIo } from './aiSettingsStore';
+import { appTarget } from '../build/appTarget';
+import { platform as currentPlatform, winPaths, type Platform } from '../platform';
 
 
 const PROJECT_FILTER: FileFilter = { name: 'VibeBasic Project', extensions: ['vbb'] };
@@ -60,6 +62,10 @@ type RawSocketEvent = Exclude<SocketEvent, { kind: 'data' }> | { kind: 'data'; i
 export class TauriBackend implements Backend {
   readonly kind = 'tauri' as const;
 
+  platform(): Promise<Platform> {
+    return call<Platform>('platform', {});
+  }
+
   async showMainWindow(): Promise<void> {
     await getCurrentWindow().show();
   }
@@ -73,7 +79,7 @@ export class TauriBackend implements Backend {
   }
 
   async saveAppDialog(defaultName: string): Promise<string | null> {
-    return (await save({ defaultPath: defaultName, filters: [{ name: 'Application', extensions: ['app'] }] })) ?? null;
+    return (await save({ defaultPath: defaultName, filters: appTarget().filters })) ?? null;
   }
 
   async makeApp(o: MakeAppOptions): Promise<void> {
@@ -89,25 +95,27 @@ export class TauriBackend implements Backend {
   }
 
   async showOpenDialog(filters: FileFilter[], title: string, initDir: string): Promise<string | null> {
-    const r = await open({ multiple: false, directory: false, title: title || undefined, defaultPath: initDir || undefined, filters: dialogFilters(filters) });
+    const r = await open({ multiple: false, directory: false, title: title || undefined, defaultPath: initDir || undefined, filters: dialogFilters(filters, currentPlatform()) });
     return typeof r === 'string' ? r : null;
   }
 
   async showOpenMultipleDialog(filters: FileFilter[], title: string, initDir: string): Promise<string[] | null> {
-    const r = await open({ multiple: true, directory: false, title: title || undefined, defaultPath: initDir || undefined, filters: dialogFilters(filters) });
+    const r = await open({ multiple: true, directory: false, title: title || undefined, defaultPath: initDir || undefined, filters: dialogFilters(filters, currentPlatform()) });
     return Array.isArray(r) ? r : typeof r === 'string' ? [r] : null;
   }
 
   async showSaveDialog(filters: FileFilter[], title: string, initDir: string, defaultName = ''): Promise<string | null> {
-    const defaultPath = initDir ? (defaultName ? `${initDir.replace(/\/+$/, '')}/${defaultName}` : initDir) : defaultName || undefined;
-    return (await save({ title: title || undefined, defaultPath, filters: dialogFilters(filters) })) ?? null;
+    const sep = winPaths() ? '\\' : '/';
+    const dir = winPaths() ? initDir.replace(/[\\/]+$/, '') : initDir.replace(/\/+$/, '');
+    const defaultPath = initDir ? (defaultName ? `${dir}${sep}${defaultName}` : initDir) : defaultName || undefined;
+    return (await save({ title: title || undefined, defaultPath, filters: dialogFilters(filters, currentPlatform()) })) ?? null;
   }
 
   listVolumes(): Promise<Volume[]> {
     return call<Volume[]>('list_volumes', {});
   }
 
-  /** pbpaste / pbcopy on the Rust side: navigator.clipboard wants a user gesture, which a Timer or Form_Load does not have. */
+  /** The system clipboard on the Rust side: navigator.clipboard wants a user gesture, which a Timer or Form_Load does not have. */
   clipboardGetText(): Promise<string> {
     return call<string>('clipboard_get_text', {});
   }

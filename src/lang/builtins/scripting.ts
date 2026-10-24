@@ -3,11 +3,13 @@
 //
 // - Dictionary: keys are compared as VB6 does (CompareMode vbBinaryCompare by default: "a" and "A" are two keys; 1 and 1#
 //   are one key); reading Item of a missing key adds it with Empty. Add of a used key is 457, Remove of a missing one 32811.
-// - FileSystemObject works on the program's files (FileIO: "\" or "/", relative to CurDir); Path is the Mac path. A
+// - FileSystemObject works on the program's files (FileIO: "\" or "/", relative to CurDir); Path is the system path. A
 //   TextStream is Windows-1252 text like Open ... For Input / Output (Unicode streams are not made).
 // - CreateObject knows the ProgIDs registered with defClass(..., true) (ADODB.*, Scripting.*); anything else is 429.
 
 import { VBRuntimeError } from '../errors';
+import { winPaths } from '../../platform';
+import { winIsRoot } from '../fileio/winPath';
 import type { VBObject } from '../host';
 import { wildcardMatcher, type FileIO } from '../fileio/fileIO';
 import type { FileStat } from '../fileio/fsApi';
@@ -172,12 +174,14 @@ export const parentOf = (p: string): string => {
 };
 const extensionOf = (p: string): string => { const n = fileNameOf(p), i = n.lastIndexOf('.'); return i < 0 ? '' : n.slice(i + 1); };
 const baseNameOf = (p: string): string => { const n = fileNameOf(p), i = n.lastIndexOf('.'); return i < 0 ? n : n.slice(0, i); };
-/** BuildPath: the path's own separator ("\" when it has one), else "/". */
+/** BuildPath: the path's own separator ("\" when it has one), else "/" ("\" on Windows). */
 const buildPath = (path: string, name: string): string => {
   if (path === '') return name;
   if (SEP.test(path[path.length - 1]) || SEP.test(name[0] ?? '')) return path + name;
-  return path + (path.includes('\\') ? '\\' : '/') + name;
+  return path + (path.includes('\\') || winPaths() ? '\\' : '/') + name;
 };
+/** A drive's or the system's root folder ("/", on Windows "C:\"). */
+const isRootPath = (p: string): boolean => (winPaths() ? winIsRoot(p) : p === '/');
 
 const mtimeDate = (st: FileStat): VBValue => {
   const d = new Date(st.mtime);
@@ -231,7 +235,7 @@ abstract class FsEntry implements VBObject {
     switch (l) {
       case 'name': case 'shortname': return fileNameOf(this.path);
       case 'path': case 'shortpath': return this.path;
-      case 'parentfolder': return this.path === '/' ? Empty : new FsFolder(this.ctx, parentOf(this.path));
+      case 'parentfolder': return isRootPath(this.path) ? Empty : new FsFolder(this.ctx, parentOf(this.path));
       case 'datelastmodified': case 'datecreated': case 'datelastaccessed': return this.stat().then(mtimeDate) as unknown as VBValue;
       case 'attributes':
         return this.stat().then(st => (st.readOnly ? 1 : 0) | (st.hidden ? 2 : 0) | (st.isDir ? 16 : 32)) as unknown as VBValue;
@@ -268,7 +272,7 @@ class FsFolder extends FsEntry {
   readonly vbTypeName = 'Folder';
   protected more(l: string): VBValue | Promise<VBValue> | undefined {
     switch (l) {
-      case 'isrootfolder': return this.path === '/';
+      case 'isrootfolder': return isRootPath(this.path);
       case 'type': return 'File Folder';
       case 'files': case 'subfolders':
         return io(this.ctx).listing(this.path).then(ls => (l === 'files'

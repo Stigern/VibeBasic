@@ -4,6 +4,7 @@ import { TauriBackend } from './tauriBackend';
 import type { AiModel, ChatMessage } from '../ai/types';
 import type { AiChatOptions } from '../ai/sse';
 import type { FileSystemApi } from '../lang/fileio/fsApi';
+import type { Platform } from '../platform';
 
 export interface FileFilter { name: string; extensions: string[] }
 /** A drive of DriveListBox: `path` is what `Drive1.Drive` returns ("/" is the startup disk). */
@@ -59,7 +60,8 @@ export type CommEvent =
  * caller. The calls reject with "number|description" (8002|Invalid port number, 8005|Port already open, 8018 ...).
  */
 export interface SerialApi {
-  /** The /dev/cu.* devices, sorted (CommPort n is the n-th). */
+  /** The serial ports (CommPort n is the n-th): the /dev/cu.* devices sorted (Mac), COM1 .. the highest COMn (Windows), the
+   *  /dev/ttyUSB* and /dev/ttyACM* devices in name order (Linux). */
   commList(): Promise<string[]>;
   /** `settings` "9600,n,8,1"; `handshaking` 0-3. Resolves with the modem lines. */
   commOpen(id: number, path: string, settings: string, handshaking: number, dtr: boolean, rts: boolean): Promise<CommLines>;
@@ -128,13 +130,15 @@ export interface MakeAppOptions {
 /** FileSystemApi: the files of a running program (Open, Kill, Dir ...) and SaveSetting, made by the main window. */
 export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, SystemApi {
   readonly kind: 'tauri' | 'browser';
+  /** The operating system (the desktop app asks the Rust side; the browser guesses from the user agent). */
+  platform(): Promise<Platform>;
   showMainWindow(): Promise<void>;
   /** Open dialog filtered to *.vbb and VB6 *.vbp. Null when cancelled. */
   openProjectDialog(): Promise<string | null>;
   saveProjectDialog(defaultFileName: string): Promise<string | null>;
-  /** Save dialog for a made app (filter .app). Null when cancelled. */
+  /** Save dialog for a made app (filter by the platform: .app, .exe, none on Linux; see appTarget). Null when cancelled. */
   saveAppDialog(defaultName: string): Promise<string | null>;
-  /** Builds a standalone .app from the project (desktop only). Rejects with the error text. */
+  /** Builds a standalone app from the project (desktop only). Rejects with the error text. */
   makeApp(o: MakeAppOptions): Promise<void>;
   openFileDialog(filters: FileFilter[]): Promise<string | null>;
   /** Generic open dialog (CommonDialog.ShowOpen): `filters` in the order shown (the first is selected), `initDir` '' for the default folder. Null when cancelled. An extension `*` means every file. */
@@ -143,7 +147,7 @@ export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, 
   showOpenMultipleDialog(filters: FileFilter[], title: string, initDir: string): Promise<string[] | null>;
   /** Generic save dialog (CommonDialog.ShowSave). `defaultName` is the file name suggested ('' for none). Null when cancelled. */
   showSaveDialog(filters: FileFilter[], title: string, initDir: string, defaultName?: string): Promise<string | null>;
-  /** DriveListBox: the startup disk "/" first, then /Volumes/*. */
+  /** DriveListBox: the startup disk "/" first, then /Volumes/* (Windows: the drive letters, `path` "C:\\"). */
   listVolumes(): Promise<Volume[]>;
   /** DirListBox / FileListBox: the contents of one folder. Rejects with the error text when it can't be read. */
   listDir(path: string): Promise<DirListing>;
@@ -161,7 +165,7 @@ export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, 
   mediaClose?(token: string): Promise<void>;
   /** Printers (desktop only): the printers of the system. */
   printerList?(): Promise<PrinterInfo[]>;
-  /** The macOS print dialog for a print window (label vbdialog-print-<n>), as a sheet on it. */
+  /** The system's print dialog for a print window (label vbdialog-print-<n>), as a sheet on it. */
   printWindow?(label: string): Promise<void>;
   /** Small JSON settings (IDE options ...) kept in localStorage under `vibebasic.settings:<key>`. Null when absent. In the
    *  desktop app the 'ai' settings (with the API key) are kept by the Rust side instead, out of reach of the form windows,
@@ -177,17 +181,17 @@ export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, 
   getEmbeddedProject(): Promise<string | null>;
   /** Exits the whole app. */
   quitApp(): Promise<void>;
-  /** The folder that contains the .app ('' when unknown). */
+  /** The folder that contains the made app ('' when unknown). */
   getAppDir(): Promise<string>;
   /** The made app's name (CFBundleName; App.EXEName); '' when unknown. */
   getAppName(): Promise<string>;
-  /** Rejects with the reason text when Make can't work here (browser, or desktop not run as a built .app). */
+  /** Rejects with the reason text when Make can't work here (browser, or desktop not run as a built app). */
   canMakeApp(): Promise<void>;
   /** Models from `GET {baseUrl}/models` (id, and the context size when the server reports one). Rejects with a readable error text. */
   aiListModels(baseUrl: string, apiKey: string): Promise<AiModel[]>;
   /** `POST {baseUrl}/chat/completions`; resolves to choices[0].message.content. With `opts.onDelta` the reply streams (thinking, then answer); `opts.signal` aborts it (rejects with "cancelled"). Rejects with a readable error text. */
   aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string, opts?: AiChatOptions): Promise<string>;
-  /** Made apps: the runtime menu's Quit (Cmd+Q) was chosen. */
+  /** Made apps: the runtime menu's Quit (Cmd+Q on a Mac) was chosen. */
   onQuitRequested(handler: () => void): void;
 }
 

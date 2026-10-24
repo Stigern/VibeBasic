@@ -562,7 +562,7 @@ export class RunSession implements Host, FormSession {
     } catch (e) { throw fsError(e); }
   }
 
-  /** The full path of a file of the program, as Open resolves it (CurDir; the drive letter dropped). */
+  /** The full path of a file of the program, as Open resolves it (CurDir; the drive letter dropped, except on Windows). */
   resolvePath(path: string): string { return this.program.resolvePath(path); }
 
   async loadPicture(path: string): Promise<VBValue> {

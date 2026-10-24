@@ -16,6 +16,12 @@ mod sysinfo;
 mod winsock;
 mod app_commands;
 
+/// The operating system: "mac", "windows" or "linux" (the frontend's Backend.platform()).
+#[tauri::command]
+fn platform() -> &'static str {
+  if cfg!(target_os = "windows") { "windows" } else if cfg!(target_os = "macos") { "mac" } else { "linux" }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -97,7 +103,8 @@ pub fn run() {
       appinfo::app_prev_instance,
       appinfo::app_log_event,
       printing::printer_list,
-      printing::print_window
+      printing::print_window,
+      platform
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

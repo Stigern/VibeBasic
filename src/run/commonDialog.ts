@@ -1,6 +1,8 @@
 // CommonDialog helpers shared by the form hosts: the VB filter string as dialog filters, and the file dialog through the backend.
 
 import type { Backend, FileFilter } from '../backend/backend';
+import { winPaths } from '../platform';
+import { winDirOf } from '../lang/fileio/winPath';
 import { patternMatcher } from './objects/fileControls';
 
 export interface FileDialogRequest {
@@ -29,8 +31,10 @@ export function multiFileName(paths: string[], explorer: boolean): string {
   const parts = paths.map(p => p.split(/[\\/]/));
   let n = parts[0].length - 1;   // the folders of the first path
   for (const q of parts) { let i = 0; while (i < n && i < q.length - 1 && q[i] === parts[0][i]) i++; n = i; }
-  const dir = n === 0 ? '' : parts[0].slice(0, n).join('/') || '/';
-  return [dir, ...parts.map(q => q.slice(n).join('/'))].join(explorer ? '\0' : ' ');
+  const sep = winPaths() ? '\\' : '/';
+  let dir = n === 0 ? '' : parts[0].slice(0, n).join(sep) || '/';
+  if (winPaths() && /^[A-Za-z]:$/.test(dir)) dir += '\\';   // the root of a drive: "C:\"
+  return [dir, ...parts.map(q => q.slice(n).join(sep))].join(explorer ? '\0' : ' ');
 }
 
 /** The name with `.ext` added when its last part has no extension (a leading dot of `ext` is fine). */
@@ -59,7 +63,11 @@ export function parseVbFilter(filter: string): FileFilter[] {
 
 /** The last part of a path (both separators). */
 export const baseName = (path: string): string => path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '';
-const dirName = (path: string): string => { const m = /^(.*)[\\/][^\\/]*$/.exec(path); return m ? m[1] || '/' : ''; };
+const dirName = (path: string): string => {
+  if (winPaths()) return winDirOf(path);
+  const m = /^(.*)[\\/][^\\/]*$/.exec(path);
+  return m ? m[1] || '/' : '';
+};
 
 /**
  * FilterIndex after the dialog: the Mac dialog has no filter menu, so it is the filter that matches the chosen file —
