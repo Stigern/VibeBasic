@@ -35,12 +35,13 @@ function enumLabels(values: { value: number; label: string }[]): string[] {
  *  protocol enums ... keep their values (they change what a program does, and Alignment was misread without them). */
 const NAME_ONLY_ENUMS = new Set(['align', 'appearance', 'arrows', 'autosize', 'backstyle', 'bevelinner', 'bevelouter', 'borderstyle', 'daylength',
   'drawmode', 'drawstyle', 'scalemode', 'fillstyle', 'floodtype', 'font3d', 'gridcelleffect', 'gridlines', 'linestyle', 'monthlength',
-  'negotiateposition', 'orientation', 'scrolling', 'shadowstyle', 'shape', 'shortcut', 'startupposition', 'tickstyle',
-  'windowstate']);   // Shortcut: written as text ("Ctrl+O")
+  'negotiateposition', 'orientation', 'scrolling', 'shadowstyle', 'shape', 'shortcut', 'tickstyle']);   // Shortcut: written as text ("Ctrl+O")
+/** The Form's BorderStyle keeps its values (a fixed dialog is asked for often; the model guessed numbers without them). */
+const FORM_VALUED = new Set(['borderstyle']);
 
 /** "Alignment(0 Left,1 Right,2 Center)": an enum property with its values; other properties by name. */
-const propText = (p: PropDef): string =>
-  p.enumValues?.length && !NAME_ONLY_ENUMS.has(p.name.toLowerCase())
+const propText = (p: PropDef, type: ControlType): string =>
+  p.enumValues?.length && (!NAME_ONLY_ENUMS.has(p.name.toLowerCase()) || (type === 'Form' && FORM_VALUED.has(p.name.toLowerCase())))
     ? `${p.name}(${enumLabels(p.enumValues).map((l, i) => `${p.enumValues![i].value} ${l}`).join(',')})` : p.name;
 
 /** The standard events, written as one word each in the control list (the note at the end spells them out). */
@@ -61,7 +62,7 @@ function eventText(names: string[]): string[] {
 export function describeControlTypes(): string {
   const lines: string[] = [];
   for (const td of Object.values(CONTROL_TYPES)) {
-    const props = td.props.filter(p => !COMMON.has(p.name.toLowerCase()) && (p.designTime || p.runtime !== 'none') && !(p.name in FONT_ALIASES && !p.designTime)).map(propText);
+    const props = td.props.filter(p => !COMMON.has(p.name.toLowerCase()) && (p.designTime || p.runtime !== 'none') && !(p.name in FONT_ALIASES && !p.designTime)).map(p => propText(p, td.type));
     const methods = td.methods.filter(m => !BASE_METHODS.has(m.name.toLowerCase())).map(m => m.name);
     let line = `${td.type}: ${props.join(', ')}`;
     if (td.events.length) line += ` | events: ${eventText(td.events.map(e => e.name).filter(n => !DRAG_EVENTS.has(n))).join(', ')}`;
@@ -121,7 +122,7 @@ export function describeControlTypes(): string {
     + ' The Sheridan 3D controls: an SSPanel (or SSFrame) is a container like a Frame (BevelOuter 0 none, 1 inset, 2 raised, BevelWidth, Font3D 0-4; FloodType 1 left to right ... 5 circle with FloodPercent makes a progress bar);'
     + ' SSCheck and SSOption have a Boolean Value and Click(Value As Integer); SSRibbon is a toggle button (Value, PictureUp, PictureDn) and ribbons of one container with the same GroupNumber release each other.'
     + ' An MDIForm (events MDIForm_Load ...; AutoShowChildren, ScrollBars) holds only Align controls and invisible ones; forms with MDIChild = True show inside it.'
-    + ' MDIForm1.ActiveForm is the active child, MDIForm1.Arrange vbCascade (vbTileHorizontal, vbTileVertical); a menu with WindowList lists the children; Set f = New Form2: f.Show opens another instance.');
+    + ' MDIForm1.ActiveForm is the active child, MDIForm1.Arrange vbCascade (vbTileHorizontal, vbTileVertical); a top-level menu with WindowList (design time) lists the children; Set f = New Form2: f.Show opens another instance.');
   return lines.join('\n');
 }
 
@@ -352,7 +353,9 @@ export function codeForPrompt(code: string, focus: { procName: string | null; me
 }
 
 /** What a request may know besides the project: the server's context size and (code mode) the selected text. */
-export interface RequestOptions { contextTokens?: number; selection?: string | null }
+export interface RequestOptions { contextTokens?: number; selection?: string | null;
+  /** A fix request: the values of the failing line's operands in the stopped frame ("Text1.Text = \"twelve\""). */
+  lineValues?: string[] }
 
 let codeSystem: string | undefined, formSystem: string | undefined;
 /** The system prompts, built once: byte-identical for every request (the server's prefix cache). */
@@ -387,6 +390,30 @@ export function buildCodeRequest(p: Project, itemId: string, cursorLine: number,
 export interface FixError { number: number; description: string; compile: boolean; line: number; procName: string | null }
 
 /**
+ * The simple operands of a line of VB code: names and `a.b.c` chains that are not called or indexed (no `(` after them), outside
+ * strings and the comment, in order, each once. Evaluated in the stopped frame without side effects (ProgramDebugger.dataTip),
+ * they become "Values on the failing line" in the fix request. Keywords and function names are among them; dataTip drops them.
+ */
+export function lineOperands(line: string, max = 8): string[] {
+  let code = '', inString = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inString) { if (c === '"') { if (line[i + 1] === '"') i++; else { inString = false; code += '""'; } } continue; }
+    if (c === '"') { inString = true; continue; }
+    if (c === "'") break;
+    code += c;
+  }
+  if (/^\s*Rem\b/i.test(code)) return [];
+  const out: string[] = [];
+  for (const m of code.matchAll(/(?<![\w.!#&])([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?![\w$%&!#@])(\s*\()?/g)) {
+    if (m[2] || out.includes(m[1])) continue;
+    out.push(m[1]);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/**
  * Debugging with AI: the code-mode system prompt; in the user message the form description, the code (the procedure
  * with the error and its callers in full), the error, the line and the variable values, then `Fix the error.`
  */
@@ -407,7 +434,9 @@ export function buildFixRequest(p: Project, itemId: string, err: FixError, vars:
     `Line ${err.line} in ${proc?.name ?? '(declarations)'}: ${lineText}`,
   ];
   if (!err.compile) parts.push(`Variable values:\n${vars.length ? vars.map(v => `${v.name} = ${v.value}`).join('\n') : '(none)'}`);
-  parts.push('Fix the error.');
+  if (!err.compile && opts.lineValues?.length) parts.push(`Values on the failing line: ${opts.lineValues.join(', ')}`);
+  parts.push(err.compile ? 'Fix the error.'
+    : 'Fix the error. Handle the actual values that cause it (check or convert them, or tell the user); do not hide the error by setting a variable to a dummy value or by dropping the statement.');
   return [{ role: 'system', content: codeSystemPrompt() }, { role: 'user', content: parts.join('\n\n') }];
 }
 

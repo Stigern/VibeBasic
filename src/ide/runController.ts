@@ -12,6 +12,7 @@ import type { StackEntry } from '../lang/interp/debugger';
 import { findSyntaxErrors } from '../lang/parser';
 import { parseCondConsts, type CondConsts } from '../lang/condComp';
 import { listProcedures } from '../model/procedures';
+import { lineOperands } from '../ai/context';
 import { moduleKind } from '../model/types';
 import { RunSession } from '../run/session';
 import type { FormHost } from '../run/formHost';
@@ -33,6 +34,8 @@ export interface ErrorToFix {
   itemId: string;
   error: { number: number; description: string; compile: boolean; line: number; procName: string | null };
   vars: { name: string; value: string }[];
+  /** The failing line's simple operands with their values in the stopped frame (`Text1.Text = "twelve"`), run-time errors only. */
+  lineValues?: string[];
 }
 
 /** How a debug command starts or goes on: a step, or Run To Cursor (a one-shot breakpoint). */
@@ -91,7 +94,22 @@ export class RunController {
   errorToFix(): ErrorToFix | null {
     const b = this.breakError;
     if (!b || this.ide.mode !== 'break') return null;
-    return { ...b, vars: b.error.compile ? [] : this.session?.variables() ?? [] };
+    return { ...b, vars: b.error.compile ? [] : this.session?.variables() ?? [], ...(b.error.compile ? {} : { lineValues: this.lineValues(b.itemId, b.error.line) }) };
+  }
+
+  /** The values of the simple operands (variables, control properties; nothing that runs code) of line `line` of an item, read in the stopped frame. */
+  private lineValues(itemId: string, line: number): string[] {
+    const dbg = this.session?.program.debug;
+    const code = [...this.ide.project.forms, ...this.ide.project.modules].find(x => x.id === itemId)?.code ?? '';
+    const text = code.split(/\r\n|\n|\r/)[line - 1] ?? '';
+    if (!dbg || !text.trim()) return [];
+    const out: string[] = [];
+    for (const e of lineOperands(text)) {
+      let tip: string | null = null;
+      try { tip = dbg.dataTip(e); } catch { /* not readable */ }
+      if (tip) out.push(tip.length > 200 ? `${tip.slice(0, 197)}...` : tip);
+    }
+    return out;
   }
 
   /** End, then wait until the program and its windows are gone (at most 3 s for the windows). */

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// Offline probes of the AI code that the live runs pointed at. Each test pins down the CURRENT behaviour (no server needed),
-// so the report's bug claims are reproducible; when a behaviour is fixed, its probe fails and can be turned around.
+// Offline probes of the AI code that the live runs pointed at (no server needed). They first pinned down the behaviour the
+// report (report.md, "Bugs in VibeBasic's AI code") describes; each is now turned around to the fixed behaviour.
 import { expect, test } from 'vitest';
 import { applyCodeProposal } from '../src/ai/codeMode';
 import { describeControlTypes } from '../src/ai/context';
@@ -11,58 +11,57 @@ import { validateCode } from '../src/ai/validate';
 import { findSyntaxErrors } from '../src/lang/parser';
 import { newControl, newForm, newProject } from '../src/model/controls';
 
-test('a changed module-level declaration is added next to the old one, not put in its place', () => {
+test('bug 4 (fixed): a changed module-level declaration replaces the old one', () => {
   const src = 'Option Explicit\nDim items As Collection\nPrivate Sub Form_Load()\n    items.Add 1\nEnd Sub';
   const code = 'Dim items As New Collection\nPrivate Sub Form_Load()\n    items.Add 1\nEnd Sub';
   const r = applyCodeProposal(src, code, 'Form_Load')!;
-  expect(r.source.split('\n').slice(0, 3)).toEqual(['Option Explicit', 'Dim items As Collection', 'Dim items As New Collection']);
-  // the parser does not see the duplicate either, so nothing in the check-and-fix round complains
+  expect(r.source.split('\n').slice(0, 3)).toEqual(['Option Explicit', 'Dim items As New Collection', 'Private Sub Form_Load()']);
   expect(findSyntaxErrors(r.source, 'Form1')).toEqual([]);
   const c = applyCodeProposal('Const MAX = 5\nPrivate Sub A()\nEnd Sub', 'Const MAX = 10\nPrivate Sub A()\n    Debug.Print MAX\nEnd Sub', 'A')!;
-  expect(c.source.startsWith('Const MAX = 5\nConst MAX = 10')).toBe(true);
+  expect(c.source.startsWith('Const MAX = 10\nPrivate Sub A()')).toBe(true);
 });
 
-test('form mode: "set" with the form\'s own name is dropped as a missing control', () => {
+test('bug 3 (fixed): "set" with the form\'s own name is a form op', () => {
   const f = newForm('Form1');
   const r = parseFormOps('{"ops":[{"op":"set","name":"Form1","props":{"Caption":"Main","MDIChild":true}}]}', f);
-  expect(r.ok).toBe(false);   // nothing usable: the whole answer is "not understood"
-  const r2 = parseFormOps('{"ops":[{"op":"set","name":"Form1","props":{"Caption":"Main"}},{"op":"add","type":"Label","name":"Label1","props":{}}]}', f);
-  expect(r2.ok && r2.warnings).toEqual(['Ignored change to missing control Form1.']);
+  expect(r.ok && r.ops).toEqual([{ op: 'form', props: { Caption: 'Main', MDIChild: true } }]);
 });
 
-test('form mode: an invalid or unknown property is only a grey warning, never a problem for the check-and-fix round', () => {
+test('bug 2 / 9 (fixed): an invalid value is a problem for the check-and-fix round, with the valid values; SSTab Tabs captions are taken', () => {
   const f = newForm('Form1');
   const r = parseFormOps('{"ops":[{"op":"form","props":{"StartUpPosition":4}},{"op":"add","type":"SSTab","name":"t","props":{"Tabs":"General\\nView\\nAdvanced"}}]}', f);
-  expect(r.ok && r.warnings).toEqual(['Ignored invalid value for StartUpPosition on Form.', 'Ignored invalid value for Tabs on t.']);
-  // runFormConversation builds `problems` from validateCode (code), skipped stubs, renames and the layout check only
+  if (!r.ok) throw new Error('not parsed');
+  expect(r.issues).toEqual(['Ignored invalid value 4 for StartUpPosition on Form1 (valid: 0 Manual, 1 CenterOwner, 2 CenterScreen, 3 Windows Default).']);
+  expect(r.ops[0]).toMatchObject({ op: 'add', type: 'SSTab', props: { TabCaption: ['General', 'View', 'Advanced'], Tabs: 3 } });
 });
 
-test('the system prompt contradicts itself about New ADODB.Connection', () => {
-  expect(describeControlTypes()).toContain('there is no New ADODB.Connection');
+test('bug 5 (fixed): the system prompt no longer says there is no New ADODB.Connection', () => {
+  expect(describeControlTypes()).not.toContain('there is no New ADODB.Connection');
   expect(LANGUAGE_REFERENCE).toMatch(/CreateObject\(ProgID\) or New: .*ADODB\.Connection/);
 });
 
-test('StartUpPosition is listed by name only, so the model has to guess its values', () => {
+test('bug 9 (fixed): StartUpPosition, WindowState and the Form\'s BorderStyle carry their values', () => {
   const form = describeControlTypes().split('\n').find(l => l.startsWith('Form:'))!;
-  expect(form).toMatch(/StartUpPosition(,|\s|$)/);
-  expect(form).not.toMatch(/StartUpPosition\(/);
+  expect(form).toContain('StartUpPosition(0 Manual,1 CenterOwner,2 CenterScreen,3 Windows Default)');
+  expect(form).toContain('WindowState(0 Normal,1 Minimized,2 Maximized)');
+  expect(form).toContain('BorderStyle(0 None,1 Fixed Single,2 Sizable,3 Fixed Dialog,4 Fixed ToolWindow,5 Sizable ToolWindow)');
 });
 
-test('isQuestion misses common question openings (they still reach the AI Answer box only if the reply is prose)', () => {
+test('isQuestion (fixed): the common question openings count', () => {
   expect(['How do I make an MDI app?', 'Can you explain this?', "What's wrong with this code?", 'Is this correct?', 'Why does this give error 13?'].map(isQuestion))
-    .toEqual([false, false, true, false, true]);
+    .toEqual([true, true, true, true, true]);
 });
 
-test('validator: members of an Object variable are not checked (ListItem.ListSubItems got through and failed with 438)', () => {
+test('bug 8 (fixed): members of a ListItem from ListItems.Add are checked (ListSubItems failed with 438)', () => {
   const p = newProject();
   const f = p.forms[0];
   const lv = newControl(f, 'ListView', { left: 0, top: 0 }, null);
   lv.name = 'ListView1';
   f.controls.push(lv);
   const code = 'Private Sub Form_Load()\n    Dim it As Object\n    Set it = ListView1.ListItems.Add(, , "x")\n    it.ListSubItems.Add 1, , "y"\nEnd Sub';
-  expect(validateCode(code, { moduleName: 'Form1', form: f, project: p })).toEqual([]);
+  expect(validateCode(code, { moduleName: 'Form1', form: f, project: p })).toEqual([expect.stringMatching(/^it is a ListItem, which has no ListSubItems property; it has Text, .*SubItems\(i\)/)]);
   const typed = 'Private Sub Form_Load()\n    Dim it As ListItem\n    Set it = ListView1.ListItems.Add(, , "x")\n    it.ListSubItems.Add 1, , "y"\nEnd Sub';
-  expect(validateCode(typed, { moduleName: 'Form1', form: f, project: p })).toEqual([]);
+  expect(validateCode(typed, { moduleName: 'Form1', form: f, project: p })).toHaveLength(1);
 });
 
 test('...and VibeBasic runs the module with both declarations (the later one wins; VB6 says Duplicate declaration)', async () => {
@@ -77,7 +76,7 @@ test('...and VibeBasic runs the module with both declarations (the later one win
   expect(seen).toEqual({ started: 'ok', errors: [], out: [' 1 '] });
 });
 
-test('a streamed reply without content falls back to the thinking text, which code mode then treats as the answer', async () => {
+test('bug 7 (fixed): a streamed reply without content is marked as thinking, so code mode takes no code from it', async () => {
   const { BrowserBackend } = await import('../src/backend/browserBackend');
   const { extractCode } = await import('../src/ai/codeMode');
   const thinking = 'The user wants a button. Maybe:\n```vb\nPrivate Sub Command1_Click()\n    End\nEnd Sub\n```\nBut wait, that ends the program; better';
@@ -89,7 +88,7 @@ test('a streamed reply without content falls back to the thinking text, which co
   globalThis.fetch = (async () => new Response(sse, { headers: { 'content-type': 'text/event-stream' } })) as typeof fetch;
   try {
     const text = await new BrowserBackend().aiChat('http://x/v1', '', 'm', [{ role: 'user', content: 'hi' }], 'low', { onDelta: () => {} });
-    expect(text).toBe(thinking);
-    expect(extractCode(text)).toBe('Private Sub Command1_Click()\n    End\nEnd Sub');
+    expect(text).toBe(`<think>${thinking}</think>`);
+    expect(extractCode(text)).toBeNull();
   } finally { globalThis.fetch = real; }
 });

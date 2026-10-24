@@ -19,7 +19,7 @@ import { layoutProblems } from './layoutCheck';
 import { LoopWatch } from './loopDetect';
 import { addAiLogEntry, describeRequest, finishAiLogEntry, type AiLogEntry, type AiLogMode } from './aiLog';
 import { isProse, questionMode, showAnswer } from './answerDialog';
-import { FORM_RESPONSE_FORMAT, FORM_STRUCTURED_OUTPUTS, NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
+import { FORM_RESPONSE_FORMAT, FORM_STRUCTURED_OUTPUTS, NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, growForOverflow, parseFormOps } from './formMode';
 import { type PreviewResult, showCodePreview, showFormPreview } from './previewDialogs';
 import { type AiSettings, type Thinking, loadAiSettings } from './settings';
 import { AI_CUT_OFF, type AiChatOptions, type AiUsage } from './sse';
@@ -204,7 +204,8 @@ async function settingsOrSetup(ide: IdeState, backend: Backend, doc: Document): 
 }
 
 /** An error to fix with AI: where it happened and, for a run-time error, the variables of the stopped frame. */
-export interface ErrorToFix { itemId: string; error: FixError; vars: { name: string; value: string }[] }
+export interface ErrorToFix { itemId: string; error: FixError; vars: { name: string; value: string }[];
+  /** The failing line's operands with their values (`Text1.Text = "twelve"`). */ lineValues?: string[] }
 
 /**
  * Ask AI on a run-time or compile error (the error dialog's Ask AI, Tools > Ask AI about this error): code mode with
@@ -222,7 +223,7 @@ async function askAboutErrorNow(ide: IdeState, backend: Backend, fix: ErrorToFix
   if (!settings) return;
   const win = ui.openCode(fix.itemId);
   win.gotoLine(fix.error.line);   // the cursor marks the failing procedure for the merge
-  const first = (() => { try { return buildFixRequest(ide.project, fix.itemId, fix.error, fix.error.compile ? [] : fix.vars, { contextTokens: settings.contextTokens }); } catch { return null; } })();
+  const first = (() => { try { return buildFixRequest(ide.project, fix.itemId, fix.error, fix.error.compile ? [] : fix.vars, { contextTokens: settings.contextTokens, lineValues: fix.lineValues }); } catch { return null; } })();
   if (!first) { await warn(doc, 'Could not build the request.'); return; }
   const applied = await runCodeConversation({ ide, backend, settings, doc }, { first, itemId: fix.itemId, codeWin: win, beforeApply: ui.end, mode: 'fix' });
   if (applied) ui.openCode(fix.itemId).gotoLine(fix.error.line);
@@ -669,8 +670,9 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
   const before = new Set(layoutProblems(form).map(p => p.key));
   const analyse = (text: string): Understood<A> => {
     const notes: string[] = [];
-    const parsed = parseFormOps(text, form, code => fixEventNames(form, code, notes));
-    if (!parsed.ok) return { result: null, jsonReason: parsed.reason };
+    let parsed = parseFormOps(text, form, code => fixEventNames(form, code, notes));
+    // usable JSON whose every op was dropped: the retry hears why, as problems (not as "not valid JSON")
+    if (!parsed.ok) return parsed.issues?.length ? { result: null, jsonReason: null, refused: { problems: parsed.issues, details: parsed.issues.join('\n') } } : { result: null, jsonReason: parsed.reason };
     const extra = parsed.ops.filter((o): o is Extract<typeof o, { op: 'add' }> => o.op === 'add').map(o => ({ name: o.name, type: o.type }));
     const problems = parsed.codeText === undefined ? [] : validateCode(parsed.codeText, { moduleName: form.name, form, extraControls: extra, project });
     if (parsed.codeSkipped) problems.push(skippedProblem(parsed.codeSkipped));
@@ -679,9 +681,20 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
         problems.push(`The form already has a control named ${r.from}, so your new one was renamed to ${r.to}; your code uses ${r.from}, which is the existing control. Give the new control a name that is not taken and use that name in the code.`);
       }
     }
+    // values the answer gave that could not be used (with the valid ones), placements that name no control, forms it cannot add
+    problems.push(...parsed.issues ?? []);
     // the layout check of the proposed form: new problems of the controls the answer adds or changes (all of them when it resizes the form)
     let proposed: FormDef | null = null;
     try { proposed = applyFormOpsToClone(form, parsed); } catch { /* the preview reports it */ }
+    // controls a little past the right or bottom edge: the form grows, instead of a model round
+    const grow = proposed ? growForOverflow(proposed) : null;
+    if (grow) {
+      // the grown size replaces the one the answer gave (one line in the preview)
+      const ops = parsed.ops.map(op => (op.op === 'form' ? { ...op, props: Object.fromEntries(Object.entries(op.props).filter(([k]) => !(k in grow.props))) } : op))
+        .filter(op => op.op !== 'form' || Object.keys(op.props).length);
+      parsed = { ...parsed, ops: [...ops, { op: 'form', props: grow.props }], warnings: [...parsed.warnings, grow.note] };
+      try { proposed = applyFormOpsToClone(form, parsed); } catch { proposed = null; }
+    }
     const layout = proposed ? layoutProblems(proposed, touchedNames(parsed.ops, proposed)).filter(p => !before.has(p.key)).map(p => p.text).slice(0, MAX_LAYOUT_PROBLEMS) : [];
     problems.push(...layout);
     return { result: { parsed, notes, problems, proposed, layout: layout.length > 0 }, jsonReason: null };

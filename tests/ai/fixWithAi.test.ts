@@ -3,13 +3,13 @@ import { afterEach, expect, test, vi } from 'vitest';
 import { undo } from '@codemirror/commands';
 import type { EditorView } from '@codemirror/view';
 import { askAiAboutError } from '../../src/ai/askDialog';
-import { buildCodeRequest, buildFixRequest } from '../../src/ai/context';
+import { buildCodeRequest, buildFixRequest, lineOperands } from '../../src/ai/context';
 import type { Backend } from '../../src/backend/backend';
 import { openCodeWindow, type CodeWindow } from '../../src/ide/codeWindow';
 import { IdeState } from '../../src/ide/ideState';
 import { RunController } from '../../src/ide/runController';
 import { Program } from '../../src/lang/interp/program';
-import { newForm, newProject } from '../../src/model/controls';
+import { newControl, newForm, newProject } from '../../src/model/controls';
 import { InlineFormHost } from '../../src/run/inlineFormHost';
 import { TestHost } from '../lang/testHost';
 
@@ -59,10 +59,15 @@ test('buildFixRequest: code-mode system prompt; code, then error number, line an
   expect(at('Private Sub Form_Load')).toBeLessThan(at('Run-time error 11'));
   expect(at('Run-time error 11')).toBeLessThan(at('Line 3 in Form_Load'));
   expect(at('Line 3 in Form_Load')).toBeLessThan(at('Variable values:'));
-  expect(user.content.endsWith('\n\nFix the error.')).toBe(true);
+  expect(user.content).toMatch(/\n\nFix the error\. Handle the actual values that cause it .*do not hide the error by setting a variable to a dummy value/);
+  expect(user.content).not.toContain('Values on the failing line');
+  // the failing line's operands with their values, when the run gave them
+  const withValues = buildFixRequest(p, id, err, [{ name: 'x', value: '0' }], { lineValues: ['x = 0'] })[1].content;
+  expect(withValues).toContain('Variable values:\nx = 0\n\nValues on the failing line: x = 0\n\nFix the error.');
   const compile = buildFixRequest(p, id, { ...err, compile: true, description: 'Variable not defined' }, [{ name: 'x', value: '0' }])[1].content;
   expect(compile).toContain('Compile error: Variable not defined');
   expect(compile).not.toContain('Variable values');
+  expect(compile.endsWith('\n\nFix the error.')).toBe(true);
 });
 
 test('x = 1 / 0 -> Ask AI -> proposal -> OK: the program has ended, the code is fixed, one undo restores it', async () => {
@@ -105,4 +110,47 @@ test('x = 1 / 0 -> Ask AI -> proposal -> OK: the program has ended, the code is 
   expect(p.forms[0].code).toBe(fixed);
   undo((wins.get(p.forms[0].id) as CodeWindow & { view: EditorView }).view);
   expect(p.forms[0].code).toBe(original);
+});
+
+test('the fix request names the values on the failing line (age = Text1.Text with "twelve"), read without side effects', async () => {
+  const original = 'Private Sub Form_Load()\n    Dim age As Integer\n    age = Text1.Text + Len(Text1.Text)\nEnd Sub';
+  const p = newProject();
+  const f = newForm('Form1', original);
+  const t = newControl(f, 'TextBox', { left: 0, top: 0 }, null);
+  t.name = 'Text1'; t.props.Text = 'twelve';
+  f.controls.push(t);
+  p.forms = [f];
+  p.startupForm = 'Form1';
+  const ide = new IdeState(p);
+  const mdi = document.body.appendChild(document.createElement('div'));
+  const layer = document.body.appendChild(document.createElement('div'));
+  const backend = {
+    loadSettings: async () => ({ baseUrl: 'http://x/v1', model: 'm', apiKey: '' }),
+    saveSettings: async () => {},
+    aiChat: vi.fn(async () => '```vb\nPrivate Sub Form_Load()\nEnd Sub\n```'),
+  } as unknown as Backend & { aiChat: ReturnType<typeof vi.fn> };
+  const wins = new Map<string, CodeWindow>();
+  const openCode = (id: string) => { const w = wins.get(id) ?? openCodeWindow(ide, id, { mdiHost: mdi }); wins.set(id, w); return w; };
+  let flow: Promise<void> | undefined;
+  const rc: RunController = new RunController(ide, () => {
+    const h = new InlineFormHost(layer);
+    h.runtimeErrorBox = async () => 'ai';
+    return h;
+  }, openCode, { doc: document, onAskAi: fix => { flow = askAiAboutError(ide, backend, fix, { openCode, end: () => rc.endAndWait() }, document); } });
+  void rc.start(false);
+  const btn = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('.dlg98 button')].find(b => b.textContent === label);
+  await vi.waitFor(() => expect(btn('OK')).toBeTruthy());
+  const user = (backend.aiChat.mock.calls[0][3] as { content: string }[])[1].content;
+  expect(user).toContain('Run-time error 13: Type mismatch');
+  expect(user).toContain('Values on the failing line: age = 0, Text1.Text = "twelve"\n\nFix the error. Handle the actual values');
+  btn('Cancel')!.click();
+  await flow;
+  rc.end();
+});
+
+test('lineOperands: names and member chains, not calls, strings or the comment', () => {
+  expect(lineOperands('    age = Text1.Text + Len(Text1.Text) \' Label1.Caption')).toEqual(['age', 'Text1.Text']);
+  expect(lineOperands('lbl.Caption = "a.b " & x(2) & Me.Width')).toEqual(['lbl.Caption', 'Me.Width']);
+  expect(lineOperands('If total / count > 2 Then MsgBox "x"')).toEqual(['If', 'total', 'count', 'Then', 'MsgBox']);
+  expect(lineOperands('Rem nothing')).toEqual([]);
 });

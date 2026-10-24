@@ -9,7 +9,7 @@ const f1 = n => (Math.round(n * 10) / 10).toString();
 const table = (head, rows) => [`| ${head.join(' | ')} |`, `|${head.map(() => '---').join('|')}|`, ...rows.map(r => `| ${r.join(' | ')} |`)].join('\n');
 const out = [];
 const levels = [...new Set(recs.map(r => r.thinking))];
-const NOTE = /^(Ignored|Renamed|Sizes for|Kept|Later changes)/;
+const NOTE = /^(Ignored|Renamed|Sizes for|Kept|Later changes|Made the form|Put the tab captions)/;
 
 // success per category and thinking level (capability probes left out)
 out.push('## Success per category', '');
