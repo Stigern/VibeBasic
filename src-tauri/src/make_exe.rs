@@ -401,13 +401,16 @@ mod tests {
 
   #[test]
   fn targets_per_platform() {
-    let w = |s: &str| normalize_target(s, ExeKind::Windows).unwrap();
-    assert_eq!(w("/Apps/Kalk.EXE"), PathBuf::from("/Apps/Kalk.exe"));
-    assert_eq!(w("/Apps/My: App?. "), PathBuf::from("/Apps/My App.exe"));
-    assert_eq!(w("/Apps/Kalk"), PathBuf::from("/Apps/Kalk.exe"));
-    let l = |s: &str| normalize_target(s, ExeKind::Linux).unwrap();
-    assert_eq!(l("/home/s/Kalk 2.0"), PathBuf::from("/home/s/Kalk 2.0"));
-    assert!(normalize_target("/home/s/..", ExeKind::Linux).is_err());
+    // "/Apps" is absolute only off Windows; there an absolute path needs a drive
+    let root = if cfg!(windows) { "C:" } else { "" };
+    let abs = |s: &str| format!("{root}{s}");
+    let w = |s: &str| normalize_target(&abs(s), ExeKind::Windows).unwrap();
+    assert_eq!(w("/Apps/Kalk.EXE"), PathBuf::from(abs("/Apps/Kalk.exe")));
+    assert_eq!(w("/Apps/My: App?. "), PathBuf::from(abs("/Apps/My App.exe")));
+    assert_eq!(w("/Apps/Kalk"), PathBuf::from(abs("/Apps/Kalk.exe")));
+    let l = |s: &str| normalize_target(&abs(s), ExeKind::Linux).unwrap();
+    assert_eq!(l("/home/s/Kalk 2.0"), PathBuf::from(abs("/home/s/Kalk 2.0")));
+    assert!(normalize_target(&abs("/home/s/.."), ExeKind::Linux).is_err());
     assert!(normalize_target("rel/x", ExeKind::Linux).is_err());
   }
 

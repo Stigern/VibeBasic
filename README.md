@@ -34,6 +34,24 @@ A Visual Basic 6 clone for macOS, with the authentic Windows 98 look and a built
   - Generated code is checked before you see it: syntax, event signatures, missing procedures and wrong properties. Problems go back to the model once.
   - Questions get plain answers. Tools > AI Log shows every request, answer, token count and timing.
 
+## Download
+
+Get the files from the [latest release](https://github.com/Stigern/VibeBasic/releases/latest) (X.Y.Z is the version):
+
+| System | File | |
+|---|---|---|
+| macOS 12 or later, Apple Silicon | `VibeBasic-X.Y.Z-macos-arm64.zip` | Unzip and move VibeBasic.app to Applications. |
+| Windows 10 or 11 (x64) | `VibeBasic-X.Y.Z-windows-x64-setup.exe` | The installer: Start menu entry and uninstaller. |
+| | `VibeBasic-X.Y.Z-windows-x64.zip` | Portable: `VibeBasic.exe` alone, nothing installed. |
+| Linux x64 (Debian, Ubuntu…) | `VibeBasic-X.Y.Z-linux-x64.deb` | `sudo apt install ./VibeBasic-X.Y.Z-linux-x64.deb` installs it with its dependencies. |
+| Linux x64 (other distributions) | `VibeBasic-X.Y.Z-linux-x64.AppImage` | `chmod +x` it and run it. |
+
+The apps are not signed by Apple or Microsoft, so the first start needs one extra step:
+
+- **macOS:** right-click VibeBasic.app and choose **Open**, then **Open** again (on macOS 15 or later: try to open it once, then click **Open Anyway** under System Settings > Privacy & Security).
+- **Windows:** if SmartScreen says "Windows protected your PC", click **More info**, then **Run anyway**. VibeBasic uses the Microsoft Edge WebView2 runtime, which Windows 10 and 11 have; the installer fetches it when it is missing.
+- **Linux:** VibeBasic needs WebKitGTK 4.1 (the .deb pulls it in). The AppImage brings its own, but the programs you make with it use the system's: `sudo apt install libwebkit2gtk-4.1-0` on Debian and Ubuntu, `sudo dnf install webkit2gtk4.1` on Fedora. Debian 12, Ubuntu 22.04 or newer.
+
 ## Build
 
 Requires Node.js, Rust and the Tauri 2 prerequisites.
@@ -44,6 +62,8 @@ npm run tauri dev      # run the IDE
 npm run build:app      # build VibeBasic.app (scripts/build-app.sh runs tauri build)
 npm test               # run the tests
 ```
+
+On Windows and Linux, build with `npx tauri build --bundles nsis` or `npx tauri build --bundles deb,appimage` (tauri.conf.json lists only the macOS bundle). The release files are built by GitHub Actions (`.github/workflows/release.yml`) for each version tag; CI (`ci.yml`) runs the type check and the tests on all three systems.
 
 ### Code signing
 

@@ -274,7 +274,8 @@ mod tests {
     let l = list(&dir.to_string_lossy()).unwrap();
     assert_eq!(l.dirs, vec!["Alpha", "beta"]);
     let files: Vec<(&str, bool)> = l.files.iter().map(|f| (f.name.as_str(), f.hidden)).collect();
-    assert_eq!(files, vec![(".secret", true), ("A.bas", false), ("b.txt", false)]);
+    // a dot file is hidden on macOS and Linux; on Windows only the Hidden attribute counts
+    assert_eq!(files, vec![(".secret", !cfg!(windows)), ("A.bas", false), ("b.txt", false)]);
     std::fs::remove_dir_all(dir).ok();
   }
 
