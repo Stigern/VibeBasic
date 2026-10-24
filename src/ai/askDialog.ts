@@ -9,14 +9,16 @@ import { listProcedures } from '../model/procedures';
 import { messageBox98, showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
 import { createAiAnimation } from './aiAnimation';
+import { thinkingOnly } from './clean';
 import { type CodeSelection, applyCodeProposal, extractCode, skippedProblem } from './codeMode';
 import { buildCodeRequest, buildFixRequest, buildFormRequest, type FixError } from './context';
 import { detectServer, isVisionError, withDetected } from './detect';
+import { effortFor, retryEffort } from './effort';
 import { renderFormImage } from './formImage';
 import { layoutProblems } from './layoutCheck';
 import { LoopWatch } from './loopDetect';
 import { addAiLogEntry, describeRequest, finishAiLogEntry, type AiLogEntry, type AiLogMode } from './aiLog';
-import { isProse, isQuestion, showAnswer } from './answerDialog';
+import { isProse, questionMode, showAnswer } from './answerDialog';
 import { FORM_RESPONSE_FORMAT, FORM_STRUCTURED_OUTPUTS, NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, parseFormOps } from './formMode';
 import { type PreviewResult, showCodePreview, showFormPreview } from './previewDialogs';
 import { type AiSettings, type Thinking, loadAiSettings } from './settings';
@@ -188,7 +190,7 @@ async function converseAbout(ide: IdeState, backend: Backend, doc: Document, o: 
   const first = (() => { try { return codeMode ? buildCodeRequest(project, itemId, codeWin!.getCursorLine(), prompt, opts) : buildFormRequest(project, itemId, prompt, opts); } catch { return null; } })();
   if (!first) { await warn(doc, 'Could not build the request.'); return; }
   const session: AiSession = { ide, backend, settings, doc, hold };
-  if (codeMode) await runCodeConversation(session, { first, itemId, codeWin: codeWin!, selection, question: isQuestion(prompt) });
+  if (codeMode) await runCodeConversation(session, { first, itemId, codeWin: codeWin!, selection, question: questionMode(prompt) });
   else await runFormConversation(session, { first, itemId });
 }
 
@@ -367,6 +369,9 @@ export const LOOP_PENALTY = 0.3;
 const noPenalties = new Set<string>();
 const rejectsPenalties = (message: string): boolean => /\b(400|422)\b/.test(message) && /presence_penalty|penalt/i.test(message);
 
+/** Whether a request is a question (questionMode): its reply is shown as text; 'unless-code': unless it has usable code. */
+type Question = boolean | 'unless-code';
+
 /** A structured output schema, sent as `structured_outputs` to vLLM and as `response_format` to other (and unknown) servers. */
 export interface StructuredOutput { responseFormat: unknown; structuredOutputs: unknown }
 
@@ -379,7 +384,7 @@ type Round<A> = Done<A> | { kind: 'error'; message: string } | { kind: 'cancel' 
 type Understood<A> = { result: A | null; jsonReason: string | null; refused?: { problems: string[]; details: string } };
 
 /** How a conversation runs: its log mode, its structured output (form mode), whether answers in prose are shown (code mode). */
-interface ConverseOptions<A = unknown> { mode: AiLogMode; structured?: StructuredOutput; answers?: boolean; question?: boolean;
+interface ConverseOptions<A = unknown> { mode: AiLogMode; structured?: StructuredOutput; answers?: boolean; question?: Question;
   /** A picture for the check-and-fix round (form mode: the proposed form when the layout check found problems), or null. */
   complaintPicture?: (a: A) => Promise<string | null> }
 
@@ -468,14 +473,17 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
      */
     const capped = async (messages: ChatMessage[], x: AiChatOptions, m: AiLogMode): Promise<string> => {
       const maxTokens = noMaxTokens.has(server) ? undefined : maxTokensFor(level ?? 'server', settings.contextTokens, messages.reduce((n, y) => n + contentChars(y.content), 0));
-      try { return await attempt(messages, level, { ...x, ...penalties, maxTokens }, m, partial); }
+      // a level the server does not take goes as the nearest one it does (learnt from its 400, kept for the session)
+      const sent = effortFor(settings.baseUrl, level);
+      try { return await attempt(messages, sent, { ...x, ...penalties, maxTokens }, m, partial); }
       catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         if (o.signal?.aborted) throw e;
+        if (retryEffort(settings.baseUrl, sent, message)) return capped(messages, x, 'retry');
         if (penalties.presencePenalty !== undefined && rejectsPenalties(message)) { noPenalties.add(server); penalties = {}; return capped(messages, x, 'retry'); }
         if (maxTokens === undefined || !rejectsMaxTokens(message)) throw e;
         noMaxTokens.add(server);
-        return attempt(messages, level, { ...x, ...penalties, maxTokens: undefined }, 'retry', partial);
+        return attempt(messages, sent, { ...x, ...penalties, maxTokens: undefined }, 'retry', partial);
       }
     };
     const plain = async (messages: ChatMessage[], m: AiLogMode): Promise<string> => {
@@ -537,14 +545,18 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     }
   };
 
-  const round = async (messages: ChatMessage[], later: boolean, mode: AiLogMode, question = false): Promise<Round<A>> => {
+  const round = async (messages: ChatMessage[], later: boolean, mode: AiLogMode, question: Question = false): Promise<Round<A>> => {
     const res = await waitForReply(doc, settings.model, send(messages, later, mode), log, undefined, s.hold);
     if (res.kind !== 'reply') return res;
     if (ide.project !== project) return { kind: 'cancel' };   // a different project was opened meanwhile
     let reply = res.text, metrics = res.metrics;
+    // A question is answered in words: no checks, no retry. A reply that is only thinking (no answer text) is shown as the
+    // answer here, and only here: code mode never takes code from the thinking.
+    if (co.answers && question && (question !== 'unless-code' || !analyse(reply).result)) {
+      const said = thinkingOnly(reply) ?? reply;
+      return { kind: 'done', result: null, reply: said, metrics, messages: [...messages, { role: 'assistant', content: said }], answer: true };
+    }
     let convo: ChatMessage[] = [...messages, { role: 'assistant', content: reply }];
-    // A question is answered in words: no checks, no retry.
-    if (co.answers && question) return { kind: 'done', result: null, reply, metrics, messages: convo, answer: true };
     const firstEntry = lastEntry;
     let got = analyse(reply);
     const garbled = (u: Understood<A>, text: string) => !u.result && !(co.answers && isProse(text));
@@ -585,7 +597,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     if (next.kind === 'error') await warn(doc, next.message);
     else if (next.kind === 'done' && next.answer) {
       const a = await showAnswer(doc, next.reply, next.metrics, copy);
-      if (a !== 'ok') { next = await round(trimConversation([...next.messages, { role: 'user', content: a.more }], budget), true, 'change', isQuestion(a.more)); continue; }
+      if (a !== 'ok') { next = await round(trimConversation([...next.messages, { role: 'user', content: a.more }], budget), true, 'change', questionMode(a.more)); continue; }
     }
     else if (next.kind === 'done' && !next.result) await showNotUnderstood(doc, next.details ? `${next.reply}\n\n${next.details}` : next.reply);
     else if (next.kind === 'done') shown = next;
@@ -607,7 +619,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
  * when the request was made), an answer without a procedure heading replaces exactly that. True when a proposal was applied.
  */
 export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[]; itemId: string; codeWin: CodeWindow; beforeApply?: () => Promise<void>; selection?: CodeSelection | null;
-  /** The request asks about the code (the answer is shown as text). */ question?: boolean; mode?: AiLogMode }): Promise<boolean> {
+  /** The request asks about the code (the answer is shown as text; see questionMode). */ question?: Question; mode?: AiLogMode }): Promise<boolean> {
   const { ide, doc } = s;
   const project = ide.project;
   const win = o.codeWin;

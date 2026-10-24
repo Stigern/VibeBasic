@@ -57,11 +57,15 @@ function httpError(res: Response, text: string, url: string): Error {
 const STREAM_IDLE_SECS = 90;
 const STREAM_TOTAL_SECS = 20 * 60;
 
-/** The answer text from the parts of a reply: content, else the thinking, else the "unreadable" error. Cut off at max_tokens: the error. */
+/**
+ * The answer text from the parts of a reply: content, else the thinking marked as such (`<think>...</think>`, which every
+ * extractor drops, so code or JSON drafted while thinking is never taken for the answer), else the "unreadable" error.
+ * Cut off at max_tokens: the error. Same as reply_text in src-tauri/src/ai.rs.
+ */
 function answerText(content: string, reasoning: string, finish: string | undefined): string {
   if (finish === 'length') throw new Error(AI_CUT_OFF);
   if (content.trim()) return content.trim();
-  if (reasoning.trim()) return reasoning.trim();
+  if (reasoning.trim()) return `<think>${reasoning.trim()}</think>`;
   throw new Error(`${AI_UNREADABLE} (Details: the reply had no text; finish_reason = ${finish ?? 'none'}.)`);
 }
 
