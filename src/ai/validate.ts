@@ -478,11 +478,25 @@ function checkProc(c: Checker, p: ProcDecl): void {
     } else expr(t);
   };
   const items = (list: PrintItem[]) => { for (const it of list) { if (it.expr) expr(it.expr); if (it.fn?.arg) expr(it.fn.arg); } };
-  /** `Control.Prop = ...` of a property that is read-only at run time (error 383), e.g. a menu's WindowList. */
+  /** Variables of this procedure declared As Form, As MDIForm or As <a form of the project> (`Set f = New Form1`). */
+  const formVars = new Set<string>();
+  eachStmt(p.body, st => {
+    if (st.kind !== 'dim') return;
+    for (const d of st.decls) {
+      const t = d.type;
+      if (!d.isArray && t !== undefined && typeof t === 'object' && 'objectType' in t && (['form', 'mdiform'].includes(lc(t.objectType)) || c.forms.has(lc(t.objectType)))) formVars.add(lc(d.name));
+    }
+  });
+  /**
+   * `Control.Prop = ...` or `Form.Prop = ...` (Me, a form, a form variable) of a property that is read-only at run time (error 383),
+   * e.g. a menu's WindowList or a form's MDIChild.
+   */
   const readOnly = (t: Expr) => {
     if (t.kind !== 'member' || t.object.kind !== 'name') return;
-    const ctl = control(lc(t.object.name));
-    const pd = ctl && !ctl.array ? getPropDef(ctl.type, t.name) : undefined;
+    const k = lc(t.object.name);
+    const ctl = control(k);
+    const isForm = !ctl && (k === 'me' ? c.me !== null : formVars.has(k) || (!shadowed(k) && c.forms.has(k)));
+    const pd = ctl ? (ctl.array ? undefined : getPropDef(ctl.type, t.name)) : isForm ? getPropDef('Form', t.name) : undefined;
     if (pd?.runtime === 'ro') c.report(`${t.object.name}.${pd.name} is read-only at run time (error 383); it is set at design time, not in code.`);
   };
   const stmts = (body: Stmt[]): void => {

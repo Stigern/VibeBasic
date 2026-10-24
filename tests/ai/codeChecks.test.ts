@@ -65,3 +65,13 @@ test('validator: a property that is read-only at run time set in code (WindowLis
   expect(validateCode('Private Sub Form_Load()\n    mnuWindow.WindowList = True\n    mnuWindow.Caption = "&Window"\nEnd Sub', { moduleName: 'Form1', form: f }))
     .toEqual(['mnuWindow.WindowList is read-only at run time (error 383); it is set at design time, not in code.']);
 });
+
+test('validator: a form property that is read-only at run time (f.MDIChild = True on a New Form1, error 383)', () => {
+  const p = newProject();
+  const f = p.forms[0];
+  const check = (body: string) => validateCode(`Private Sub Form_Load()\n${body}\nEnd Sub`, { moduleName: 'Form1', form: f, project: p });
+  expect(check('    Dim f As Form1\n    Set f = New Form1\n    f.MDIChild = True\n    f.Caption = "x"\n    f.Show'))
+    .toEqual(['f.MDIChild is read-only at run time (error 383); it is set at design time, not in code.']);
+  expect(check('    Me.BorderStyle = 1')).toEqual(['Me.BorderStyle is read-only at run time (error 383); it is set at design time, not in code.']);
+  expect(check('    Me.Caption = "ok"\n    Form1.Caption = "ok"')).toEqual([]);
+});
