@@ -149,12 +149,15 @@ async function exclusive(ide: IdeState, task: () => Promise<void>): Promise<void
   try { await task(); } finally { ide.setBusy(false); }
 }
 
-export function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor(itemId: string): CodeWindow | null }, doc: Document = document): Promise<void> {
+/** `o.prompt`: asks for the request instead of the plain prompt dialog (the AI Wizard's dialog); null cancels. */
+export function askAi(ide: IdeState, backend: Backend, ui: { codeWindowFor(itemId: string): CodeWindow | null }, doc: Document = document,
+  o: { prompt?: () => Promise<string | null> } = {}): Promise<void> {
   if (ide.mode !== 'design') return Promise.resolve();
-  return exclusive(ide, () => askAiNow(ide, backend, ui, doc));
+  return exclusive(ide, () => askAiNow(ide, backend, ui, doc, o));
 }
 
-async function askAiNow(ide: IdeState, backend: Backend, ui: { codeWindowFor(itemId: string): CodeWindow | null }, doc: Document): Promise<void> {
+async function askAiNow(ide: IdeState, backend: Backend, ui: { codeWindowFor(itemId: string): CodeWindow | null }, doc: Document,
+  o: { prompt?: () => Promise<string | null> }): Promise<void> {
   const view = ide.activeView;
   const itemId = view.kind === 'code' ? view.itemId : view.kind === 'designer' ? view.formId : null;
   const item = itemId ? ide.project.forms.find(f => f.id === itemId) ?? ide.project.modules.find(m => m.id === itemId) : undefined;
@@ -168,7 +171,7 @@ async function askAiNow(ide: IdeState, backend: Backend, ui: { codeWindowFor(ite
 
   const project = ide.project;
   const codeMode = view.kind === 'code';
-  const prompt = await promptDialog(doc, `Ask AI - ${item.name} (${codeMode ? 'Code' : 'Form'})`);
+  const prompt = await (o.prompt ? o.prompt() : promptDialog(doc, `Ask AI - ${item.name} (${codeMode ? 'Code' : 'Form'})`));
   if (prompt === null) return;
   // a modal dialog from here on, until the conversation's own dialogs take over
   const hold = holdDialog(doc, `Connecting to ${stored.model}...`);

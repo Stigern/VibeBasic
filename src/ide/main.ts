@@ -9,6 +9,7 @@ import { IdeState, OPTION_EXPLICIT, type IdeOptions } from './ideState';
 import { buildLayout, type IdeLayout } from './layout';
 import { buildMenus, type IdeActions } from './menus';
 import { askAi, askAiAboutError } from '../ai/askDialog';
+import { wizardDialog } from '../ai/wizardDialog';
 import { showAiLog } from '../ai/aiLog';
 import { getCodeWindow, openCodeWindow, registerCodeActions, type CodeEnv } from './codeWindow';
 import { openDesigner, registerDesignerActions } from './designer';
@@ -70,6 +71,8 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     if (state.mode === 'design' && v.kind === 'designer' && committed()) void showMenuEditor(state, v.formId, doc);
   };
   actions.askAi = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc); };
+  // the AI Wizard of the New Project dialog: Ask AI on the new Form1 with the wizard's own dialog (description and improvements)
+  actions.aiWizard = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc, { prompt: () => wizardDialog(doc) }); };
   actions.aiLog = () => { void showAiLog(doc, text => backend.clipboardSetText(text)); };
   const recent = new RecentProjects(backend);
   const fc = new FileController(state, backend, doc, recent);
@@ -93,7 +96,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     }
     const c = r.choice;
     if (!c) return;
-    if (c.kind === 'new') { if ((await fc.newProject(c.template)) && c.template === 'aiWizard') actions.askAi?.(); }
+    if (c.kind === 'new') { if ((await fc.newProject(c.template)) && c.template === 'aiWizard') actions.aiWizard?.(); }
     else await fc.open(c.kind === 'recent' ? c.path : undefined);
   };
   actions.newProject = () => { if (state.mode === 'design' && committed()) void chooseProject(false); };
