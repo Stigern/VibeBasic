@@ -6,6 +6,8 @@ import { drawFormImage, layoutFormImage, type Ctx } from '../../src/ai/formImage
 import { parseFormOps } from '../../src/ai/formMode';
 import { checkLayout } from '../../src/ai/layoutCheck';
 import { newControl, newProject } from '../../src/model/controls';
+import { newMdiForm } from '../../src/model/mdi';
+import { absoluteRect } from '../../src/ide/designerLogic';
 import type { ControlType, FormDef } from '../../src/model/types';
 
 /** A clean form: Label1 "Name:" left of Text1, Command1 "OK" at the bottom right. */
@@ -152,4 +154,39 @@ test('place and arrange skip Lines and docked controls with a warning', () => {
   expect(r.ops.filter(o => o.op !== 'form' && o.name === 'Line1')).toEqual([]);
   expect(r.warnings.join('\n')).toContain('Ignored place of Line1: a Line is placed by X1, Y1, X2 and Y2.');
   expect(r.warnings.join('\n')).toContain('Ignored arrange of Line1');
+});
+
+/** An MDI form with a PictureBox docked at the top (stored Left/Top 240, Width 1215) and a button in it. */
+function toolbarForm(align = 1): { f: FormDef; pic: ReturnType<typeof newControl> } {
+  const f = newMdiForm('MDIForm1');
+  const pic = newControl(f, 'PictureBox', { left: 240, top: 240, width: 1215, height: 600 }, null);
+  Object.assign(pic.props, { Name: 'picTools', Align: align });
+  pic.name = 'picTools';
+  f.controls.push(pic);
+  const b = newControl(f, 'CommandButton', { left: 120, top: 120, width: 1095, height: 375 }, pic.id);
+  b.name = 'cmdNew';
+  f.controls.push(b);
+  return { f, pic };
+}
+
+test('#9 placement and the form picture use where a docked container really is', () => {
+  const { f } = toolbarForm();
+  expect(absoluteRect(f, f.controls[1].id)).toMatchObject({ left: 120, top: 120 });
+  const r = ok(parseFormOps(JSON.stringify({ ops: [{ op: 'add', type: 'CommandButton', name: 'cmdOpen', container: 'picTools', place: { rightOf: 'cmdNew' } }] }), f));
+  expect(props(r, 'cmdOpen')).toMatchObject({ Left: 120 + 1095 + 120, Top: 120 });
+  // docked at the bottom of a normal form: its button is drawn near the bottom
+  const g = newProject().forms[0];
+  const pic = newControl(g, 'PictureBox', { left: 240, top: 240, width: 1215, height: 600 }, null);
+  pic.props.Align = 2;
+  g.controls.push(pic, newControl(g, 'CommandButton', { left: 120, top: 120, width: 1095, height: 375 }, pic.id));
+  const L = layoutFormImage(g);
+  const btn = L.controls.find(c => c.name === 'Command1')!;
+  expect(btn.y).toBeGreaterThan(L.oy + L.ch / 2);
+});
+
+test('#10 the layout check measures children of a docked container against its docked size', () => {
+  const { f } = toolbarForm();
+  const b = newControl(f, 'CommandButton', { left: 2400, top: 120, width: 1095, height: 375 }, f.controls[0].id);
+  f.controls.push(b);
+  expect(checkLayout(f).join('\n')).not.toMatch(/past the right edge of PictureBox/);
 });
