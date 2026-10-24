@@ -1,4 +1,10 @@
-//! Make app: builds a standalone .app by copying VibeBasic.app itself.
+//! Make app: builds a standalone .app by copying VibeBasic.app itself. macOS only for now: on Windows and Linux the
+//! commands answer NOT_SUPPORTED (made apps there are task W2); the bundle code still compiles everywhere.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
+/// What Make answers off macOS until made apps exist there.
+#[cfg(not(target_os = "macos"))]
+pub const NOT_SUPPORTED: &str = "Making an app is not supported on this platform yet.";
 
 /// Removes control characters, `/` and `:`, trims whitespace and leading dots.
 /// Empty names (and `.`/`..`) become `Project1`.
@@ -376,10 +382,14 @@ pub fn normalize_target(raw: &str) -> Result<PathBuf, MakeError> {
 /// Ok when VibeBasic runs as a built .app (the only place Make works).
 #[tauri::command]
 pub fn can_make_app() -> Result<(), String> {
+  #[cfg(not(target_os = "macos"))]
+  return Err(NOT_SUPPORTED.to_string());
+  #[cfg(target_os = "macos")]
   current_bundle().map(|_| ()).map_err(|e| e.message())
 }
 
 #[tauri::command]
+#[cfg_attr(not(target_os = "macos"), allow(clippy::needless_return))]
 pub async fn make_app(
   target_path: String,
   app_name: String,
@@ -389,6 +399,12 @@ pub async fn make_app(
   version: Option<AppVersion>,
   file_types: Option<Vec<String>>,
 ) -> Result<(), String> {
+  #[cfg(not(target_os = "macos"))]
+  {
+    let _ = (target_path, app_name, project_json, icon_png_base64, overwrite, version, file_types);
+    return Err(NOT_SUPPORTED.to_string());
+  }
+  #[cfg(target_os = "macos")]
   tauri::async_runtime::spawn_blocking(move || {
     use base64::Engine;
     let icon_png = match icon_png_base64 {
@@ -409,7 +425,8 @@ pub async fn make_app(
   .map_err(|e| e.message())
 }
 
-#[cfg(test)]
+/// The bundle tests use ditto, codesign's ad-hoc signing and xattr: macOS only.
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
   use super::*;
   use std::cell::RefCell;

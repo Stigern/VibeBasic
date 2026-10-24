@@ -112,11 +112,40 @@ fn not_open() -> String {
   "8018|Operation valid only when the port is open".to_string()
 }
 
+/// Windows: CommPort n is "COMn", exactly as VB6, so the list (the frontend opens its n-th entry) runs from COM1 to the
+/// highest port there is. A COMn in between that is not there fails when it is opened (8002).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn windows_comm_list(available: &[String]) -> Vec<String> {
+  let max = available
+    .iter()
+    .filter_map(|p| {
+      let p = p.trim_start_matches(r"\\.\");
+      p.get(..3).filter(|c| c.eq_ignore_ascii_case("COM"))?;
+      p[3..].parse::<u32>().ok()
+    })
+    .max()
+    .unwrap_or(0);
+  (1..=max).map(|n| format!("COM{n}")).collect()
+}
+
+/// Linux: the USB serial adapters and CDC-ACM devices (/dev/ttyUSB*, /dev/ttyACM*) in name order, numbers by value
+/// (ttyUSB2 before ttyUSB10). CommPort n is the n-th of them.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn linux_comm_list(available: impl IntoIterator<Item = String>) -> Vec<String> {
+  let mut out: Vec<String> = available.into_iter().filter(|p| p.starts_with("/dev/ttyUSB") || p.starts_with("/dev/ttyACM")).collect();
+  let key = |p: &String| {
+    let digits = p.len() - p.bytes().rev().take_while(u8::is_ascii_digit).count();
+    (p[..digits].to_string(), p[digits..].parse::<u64>().unwrap_or(0))
+  };
+  out.sort_by_key(key);
+  out.dedup();
+  out
+}
+
 /// The serial ports: /dev/cu.* (the "call-up" devices a program opens), sorted by name. CommPort n is the n-th of them.
+#[cfg(target_os = "macos")]
 pub fn list_ports() -> Vec<String> {
-  let mut out: Vec<String> = serialport::available_ports()
-    .map(|v| v.into_iter().map(|p| p.port_name).collect())
-    .unwrap_or_default();
+  let mut out = available_names();
   // ports IOKit does not list (virtual ones): the /dev entries
   if let Ok(dir) = std::fs::read_dir("/dev") {
     for e in dir.flatten() {
@@ -130,6 +159,41 @@ pub fn list_ports() -> Vec<String> {
   out.sort();
   out.dedup();
   out
+}
+
+fn available_names() -> Vec<String> {
+  serialport::available_ports().map(|v| v.into_iter().map(|p| p.port_name).collect()).unwrap_or_default()
+}
+
+/// COM1 to the highest port Windows has (windows_comm_list).
+#[cfg(windows)]
+pub fn list_ports() -> Vec<String> {
+  windows_comm_list(&available_names())
+}
+
+/// The ports the serialport crate finds plus the /dev entries it skips, filtered by linux_comm_list.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn list_ports() -> Vec<String> {
+  let mut all = available_names();
+  if let Ok(dir) = std::fs::read_dir("/dev") {
+    all.extend(dir.flatten().map(|e| format!("/dev/{}", e.file_name().to_string_lossy())));
+  }
+  linux_comm_list(all)
+}
+
+/// Windows reports a missing port and a port in use alike (serialport's NoDevice): a port Windows does not list is 8002.
+#[cfg(windows)]
+fn open_err(path: &str, e: serialport::Error) -> String {
+  let name = path.trim_start_matches(r"\\.\");
+  if matches!(e.kind(), serialport::ErrorKind::NoDevice) && !available_names().iter().any(|p| p.trim_start_matches(r"\\.\").eq_ignore_ascii_case(name)) {
+    return "8002|Invalid port number".to_string();
+  }
+  port_err(e)
+}
+
+#[cfg(not(windows))]
+fn open_err(_path: &str, e: serialport::Error) -> String {
+  port_err(e)
 }
 
 fn read_lines(p: &mut dyn SerialPort) -> Lines {
@@ -185,7 +249,7 @@ impl Ports {
       .timeout(READ_TIMEOUT)
       .dtr_on_open(dtr)
       .open()
-      .map_err(port_err)?;
+      .map_err(|e| open_err(path, e))?;
     let _ = port.write_data_terminal_ready(dtr);
     if flow(handshaking) != FlowControl::Hardware {
       let _ = port.write_request_to_send(rts);
@@ -383,6 +447,17 @@ mod tests {
   }
 
   #[test]
+  fn comm_port_n_per_platform() {
+    let win = windows_comm_list(&["COM3".into(), r"\\.\COM10".into(), "com1".into(), "LPT1".into()]);
+    assert_eq!(win.len(), 10);
+    assert_eq!((win[0].as_str(), win[2].as_str(), win[9].as_str()), ("COM1", "COM3", "COM10"));
+    assert!(windows_comm_list(&[]).is_empty());
+    let linux = linux_comm_list(["/dev/ttyUSB10", "/dev/ttyS0", "/dev/ttyUSB2", "/dev/ttyACM0", "/dev/ttyUSB2", "/dev/tty"].map(String::from));
+    assert_eq!(linux, ["/dev/ttyACM0", "/dev/ttyUSB2", "/dev/ttyUSB10"]);
+  }
+
+  #[cfg(target_os = "macos")]
+  #[test]
   fn port_listing_is_a_sorted_list_of_call_up_devices() {
     let ports = list_ports();
     assert!(ports.iter().all(|p| p.starts_with("/dev/cu.")));
@@ -395,7 +470,8 @@ mod tests {
   fn a_missing_port_is_8002_and_a_closed_one_8018() {
     let p = Ports::default();
     let emit: Emit = Arc::new(|_| {});
-    assert!(p.open(1, "/dev/cu.no-such-port-vibebasic", "9600,n,8,1", 0, true, false, emit).unwrap_err().starts_with("8002|"));
+    let missing = if cfg!(windows) { "COM250" } else { "/dev/cu.no-such-port-vibebasic" };
+    assert!(p.open(1, missing, "9600,n,8,1", 0, true, false, emit).unwrap_err().starts_with("8002|"));
     assert!(p.write(1, b"x").unwrap_err().starts_with("8018|"));
     assert!(p.set_lines(1, Some(true), None, None).unwrap_err().starts_with("8018|"));
     p.close(1);
@@ -404,6 +480,7 @@ mod tests {
 
   /// MSComm1.PortOpen = False: MSComm1.PortOpen = True at once (reconnect code): the reader thread's clone of the port holds
   /// the exclusive lock until it has stopped, so close (and close_all) return only once the thread has ended.
+  #[cfg(unix)]
   #[test]
   fn close_waits_for_the_reader_thread() {
     for all in [false, true] {

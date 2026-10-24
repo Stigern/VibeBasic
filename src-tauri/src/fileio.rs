@@ -10,7 +10,6 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -280,7 +279,7 @@ pub fn copy(from: &str, to: &str) -> Result<(), String> {
     if dst.is_dir() || !dst.is_file() {
       return Err(vb(75));
     }
-    if (dst.dev(), dst.ino()) == (src.dev(), src.ino()) {
+    if same_file(f, &src, t, &dst) {
       return Err(vb(70));
     }
   }
@@ -288,7 +287,37 @@ pub fn copy(from: &str, to: &str) -> Result<(), String> {
   std::fs::copy(f, t).map(|_| ()).map_err(|e| io_err(&e, t, 75))
 }
 
+/// The same file under two names: the same device and inode on Unix (a hard link too); on Windows the same final path
+/// (another spelling or a symlink; a hard link is not caught there).
+#[cfg(unix)]
+fn same_file(_: &Path, a: &std::fs::Metadata, _: &Path, b: &std::fs::Metadata) -> bool {
+  use std::os::unix::fs::MetadataExt;
+  (a.dev(), a.ino()) == (b.dev(), b.ino())
+}
+
+#[cfg(windows)]
+fn same_file(a: &Path, _: &std::fs::Metadata, b: &Path, _: &std::fs::Metadata) -> bool {
+  matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+}
+
+/// SetAttr on Windows: VB6's attribute values are the file attributes themselves (vbReadOnly 1, vbHidden 2, vbSystem 4,
+/// vbArchive 32); vbNormal (0) is FILE_ATTRIBUTE_NORMAL.
+#[cfg(windows)]
+pub fn set_attr(path: &str, attr: u32) -> Result<(), String> {
+  use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_NORMAL, SetFileAttributesW};
+  let p = Path::new(path);
+  std::fs::metadata(p).map_err(|e| io_err(&e, p, 75))?;
+  let a = attr & (1 | 2 | 4 | 32);
+  let wide: Vec<u16> = path.encode_utf16().chain([0]).collect();
+  // SAFETY: a NUL-terminated path.
+  if unsafe { SetFileAttributesW(wide.as_ptr(), if a == 0 { FILE_ATTRIBUTE_NORMAL } else { a }) } == 0 {
+    return Err(io_err(&std::io::Error::last_os_error(), p, 75));
+  }
+  Ok(())
+}
+
 /// SetAttr: vbReadOnly (1) is the file's write permission; the other attributes have no Mac counterpart and are ignored.
+#[cfg(unix)]
 pub fn set_attr(path: &str, attr: u32) -> Result<(), String> {
   let p = Path::new(path);
   let meta = std::fs::metadata(p).map_err(|e| io_err(&e, p, 75))?;
@@ -320,7 +349,8 @@ pub fn stat(path: &str) -> Option<FileStat> {
     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
     .map(|d| d.as_millis() as f64)
     .unwrap_or(0.0);
-  let hidden = p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'));
+  let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+  let hidden = !name.is_empty() && crate::files::is_hidden(&name, crate::files::windows_attributes(&meta));
   Some(FileStat { is_dir: meta.is_dir(), size: if meta.is_dir() { 0 } else { meta.len() }, mtime, read_only: meta.permissions().readonly(), hidden })
 }
 
@@ -618,8 +648,10 @@ mod tests {
   }
 
   /// H1: FileCopy onto the source itself (the same path, another spelling, a symlink, a hard link) is 70 and leaves it intact.
+  #[cfg(unix)]
   #[test]
   fn filecopy_onto_itself_is_refused_and_keeps_the_file() {
+    use std::os::unix::fs::MetadataExt;
     let dir = tempfile::tempdir().unwrap();
     let a = dir.path().join("data.txt");
     std::fs::write(&a, "precious").unwrap();
@@ -645,6 +677,7 @@ mod tests {
   }
 
   /// M1: Open of a FIFO is 75 at once instead of blocking in open(2).
+  #[cfg(unix)]
   #[test]
   fn open_of_a_fifo_is_75_without_blocking() {
     let dir = tempfile::tempdir().unwrap();

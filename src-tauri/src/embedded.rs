@@ -1,13 +1,21 @@
-//! Runtime mode for made apps: the project embedded in `Contents/Resources/vibebasic-project.vbb`.
+//! Runtime mode for made apps: the project embedded in the app's resources (`Contents/Resources/vibebasic-project.vbb` on
+//! macOS; Tauri's resource folder elsewhere).
 
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+#[cfg(target_os = "macos")]
+use tauri::Emitter;
+use tauri::{AppHandle, Manager, Runtime};
 
+#[cfg(target_os = "macos")]
 use crate::make_app::current_bundle;
 
 pub const EMBEDDED_FILE: &str = "vibebasic-project.vbb";
 /// Event the runtime menu emits to the frontend when the user chooses Quit (Cmd+Q).
+#[cfg(target_os = "macos")]
 pub const QUIT_EVENT: &str = "vb:quit-requested";
 
 fn embedded_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
@@ -33,20 +41,53 @@ pub fn quit_app<R: Runtime>(app: AppHandle<R>) {
   app.exit(0);
 }
 
-/// The folder that contains the .app (App.Path in a made app).
-#[tauri::command]
-pub fn get_app_dir() -> Option<String> {
-  let bundle = current_bundle().ok()?;
-  Some(bundle.parent()?.to_string_lossy().to_string())
+/// Off macOS: the made app's executable (on Linux the AppImage file itself when it runs as one), None in the IDE (no
+/// embedded project).
+#[cfg(not(target_os = "macos"))]
+fn made_app_exe<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+  if !has_embedded(app) {
+    return None;
+  }
+  #[cfg(target_os = "linux")]
+  if let Some(p) = std::env::var_os("APPIMAGE").filter(|p| !p.is_empty()) {
+    return Some(PathBuf::from(p));
+  }
+  std::env::current_exe().ok()
 }
 
-/// The made app's name (CFBundleName; App.EXEName). None outside a bundle.
+/// The made app's name: its executable's file name without the extension. None in the IDE.
+#[cfg(not(target_os = "macos"))]
+pub fn app_name<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
+  made_app_exe(app)?.file_stem().map(|s| s.to_string_lossy().into_owned())
+}
+
+/// The folder that contains the .app (App.Path in a made app; off macOS the folder of its executable).
 #[tauri::command]
-pub fn get_app_name() -> Option<String> {
-  current_bundle().ok().map(|b| bundle_display_name(&b))
+pub fn get_app_dir<R: Runtime>(app: AppHandle<R>) -> Option<String> {
+  #[cfg(target_os = "macos")]
+  let dir = {
+    let _ = &app;
+    current_bundle().ok()?.parent()?.to_path_buf()
+  };
+  #[cfg(not(target_os = "macos"))]
+  let dir = made_app_exe(&app)?.parent()?.to_path_buf();
+  Some(dir.to_string_lossy().to_string())
+}
+
+/// The made app's name (CFBundleName; App.EXEName). None outside a bundle (off macOS: in the IDE).
+#[tauri::command]
+pub fn get_app_name<R: Runtime>(app: AppHandle<R>) -> Option<String> {
+  #[cfg(target_os = "macos")]
+  return {
+    let _ = app;
+    current_bundle().ok().map(|b| bundle_display_name(&b))
+  };
+  #[cfg(not(target_os = "macos"))]
+  app_name(&app)
 }
 
 /// CFBundleName of the bundle at `bundle`, else its file name without `.app`.
+#[cfg(target_os = "macos")]
 pub fn bundle_display_name(bundle: &Path) -> String {
   let from_plist = plist::Value::from_file(bundle.join("Contents/Info.plist"))
     .ok()
@@ -58,6 +99,7 @@ pub fn bundle_display_name(bundle: &Path) -> String {
 }
 
 /// One app menu: "About <name>" and "Quit <name>" (Cmd+Q, handled by the frontend so the program can end cleanly).
+#[cfg(target_os = "macos")]
 pub fn runtime_menu<R: Runtime>(app: &AppHandle<R>, app_name: &str) -> tauri::Result<Menu<R>> {
   let about = PredefinedMenuItem::about(app, Some(&format!("About {app_name}")), None)?;
   let quit = MenuItem::with_id(app, "vb-quit", format!("Quit {app_name}"), true, Some("CmdOrCtrl+Q"))?;
@@ -81,11 +123,20 @@ pub fn runtime_menu<R: Runtime>(app: &AppHandle<R>, app_name: &str) -> tauri::Re
   Menu::with_items(app, &[&sub, &edit])
 }
 
-/// Installs the runtime menu when the embedded project exists. Returns whether it did.
+/// Installs the runtime menu when the embedded project exists. Returns whether it did. macOS only: there the menu is the
+/// app's menu bar; on Windows and Linux an app menu would be a menu bar in every window, above the program's own menus.
 pub fn setup_runtime<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<bool> {
   if !has_embedded(app) {
     return Ok(false);
   }
+  #[cfg(not(target_os = "macos"))]
+  return Ok(true);
+  #[cfg(target_os = "macos")]
+  install_runtime_menu(app)
+}
+
+#[cfg(target_os = "macos")]
+fn install_runtime_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<bool> {
   let name = current_bundle().map(|b| bundle_display_name(&b)).unwrap_or_else(|_| "VibeBasic".into());
   app.set_menu(runtime_menu(app, &name)?)?;
   app.on_menu_event(|app, event| {
@@ -96,7 +147,7 @@ pub fn setup_runtime<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<bool> {
   Ok(true)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
   use super::*;
 

@@ -1,11 +1,13 @@
 //! The AI settings (base URL, model, API key ...) of Tools > Options > AI, kept on the Rust side instead of in the webview's
 //! localStorage. Every window of the app shares one localStorage (form windows load form.html from the same origin), so a key
 //! kept there could be read by any script that got into a form window. Here it is a file only the user can read
-//! (`ai-settings.json`, mode 0600, in the app's config folder), and the commands that read and write it are granted to the
+//! (`ai-settings.json`, mode 0600 on macOS and Linux, in the app's config folder; on Windows that folder is in the user's
+//! profile, %APPDATA%, whose ACL already keeps other users out), and the commands that read and write it are granted to the
 //! main window only (capabilities/default.json; the form and dialog windows get media_read and nothing else).
 //! The frontend moves settings saved by older versions out of localStorage once (src/backend/aiSettingsStore.ts).
 
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -54,10 +56,11 @@ pub fn save(file: &Path, v: &Value) -> Result<(), String> {
   }
   let tmp = file.with_extension(format!("json.{}.{}.tmp", std::process::id(), TMP_SEQ.fetch_add(1, Ordering::Relaxed)));
   let text = serde_json::to_string_pretty(v).map_err(|e| e.to_string())?;
-  let r = std::fs::OpenOptions::new()
-    .write(true)
-    .create_new(true)
-    .mode(0o600)
+  let mut opts = std::fs::OpenOptions::new();
+  opts.write(true).create_new(true);
+  #[cfg(unix)]
+  opts.mode(0o600);
+  let r = opts
     .open(&tmp)
     .and_then(|mut f| f.write_all(text.as_bytes()).and_then(|_| f.sync_all()))
     .and_then(|_| std::fs::rename(&tmp, file));
@@ -83,7 +86,17 @@ pub async fn ai_settings_set(app: AppHandle, settings: Value) -> Result<(), Stri
 mod tests {
   use super::*;
   use serde_json::json;
-  use std::os::unix::fs::PermissionsExt;
+
+  /// The file's permission bits (0o600 on Unix); on Windows the profile's ACL protects it, so the check passes.
+  fn mode(file: &Path) -> u32 {
+    #[cfg(unix)]
+    return std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(file).unwrap().permissions()) & 0o777;
+    #[cfg(not(unix))]
+    {
+      let _ = file;
+      0o600
+    }
+  }
 
   #[test]
   fn saved_settings_come_back_and_only_the_user_can_read_them() {
@@ -93,7 +106,7 @@ mod tests {
     let v = json!({ "baseUrl": "http://localhost:11434/v1", "model": "m", "apiKey": "secret", "thinking": "low" });
     save(&file, &v).unwrap();
     assert_eq!(load(&file).unwrap(), Some(v));
-    assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(mode(&file), 0o600);
     save(&file, &json!({ "apiKey": "" })).unwrap();
     assert_eq!(load(&file).unwrap(), Some(json!({ "apiKey": "" })));
     assert_eq!(std::fs::read_dir(file.parent().unwrap()).unwrap().count(), 1);
@@ -119,7 +132,7 @@ mod tests {
       }
       let got = load(&file).unwrap().unwrap();
       assert!(got == long || got == short, "{got}");
-      assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+      assert_eq!(mode(&file), 0o600);
     }
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
   }

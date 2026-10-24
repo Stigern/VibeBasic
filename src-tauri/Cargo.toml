@@ -32,6 +32,24 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 serialport = { version = "4.10", default-features = false }
 libc = "0.2"
 
+# Clipboard off macOS (macOS keeps pbcopy / pbpaste). No image support: only text is used.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+arboard = { version = "3", default-features = false }
+
+# Printers, power status, drives, file attributes, processes and the raw command line on Windows.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Wdk_System_SystemServices",
+  "Win32_Foundation",
+  "Win32_Graphics_Printing",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Environment",
+  "Win32_System_Power",
+  "Win32_System_SystemInformation",
+] }
+
 [dev-dependencies]
 tempfile = "3"
 httpmock = "0.7"
