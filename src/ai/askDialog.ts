@@ -687,7 +687,7 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
     let proposed: FormDef | null = null;
     try { proposed = applyFormOpsToClone(form, parsed); } catch { /* the preview reports it */ }
     // controls a little past the right or bottom edge: the form grows, instead of a model round
-    const grow = proposed ? growForOverflow(proposed) : null;
+    const grow = proposed ? growForOverflow(proposed, touchedNames(parsed.ops, proposed)) : null;
     if (grow) {
       // the grown size replaces the one the answer gave (one line in the preview)
       const ops = parsed.ops.map(op => (op.op === 'form' ? { ...op, props: Object.fromEntries(Object.entries(op.props).filter(([k]) => !(k in grow.props))) } : op))

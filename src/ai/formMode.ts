@@ -493,14 +493,17 @@ const GROW_MARGIN = 240;
 
 /**
  * Width / Height that make `form` (a proposal) big enough when its controls stick out past the right or bottom edge by at most
- * AUTO_GROW_MAX twips (each edge on its own), with GROW_MARGIN to spare; null when nothing needs it. The MDI form is left alone.
+ * AUTO_GROW_MAX twips (each edge on its own), with GROW_MARGIN to spare; null when nothing needs it. With `only` (lower-case
+ * names), just those controls count: a control the answer did not touch is not a reason to resize the form. The MDI form is
+ * left alone.
  */
-export function growForOverflow(form: FormDef): { props: Record<string, number>; note: string } | null {
+export function growForOverflow(form: FormDef, only?: Set<string>): { props: Record<string, number>; note: string } | null {
   if (form.mdi) return null;
   const client = formClientTwips(form.props, hasMenuBar(form.controls));
   let right = 0, bottom = 0, rightName = '', bottomName = '';
   for (const c of form.controls) {
     if (c.parentId || isMenu(c) || isLine(c) || isDocked(c) || c.props.Visible === false || CONTROL_TYPES[c.type].invisibleAtRuntime) continue;
+    if (only && !only.has(c.name.toLowerCase()) && !only.has(label(c.name, c.index).toLowerCase())) continue;
     const r = rectOf(c);
     if (r.left + r.width > right) { right = r.left + r.width; rightName = label(c.name, c.index); }
     if (r.top + r.height > bottom) { bottom = r.top + r.height; bottomName = label(c.name, c.index); }

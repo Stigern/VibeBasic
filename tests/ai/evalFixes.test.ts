@@ -159,6 +159,10 @@ test('growForOverflow: up to 240 twips past the right or bottom edge grows the f
   expect(growForOverflow(f)?.props).toEqual({ Height: 3945 });
   f.controls[0].props.Top = 120;
   expect(growForOverflow(f)).toBeNull();
+  // only the controls the answer touched count
+  f.controls[0].props.Left = 3600;
+  expect(growForOverflow(f, new Set(['cmdcancel']))).toBeNull();
+  expect(growForOverflow(f, new Set(['cmdok']))?.props).toEqual({ Width: 5175 });
 });
 
 test('form mode: a small overflow is fixed without a check round', async () => {
