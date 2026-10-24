@@ -42,3 +42,21 @@ test('response_format and max_tokens are sent when given; a reply cut off at max
   vi.stubGlobal('fetch', vi.fn(async () => new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })));
   await expect(b.aiChat('http://h/v1', '', 'x', [], undefined, { onDelta: () => {} })).rejects.toThrow(AI_CUT_OFF);
 });
+
+test('#20 an error the server sends inside the stream is passed on, not taken for a lost connection; error: null is no error', async () => {
+  const b = new BrowserBackend();
+  const stream = (body: string) => vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })));
+  stream(`data: ${JSON.stringify({ error: { message: 'image input is not supported for this model' } })}\n\n`);
+  await expect(b.aiChat('http://h/v1', '', 'x', [], undefined, { onDelta: () => {} })).rejects.toThrow(/^image input is not supported for this model$/);
+  stream(`data: ${JSON.stringify({ choices: [{ delta: { content: 'Hi' } }], error: null })}\n\ndata: [DONE]\n\n`);
+  await expect(b.aiChat('http://h/v1', '', 'x', [], undefined, { onDelta: () => {} })).resolves.toBe('Hi');
+});
+
+test('#15 credentials in the base URL never reach the log or an error', async () => {
+  const { describeRequest, redactUrl } = await import('../../src/ai/aiLog');
+  expect(describeRequest('https://bob:sk-SECRET@host/v1/?key=sk-SECRET#x', 'm', [], {}).split('\n')[0]).toBe('POST https://host/v1/chat/completions');
+  expect(redactUrl('http://h:11434/v1')).toBe('http://h:11434/v1');
+  expect(redactUrl('ht tp://bob:sk-SECRET@host/v1?key=sk-SECRET')).not.toContain('SECRET');
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+  await expect(new BrowserBackend().aiChat('https://bob:sk-SECRET@host/v1', '', 'x', [])).rejects.toThrow(/^Could not connect to https:\/\/host\/v1\. /);
+});

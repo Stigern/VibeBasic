@@ -32,10 +32,27 @@ const scrub = (text: string, secret: string): string => {
   return k ? text.split(k).join(MASK) : text;
 };
 
+/**
+ * `url` without a user name, password, query or fragment, which may carry a key (as redact_url in src-tauri/src/ai.rs), and
+ * without a trailing slash: what the log shows of the base URL.
+ */
+export function redactUrl(url: string): string {
+  const t = url.trim();
+  try {
+    const u = new URL(t);
+    u.username = ''; u.password = ''; u.search = ''; u.hash = '';
+    return u.toString().replace(/\/+$/, '');
+  } catch {
+    const head = t.slice(0, t.search(/[?#]/) < 0 ? t.length : t.search(/[?#]/));
+    const scheme = head.indexOf('://'), at = head.lastIndexOf('@');
+    return (at > scheme ? (scheme >= 0 ? head.slice(0, scheme + 3) : '') + head.slice(at + 1) : head).replace(/\/+$/, '');
+  }
+}
+
 /** The request as text: a header line with the options, then every message. */
 export function describeRequest(baseUrl: string, model: string, messages: ChatMessage[], options: Record<string, unknown>): string {
   const opts = Object.entries(options).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}: ${typeof v === 'string' || typeof v === 'number' ? v : JSON.stringify(v)}`);
-  return [`POST ${baseUrl.trim().replace(/\/+$/, '')}/chat/completions`, `model: ${model}`, ...opts, '',
+  return [`POST ${redactUrl(baseUrl)}/chat/completions`, `model: ${model}`, ...opts, '',
     ...messages.map(m => `--- ${m.role} ---\n${contentText(m.content)}`)].join('\n');
 }
 

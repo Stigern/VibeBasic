@@ -148,7 +148,7 @@ fn map_send_error(e: &reqwest::Error, base_url: &str, timeout_secs: u64) -> Stri
   let base_url = base_url.as_str();
   if e.is_connect() {
     format!(
-      "Could not connect to {base_url}. Check that the AI server is running and can be reached from this Mac. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0. (Details: {})",
+      "Could not connect to {base_url}. Check that the AI server is running and can be reached from this computer. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0. (Details: {})",
       root_cause(e)
     )
   } else if e.is_timeout() {
@@ -159,7 +159,7 @@ fn map_send_error(e: &reqwest::Error, base_url: &str, timeout_secs: u64) -> Stri
     unreadable()
   } else {
     format!(
-      "Could not connect to {base_url}. Check that the AI server is running and can be reached from this Mac. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0. (Details: {})",
+      "Could not connect to {base_url}. Check that the AI server is running and can be reached from this computer. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0. (Details: {})",
       root_cause(e)
     )
   }
@@ -422,7 +422,8 @@ async fn chat_stream_with(
       return Ok(true);
     }
     let Ok(v) = serde_json::from_str::<Value>(payload) else { return Ok(false) };
-    if v.get("error").is_some() {
+    // `"error": null` (some proxies send it with every chunk) is no error
+    if v.get("error").is_some_and(|e| !e.is_null()) {
       return Err(body_message(payload).unwrap_or_else(unreadable));
     }
     if let Some(u) = read_usage(&v) {
@@ -980,6 +981,14 @@ mod tests {
       then.status(200).header("content-type", "text/event-stream").body("data: {\"error\":{\"message\":\"boom\"}}\n\n");
     });
     assert_eq!(chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap_err(), "boom");
+    // "error": null in every chunk is no error
+    let server3 = MockServer::start();
+    server3.mock(|when, then| {
+      when.any_request();
+      then.status(200).header("content-type", "text/event-stream")
+        .body("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}],\"error\":null}\n\ndata: [DONE]\n\n");
+    });
+    assert_eq!(chat_stream(&server3.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap(), "Hi");
   }
 
   #[test]
@@ -998,6 +1007,7 @@ mod tests {
     let e = chat(base, &None, "m", &msgs(), &None, &NONE).await.unwrap_err();
     assert!(!e.contains("sekret"), "{e}");
     assert!(e.contains("127.0.0.1:1"), "{e}");
+    assert!(e.contains("reached from this computer"), "{e}");   // not "this Mac": the text is shown on every system
     // 404 text echoes the url
     let server = MockServer::start();
     server.mock(|when, then| {

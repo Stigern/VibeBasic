@@ -5,7 +5,7 @@ import { field } from '../ide/projectDialogs';
 import { createCombo } from '../ui98/combo';
 import { messageBox98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
-import { addAiLogEntry } from './aiLog';
+import { addAiLogEntry, redactUrl } from './aiLog';
 import { probeVision } from './detect';
 import { THINKING_LEVELS, defaultAiSettings, loadAiSettings, updateAiSettings } from './settings';
 import type { AiModel, FormPicture, ServerKind, Thinking } from './types';
@@ -68,7 +68,7 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       addAiLogEntry({ mode: 'test', model: model.getValue().trim(), seconds: Math.round((Date.now() - t0) / 100) / 10, status: 'error',
-        sent: `GET ${baseUrl.value.trim().replace(/\/+$/, '')}/models`, reply: '', reasoning: '', error: message }, apiKey.value);
+        sent: `GET ${redactUrl(baseUrl.value)}/models`, reply: '', reasoning: '', error: message }, apiKey.value);
       await messageBox98(doc, { prompt: message, title: 'VibeBasic', buttons: 48 });
     } finally { test.disabled = false; }
   };
