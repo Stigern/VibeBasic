@@ -70,6 +70,13 @@ input[type=text], textarea { cursor: text; }
   background: transparent;
 }
 .dlg98 { min-width: 180px; max-width: 90vw; box-shadow: var(--w98-window), 1px 1px 0 #000; }
+/* moved or resized: placed by hand (left / top / width / height in the style) */
+.dlg98.dlg98-pinned { position: absolute; max-width: none; box-sizing: border-box; }
+/* a resizable dialog: the content takes the room above the buttons */
+.dlg98-resizable { position: relative; display: flex; flex-direction: column; }
+.dlg98-resizable > .title-bar { flex: none; }
+.dlg98-resizable > .dlg98-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.dlg98-resizable > .dlg98-body > :first-child { flex: 1; min-height: 0; }
 .dlg98 .window-body, .dlg98-body { margin: 0; padding: 12px 12px 12px; }
 .dlg98-message { display: flex; align-items: center; gap: 14px; min-height: 32px; }
 .dlg98-icon { flex: none; width: 32px; height: 32px; }

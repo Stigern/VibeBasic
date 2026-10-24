@@ -17,7 +17,14 @@ export interface DialogOptions {
   buttons: DialogButton[];
   /** VB InputBox layout: buttons stacked on the right instead of centred along the bottom. */
   buttonsSide?: boolean;
+  /** A size grip in the lower right corner; `content` fills the room the dialog gets (it is never smaller than at first). */
+  resizable?: boolean;
+  /** Where the user left the dialog (moved or resized), kept under this key and used again the next time (in this session). */
+  placeKey?: string;
 }
+
+/** The place and size the user gave a dialog, by DialogOptions.placeKey. */
+const places = new Map<string, { left: number; top: number; width: number; height: number }>();
 
 const FOCUSABLE = 'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
@@ -26,6 +33,7 @@ const FOCUSABLE = 'button:not(:disabled), input:not(:disabled), textarea:not(:di
  * Modal: a full-screen transparent overlay blocks the rest of the document, keys are captured
  * (Enter = default, Escape = cancel, Tab cycles) and never reach other handlers while it is open.
  * An element in `content` with `data-autofocus` receives focus instead of the default button.
+ * The title bar moves it; `resizable` adds a size grip.
  */
 export function showDialog98(doc: Document, o: DialogOptions): Promise<string> {
   return new Promise<string>(resolve => {
@@ -37,6 +45,7 @@ export function showDialog98(doc: Document, o: DialogOptions): Promise<string> {
     const finish = (value: string) => {
       if (finished) return;
       finished = true;
+      if (o.placeKey && pinned) places.set(o.placeKey, { left: win.offsetLeft, top: win.offsetTop, width: win.offsetWidth, height: win.offsetHeight });
       doc.removeEventListener('keydown', onKey, true);
       doc.removeEventListener('focusin', onFocusIn, true);
       overlay.remove();
@@ -62,11 +71,59 @@ export function showDialog98(doc: Document, o: DialogOptions): Promise<string> {
     });
     const buttonRow = h('div', { class: o.buttonsSide ? 'dlg98-buttons side' : 'dlg98-buttons' }, ...buttonEls.values());
     const body = h('div', { class: o.buttonsSide ? 'window-body dlg98-body side' : 'window-body dlg98-body' }, o.content, buttonRow);
-    const win = h('div', { class: 'window dlg98', role: 'dialog', 'aria-modal': 'true' }, title.bar, body);
+    const win = h('div', { class: o.resizable ? 'window dlg98 dlg98-resizable' : 'window dlg98', role: 'dialog', 'aria-modal': 'true' }, title.bar, body);
     const overlay = h('div', { class: 'dlg98-overlay' }, win);
     overlay.addEventListener('dlg98-abort', abort);
     // Swallow pointer events outside the dialog so the document below cannot be used.
     overlay.addEventListener('mousedown', e => { if (e.target === overlay) e.preventDefault(); });
+
+    // Moving and sizing: the first drag pins the (centred) dialog where it is, with the size it has, in viewport pixels.
+    let pinned = false, minW = 0, minH = 0;
+    const pin = (r: { left: number; top: number; width: number; height: number }) => {
+      pinned = true;
+      win.classList.add('dlg98-pinned');
+      Object.assign(win.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+    };
+    const pinHere = () => {
+      if (pinned) return;
+      const r = win.getBoundingClientRect();
+      minW = r.width; minH = r.height;
+      pin({ left: r.left, top: r.top, width: r.width, height: r.height });
+    };
+    /** Follows the mouse from a mousedown until the button is released; `move` gets the distance from the start. */
+    const drag = (e: MouseEvent, move: (dx: number, dy: number) => void) => {
+      e.preventDefault();
+      const sx = e.clientX, sy = e.clientY;
+      const onMove = (ev: MouseEvent) => move(ev.clientX - sx, ev.clientY - sy);
+      const onUp = () => { doc.removeEventListener('mousemove', onMove, true); doc.removeEventListener('mouseup', onUp, true); };
+      doc.addEventListener('mousemove', onMove, true);
+      doc.addEventListener('mouseup', onUp, true);
+    };
+    title.bar.addEventListener('mousedown', e => {
+      if (e.button !== 0 || (e.target as Element).closest('.title-bar-controls')) return;
+      pinHere();
+      const x0 = win.offsetLeft, y0 = win.offsetTop, w = win.offsetWidth;
+      const vw = doc.documentElement.clientWidth, vh = doc.documentElement.clientHeight;
+      drag(e, (dx, dy) => {
+        // a part of the title bar stays on the screen, so the dialog can always be taken back
+        win.style.left = `${vw ? Math.min(vw - 40, Math.max(40 - w, x0 + dx)) : x0 + dx}px`;
+        win.style.top = `${vh ? Math.min(vh - 20, Math.max(0, y0 + dy)) : y0 + dy}px`;
+      });
+    });
+    if (o.resizable) {
+      const grip = h('div', { class: 'mdi98-grip dlg98-grip' });
+      win.appendChild(grip);
+      grip.addEventListener('mousedown', e => {
+        if (e.button !== 0) return;
+        e.stopPropagation();
+        pinHere();
+        const w0 = win.offsetWidth, h0 = win.offsetHeight;
+        drag(e, (dx, dy) => {
+          win.style.width = `${Math.max(minW, w0 + dx)}px`;
+          win.style.height = `${Math.max(minH, h0 + dy)}px`;
+        });
+      });
+    }
 
     const isTopmost = () => {
       const all = doc.querySelectorAll('.dlg98-overlay');
@@ -120,6 +177,15 @@ export function showDialog98(doc: Document, o: DialogOptions): Promise<string> {
 
     overlay.addEventListener('keydown', onOverlayKey);
     doc.body.appendChild(overlay);
+    const saved = o.placeKey ? places.get(o.placeKey) : undefined;
+    if (saved) {   // where the user left it last time: never smaller than now, and on the screen
+      const r = win.getBoundingClientRect(), vw = doc.documentElement.clientWidth, vh = doc.documentElement.clientHeight;
+      minW = r.width; minH = r.height;
+      const width = Math.max(minW, vw ? Math.min(saved.width, vw) : saved.width), height = Math.max(minH, vh ? Math.min(saved.height, vh) : saved.height);
+      pin({ width, height,
+        left: vw ? Math.min(Math.max(0, saved.left), Math.max(0, vw - width)) : saved.left,
+        top: vh ? Math.min(Math.max(0, saved.top), Math.max(0, vh - height)) : saved.top });
+    }
     doc.addEventListener('keydown', onKey, true);
     doc.addEventListener('focusin', onFocusIn, true);
 

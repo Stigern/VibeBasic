@@ -84,13 +84,14 @@ async function waitForReply(doc: Document, model: string, start: Start, log: Str
   const bar = h('div', { class: 'ai-progress', style: 'position:relative;height:16px;margin-top:8px;overflow:hidden;box-shadow:inset -1px -1px #fff,inset 1px 1px #808080' }, block);
   const box = h('div', {
     class: 'ai-stream', 'aria-readonly': 'true',
-    style: 'box-sizing:border-box;width:420px;height:92px;margin-top:8px;padding:2px 4px;overflow-y:auto;background:#fff;color:#000;'
+    style: 'box-sizing:border-box;flex:1 1 auto;height:92px;min-height:92px;margin-top:8px;padding:2px 4px;overflow-y:auto;background:#fff;color:#000;'
       + 'font:12px/14px "Courier New",monospace;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;'
       + 'box-shadow:inset -1px -1px #fff,inset 1px 1px #808080,inset -2px -2px #dfdfdf,inset 2px 2px #000',
   });
   const anim = createAiAnimation(doc);
   const labelEl = h('div', { class: 'ai-wait-label' }, label);
-  const content = h('div', { style: 'min-width:420px' }, anim.el, labelEl, bar, box);
+  // the box takes the room the dialog gets when it is made bigger (it keeps its place and size for the next request)
+  const content = h('div', { style: 'min-width:420px;display:flex;flex-direction:column' }, anim.el, labelEl, bar, box);
   log.attach(box);
   let pos = 0, dir = 1;
   const timer = setInterval(() => {
@@ -109,7 +110,7 @@ async function waitForReply(doc: Document, model: string, start: Start, log: Str
   }
   catch (e) { request = Promise.reject(e); }
   const answered = request.then<Waited, Waited>(text => ({ kind: 'reply', text, metrics: formatMetrics(usage, Date.now() - t0) }), e => ({ kind: 'error', message: e instanceof Error ? e.message : String(e) }));
-  const cancelled = showDialog98(doc, { title: TITLE, content, buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }] })
+  const cancelled = showDialog98(doc, { title: TITLE, content, buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }], resizable: true, placeKey: 'ai-wait' })
     .then<Waited>(() => ({ kind: 'cancel' }));
   try {
     const res = await Promise.race([answered, cancelled]);

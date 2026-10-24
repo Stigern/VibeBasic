@@ -4,6 +4,10 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- The Ask AI waiting window can be made bigger with the grip in its lower right corner; the box with the thinking and the answer grows with it. It keeps its place and size for the next request (until VibeBasic is closed).
+- Every dialog can be moved by its title bar, as in Windows 98.
+
 ### Fixed
 - Windows: a running program's form could not be moved by its title bar. Windows resizes a new window to its scaled size, which rebuilt the title bar without its drag mark; the title bar now carries it each time it is built.
 - Windows: F5, Ctrl+R and Shift+F5 in a running program reloaded its window, which went blank (WebView2's browser shortcuts). Those keys, and Ctrl+P, Ctrl+F, Ctrl+G, F3, F7 and Alt+Left/Right, no longer reach the browser in any window. The program still gets KeyDown for them, and F5 in the IDE still runs.

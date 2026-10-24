@@ -388,3 +388,56 @@ describe('dialog lifecycle', () => {
     expect(seen).toEqual(['Enter', 'Escape']);
   });
 });
+
+describe('moving and sizing a dialog', () => {
+  const mouse = (type: string, x: number, y: number, target: EventTarget = document) =>
+    target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y }));
+  const dlg = () => document.querySelector<HTMLElement>('.dlg98')!;
+
+  test('the title bar moves any dialog (the close box does not); the grip of a resizable one sizes it, and its content fills it', async () => {
+    const p = showDialog98(document, { title: 'T', content: h('div', {}, 'x'), buttons: [{ label: 'OK', value: 'ok', cancel: true }] });
+    expect(document.querySelector('.dlg98-grip')).toBeNull();
+    mouse('mousedown', 10, 10, document.querySelector('.dlg98 .title-bar-text')!);
+    mouse('mousemove', 60, 40);
+    mouse('mouseup', 60, 40);
+    expect(dlg().classList.contains('dlg98-pinned')).toBe(true);
+    expect([dlg().style.left, dlg().style.top]).toEqual(['50px', '30px']);
+    mouse('mousemove', 200, 200);   // released: no longer follows
+    expect(dlg().style.left).toBe('50px');
+    closeX().click();
+    expect(await p).toBe('ok');
+
+    const q = showDialog98(document, { title: 'T', content: h('div', {}, 'x'), buttons: [{ label: 'OK', value: 'ok', cancel: true }], resizable: true });
+    expect(dlg().classList.contains('dlg98-resizable')).toBe(true);
+    mouse('mousedown', 100, 100, document.querySelector('.dlg98-grip')!);
+    mouse('mousemove', 180, 160);
+    mouse('mouseup', 180, 160);
+    expect([dlg().style.width, dlg().style.height]).toEqual(['80px', '60px']);   // jsdom: from a size of 0
+    closeX().click();
+    await q;
+  });
+
+  test('placeKey: the dialog opens again where the user left it', async () => {
+    const open = () => showDialog98(document, { title: 'T', content: h('div', {}, 'x'), buttons: [{ label: 'OK', value: 'ok', cancel: true }], resizable: true, placeKey: 'test-place' });
+    const p = open();
+    mouse('mousedown', 0, 0, document.querySelector('.dlg98 .title-bar-text')!);
+    mouse('mousemove', 0, 0);
+    mouse('mouseup', 0, 0);
+    Object.assign(dlg().style, { left: '120px', top: '80px', width: '500px', height: '300px' });
+    closeX().click();
+    await p;
+    const q = open();
+    // jsdom has no layout (offsetLeft ... are 0), so the kept place is the one jsdom measured
+    expect(dlg().classList.contains('dlg98-pinned')).toBe(true);
+    closeX().click();
+    await q;
+    const r = open();
+    expect(dlg().classList.contains('dlg98-pinned')).toBe(true);
+    closeX().click();
+    await r;
+    const other = showDialog98(document, { title: 'T', content: h('div', {}, 'x'), buttons: [{ label: 'OK', value: 'ok', cancel: true }] });
+    expect(dlg().classList.contains('dlg98-pinned')).toBe(false);   // another dialog: centred
+    closeX().click();
+    await other;
+  });
+});
