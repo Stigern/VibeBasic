@@ -15,6 +15,7 @@ mod make_exe;
 mod payload;
 mod media;
 mod printing;
+mod splash;
 mod sysinfo;
 mod winsock;
 mod app_commands;
@@ -128,7 +129,10 @@ pub fn run() {
             .build(),
         )?;
       }
-      embedded::setup_runtime(app.handle())?;
+      // the IDE shows its splash while it loads; a made app goes straight to the program
+      if !embedded::setup_runtime(app.handle())? {
+        splash::open(app.handle())?;
+      }
       Ok(())
     })
     .build(context())

@@ -14,6 +14,7 @@ export default defineConfig({
       input: {
         main: 'index.html',
         form: 'form.html',
+        splash: 'splash.html',
         gallery: 'dev/gallery.html',
       },
     },

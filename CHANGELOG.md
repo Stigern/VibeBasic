@@ -2,6 +2,11 @@
 
 All notable changes to VibeBasic. Format follows Keep a Changelog.
 
+## [Unreleased]
+
+### Added
+- A splash window when VibeBasic starts, in the spirit of the VB6 one: it shows while the IDE loads (about two seconds), then the IDE comes up. The version on it comes from the app. Programs made with Make have none.
+
 ## [0.10.1] - 2026-10-24
 
 A bug hunt in the AI assistant, measured against a real local model (Qwen 27B on vLLM). Tasks solved at Thinking Low rose from 82% to 96%: form layouts from 64% to 91%, Ask AI on run-time errors from 80% to 100%.

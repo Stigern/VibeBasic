@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import type { Backend, MakeAppOptions, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DbValue, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { AiModel, ChatMessage } from '../ai/types';
@@ -14,6 +15,9 @@ import { platform as currentPlatform, winPaths, type Platform } from '../platfor
 
 
 const PROJECT_FILTER: FileFilter = { name: 'VibeBasic Project', extensions: ['vbb'] };
+/** The splash window stays until this long after the start of the main window's page. It shows once its own page is drawn,
+ *  some way into that, so it is seen for about 1.5 to 2 seconds. */
+const SPLASH_MIN_MS = 2500;
 
 async function call<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
   try {
@@ -66,8 +70,12 @@ export class TauriBackend implements Backend {
     return call<Platform>('platform', {});
   }
 
+  /** The IDE is ready: the main window comes up and then the splash window (splash.rs) closes, but not before it has been seen. */
   async showMainWindow(): Promise<void> {
+    const splash = await WebviewWindow.getByLabel('splash').catch(() => null);
+    if (splash) await new Promise(r => setTimeout(r, Math.max(0, SPLASH_MIN_MS - performance.now())));
     await getCurrentWindow().show();
+    await splash?.close().catch(() => {});
   }
 
   openProjectDialog(): Promise<string | null> {
