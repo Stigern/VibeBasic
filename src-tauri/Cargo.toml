@@ -31,6 +31,9 @@ rusqlite = { version = "0.32", features = ["bundled", "column_decltype"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serialport = { version = "4.10", default-features = false }
 libc = "0.2"
+# Make on Windows: the made exe's icon and version resource (pure Rust; without its image feature). png: the icon sizes.
+editpe = { version = "0.2.4", default-features = false, features = ["std"] }
+png = "0.18"
 
 # Clipboard off macOS (macOS keeps pbcopy / pbpaste). No image support: only text is used.
 [target.'cfg(not(target_os = "macos"))'.dependencies]

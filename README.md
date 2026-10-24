@@ -17,6 +17,7 @@ A Visual Basic 6 clone for macOS, with the authentic Windows 98 look and a built
 - **Run and debug:** F5 runs the program in real windows. Breakpoints (F9), stepping (F8), the Immediate, Locals, Watch and Call Stack windows, data tips and Set Next Statement work as in VB6. Programs can start in `Sub Main` and read `Command$`.
 - **Open VB6 projects:** File > Open Project reads `.vbp` projects with their `.frm`, `.frx`, `.bas` and `.cls` files, and shows a report of anything VibeBasic cannot use.
 - **Make app:** builds a standalone Mac `.app` from your project, with version information and the file types it opens.
+  On Windows, Make writes a single `<Name>.exe` (the project's icon and version information in its resources; it runs on Windows 10 and 11, which have the WebView2 runtime). File types are not registered there: Open With passes the file to `Command$`. On Linux it writes the `<Name>` executable with a `<Name>.desktop` launcher and `<Name>.png` icon next to it (it needs WebKitGTK 4.1, as VibeBasic does). Make only replaces a program it made itself.
 - **Controls:** the classic intrinsic controls, plus ActiveX-style components picked under Project > Components (Ctrl+T):
   - Common Controls: TreeView, ListView, Toolbar, StatusBar, ImageList, ImageCombo, CoolBar (bands host other controls), DTPicker, FlatScrollBar, Animation (GIF, APNG, WebP and MP4 instead of AVI) and others, plus the Access-style Calendar (MSCAL).
   - Media and data: MSFlexGrid, MSChart, RichTextBox, MaskedEdit, MMControl and MediaPlayer.

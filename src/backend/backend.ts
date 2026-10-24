@@ -123,7 +123,9 @@ export interface DatabaseApi {
 /** Make: the project, the icon, the version for Info.plist (Major.Minor.Revision, Legal Copyright) and the file extensions it opens. */
 export interface MakeAppOptions {
   targetPath: string; appName: string; projectJson: string; iconPngBase64: string | null; overwrite: boolean;
-  version?: { major: number; minor: number; revision: number; copyright: string };
+  /** The texts after `copyright` go to a Windows exe's version resource (macOS has no place for them). */
+  version?: { major: number; minor: number; revision: number; copyright: string;
+    companyName?: string; fileDescription?: string; productName?: string; comments?: string; legalTrademarks?: string };
   fileTypes?: string[];
 }
 

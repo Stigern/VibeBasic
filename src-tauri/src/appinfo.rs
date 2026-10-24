@@ -210,8 +210,8 @@ fn log_owner<R: Runtime>(_app: &AppHandle<R>) -> (String, String) {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn log_owner<R: Runtime>(app: &AppHandle<R>) -> (String, String) {
-  match crate::embedded::app_name(app) {
+fn log_owner<R: Runtime>(_app: &AppHandle<R>) -> (String, String) {
+  match crate::embedded::app_name() {
     Some(name) => (crate::make_app::bundle_id_for(&name), name),
     None => ("no.vibebasic.ide".into(), "VibeBasic".into()),
   }

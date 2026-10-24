@@ -46,7 +46,8 @@ export async function makeAppFlow(ide: IdeState, backend: Backend, doc: Document
     const icon = p.iconAsset ? p.assets[p.iconAsset]?.dataBase64 ?? null : null;
     await backend.makeApp({
       targetPath: target, appName, projectJson: serializeProject(ide.project), iconPngBase64: icon, overwrite: true,
-      version: { major: v.major, minor: v.minor, revision: v.revision, copyright: v.legalCopyright ?? '' },
+      version: { major: v.major, minor: v.minor, revision: v.revision, copyright: v.legalCopyright ?? '',
+        companyName: v.companyName, fileDescription: v.fileDescription, productName: v.productName, comments: v.comments, legalTrademarks: v.legalTrademarks },
       fileTypes: ide.project.fileTypes ?? [],
     });
   } catch (e) {

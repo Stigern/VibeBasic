@@ -9,7 +9,10 @@ mod files;
 mod fileio;
 mod inet;
 mod io_util;
+mod icon;
 mod make_app;
+mod make_exe;
+mod payload;
 mod media;
 mod printing;
 mod sysinfo;
@@ -20,6 +23,17 @@ mod app_commands;
 #[tauri::command]
 fn platform() -> &'static str {
   if cfg!(target_os = "windows") { "windows" } else if cfg!(target_os = "macos") { "mac" } else { "linux" }
+}
+
+/// Tauri's context. On Linux a made app's windows get the project's icon (Windows reads it from the exe's resources).
+fn context() -> tauri::Context<tauri::Wry> {
+  #[allow(unused_mut)]
+  let mut ctx = tauri::generate_context!();
+  #[cfg(target_os = "linux")]
+  if let Some(icon) = embedded::project_window_icon() {
+    ctx.set_default_window_icon(Some(icon));
+  }
+  ctx
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -117,7 +131,7 @@ pub fn run() {
       embedded::setup_runtime(app.handle())?;
       Ok(())
     })
-    .build(tauri::generate_context!())
+    .build(context())
     .expect("error while building tauri application")
     .run(|_app, _event| {
       // A document opened with the app (Finder, a made app's file types): its path is Command$.
