@@ -27,9 +27,10 @@ test('validateCode: clean code has no problems', () => {
 test('validateCode: syntax errors with line numbers', () => {
   const p = validateCode('Private Sub A()\n    If x Then\nEnd Sub', { moduleName: 'Form1', form: null });
   expect(p.length).toBeGreaterThan(0);
-  expect(p[0]).toMatch(/^Line \d+: /);
+  // "Code line" (not "Line", which the model took for the Line method) and the statement quoted
+  expect(p[0]).toMatch(/^Code line \d+ \(`[^`]+`\): /);
   const bare = validateCode('x = 1\ny = = 2', { moduleName: 'Form1', form: null });
-  expect(bare[0]).toMatch(/^Line 2: /);
+  expect(bare[0]).toMatch(/^Code line 2 \(`y = = 2`\): /);
 });
 
 test('validateCode: unknown control and wrong event', () => {
@@ -465,7 +466,7 @@ test('#4 a bare body with an End Sub too many is reported (an error on the wrapp
   const f = form();
   expect(validateCode('    Debug.Print 2\nEnd Sub', { moduleName: 'Form1', form: f })).toEqual([]);
   // the End Sub closes the dummy wrapper; its own End Sub then stands outside: the error is on the wrapper's line
-  expect(validateCode("    Debug.Print 1\nEnd Sub\n' done", { moduleName: 'Form1', form: f }).join()).toMatch(/^Line 4: /);
+  expect(validateCode("    Debug.Print 1\nEnd Sub\n' done", { moduleName: 'Form1', form: f }).join()).toMatch(/^Code line 4: /);
 });
 
 test('#13 methods of an Implements interface are not taken for event procedures', () => {

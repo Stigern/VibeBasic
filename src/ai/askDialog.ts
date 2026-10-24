@@ -25,7 +25,7 @@ import { type AiSettings, type Thinking, loadAiSettings } from './settings';
 import { AI_CUT_OFF, type AiChatOptions, type AiUsage } from './sse';
 import { StreamLog } from './streamLog';
 import { type ChatMessage, type ContentPart, contentChars, contentText } from './types';
-import { autoFixEventNames, validateCode } from './validate';
+import { autoFixEventNames, isSyntaxProblem, validateCode } from './validate';
 
 const VB_EXCLAMATION = 48;
 const TITLE = 'VibeBasic';
@@ -649,7 +649,8 @@ export async function runCodeConversation(s: AiSession, o: { first: ChatMessage[
     return { result: { applied, notes, problems }, jsonReason: null };
   };
   return converse<A>(s, o.first, analyse,
-    (a, _reply, metrics) => showCodePreview(doc, win.getSource().replace(/\r\n?/g, '\n'), a.applied.source, a.applied.changes, [...a.notes, ...a.problems], metrics),
+    (a, _reply, metrics) => showCodePreview(doc, win.getSource().replace(/\r\n?/g, '\n'), a.applied.source, a.applied.changes,
+      [...a.notes, ...a.problems.filter(p => !isSyntaxProblem(p))], metrics, true, a.problems.filter(isSyntaxProblem)),
     async a => { await o.beforeApply?.(); win.applyChange(0, win.getSource().length, a.applied.source); },
     { mode: o.mode ?? 'code', answers: true, question: o.question });
 }
@@ -695,7 +696,9 @@ export async function runFormConversation(s: AiSession, o: { first: ChatMessage[
       const { parsed } = a;
       const code = parsed.code === null ? undefined
         : { before: form.code.replace(/\r\n?/g, '\n'), after: parsed.code, changes: parsed.codeChanges ?? [] };
-      return showFormPreview(doc, applyFormOpsToClone(form, parsed), describeOps(parsed), [...parsed.warnings, ...a.notes, ...a.problems], project.assets, code, metrics);
+      const shown = [...parsed.warnings, ...a.notes];
+      return showFormPreview(doc, applyFormOpsToClone(form, parsed), describeOps(parsed), [...shown, ...a.problems.filter(p => !shown.includes(p) && !isSyntaxProblem(p))], project.assets, code, metrics,
+        a.problems.filter(isSyntaxProblem));
     },
     async a => {
       try { ide.stack.execute(formOpsToCommand(ide.project, o.itemId, a.parsed, 'AI changes')); }

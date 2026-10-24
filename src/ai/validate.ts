@@ -7,7 +7,10 @@ import { formEvents, formObjectName } from '../model/mdi';
 import { compileProblems, type CheckModule } from '../lang/compileCheck';
 import { parseModuleLenient } from '../lang/parser';
 import { TYPE_KEYWORDS } from '../lang/parseStatements';
-import { CONTROL_TYPES } from '../model/controls';
+import { CONTROL_TYPES, getPropDef } from '../model/controls';
+import { ADO_CONNECTION_MEMBERS } from '../run/data/dbObjects';
+import { ADO_RECORDSET_MEMBERS } from '../run/data/recordset';
+import { LIST_ITEM_MEMBERS } from '../run/objects/listCollections';
 import { listProcedures } from '../model/procedures';
 import { moduleKind, type ControlType, type FormDef, type Project } from '../model/types';
 import {
@@ -105,6 +108,31 @@ const unsupported = (name: string): string => {
   return `${name} is not supported in VibeBasic.${alt ? ` ${alt}` : ''}`;
 };
 const PARSER_UNSUPPORTED = /^Not supported in VibeBasic: (.+)$/;
+
+// ---------------------------------------------------------------------------------------------------------------
+// Syntax errors the model can act on
+
+/** "Code line" (never "Line N": the model took that for the Line method), so a syntax problem is recognised by this start. */
+const SYNTAX_PREFIX = 'Code line ';
+/** A syntax error (or an unsupported statement): the code does not compile. */
+export const isSyntaxProblem = (problem: string): boolean => problem.startsWith(SYNTAX_PREFIX);
+
+/** The form statements the model gets wrong most, by what the line uses (the first that matches). */
+const EXPECTED_FORMS: [RegExp, string][] = [
+  [/\bListItems\s*\.\s*Add\b/i, 'ListItems.Add takes (Index, Key, Text): Set it = ListView1.ListItems.Add(, , "text") with parentheses when the result is used, then it.SubItems(1) = "x".'],
+  [/(?:^|[.\s:])Scale\b/i, 'Scale takes two corners: Picture1.Scale (x1, y1)-(x2, y2), e.g. Picture1.Scale (0, 100)-(10, 0).'],
+  [/(?:^|[.\s:])Circle\b/i, 'Circle takes (x, y), radius[, color[, start, end[, aspect]]], e.g. Picture1.Circle (500, 500), 200, vbRed.'],
+  [/(?:^|[.\s:])PSet\b/i, 'PSet takes (x, y)[, color], e.g. Picture1.PSet (10, 20), vbBlue.'],
+  [/(?:^|[.\s:])Line\b(?!\s+Input)/i, 'Line takes [(x1, y1)]-(x2, y2)[, color][, B or BF], e.g. Picture1.Line (0, 0)-(100, 50), vbBlack, BF.'],
+];
+
+/** "Code line 17 (`Picture1.Scale (0, 8), (4, 0)`): Expected: -. Scale takes two corners: ..." */
+export function syntaxProblem(line: number, statement: string, message: string): string {
+  const shown = statement.length > 120 ? `${statement.slice(0, 117)}...` : statement;
+  const code = statement.replace(/"[^"]*"?/g, '""').replace(/'.*$/, '');   // what a string or a comment says does not count
+  const hint = EXPECTED_FORMS.find(([re]) => re.test(code))?.[1];
+  return `${SYNTAX_PREFIX}${line}${shown ? ` (\`${shown}\`)` : ''}: ${message.replace(/\.?$/, '.')}${hint ? ` ${hint}` : ''}`;
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // Control members
@@ -236,6 +264,79 @@ function procNames(p: ProcDecl): { declared: Set<string>; implicit: Set<string> 
   return { declared, implicit };
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Objects of known classes in local variables
+
+/** A run-time class whose members are known exactly (the run-time object's own list). */
+interface KnownClass { label: string; members: ReadonlySet<string>; has: string }
+const knownClass = (label: string, members: readonly string[], has: string): KnownClass => ({ label, members: new Set(members), has });
+const LIST_ITEM = knownClass('ListItem', LIST_ITEM_MEMBERS, 'Text, Key, Tag, Icon, SmallIcon, Index, Selected and SubItems(i) (1-based)');
+/** By lower-case type name or ProgID. A bare `Recordset` may be DAO (Data1.Recordset), so only the ADODB names count. */
+const KNOWN_CLASSES: Record<string, KnownClass> = {
+  listitem: LIST_ITEM,
+  'adodb.recordset': knownClass('ADODB.Recordset', ADO_RECORDSET_MEMBERS, 'the ADO members (Open, MoveNext, EOF, Fields, AddNew, Update, Find, Filter ...)'),
+  'adodb.connection': knownClass('ADODB.Connection', ADO_CONNECTION_MEMBERS, 'Open, Close, Execute, BeginTrans, CommitTrans, RollbackTrans, ConnectionString, State ...'),
+  connection: knownClass('ADODB.Connection', ADO_CONNECTION_MEMBERS, 'Open, Close, Execute, BeginTrans, CommitTrans, RollbackTrans, ConnectionString, State ...'),
+};
+
+/** The statements of a body and of every block in it. */
+function eachStmt(body: Stmt[], fn: (s: Stmt) => void): void {
+  for (const s of body) {
+    fn(s);
+    switch (s.kind) {
+      case 'if': for (const b of s.branches) eachStmt(b.body, fn); if (s.elseBody) eachStmt(s.elseBody, fn); break;
+      case 'select': for (const cl of s.cases) eachStmt(cl.body, fn); if (s.elseBody) eachStmt(s.elseBody, fn); break;
+      case 'for': case 'forEach': case 'do': case 'while': case 'with': eachStmt(s.body, fn); break;
+      default: break;
+    }
+  }
+}
+
+/**
+ * The local variables of `p` that hold an object of a known class: declared `As ListItem` / `As ADODB.Recordset` ..., or (declared
+ * As Object, Variant or not at all) only ever set from a known factory: `ListView1.ListItems.Add(...)`, `ListView1.ListItems(i)`,
+ * `ListView1.SelectedItem`, `For Each it In ListView1.ListItems`, `CreateObject("ADODB.Recordset")`, `New ADODB.Connection`.
+ * A variable that is also set from anything else is left out (its class is not certain).
+ */
+function knownObjects(p: ProcDecl, controls: Map<string, { type: ControlType; array: boolean }>, moduleLevel: Set<string>): Map<string, KnownClass> {
+  const declared = new Map<string, VBTypeName | undefined>();
+  eachStmt(p.body, s => { if (s.kind === 'dim') for (const d of s.decls) if (!d.isArray) declared.set(lc(d.name), d.type); });
+  const isListView = (e: Expr): boolean => e.kind === 'name' && controls.get(lc(e.name))?.type === 'ListView' && !controls.get(lc(e.name))!.array;
+  const listItems = (e: Expr): boolean => e.kind === 'member' && lc(e.name) === 'listitems' && isListView(e.object);
+  const classOfValue = (v: Expr): KnownClass | null => {
+    if (v.kind === 'new') return KNOWN_CLASSES[lc(v.typeName)] ?? null;
+    if (v.kind === 'member' && lc(v.name) === 'selecteditem' && isListView(v.object)) return LIST_ITEM;
+    if (v.kind !== 'call') return null;
+    const t = v.target;
+    if (t.kind === 'name' && lc(t.name) === 'createobject' && v.args[0]?.kind === 'string') return KNOWN_CLASSES[lc(v.args[0].value.trim())] ?? null;
+    if (listItems(t) && v.args.length === 1) return LIST_ITEM;   // ListView1.ListItems(i)
+    if (t.kind === 'member' && ['add', 'item'].includes(lc(t.name)) && listItems(t.object)) return LIST_ITEM;
+    return null;
+  };
+  const found = new Map<string, KnownClass | null>();
+  const note = (name: string, cls: KnownClass | null) => {
+    const k = lc(name);
+    const prev = found.get(k);
+    found.set(k, prev === undefined ? cls : prev === cls ? cls : null);
+  };
+  eachStmt(p.body, s => {
+    if (s.kind === 'assign' && s.target.kind === 'name') note(s.target.name, s.isSet ? classOfValue(s.value) : null);
+    else if (s.kind === 'forEach') note(s.variable.name, listItems(s.collection) ? LIST_ITEM : null);
+  });
+  const out = new Map<string, KnownClass>();
+  const params = new Set(p.params.map(x => lc(x.name)));
+  for (const [k, t] of declared) {
+    const byType = t !== undefined && typeof t === 'object' && 'objectType' in t ? KNOWN_CLASSES[lc(t.objectType)] : undefined;
+    if (byType) { out.set(k, byType); continue; }
+    if (t !== undefined && t !== 'Object' && t !== 'Variant') continue;
+    const cls = found.get(k);
+    if (cls) out.set(k, cls);
+  }
+  // not declared in the procedure (no Option Explicit): only a name that is not a parameter or a module-level name
+  for (const [k, cls] of found) if (cls && !declared.has(k) && !params.has(k) && !moduleLevel.has(k)) out.set(k, cls);
+  return out;
+}
+
 interface Checker {
   report(msg: string): void;
   /** The name rules may run (unknown names, undeclared variables, calls): the project is known and every module parsed. */
@@ -259,6 +360,7 @@ interface Checker {
 
 function checkProc(c: Checker, p: ProcDecl): void {
   const { declared, implicit } = procNames(p);
+  const objects = knownObjects(p, c.controls, c.module);
   if (p.name === BARE_PROC) for (const n of c.bareExtra) declared.add(n);
   const shadowed = (k: string) => declared.has(k) || c.module.has(k);
   const known = (k: string) => shadowed(k) || c.globals.has(k) || isLanguageName(k) || BUILTIN_OBJECTS.has(k) || (c.me?.has(k) ?? false);
@@ -317,6 +419,11 @@ function checkProc(c: Checker, p: ProcDecl): void {
         if (c.me && !c.me.has(lc(name))) c.report(noMember('Form', name, method));
         return;
       }
+      const cls = objects.get(k);
+      if (cls) {
+        if (!cls.members.has(lc(name))) c.report(`${obj.name} is a ${cls.label}, which has no ${name} ${method ? 'method' : 'property'}; it has ${cls.has}.`);
+        return;
+      }
       const ctl = control(k);
       if (ctl) {
         if (!ctl.array && !controlHasMember(ctl.type, name, false)) c.report(noMember(ctl.type, name, method));
@@ -371,6 +478,13 @@ function checkProc(c: Checker, p: ProcDecl): void {
     } else expr(t);
   };
   const items = (list: PrintItem[]) => { for (const it of list) { if (it.expr) expr(it.expr); if (it.fn?.arg) expr(it.fn.arg); } };
+  /** `Control.Prop = ...` of a property that is read-only at run time (error 383), e.g. a menu's WindowList. */
+  const readOnly = (t: Expr) => {
+    if (t.kind !== 'member' || t.object.kind !== 'name') return;
+    const ctl = control(lc(t.object.name));
+    const pd = ctl && !ctl.array ? getPropDef(ctl.type, t.name) : undefined;
+    if (pd?.runtime === 'ro') c.report(`${t.object.name}.${pd.name} is read-only at run time (error 383); it is set at design time, not in code.`);
+  };
   const stmts = (body: Stmt[]): void => {
     for (const s of body) {
       switch (s.kind) {
@@ -378,7 +492,7 @@ function checkProc(c: Checker, p: ProcDecl): void {
         case 'const': for (const d of s.decls) expr(d.value); break;
         case 'redim': for (const d of s.decls) for (const b of d.bounds) { if (b.lower) expr(b.lower); expr(b.upper); } break;
         case 'erase': break;
-        case 'assign': target(s.target); expr(s.value); break;
+        case 'assign': target(s.target); readOnly(s.target); expr(s.value); break;
         case 'call':
           if (s.target.kind === 'name') callTarget(s.target.name, s.args, false);
           else if (s.target.kind === 'member') member(s.target.object, s.target.name, true);
@@ -515,8 +629,8 @@ export function validateCode(code: string, ctx: ValidateContext): string[] {
     // an error on the wrapper's End Sub (line count + 1) belongs to the body: a block it left open, an End Sub too many
     if (bare && (line < 1 || line > count + 1)) continue;
     const un = PARSER_UNSUPPORTED.exec(e.message);
-    if (un) report(`Line ${line}: ${unsupported(un[1])}`);
-    else report(`Line ${line}: ${e.message}`);
+    const stmt = (sourceLines[e.line - 1] ?? '').trim();
+    report(syntaxProblem(line, bare && line > count ? '' : stmt, un ? unsupported(un[1]) : e.message));
   }
 
   const procs = listProcedures(code);
