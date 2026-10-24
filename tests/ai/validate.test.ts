@@ -460,3 +460,28 @@ test('MDI: MDIForm_ events on the MDI form, New of a form, ActiveForm and Arrang
   expect(check('Private Sub Form_Load()\nEnd Sub').join()).toContain('MDIForm_Load');
   expect(check('Private Sub MDIForm_KeyPress(KeyAscii As Integer)\nEnd Sub').join()).toContain('no KeyPress event');
 });
+
+test('#4 a bare body with an End Sub too many is reported (an error on the wrapper End line counts); its own last End line is dropped', () => {
+  const f = form();
+  expect(validateCode('    Debug.Print 2\nEnd Sub', { moduleName: 'Form1', form: f })).toEqual([]);
+  // the End Sub closes the dummy wrapper; its own End Sub then stands outside: the error is on the wrapper's line
+  expect(validateCode("    Debug.Print 1\nEnd Sub\n' done", { moduleName: 'Form1', form: f }).join()).toMatch(/^Line 4: /);
+});
+
+test('#13 methods of an Implements interface are not taken for event procedures', () => {
+  const p = newProject();
+  p.modules.push({ id: 'c1', name: 'IShape', kind: 'class', instancing: 1, code: 'Public Sub Paint()\nEnd Sub\nPublic Sub Click()\nEnd Sub' } as never);
+  const f = p.forms[0];
+  const code = 'Implements IShape\n\nPrivate Sub IShape_Paint()\nEnd Sub\n\nPrivate Sub IShape_Click()\nEnd Sub';
+  expect(validateCode(code, { moduleName: f.name, form: f, project: p }).join()).not.toContain('no control named IShape');
+  f.code = 'Implements IShape';   // the form already implements it
+  expect(validateCode('Private Sub IShape_Paint()\nEnd Sub', { moduleName: f.name, form: f, project: p }).join()).not.toContain('no control named IShape');
+});
+
+test('#14 on the MDI form the event-name autofix writes MDIForm_', () => {
+  const mdi = newMdiForm('MDIForm1');
+  expect(autoFixEventNames('Private Sub MDIForm1_Load()\nEnd Sub', mdi)).toEqual({ code: 'Private Sub MDIForm_Load()\nEnd Sub', notes: ['Renamed MDIForm1_Load to MDIForm_Load'] });
+  expect(autoFixEventNames('Private Sub Form_Load()\nEnd Sub', mdi)).toEqual({ code: 'Private Sub MDIForm_Load()\nEnd Sub', notes: ['Renamed Form_Load to MDIForm_Load'] });
+  expect(autoFixEventNames('Private Sub MDIForm_Load()\nEnd Sub', mdi).notes).toEqual([]);
+  expect(autoFixEventNames('Private Sub Form_KeyPress(KeyAscii As Integer)\nEnd Sub', mdi).notes).toEqual([]);   // no such MDI event
+});

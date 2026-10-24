@@ -61,22 +61,26 @@ function signatureProblem(procName: string, declared: Param[], params: string, a
 }
 
 const eventsOf = (type: ControlType): Set<string> => new Set(CONTROL_TYPES[type].events.map(e => e.name.toLowerCase()));
-const FORM_EVENTS = (): Map<string, string> => new Map(CONTROL_TYPES.Form.events.map(e => [e.name.toLowerCase(), e.name]));
-
-/** "Form1_Load" -> "Form_Load": VB6 form events always use the name Form_. Only the Sub header changes. */
-export function autoFixEventNames(code: string, formName: string): { code: string; notes: string[] } {
+/**
+ * "Form1_Load" -> "Form_Load": VB6 form events always use the name Form_ (MDIForm_ on the MDI form, where "Form_Load" becomes
+ * "MDIForm_Load" too). Only the Sub header changes. `form` is the form, or just its name (a normal form).
+ */
+export function autoFixEventNames(code: string, form: string | { name: string; mdi?: boolean }): { code: string; notes: string[] } {
   const notes: string[] = [];
-  if (!formName || formName.toLowerCase() === 'form') return { code, notes };
-  const formEvents = FORM_EVENTS();
+  const f = typeof form === 'string' ? { name: form, mdi: false } : { name: form.name, mdi: !!form.mdi };
+  const target = formObjectName(f);
+  const prefixes = [f.name, ...(f.mdi ? ['Form'] : [])].map(n => `${n.toLowerCase()}_`).filter(p => p !== `${target.toLowerCase()}_`);
+  if (!f.name || !prefixes.length) return { code, notes };
+  const events = new Map(formEvents(f).map(e => [e.name.toLowerCase(), e.name]));
   const re = /^(\s*(?:(?:Public|Private|Friend|Static)\s+)*Sub\s+)([A-Za-z_][A-Za-z0-9_]*)(?=\s*(?:\(|$|'))/i;
-  const prefix = `${formName.toLowerCase()}_`;
   const lines = code.split('\n').map(line => {
     const m = re.exec(line.replace(/\r$/, ''));
-    if (!m || !m[2].toLowerCase().startsWith(prefix)) return line;
-    const ev = formEvents.get(m[2].slice(prefix.length).toLowerCase());
+    const prefix = m && prefixes.find(p => m[2].toLowerCase().startsWith(p));
+    if (!m || !prefix) return line;
+    const ev = events.get(m[2].slice(prefix.length).toLowerCase());
     if (!ev) return line;
-    notes.push(`Renamed ${m[2]} to Form_${ev}`);
-    return `${m[1]}Form_${ev}${line.slice(m[0].length)}`;
+    notes.push(`Renamed ${m[2]} to ${target}_${ev}`);
+    return `${m[1]}${target}_${ev}${line.slice(m[0].length)}`;
   });
   return { code: lines.join('\n'), notes };
 }
@@ -499,13 +503,17 @@ export function validateCode(code: string, ctx: ValidateContext): string[] {
   const report = (m: string) => { if (!problems.includes(m)) problems.push(m); };
   // A bare body (no Sub header) is checked inside a dummy Sub; line numbers stay the same.
   const bare = listProcedures(code).length === 0 && code.split(/\r?\n/).some(l => !DECL_OR_COMMENT.test(l));
-  const source = bare ? `Sub ${BARE_PROC}()\n${code}\nEnd Sub` : code;
+  // the End line a bare body may end with is dropped by the merge (it keeps the procedure's own), so it is not checked either
+  const bodyLines = code.split(/\r?\n/);
+  if (bare) while (bodyLines.length > 1 && /^\s*End\s+(Sub|Function|Property)\b/i.test(bodyLines[bodyLines.length - 1])) bodyLines.pop();
+  const source = bare ? `Sub ${BARE_PROC}()\n${bodyLines.join('\n')}\nEnd Sub` : code;
   const parsed = parseModuleLenient(source, ctx.moduleName);
   const sourceLines = source.split(/\r?\n/);
-  const count = code.split(/\r?\n/).length;
+  const count = bodyLines.length;
   for (const e of parsed.errors) {
     const line = bare ? e.line - 1 : e.line;
-    if (bare && (line < 1 || line > count)) continue;
+    // an error on the wrapper's End Sub (line count + 1) belongs to the body: a block it left open, an End Sub too many
+    if (bare && (line < 1 || line > count + 1)) continue;
     const un = PARSER_UNSUPPORTED.exec(e.message);
     if (un) report(`Line ${line}: ${unsupported(un[1])}`);
     else report(`Line ${line}: ${e.message}`);
@@ -527,8 +535,10 @@ export function validateCode(code: string, ctx: ValidateContext): string[] {
     for (const c of ctx.extraControls ?? []) controls.set(lc(c.name), c.type);
     const decls = new Map((bare ? [] : parsed.ast?.procedures ?? []).map(d => [lc(d.name), d] as const));
     // `Private WithEvents w As Worker`: w_Event handles the class's events, not a control's
-    const eventVars = new Set([...parsed.ast?.variables ?? [], ...parseModuleLenient(ctx.form.code, ctx.moduleName).ast?.variables ?? []]
-      .filter(v => v.withEvents).map(v => lc(v.name)));
+    // and `Implements IShape`: IShape_Paint is the interface's method, whatever its name looks like
+    const formAst = parseModuleLenient(ctx.form.code, ctx.moduleName).ast;
+    const eventVars = new Set([...parsed.ast?.variables ?? [], ...formAst?.variables ?? []].filter(v => v.withEvents).map(v => lc(v.name)));
+    for (const n of [...parsed.ast?.implements ?? [], ...formAst?.implements ?? []]) eventVars.add(lc(n));
     for (const p of procs) {
       if (p.kind !== 'sub' || p.property) continue;
       const us = p.name.lastIndexOf('_');
