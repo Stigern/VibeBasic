@@ -2,12 +2,15 @@
 
 # VibeBasic
 
-A Visual Basic 6 clone for macOS, Windows and Linux, with the authentic Windows 98 look and a built-in AI assistant that runs on your own local model.
+A Visual Basic 6 clone for macOS, Windows and Linux, with the authentic Windows 98 look and a built-in AI assistant that connects to OpenAI-compatible servers, including your own local model.
 
-![VibeBasic: a form in the designer next to its code](docs/images/screenshot.png)
+![VibeBasic 0.10.2: the AI Wizard with program description, appearance, improvements and live request preview](docs/images/screenshot.png)
+
+The AI Wizard in 0.10.2: describe a program, choose its appearance and features, and review the request before creating it.
 
 ## What it does
 
+- **New and recent projects:** the startup chooser offers Standard EXE, MDI Application, Sub Main, Data Project and AI Wizard, plus Existing and Recent tabs. File > New Project opens it again; recently opened and saved projects also appear in the File menu.
 - **Form designer:** drag controls onto a form, set their properties and double-click to write event code.
 - **Menus:** Tools > Menu Editor (Ctrl+E) builds a form's menus as in VB6: `&` access keys, separators, submenus, Checked, Enabled and Visible, Shortcut keys, menu control arrays (`Load mnuMRU(i)` for a recent-files list) and `PopupMenu` for context menus. Each form window draws its own Win98 menu bar under its title bar, on every system (on macOS a program's menus never go into the menu bar at the top of the screen). On macOS a Ctrl shortcut also answers to Cmd, except Cmd+C, X, V, A, Z, W and Q, which stay with the Mac.
 - **MDI:** Project > Add MDI Form makes the project's MDI form (the AppWorkspace grey; it holds aligned controls such as a Toolbar, a StatusBar or a PictureBox with Align, and invisible ones). Forms with `MDIChild = True` open inside it as Win98 child windows that move, resize, minimize and maximize within it ("MDIForm1 - [Form2]"); `Arrange`, `ActiveForm`, the Window list menu and merged child menus work as in VB6, and `Dim f As New Form2: f.Show` opens another instance of a form.
@@ -81,6 +84,10 @@ APPLE_SIGNING_IDENTITY="Apple Development: Your Name (TEAMID)"
 ## AI setup
 
 Set up the AI under Tools > Options > AI. Enter the server's base URL, for example `http://<host>:11434/v1` for Ollama or `http://<host>:8000/v1` for vLLM, and press Test Connection: it picks the model, and finds out whether the server understands pictures and structured output. A vision model (such as Qwen3-VL or a multimodal Qwen) lets the AI see your forms. Thinking sets how hard a reasoning model thinks; Low is the fastest.
+
+To create a program, choose **Tools > AI Wizard...** or **File > New Project > AI Wizard**. Start from an example or describe your own program, choose its colours, language and size, and adjust the improvements and sliders. The request updates as you make choices; Copy puts it on the clipboard. Press Create to ask the AI, then review the generated form and code before applying them.
+
+You can open and explore the wizard before configuring AI. If setup is needed when you press Create, save the server and model in Options to continue with the same request. If you turned off the startup chooser, the wizard remains available under Tools; **Tools > Options > General > Prompt for project at startup** restores the chooser.
 
 ## Status
 
