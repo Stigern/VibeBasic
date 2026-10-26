@@ -32,6 +32,7 @@ Describe a program, choose its appearance and features, and review the request b
 - **AI assistant:** connects to any OpenAI-compatible server, such as Ollama or vLLM.
   - **AI Wizard** under Tools or File > New Project builds a new program from your description. Pick an example, colours, language, form size and improvements, then review the request before creating it. You can explore the wizard before setting up an AI server.
   - Ask AI (Ctrl+I) writes code in the code window, or lays out controls in the form designer.
+  - The Ask AI dialog shows the context to send. Choose selected code, the current procedure or the whole code file; optionally ask for a minimal change, preserve the layout or request an explanation. Include a schematic of the current form from either the designer or its code window, and attach up to two reference images (PNG, JPEG or WebP, at most 5 MiB each). Thumbnails and remove buttons let you review the attachments before sending. These choices do not change the global AI preferences; if a server omits images, the answer or proposal shows a warning.
   - **Ask AI** in the error dialog suggests a fix for the line that failed.
   - Every suggestion is shown as a preview. You can refine it with **Change...**, and it is applied as one undo step.
   - With a vision model, the AI sees a picture of your form. A layout check catches overlapping controls and cut-off captions, and the AI places controls relative to each other ("below Text1", "arrange as a row").

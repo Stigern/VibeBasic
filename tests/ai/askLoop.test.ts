@@ -40,7 +40,7 @@ async function start(b: Backend) {
   const p = askAi(s, b, { codeWindowFor: () => null });
   await vi.waitFor(() => expect(document.querySelector('.ai-prompt')).toBeTruthy());
   (document.querySelector('.ai-prompt') as HTMLTextAreaElement).value = 'Lag et finansprogram';
-  btn('OK')!.click();
+  btn('Ask AI')!.click();
   return { s, p };
 }
 const OBSERVED = '{"op":"form","props":{"Caption":"Financial Manager","Width":4800,"Height":4800}},';

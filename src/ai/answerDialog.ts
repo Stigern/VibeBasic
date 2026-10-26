@@ -59,14 +59,15 @@ async function askMore(doc: Document): Promise<string | null> {
 }
 
 /** Shows the answer until OK (resolves 'ok') or Ask more... with a text typed in. Copy copies the whole answer. */
-export async function showAnswer(doc: Document, reply: string, metrics: string, copy: (text: string) => Promise<void> | void): Promise<'ok' | { more: string }> {
+export async function showAnswer(doc: Document, reply: string, metrics: string, copy: (text: string) => Promise<void> | void, imageWarnings: string[] = []): Promise<'ok' | { more: string }> {
   const text = stripThinking(reply);
   const box = h('div', {
     class: 'ai-answer-box', 'aria-readonly': 'true', tabindex: '0',
     style: 'box-sizing:border-box;width:520px;max-height:320px;overflow-y:auto;padding:4px 6px;background:#fff;color:#000;user-select:text;'
       + 'box-shadow:inset -1px -1px #fff,inset 1px 1px #808080,inset -2px -2px #dfdfdf,inset 2px 2px #0a0a0a',
   }, ...renderAnswer(text));
-  const content = h('div', {}, ...(metrics ? [h('div', { class: 'ai-metrics', style: 'color:#808080;margin-bottom:4px' }, metrics)] : []), box);
+  const content = h('div', {}, ...(metrics ? [h('div', { class: 'ai-metrics', style: 'color:#808080;margin-bottom:4px' }, metrics)] : []),
+    ...imageWarnings.map(t => h('div', { class: 'ai-image-warning', style: 'color:#800000;margin-bottom:6px' }, t)), box);
   for (;;) {
     const top = box.scrollTop;
     const shown = showDialog98(doc, {

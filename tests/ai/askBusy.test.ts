@@ -33,7 +33,7 @@ function setup() {
 async function enterPrompt() {
   await vi.waitFor(() => expect(document.querySelector('.ai-prompt')).toBeTruthy());
   (document.querySelector('.ai-prompt') as HTMLTextAreaElement).value = 'x';
-  click('OK');
+  click('Ask AI');
 }
 
 test('a modal dialog covers the server detection, and the IDE is busy: no second Ask AI', async () => {

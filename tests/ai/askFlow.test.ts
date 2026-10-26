@@ -20,9 +20,9 @@ const click = (label: string) => btn(label)!.click();
 const shown = async (label: string) => { await vi.waitFor(() => expect(btn(label)).toBeTruthy()); };
 const text = () => [...document.querySelectorAll('.dlg98')].map(d => d.textContent).join('|');
 async function enterPrompt(t: string) {
-  await shown('OK');
+  await shown('Ask AI');
   (document.querySelector('.ai-prompt') as HTMLTextAreaElement).value = t;
-  click('OK');
+  click('Ask AI');
 }
 const codeWin = (src: string, line = 1) => {
   const w = { src, getSource: () => w.src, getCursorLine: () => line, applyChange: vi.fn((a: number, b: number, t: string) => { w.src = w.src.slice(0, a) + t + w.src.slice(b); }) };
@@ -75,7 +75,7 @@ test('code mode happy path applies one transaction', async () => {
 
 test('dialog title names the item and mode', async () => {
   const p = askAi(ide('designer'), fakeBackend('m', async () => ''), { codeWindowFor: () => null });
-  await shown('OK');
+  await shown('Ask AI');
   expect(document.querySelector('.dlg98 .title-bar-text')!.textContent).toBe('Ask AI - Form1 (Form)');
   click('Cancel');
   await p;

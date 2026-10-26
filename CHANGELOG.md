@@ -4,6 +4,25 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-26
+
+### Added
+- Ask AI now lets you choose selected code, the current procedure or the whole code file, with optional instructions to make a minimal change, preserve the layout or explain the changes.
+- Include a schematic of the current form from either the designer or its code window. Attach up to two PNG, JPEG or WebP reference images (5 MiB each), review their thumbnails and remove them before sending. Per-request choices keep the global AI preferences unchanged.
+- A larger request field, side-by-side image cards with enlarged previews, a compact context summary with expandable details, visible model/image support and an explicit Ask AI button. Keyboard shortcuts and small-window scrolling remain available.
+- Requested explanations appear separately in code and form proposal previews. Image omissions caused by model or server limits are disclosed before accepting a proposal.
+
+### Changed
+- Automatic repair keeps the better validated proposal: fewer syntax errors first, then fewer other problems. Ties retain the original answer, and Change continues from the proposal actually displayed.
+- Form requests ask for fixed fonts, colors and captions as design-time properties, so the designer and running form agree.
+
+### Fixed
+- An empty Ask AI request no longer discards attached images and scope choices.
+- Resizing WebP references preserves transparency instead of converting them to JPEG. Invalid and oversized attachments report errors without discarding the draft.
+- Unfenced VB responses are not duplicated in the explanation panel.
+- Closing an image preview restores keyboard focus even if a pending attachment rebuilt its original thumbnail. Context details can be opened with Enter without sending the request.
+- Omitted image warnings identify the correct attachment role even when reference and form pictures contain identical image data.
+
 ## [0.11.2] - 2026-10-26
 
 ### Changed

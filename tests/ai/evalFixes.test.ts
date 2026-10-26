@@ -23,9 +23,9 @@ const btn = (label: string) => [...document.querySelectorAll<HTMLButtonElement>(
 const click = (label: string) => btn(label)!.click();
 const text = () => [...document.querySelectorAll('.dlg98')].map(d => d.textContent).join('|');
 async function enterPrompt(t: string) {
-  await vi.waitFor(() => expect(btn('OK')).toBeTruthy());
+  await vi.waitFor(() => expect(btn('Ask AI')).toBeTruthy());
   (document.querySelector('.ai-prompt') as HTMLTextAreaElement).value = t;
-  click('OK');
+  click('Ask AI');
 }
 const codeWin = (src: string) => {
   const w = { src, getSource: () => w.src, getCursorLine: () => 1, applyChange: vi.fn((a: number, b: number, t: string) => { w.src = w.src.slice(0, a) + t + w.src.slice(b); }) };

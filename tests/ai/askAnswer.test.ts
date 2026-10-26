@@ -23,7 +23,7 @@ const text = () => [...document.querySelectorAll('.dlg98')].map(d => d.textConte
 async function enterPrompt(t: string) {
   await vi.waitFor(() => expect(document.querySelector('.ai-prompt')).toBeTruthy());
   (document.querySelector('.ai-prompt') as HTMLTextAreaElement).value = t;
-  click('OK');
+  click('Ask AI');
 }
 function ide() {
   const s = new IdeState(newProject());

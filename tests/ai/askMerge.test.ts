@@ -25,9 +25,9 @@ test('a merge that would declare a name twice: retried once, then not understood
     aiChat: vi.fn(async () => reply),
   } as unknown as Backend & { aiChat: ReturnType<typeof vi.fn> };
   const p = askAi(s, b, { codeWindowFor: () => w as never });
-  await vi.waitFor(() => expect(btn('OK')).toBeTruthy());
+  await vi.waitFor(() => expect(btn('Ask AI')).toBeTruthy());
   (document.querySelector('.ai-prompt') as HTMLTextAreaElement).value = 'x';
-  click('OK');
+  click('Ask AI');
   await vi.waitFor(() => expect(text()).toContain('could not be understood'));
   expect(b.aiChat).toHaveBeenCalledTimes(2);
   expect(b.aiChat.mock.calls[1][3].at(-1).content).toContain('would declare a twice');

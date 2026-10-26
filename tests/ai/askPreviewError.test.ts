@@ -22,9 +22,9 @@ test('a failing preview shows the not-understood dialog with the error in Detail
     aiChat: async () => '{"ops":[{"op":"delete","name":"Command1"}]}',
   } as unknown as Backend;
   const p = askAi(s, backend, { codeWindowFor: () => null });
-  await vi.waitFor(() => expect(btn('OK')).toBeTruthy());
+  await vi.waitFor(() => expect(btn('Ask AI')).toBeTruthy());
   (document.querySelector('.ai-prompt') as HTMLTextAreaElement).value = 'x';
-  btn('OK')!.click();
+  btn('Ask AI')!.click();
   await vi.waitFor(() => expect(btn('Details...')).toBeTruthy());
   btn('Details...')!.click();
   await vi.waitFor(() => expect((document.querySelector('.ai-details') as HTMLTextAreaElement)?.value).toContain('preview boom'));

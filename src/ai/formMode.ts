@@ -23,7 +23,7 @@ export type FormOp =
   | { op: 'delete'; name: string; index: number | null }
   | { op: 'form'; props: Record<string, PropValue> };
 export type ParsedFormOps =
-  | { ok: true; ops: FormOp[]; code: string | null; warnings: string[]; codeChanges?: CodeApplyResult['changes']; codeText?: string; codeSkipped?: string[];
+  | { ok: true; ops: FormOp[]; code: string | null; warnings: string[]; explanation?: string; codeChanges?: CodeApplyResult['changes']; codeText?: string; codeSkipped?: string[];
       /** What the answer asked for but could not be done (also in `warnings`), with what would be valid: problems for the check-and-fix round. */
       issues?: string[];
       /** Added controls renamed because their name was taken: `from` (what the answer asked for, still the existing control) to `to`. */
@@ -86,6 +86,7 @@ export const FORM_OPS_SCHEMA = {
       },
     },
     code: TEXT,
+    explanation: TEXT,
   },
   required: ['ops'],
   additionalProperties: false,
@@ -485,7 +486,7 @@ export function parseFormOps(reply: string, form: FormDef, fixCode?: (code: stri
   if (!ops.length && code === null) {
     return warnings.length ? { ...fail, raw: `${reply}\n\nIgnored:\n${warnings.join('\n')}`, ...(issues.length ? { issues } : {}) } : fail;
   }
-  return { ok: true, ops, code, warnings, ...(codeChanges ? { codeChanges } : {}), ...(code !== null && text !== undefined ? { codeText: text } : {}), ...(codeSkipped ? { codeSkipped } : {}),
+  return { ok: true, ops, code, warnings, ...(typeof json.explanation === 'string' ? { explanation: json.explanation.trim().slice(0, 2000) } : {}), ...(codeChanges ? { codeChanges } : {}), ...(code !== null && text !== undefined ? { codeText: text } : {}), ...(codeSkipped ? { codeSkipped } : {}),
     ...(renamed.length ? { renamed } : {}), ...(issues.length ? { issues } : {}) };
 }
 

@@ -39,7 +39,7 @@ async function askForm(b: Backend, s = designer()) {
   const p = askAi(s, b, { codeWindowFor: () => null });
   await vi.waitFor(() => expect(document.querySelector('.ai-prompt')).toBeTruthy());
   (document.querySelector('.ai-prompt') as HTMLTextAreaElement).value = 'make a login form';
-  btn('OK')!.click();
+  btn('Ask AI')!.click();
   await vi.waitFor(() => expect(text()).toContain('AI Suggestion'));
   btn('Cancel')!.click();
   await p;

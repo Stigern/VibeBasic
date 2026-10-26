@@ -18,9 +18,9 @@ const btn = (label: string) => [...document.querySelectorAll<HTMLButtonElement>(
 const click = (label: string) => btn(label)!.click();
 const text = () => [...document.querySelectorAll('.dlg98')].map(d => d.textContent).join('|');
 async function enterPrompt(t: string) {
-  await vi.waitFor(() => expect(btn('OK')).toBeTruthy());
+  await vi.waitFor(() => expect(btn('Ask AI')).toBeTruthy());
   (document.querySelector('.ai-prompt') as HTMLTextAreaElement).value = t;
-  click('OK');
+  click('Ask AI');
 }
 const codeWin = (src: string) => {
   const w = { src, getSource: () => w.src, getCursorLine: () => 1, applyChange: vi.fn((a: number, b: number, t: string) => { w.src = w.src.slice(0, a) + t + w.src.slice(b); }) };
@@ -38,6 +38,70 @@ afterEach(() => { document.body.innerHTML = ''; });
 
 const GOOD = '```vb\nPrivate Sub Command1_Click()\n    MsgBox "Hi"\nEnd Sub\n```';
 const BAD_SYNTAX = '```vb\nPrivate Sub Command1_Click()\n    If x Then\nEnd Sub\n```';
+
+const candidate = (label: string, body: string) => `\`\`\`vb\nPrivate Sub Command1_Click()\n    MsgBox "${label}"\n${body}\nEnd Sub\n\`\`\``;
+const FIRST_PROBLEM = candidate('First', '    MissingOne');
+const MORE_PROBLEMS = candidate('Second', '    MissingOne\n    MissingTwo');
+const SYNTAX_PROBLEM = candidate('Syntax', '    If True Then');
+
+test.each([
+  { title: 'more validation problems', first: FIRST_PROBLEM, second: MORE_PROBLEMS, kept: 'First' },
+  { title: 'equal validation counts', first: FIRST_PROBLEM, second: candidate('Second', '    MissingTwo'), kept: 'First' },
+  { title: 'fewer validation problems', first: MORE_PROBLEMS, second: FIRST_PROBLEM, kept: 'First' },
+  { title: 'new syntax error despite fewer other problems', first: MORE_PROBLEMS, second: SYNTAX_PROBLEM, kept: 'Second' },
+  { title: 'fixed syntax despite more other problems', first: SYNTAX_PROBLEM, second: MORE_PROBLEMS, kept: 'Second' },
+  { title: 'equal syntax counts', first: SYNTAX_PROBLEM, second: candidate('Second', '    If True Then'), kept: 'Syntax' },
+])('repair selection: $title', async ({ first, second, kept }) => {
+  const w = codeWin('Private Sub Command1_Click()\nEnd Sub');
+  const b = fakeBackend([first, second]);
+  const p = askAi(ide('code'), b, { codeWindowFor: () => w as any });
+  await enterPrompt('update the click handler');
+  await vi.waitFor(() => expect(text()).toContain('AI Suggestion'));
+  expect(b.aiChat).toHaveBeenCalledTimes(2);
+  expect(document.querySelector('.ai-after')?.textContent).toContain(`MsgBox "${kept}"`);
+  click('OK');
+  await p;
+  expect(w.src).toContain(`MsgBox "${kept}"`);
+});
+
+test.each([
+  { title: 'worse', first: { InvalidOne: 1 }, second: { InvalidOne: 1, InvalidTwo: 1 }, kept: 'First' },
+  { title: 'tied', first: { InvalidOne: 1 }, second: { InvalidTwo: 1 }, kept: 'First' },
+  { title: 'better', first: { InvalidOne: 1 }, second: {}, kept: 'Second' },
+])('form repair selection: $title', async ({ first, second, kept }) => {
+  const s = ide('designer');
+  const reply = (caption: string, invalid: object) => JSON.stringify({ ops: [{ op: 'form', props: { Caption: caption, ...invalid } }] });
+  const b = fakeBackend([reply('First', first), reply('Second', second)]);
+  const p = askAi(s, b, { codeWindowFor: () => null });
+  await enterPrompt('change the form caption');
+  await vi.waitFor(() => expect(text()).toContain('AI Suggestion'));
+  expect(b.aiChat).toHaveBeenCalledTimes(2);
+  expect(document.querySelector('.ai-ops')?.textContent).toContain(kept);
+  click('OK');
+  await p;
+  expect(s.project.forms[0].props.Caption).toBe(kept);
+});
+
+test('Change continues from the displayed first proposal after a worse repair', async () => {
+  const w = codeWin('Private Sub Command1_Click()\nEnd Sub');
+  const b = fakeBackend([FIRST_PROBLEM, MORE_PROBLEMS, GOOD]);
+  const p = askAi(ide('code'), b, { codeWindowFor: () => w as any });
+  await enterPrompt('update the click handler');
+  await vi.waitFor(() => expect(text()).toContain('AI Suggestion'));
+  expect(document.querySelector('.ai-after')?.textContent).toContain('MsgBox "First"');
+  click('Change...');
+  await vi.waitFor(() => expect(document.querySelector('.ai-change')).toBeTruthy());
+  (document.querySelector('.ai-change') as HTMLInputElement).value = 'show Hi instead';
+  click('OK');
+  await vi.waitFor(() => expect(document.querySelector('.ai-after')?.textContent).toContain('MsgBox "Hi"'));
+  const messages = b.aiChat.mock.calls[2][3];
+  expect(messages.slice(0, -1)).toEqual([...b.aiChat.mock.calls[0][3], { role: 'assistant', content: FIRST_PROBLEM }]);
+  expect(messages.at(-1).content).toContain('show Hi instead');
+  click('OK');
+  await p;
+  expect(b.aiChat).toHaveBeenCalledTimes(3);
+  expect(w.src).toContain('MsgBox "Hi"');
+});
 
 test('thinking level is passed to aiChat; server default sends nothing', async () => {
   const w = codeWin('Private Sub Command1_Click()\nEnd Sub');
