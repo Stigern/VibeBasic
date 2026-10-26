@@ -1,5 +1,6 @@
 mod ai;
 mod ai_lan;
+mod tailscale;
 mod appinfo;
 mod ai_settings;
 mod clipboard;

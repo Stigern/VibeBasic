@@ -26,6 +26,8 @@ export async function searchLanDialog(doc: Document, backend: LanBackend, apiKey
   const servers = new Map<string, LanServer>();
   const ports = h('input', { type: 'text', value: DEFAULT_PORTS, class: 'lan98-ports', 'aria-label': 'Ports' });
   const link = check('Include link-local networks (169.254.x.x)', false);
+  const tailscale = check('Include Tailscale peers', false);
+  tailscale.el.classList.add('lan98-tailscale');
   const key = check('Use API key when searching', false);
   key.el.classList.add('lan98-key'); key.input.disabled = !apiKey.trim();
   const networkList = h('div', { class: 'lan98-networks', role: 'group', 'aria-label': 'Networks to scan' });
@@ -42,14 +44,14 @@ export async function searchLanDialog(doc: Document, backend: LanBackend, apiKey
   const clearRecent = h('button', { type: 'button', disabled: true }, 'Clear Recent');
   const recentRow = h('div', { class: 'lan98-recent', hidden: true }, field('Recent:', recent), useRecent, clearRecent);
   const content = h('div', { class: 'lan98' },
-    h('div', {}, 'Find Ollama, LM Studio, vLLM and other OpenAI-compatible servers on this computer and your local network. Review the networks and ports, then press Start.'),
+    h('div', {}, 'Find Ollama, LM Studio, vLLM and other OpenAI-compatible servers on this computer, your LAN or Tailscale. Review the networks and ports, then press Start.'),
     field('Ports:', ports), h('div', {}, 'Defaults: Ollama 11434, LM Studio 1234, vLLM 8000, llama.cpp 8080.'),
-    link.el, key.el, recentRow, h('div', {}, 'Networks to scan:'), networkList, summary,
-    h('div', {}, 'Localhost is always checked. Private IPv4 networks only, capped to /24 and 1,024 hosts. No public addresses or IPv6.'),
+    tailscale.el, link.el, key.el, recentRow, h('div', {}, 'Networks and devices to scan:'), networkList, summary,
+    h('div', {}, 'Localhost is always checked. LAN: selected private IPv4 networks, at most /24. Tailscale: selected known peers only. Up to 1,024 hosts; no IPv6.'),
     progress, status, results, details, h('div', { class: 'lan98-actions' }, start, stop, use));
   const updateButtons = () => {
     start.disabled = loading || !preferencesReady || running; stop.disabled = !running; use.disabled = running || !selected;
-    ports.disabled = link.input.disabled = running || !preferencesReady;
+    ports.disabled = link.input.disabled = tailscale.input.disabled = running || !preferencesReady;
     key.input.disabled = running || !apiKey.trim();
     for (const n of networks) n.input.disabled = running;
     useRecent.disabled = clearRecent.disabled = running || !recent.value;
@@ -58,7 +60,7 @@ export async function searchLanDialog(doc: Document, backend: LanBackend, apiKey
     try {
       const count = 1 + networks.filter(n => n.input.checked).reduce((sum, n) => sum + n.network.hostCount, 0);
       const portCount = parseLanPorts(ports.value).length;
-      summary.textContent = `${count} ${count === 1 ? 'host' : 'hosts'} × ${portCount} ${portCount === 1 ? 'port' : 'ports'}. Connections: 250 ms timeout, at most 64 at once. Open ports are checked for an AI model API.`;
+      summary.textContent = `${count} ${count === 1 ? 'host' : 'hosts'} × ${portCount} ${portCount === 1 ? 'port' : 'ports'}. Connections: ${tailscale.input.checked ? 'LAN 250 ms, Tailscale 2 s' : '250 ms'} timeout, at most 64 at once. Open ports are checked for an AI model API.`;
     } catch (e) { summary.textContent = String((e as Error).message); }
   };
   const render = () => {
@@ -110,15 +112,24 @@ export async function searchLanDialog(doc: Document, backend: LanBackend, apiKey
     const turn = ++networkTurn; loading = true; updateButtons();
     const unchecked = new Set(networks.filter(n => !n.input.checked).map(n => n.network.network));
     try {
-      const found = await backend.aiLanNetworks(link.input.checked);
+      let found: LanNetwork[], warning = '';
+      try { found = await backend.aiLanNetworks(link.input.checked, tailscale.input.checked); }
+      catch (e) {
+        if (!alive || turn !== networkTurn) return;
+        if (!tailscale.input.checked) throw e;
+        warning = `Tailscale unavailable: ${(e as Error).message} LAN discovery is still available.`;
+        tailscale.input.checked = false;
+        found = await backend.aiLanNetworks(link.input.checked, false);
+      }
       if (!alive || turn !== networkTurn) return;
       networks = found.map(network => { const box = check(`${network.interface}: ${network.network} (${network.hostCount} hosts)${network.note ? ` — ${network.note}` : ''}`, !unchecked.has(network.network)); box.input.addEventListener('change', updateSummary); return { network, input: box.input, el: box.el }; });
       networkList.replaceChildren(...networks.map(n => n.input.parentElement!));
-      status.textContent = found.length ? 'Ready.' : 'No private network found. Only this computer will be checked.';
+      status.textContent = warning || (found.length ? 'Ready.' : 'No private network found. Only this computer will be checked.');
     } catch (e) { if (alive && turn === networkTurn) { networks = []; networkList.replaceChildren(); status.textContent = `Could not list networks: ${(e as Error).message}`; } }
     finally { if (alive && turn === networkTurn) { loading = false; updateSummary(); updateButtons(); } }
   };
   link.input.addEventListener('change', () => { void loadNetworks(); });
+  tailscale.input.addEventListener('change', () => { void loadNetworks(); });
   ports.addEventListener('input', updateSummary);
   stop.addEventListener('click', () => { controller?.abort(); status.textContent = 'Stopping...'; });
   start.addEventListener('click', () => { void (async () => {
@@ -129,7 +140,7 @@ export async function searchLanDialog(doc: Document, backend: LanBackend, apiKey
     servers.clear(); selected = undefined; progress.value = 0; render(); status.textContent = 'Searching...';
     preferences.ports = parsed.join(', '); void savePreferences();
     try {
-      const found = await backend.aiLanScan({ networks: networks.filter(n => n.input.checked).map(n => n.network.network), ports: parsed, linkLocal: link.input.checked, ...(key.input.checked && apiKey.trim() ? { apiKey } : {}) }, {
+      const found = await backend.aiLanScan({ networks: networks.filter(n => n.input.checked).map(n => n.network.network), ports: parsed, linkLocal: link.input.checked, ...(tailscale.input.checked ? { tailscale: true } : {}), ...(key.input.checked && apiKey.trim() ? { apiKey } : {}) }, {
         signal, onProgress: p => {
           if (!alive || signal.aborted || turn !== scanTurn) return;
           progress.max = Math.max(1, p.total); progress.value = p.completed;
@@ -151,7 +162,7 @@ export async function searchLanDialog(doc: Document, backend: LanBackend, apiKey
     try { if (typeof p?.ports === 'string') ports.value = parseLanPorts(p.ports).join(', '); } catch { /* use defaults */ }
     preferences.ports = ports.value;
     preferences.recent = Array.isArray(p?.recent) ? p.recent.filter((url): url is string => {
-      if (typeof url !== 'string' || !/^http:\/\/(?:127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|169\.254\.\d+\.\d+):\d+\/v1$/.test(url)) return false;
+      if (typeof url !== 'string' || !/^http:\/\/(?:127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|169\.254\.\d+\.\d+|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+):\d+\/v1$/.test(url)) return false;
       try { return Number(new URL(url).port || '80') > 0; } catch { return false; }
     }).slice(0, 5) : [];
     recent.replaceChildren(...preferences.recent.map(url => h('option', { value: url }, url)));

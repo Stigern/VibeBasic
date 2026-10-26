@@ -142,7 +142,7 @@ const FS_PREFIX = 'vibebasic.fs:';
 
 /** Development only: files live in localStorage under `vibebasic.fs:<path>`, dialogs are window.prompt. */
 export class BrowserBackend implements Backend {
-  aiLanNetworks(_linkLocal: boolean): Promise<LanNetwork[]> { return Promise.reject(new Error('LAN search is available in the VibeBasic desktop app.')); }
+  aiLanNetworks(_linkLocal: boolean, _tailscale = false): Promise<LanNetwork[]> { return Promise.reject(new Error('LAN search is available in the VibeBasic desktop app.')); }
   aiLanScan(_request: LanScanRequest, _options?: LanScanOptions): Promise<LanServer[]> { return Promise.reject(new Error('LAN search is available in the VibeBasic desktop app.')); }
   readonly kind = 'browser' as const;
   /** The files of a running program and SaveSetting: in memory, as long as the page lives (development only). */

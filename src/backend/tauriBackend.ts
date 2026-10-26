@@ -278,8 +278,8 @@ export class TauriBackend implements Backend {
     return call<AiModel[]>('ai_list_models', { baseUrl, apiKey });
   }
 
-  aiLanNetworks(linkLocal: boolean): Promise<LanNetwork[]> {
-    return call<LanNetwork[]>('ai_lan_networks', { linkLocal });
+  aiLanNetworks(linkLocal: boolean, tailscale = false): Promise<LanNetwork[]> {
+    return call<LanNetwork[]>('ai_lan_networks', { linkLocal, tailscale });
   }
 
   async aiLanScan(request: LanScanRequest, options: LanScanOptions = {}): Promise<LanServer[]> {

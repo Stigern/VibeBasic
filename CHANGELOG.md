@@ -4,6 +4,13 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-26
+
+### Added
+- AI server discovery over Tailscale: Search LAN > Include Tailscale peers reads the local client's known online IPv4 devices and lets you choose which to check. Only listed peer addresses are probed; the Tailscale address range is never swept. Peer connections have longer timeouts for relayed links, and Tailscale URLs remain available in Recent.
+- A bounded, read-only Tailscale CLI lookup on macOS, Windows and Linux, including the bundled macOS client. Missing, disconnected or unresponsive clients show a useful message while keeping LAN discovery available.
+- Includes the LAN discovery feature below (networks/ports, results, Use, cancellation, key opt-in and remembered servers). Version 0.11.0 was superseded before its downloads were published.
+
 ## [0.11.0] - 2026-10-26
 
 ### Added

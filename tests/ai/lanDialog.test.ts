@@ -98,3 +98,43 @@ test('recent servers can be cleared without starting a scan', async () => {
   expect(s.requests).toEqual([]);
   button('Close').click(); await result;
 });
+
+test('Tailscale peers are individually listed and included only when selected', async () => {
+  const s = setup(); const local = s.backend.aiLanNetworks;
+  s.backend.aiLanNetworks = async (linkLocal, tailscale) => [
+    ...await local(linkLocal),
+    ...(tailscale ? [{ interface: 'Tailscale: ai-box', address: '100.100.2.3', network: '100.100.2.3/32', prefix: 32, hostCount: 1, note: 'known peer' }] : []),
+  ];
+  const result = searchLanDialog(document, s.backend); await waitReady();
+  const toggle = document.querySelector<HTMLInputElement>('.lan98-tailscale input');
+  expect(toggle).not.toBeNull(); expect(toggle!.checked).toBe(false); toggle!.click();
+  await vi.waitFor(() => expect(document.body.textContent).toContain('100.100.2.3/32'));
+  button('Start').click();
+  await vi.waitFor(() => expect(s.requests).toHaveLength(1));
+  expect(s.requests[0]).toMatchObject({ networks: ['192.168.1.0/24', '100.100.2.3/32'], tailscale: true });
+  button('Close').click(); await result; s.finish();
+});
+
+test('unavailable Tailscale leaves LAN discovery usable and reports how to reconnect', async () => {
+  const s = setup(); const local = s.backend.aiLanNetworks;
+  s.backend.aiLanNetworks = async (linkLocal, tailscale) => {
+    if (tailscale) throw new Error('Open Tailscale and connect, then try again.');
+    return local(linkLocal);
+  };
+  const result = searchLanDialog(document, s.backend); await waitReady();
+  const toggle = document.querySelector<HTMLInputElement>('.lan98-tailscale input');
+  expect(toggle).not.toBeNull(); toggle!.click();
+  await vi.waitFor(() => expect(document.body.textContent).toContain('Tailscale unavailable'));
+  expect(toggle!.checked).toBe(false); expect(button('Start').disabled).toBe(false);
+  expect(document.body.textContent).toContain('192.168.1.0/24');
+  button('Close').click(); await result;
+});
+
+test('a previously chosen Tailscale server remains available in Recent without scanning', async () => {
+  const s = setup(); s.settings.set('aiLan', { ports: '8000', recent: ['http://100.100.2.3:8000/v1'] });
+  const result = searchLanDialog(document, s.backend); await waitReady();
+  expect(document.querySelector<HTMLElement>('.lan98-recent')!.hidden).toBe(false);
+  button('Use Recent').click();
+  expect(await result).toMatchObject({ baseUrl: 'http://100.100.2.3:8000/v1' });
+  expect(s.requests).toEqual([]);
+});

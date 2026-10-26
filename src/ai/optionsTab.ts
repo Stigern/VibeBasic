@@ -29,7 +29,7 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
   const picture = createCombo({ items: [PICTURE_LABELS.auto, PICTURE_LABELS.off], value: PICTURE_LABELS.auto, editable: false, onChange: () => { dirty.picture = true; } });
   const test = h('button', { type: 'button' }, 'Test Connection');
   const canSearch = backend.kind === 'tauri' && !!backend.aiLanNetworks && !!backend.aiLanScan;
-  const search = h('button', { type: 'button', disabled: !canSearch, title: canSearch ? 'Find AI servers on this computer and your local network' : 'LAN search is available in the VibeBasic desktop app.' }, 'Search LAN...');
+  const search = h('button', { type: 'button', disabled: !canSearch, title: canSearch ? 'Find AI servers on this computer, your LAN or Tailscale' : 'LAN search is available in the VibeBasic desktop app.' }, 'Search LAN...');
   let probing = false;
   const setProbing = (value: boolean) => {
     probing = value; test.disabled = value; search.disabled = value || !canSearch;

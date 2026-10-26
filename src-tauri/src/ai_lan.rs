@@ -22,7 +22,7 @@ pub struct LanServer {
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LanRequest { networks: Vec<String>, ports: Vec<u16>, link_local: bool, api_key: Option<String> }
+pub struct LanRequest { networks: Vec<String>, ports: Vec<u16>, link_local: bool, #[serde(default)] tailscale: bool, api_key: Option<String> }
 #[derive(Clone, Serialize)]
 pub struct LanProgress { completed: usize, total: usize, found: usize, server: Option<LanServer> }
 
@@ -30,6 +30,7 @@ const MAX_HOSTS: usize = 1024;
 const MAX_BODY: usize = 1_000_000;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
 const IDENTIFY_TIMEOUT: Duration = Duration::from_secs(2);
+const TAILSCALE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn plan_networks(interfaces: Vec<LocalInterface>, link_local: bool) -> Vec<LanNetwork> {
   let mut result = Vec::new();
@@ -53,6 +54,10 @@ fn plan_networks(interfaces: Vec<LocalInterface>, link_local: bool) -> Vec<LanNe
   result
 }
 
+fn peer_network(peer: crate::tailscale::Peer) -> LanNetwork {
+  LanNetwork { interface: format!("Tailscale: {}", peer.name), address: peer.address.to_string(), network: format!("{}/32", peer.address), prefix: 32, host_count: 1, note: "known peer".into() }
+}
+
 fn local_networks(link_local: bool) -> Result<Vec<LanNetwork>, String> {
   let interfaces = if_addrs::get_if_addrs().map_err(|_| "Could not read this computer's network interfaces.".to_string())?;
   let interfaces = interfaces.into_iter().filter_map(|iface| {
@@ -68,21 +73,27 @@ fn local_networks(link_local: bool) -> Result<Vec<LanNetwork>, String> {
 fn targets(networks: &[LanNetwork], selected: &[String], ports: &[u16]) -> Result<Vec<(Ipv4Addr, u16)>, String> {
   let ports: Vec<_> = ports.iter().copied().collect::<HashSet<_>>().into_iter().collect();
   if ports.is_empty() || ports.len() > 16 || ports.contains(&0) { return Err("Choose 1 to 16 ports, each from 1 to 65535.".into()); }
-  if selected.iter().any(|s| !networks.iter().any(|n| &n.network == s)) { return Err("Choose only this computer's listed local networks.".into()); }
+  if selected.iter().any(|s| !networks.iter().any(|n| &n.network == s)) { return Err("Choose only the currently listed LAN networks or Tailscale devices. Reopen the search to refresh them.".into()); }
   let mut hosts = vec![Ipv4Addr::LOCALHOST];
   let mut seen_hosts = HashSet::from([Ipv4Addr::LOCALHOST]);
   for network in networks.iter().filter(|n| selected.contains(&n.network)) {
     let base: Ipv4Addr = network.network.split('/').next().unwrap_or("").parse().map_err(|_| "Invalid local network.")?;
     let first = u32::from(base) + u32::from(network.prefix < 31);
     hosts.extend((0..network.host_count).map(|i| Ipv4Addr::from(first + i as u32)).filter(|host| seen_hosts.insert(*host)));
+    if hosts.len() > MAX_HOSTS + 1 { return Err("Select fewer networks or devices: the search limit is 1,024 hosts plus localhost.".into()); }
   }
   let mut ports = ports; ports.sort_unstable();
   Ok(hosts.into_iter().flat_map(|host| ports.iter().map(move |port| (host, *port))).collect())
 }
 
 fn client() -> reqwest::Client {
+  client_for(false)
+}
+
+fn client_for(tailscale: bool) -> reqwest::Client {
   reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none())
-    .connect_timeout(CONNECT_TIMEOUT).timeout(IDENTIFY_TIMEOUT).build().expect("LAN HTTP client")
+    .connect_timeout(if tailscale { TAILSCALE_CONNECT_TIMEOUT } else { CONNECT_TIMEOUT })
+    .timeout(if tailscale { Duration::from_secs(5) } else { IDENTIFY_TIMEOUT }).build().expect("LAN HTTP client")
 }
 
 async fn get_json(client: &reqwest::Client, url: &str, key: Option<&str>) -> Option<(u16, bool, Value)> {
@@ -127,6 +138,7 @@ async fn scan_targets(targets: Vec<(Ipv4Addr, u16)>, key: Option<String>, report
   let mut pending = targets.into_iter();
   let mut tasks = JoinSet::new();
   let client = client();
+  let tailscale_client = client_for(true);
   let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
   let mut found = Vec::new();
   let mut completed = 0;
@@ -135,9 +147,11 @@ async fn scan_targets(targets: Vec<(Ipv4Addr, u16)>, key: Option<String>, report
   loop {
     while tasks.len() < 64 {
       let Some((host, port)) = pending.next() else { break; };
-      let client = client.clone(); let key = key.clone(); let permits = permits.clone();
+      let tailscale = crate::tailscale::is_address(host);
+      let client = if tailscale { tailscale_client.clone() } else { client.clone() };
+      let key = key.clone(); let permits = permits.clone();
       tasks.spawn(async move {
-        match tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect((host, port))).await {
+        match tokio::time::timeout(if tailscale { TAILSCALE_CONNECT_TIMEOUT } else { CONNECT_TIMEOUT }, tokio::net::TcpStream::connect((host, port))).await {
           Ok(Ok(connection)) => { drop(connection); },
           _ => return None,
         }
@@ -158,16 +172,20 @@ async fn scan_targets(targets: Vec<(Ipv4Addr, u16)>, key: Option<String>, report
 }
 
 #[tauri::command]
-pub async fn ai_lan_networks(link_local: bool) -> Result<Vec<LanNetwork>, String> {
-  crate::io_util::off_main(move || local_networks(link_local)).await
+pub async fn ai_lan_networks(link_local: bool, tailscale: Option<bool>) -> Result<Vec<LanNetwork>, String> {
+  let mut networks = crate::io_util::off_main(move || local_networks(link_local)).await?;
+  if tailscale.unwrap_or(false) {
+    networks.extend(crate::tailscale::peers().await?.into_iter().map(peer_network));
+  }
+  Ok(networks)
 }
 
 #[tauri::command]
 pub async fn ai_lan_scan(app: tauri::AppHandle, streams: State<'_, AiStreams>, request: LanRequest, stream_id: String) -> Result<Vec<LanServer>, String> {
-  let available = ai_lan_networks(request.link_local).await?;
-  let targets = targets(&available, &request.networks, &request.ports)?;
   let id = stream_id.clone();
   let result = registered_task(|handle| streams.register(&stream_id, handle), async move {
+    let available = ai_lan_networks(request.link_local, Some(request.tailscale)).await?;
+    let targets = targets(&available, &request.networks, &request.ports)?;
     scan_targets(targets, request.api_key, move |progress| {
       let _ = app.emit_to("main", "ai:lan", json!({"id": id, "progress": progress}));
     }).await
@@ -296,5 +314,31 @@ mod tests {
     }, async move { observed.store(true, std::sync::atomic::Ordering::SeqCst); Ok(Vec::new()) }).await;
     assert!(!started.load(std::sync::atomic::Ordering::SeqCst));
     assert_eq!(result.unwrap_err(), "cancelled");
+  }
+
+  #[test]
+  fn tailscale_lists_only_known_online_ipv4_nodes_without_sweeping_the_address_range() {
+    let status = json!({"BackendState":"Running", "Self":{"HostName":"this-pc", "TailscaleIPs":["100.64.1.1"]}, "Peer":{
+      "ai":{"DNSName":"ai-box.example.ts.net.","Online":true,"TailscaleIPs":["100.100.2.3","fd7a:115c:a1e0::1"]},
+      "offline":{"HostName":"off","Online":false,"TailscaleIPs":["100.70.0.8"]},
+      "public":{"HostName":"outside","Online":true,"TailscaleIPs":["8.8.8.8","192.168.1.9"]},
+      "duplicate":{"Online":true,"TailscaleIPs":["100.64.1.1"]}
+    }});
+    let nodes = crate::tailscale::parse_status(&status).unwrap().into_iter().map(peer_network).collect::<Vec<_>>();
+    assert_eq!(nodes.len(), 2);
+    assert!(nodes.iter().all(|n| n.prefix == 32 && n.host_count == 1));
+    assert!(nodes.iter().any(|n| n.network == "100.100.2.3/32" && n.interface.contains("ai-box.example.ts.net")));
+    let selected = nodes.iter().map(|n| n.network.clone()).collect::<Vec<_>>();
+    let attempts = targets(&nodes, &selected, &[8000]).unwrap();
+    assert_eq!(attempts.len(), 3); // localhost, self and one online peer
+    assert!(targets(&nodes, &["100.100.2.0/24".into()], &[8000]).is_err());
+    assert!(targets(&[], &["100.100.2.3/32".into()], &[8000]).is_err());
+    assert!(crate::tailscale::parse_status(&json!({"BackendState":"NeedsLogin"})).is_err());
+    assert!(crate::tailscale::parse_status(&json!({"BackendState":"Stopped"})).is_err());
+    let mut crowded = plan_networks((0..5).map(|i| LocalInterface { name: format!("lan{i}"), address: Ipv4Addr::new(10, i, 0, 1), prefix: 24, up: true }).collect(), false);
+    crowded.extend(nodes);
+    assert_eq!(targets(&crowded, &selected, &[8000]).unwrap().len(), 3);
+    let all = crowded.iter().map(|n| n.network.clone()).collect::<Vec<_>>();
+    assert!(targets(&crowded, &all, &[8000]).unwrap_err().contains("Select fewer"));
   }
 }
