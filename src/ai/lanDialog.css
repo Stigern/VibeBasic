@@ -1,0 +1,16 @@
+.lan98 { width: min(650px, calc(100vw - 64px)); display: flex; flex-direction: column; gap: 7px; }
+.lan98 .dlgform98-row { grid-template-columns: 45px 1fr; }
+.lan98-ports { width: 100%; box-sizing: border-box; }
+.lan98-networks { max-height: 90px; overflow: auto; }
+.lan98-summary, .lan98-details { overflow-wrap: anywhere; }
+.lan98 progress { width: 100%; height: 16px; }
+.lan98-results { min-height: 110px; max-height: 200px; overflow: auto; background: white; border: 2px inset; }
+.lan98-result { width: 100%; min-height: 28px; border: 0; box-shadow: none; background: white; text-align: left; display: grid; grid-template-columns: 2fr 1.5fr 1fr; gap: 8px; padding: 4px 6px; }
+.lan98-result span { overflow-wrap: anywhere; }
+.lan98-result[aria-selected="true"] { background: #000080; color: white; }
+.lan98-actions, .lan98-recent { display: flex; gap: 8px; align-items: center; }
+.lan98-actions button { min-width: 75px; }
+.lan98-actions button:last-child { margin-left: auto; }
+.lan98-recent[hidden] { display: none; }
+.lan98-recent .dlgform98-row { flex: 1; min-width: 0; }
+.lan98-recent select { min-width: 0; width: 100%; }

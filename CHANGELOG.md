@@ -4,6 +4,13 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-26
+
+### Added
+- Search LAN in Tools > Options > AI finds Ollama, LM Studio, vLLM and other OpenAI-compatible servers, as in VisualVibe. Review the local networks and ports, then press Start; results show the URL, server kind, models and response time. Use fills the AI server and model fields.
+- Search only this computer or selected private IPv4 networks, capped to /24 and 1,024 hosts. Ports are editable (defaults: 11434, 1234, 8000 and 8080); link-local networks are optional. Stop, Close and Escape cancel pending connections and requests. API keys are sent during discovery only when explicitly selected.
+- Discovery remembers the port list and the last five selected servers. It is available in the desktop app on macOS, Windows and Linux; the browser preview explains its desktop-only availability.
+
 ## [0.10.3] - 2026-10-26
 
 ### Fixed

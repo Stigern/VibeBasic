@@ -2,6 +2,7 @@ import { BrowserBackend } from './browserBackend';
 import type { PrinterInfo } from '../run/printing';
 import { TauriBackend } from './tauriBackend';
 import type { AiModel, ChatMessage } from '../ai/types';
+import type { LanBackend } from '../ai/lanTypes';
 import type { AiChatOptions } from '../ai/sse';
 import type { FileSystemApi } from '../lang/fileio/fsApi';
 import type { Platform } from '../platform';
@@ -131,7 +132,7 @@ export interface MakeAppOptions {
 }
 
 /** FileSystemApi: the files of a running program (Open, Kill, Dir ...) and SaveSetting, made by the main window. */
-export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, SystemApi {
+export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, SystemApi, LanBackend {
   readonly kind: 'tauri' | 'browser';
   /** The operating system (the desktop app asks the Rust side; the browser guesses from the user agent). */
   platform(): Promise<Platform>;

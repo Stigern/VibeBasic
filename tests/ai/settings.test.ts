@@ -18,6 +18,48 @@ const flush = () => new Promise(r => setTimeout(r, 0));
 const okButton = () => [...document.querySelectorAll('button')].find(b => b.textContent === 'OK')!;
 
 test('defaults', async () => expect(await loadAiSettings(fakeBackend())).toEqual({ baseUrl: 'http://localhost:11434/v1', model: '', apiKey: '', thinking: 'server' }));
+
+test('Search LAN fills the chosen server and model without keeping the previous server capabilities', async () => {
+  const base = fakeBackend();
+  base.store.set('ai', { baseUrl: 'http://old/v1', model: 'old-model', apiKey: '', thinking: 'low', vision: false, contextTokens: 8192 });
+  const backend = { ...base, kind: 'tauri' as const,
+    aiLanNetworks: async () => [],
+    aiLanScan: async () => [{ host: '192.168.1.8', port: 8000, baseUrl: 'http://192.168.1.8:8000/v1', kind: 'vLLM', models: ['new-model'], requiresKey: false, latencyMs: 2 }],
+  };
+  const tab = buildAiTab(backend, document); document.body.append(tab.content);
+  await flush();
+  const search = [...tab.content.querySelectorAll('button')].find(b => b.textContent === 'Search LAN...');
+  expect(search).toBeDefined(); search!.click();
+  const press = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('.dlg98 button')].find(b => b.textContent === label)!.click();
+  await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('.lan98-actions button')?.disabled).toBe(false));
+  press('Start');
+  await vi.waitFor(() => expect(document.body.textContent).toContain('Done. 1 server found.'));
+  press('Use');
+  await vi.waitFor(() => expect(tab.controls.baseUrl.value).toBe('http://192.168.1.8:8000/v1'));
+  expect(tab.controls.model.getValue()).toBe('new-model');
+  await tab.apply();
+  expect(base.store.get('ai')).toMatchObject({ baseUrl: 'http://192.168.1.8:8000/v1', model: 'new-model', serverKind: 'vllm' });
+  expect(base.store.get('ai')).not.toHaveProperty('vision');
+  expect(base.store.get('ai')).not.toHaveProperty('contextTokens');
+});
+
+test('connection testing and LAN search cannot overwrite each other while either is pending', async () => {
+  let listed!: (models: AiModel[]) => void;
+  const base = fakeBackend(() => new Promise(r => { listed = r; }));
+  const backend = { ...base, kind: 'tauri' as const, aiLanNetworks: async () => [], aiLanScan: async () => [] };
+  const tab = buildAiTab(backend, document); document.body.append(tab.content);
+  await flush();
+  const search = [...tab.content.querySelectorAll('button')].find(b => b.textContent === 'Search LAN...')!;
+  const tested = tab.controls.testConnection();
+  expect(search.disabled).toBe(true);
+  listed([]); await flush(); okButton().click(); await tested;
+  expect(search.disabled).toBe(false);
+  search.click();
+  await vi.waitFor(() => expect(document.querySelector('.lan98')).not.toBeNull());
+  expect(tab.controls.test.disabled).toBe(true);
+  [...document.querySelectorAll<HTMLButtonElement>('.dlg98 button')].find(b => b.textContent === 'Close')!.click();
+  await vi.waitFor(() => expect(tab.controls.test.disabled).toBe(false));
+});
 test('roundtrip', async () => {
   const b = fakeBackend();
   const s = { baseUrl: 'http://10.0.0.5:11434/v1', model: 'qwen2.5-coder:14b', apiKey: 'k', thinking: 'low' as const };

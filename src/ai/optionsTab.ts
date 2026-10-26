@@ -10,11 +10,12 @@ import { probeVision } from './detect';
 import { nearestEffort, probeEfforts } from './effort';
 import { THINKING_LEVELS, defaultAiSettings, loadAiSettings, updateAiSettings } from './settings';
 import type { AiModel, FormPicture, ServerKind, Thinking } from './types';
+import type { LanBackend } from './lanTypes';
 
 const THINKING_LABELS: Record<Thinking, string> = { server: 'Server default', low: 'Low (fast)', medium: 'Medium', high: 'High (thorough)' };
 const thinkingOf = (label: string): Thinking => THINKING_LEVELS.find(t => THINKING_LABELS[t] === label) ?? 'server';
 
-type AiBackend = Pick<Backend, 'loadSettings' | 'saveSettings' | 'aiListModels'> & Partial<Pick<Backend, 'aiChat'>>;
+type AiBackend = Pick<Backend, 'loadSettings' | 'saveSettings' | 'aiListModels'> & Partial<Pick<Backend, 'aiChat' | 'kind' | 'aiLanNetworks' | 'aiLanScan'>>;
 
 const PICTURE_LABELS: Record<FormPicture, string> = { auto: 'Auto', off: 'Off' };
 
@@ -27,6 +28,14 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
   const fast = check('Fast follow-up rounds', true);
   const picture = createCombo({ items: [PICTURE_LABELS.auto, PICTURE_LABELS.off], value: PICTURE_LABELS.auto, editable: false, onChange: () => { dirty.picture = true; } });
   const test = h('button', { type: 'button' }, 'Test Connection');
+  const canSearch = backend.kind === 'tauri' && !!backend.aiLanNetworks && !!backend.aiLanScan;
+  const search = h('button', { type: 'button', disabled: !canSearch, title: canSearch ? 'Find AI servers on this computer and your local network' : 'LAN search is available in the VibeBasic desktop app.' }, 'Search LAN...');
+  let probing = false;
+  const setProbing = (value: boolean) => {
+    probing = value; test.disabled = value; search.disabled = value || !canSearch;
+    baseUrl.disabled = apiKey.disabled = value;
+    for (const input of model.el.querySelectorAll('input')) input.disabled = value;
+  };
   const dirty = { baseUrl: false, apiKey: false, model: false, thinking: false, fast: false, picture: false };
   baseUrl.addEventListener('input', () => { dirty.baseUrl = true; });
   fast.input.addEventListener('change', () => { dirty.fast = true; });
@@ -46,8 +55,25 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
     if (!dirty.model) { model.setValue(s.model); if (s.model) model.setItems([s.model]); }
   }).catch(() => {});
 
+  search.addEventListener('click', () => { void (async () => {
+    if (!canSearch || probing) return;
+    setProbing(true);
+    try {
+      await loading;
+      const { searchLanDialog } = await import('./lanDialog');
+      const found = await searchLanDialog(doc, backend as LanBackend, apiKey.value);
+      if (!found) return;
+      baseUrl.value = found.baseUrl; dirty.baseUrl = dirty.model = true;
+      const previous = model.getValue();
+      model.setItems(found.models); model.setValue(found.models.includes(previous) ? previous : found.models[0] ?? '');
+      tested = new Map(found.models.map(id => [id.toLowerCase(), { id, ...(found.kind === 'vLLM' ? { ownedBy: 'vllm' } : {}) }]));
+      visionTested.clear();
+    } finally { setProbing(false); }
+  })(); });
+
   const testConnection = async (): Promise<void> => {
-    test.disabled = true;
+    if (probing) return;
+    setProbing(true);
     const t0 = Date.now();
     try {
       const list = await backend.aiListModels(baseUrl.value.trim(), apiKey.value);
@@ -72,7 +98,7 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
       addAiLogEntry({ mode: 'test', model: model.getValue().trim(), seconds: Math.round((Date.now() - t0) / 100) / 10, status: 'error',
         sent: `GET ${redactUrl(baseUrl.value)}/models`, reply: '', reasoning: '', error: message }, apiKey.value);
       await messageBox98(doc, { prompt: message, title: 'VibeBasic', buttons: 48 });
-    } finally { test.disabled = false; }
+    } finally { setProbing(false); }
   };
   test.addEventListener('click', () => { void testConnection(); });
 
@@ -110,7 +136,7 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
     label: 'AI',
     content: h('div', { class: 'dlgform98' },
       field('Base URL:', baseUrl), field('Model:', model.el), field('API Key (optional):', apiKey), field('Thinking:', thinking.el),
-      field('Send form picture:', picture.el), fast.el, test,
+      field('Send form picture:', picture.el), fast.el, h('div', { style: 'display:flex;gap:8px' }, test, search),
       h('div', {}, 'For Ollama on another PC use http://<its IP>:11434/v1'),
       h('div', {}, 'Thinking level is sent to vLLM/Qwen servers. Use Server default for other servers.'),
       h('div', {}, 'Fast follow-up rounds: the check-and-fix retry and Change... think Low.'),

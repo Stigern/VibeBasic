@@ -4,9 +4,9 @@
 
 A Visual Basic 6 clone for macOS, Windows and Linux, with the authentic Windows 98 look and a built-in AI assistant that connects to OpenAI-compatible servers, including your own local model.
 
-![VibeBasic 0.10.3: the AI Wizard with program description, appearance, improvements and live request preview](docs/images/screenshot.png)
+![VibeBasic: the AI Wizard with program description, appearance, improvements and live request preview](docs/images/screenshot.png)
 
-The AI Wizard in 0.10.3: describe a program, choose its appearance and features, and review the request before creating it.
+Describe a program, choose its appearance and features, and review the request before creating it.
 
 ## What it does
 
@@ -84,6 +84,10 @@ APPLE_SIGNING_IDENTITY="Apple Development: Your Name (TEAMID)"
 `security find-identity -v -p codesigning` lists the identities on your Mac. `npm run build:app` loads `.env.local`, and the Tauri bundler reads `APPLE_SIGNING_IDENTITY` from the environment. Sign every build with the same identity, or macOS asks again for permissions such as Local Network access (Winsock). Without an identity the app is built unsigned.
 
 ## AI setup
+
+In the desktop app, **Tools > Options > AI > Search LAN...** finds AI servers on this computer and your local network. Select the networks and ports to check, then press Start. Choose a result and press Use to fill the server URL and model; press OK in Options to keep them. The search shows each server's kind, models and response time, supports Stop/Close, and remembers your ports and five recent server URLs.
+
+The default ports are 11434 (Ollama), 1234 (LM Studio), 8000 (vLLM) and 8080 (llama.cpp). Only selected private IPv4 networks are checked, capped to /24 and 1,024 hosts; link-local networks are optional. Merely opening the dialog sends no requests. Your API key is excluded from discovery unless you select **Use API key when searching**. A server must listen on its LAN address and allow the chosen port through its firewall to be found. Search LAN requires the macOS, Windows or Linux desktop app.
 
 Set up the AI under Tools > Options > AI. Enter the server's base URL, for example `http://<host>:11434/v1` for Ollama or `http://<host>:8000/v1` for vLLM, and press Test Connection: it picks the model, and finds out whether the server understands pictures and structured output. A vision model (such as Qwen3-VL or a multimodal Qwen) lets the AI see your forms. Thinking sets how hard a reasoning model thinks; Low is the fastest.
 

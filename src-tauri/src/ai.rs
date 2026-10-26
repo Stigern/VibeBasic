@@ -534,7 +534,7 @@ const MAX_PENDING_CANCELS: usize = 256;
 
 impl AiStreams {
   /// Registers a running request. Returns false (and aborts it) when a cancel for `id` already arrived.
-  fn register(&self, id: &str, handle: AbortHandle) -> bool {
+  pub(crate) fn register(&self, id: &str, handle: AbortHandle) -> bool {
     let mut t = self.0.lock().unwrap();
     if t.cancelled.remove(id) {
       handle.abort();
@@ -544,7 +544,7 @@ impl AiStreams {
     true
   }
 
-  fn finish(&self, id: &str) {
+  pub(crate) fn finish(&self, id: &str) {
     let mut t = self.0.lock().unwrap();
     t.handles.remove(id);
     t.cancelled.remove(id);

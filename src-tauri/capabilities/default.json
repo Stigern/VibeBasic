@@ -17,6 +17,8 @@
     "core:window:allow-create",
     "core:webview:allow-create-webview-window",
     "allow-ai-list-models",
+    "allow-ai-lan-networks",
+    "allow-ai-lan-scan",
     "allow-ai-chat",
     "allow-ai-cancel",
     "allow-ai-settings-get",

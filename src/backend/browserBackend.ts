@@ -1,6 +1,7 @@
 import type { Backend, MakeAppOptions, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import { guessPlatform, type Platform } from '../platform';
 import type { AiModel, ChatMessage } from '../ai/types';
+import type { LanNetwork, LanServer, LanScanRequest, LanScanOptions } from '../ai/lanTypes';
 import { AI_CUT_OFF, readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
 import { redactUrl } from '../ai/aiLog';
 import { MemoryFs } from '../lang/fileio/memoryFs';
@@ -141,6 +142,8 @@ const FS_PREFIX = 'vibebasic.fs:';
 
 /** Development only: files live in localStorage under `vibebasic.fs:<path>`, dialogs are window.prompt. */
 export class BrowserBackend implements Backend {
+  aiLanNetworks(_linkLocal: boolean): Promise<LanNetwork[]> { return Promise.reject(new Error('LAN search is available in the VibeBasic desktop app.')); }
+  aiLanScan(_request: LanScanRequest, _options?: LanScanOptions): Promise<LanServer[]> { return Promise.reject(new Error('LAN search is available in the VibeBasic desktop app.')); }
   readonly kind = 'browser' as const;
   /** The files of a running program and SaveSetting: in memory, as long as the page lives (development only). */
   private readonly memFs = new MemoryFs();

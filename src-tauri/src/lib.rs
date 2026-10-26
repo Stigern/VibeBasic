@@ -1,4 +1,5 @@
 mod ai;
+mod ai_lan;
 mod appinfo;
 mod ai_settings;
 mod clipboard;
@@ -51,6 +52,8 @@ pub fn run() {
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       ai::ai_list_models,
+      ai_lan::ai_lan_networks,
+      ai_lan::ai_lan_scan,
       ai::ai_chat,
       ai::ai_cancel,
       ai_settings::ai_settings_get,
@@ -218,6 +221,6 @@ mod acl_tests {
         targeted += 1;
       }
     }
-    assert_eq!(targeted, 4);   // ai:delta, ai:usage, vb:socket, vb:comm
+    assert_eq!(targeted, 5);   // ai:delta, ai:usage, ai:lan, vb:socket, vb:comm
   }
 }

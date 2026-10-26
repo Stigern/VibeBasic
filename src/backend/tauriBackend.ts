@@ -5,6 +5,7 @@ import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import type { Backend, MakeAppOptions, CommEvent, CommLines, SysInfoData, DbExecResult, DbQueryResult, DbValue, DirListing, FileFilter, InetRequest, InetResponse, SocketEvent, SocketInfo, Volume } from './backend';
 import type { AiModel, ChatMessage } from '../ai/types';
+import type { LanNetwork, LanServer, LanScanRequest, LanScanOptions, LanProgress } from '../ai/lanTypes';
 import { dialogFilters } from './dialogFilters';
 import type { PrinterInfo } from '../run/printing';
 import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
@@ -275,6 +276,25 @@ export class TauriBackend implements Backend {
 
   aiListModels(baseUrl: string, apiKey: string): Promise<AiModel[]> {
     return call<AiModel[]>('ai_list_models', { baseUrl, apiKey });
+  }
+
+  aiLanNetworks(linkLocal: boolean): Promise<LanNetwork[]> {
+    return call<LanNetwork[]>('ai_lan_networks', { linkLocal });
+  }
+
+  async aiLanScan(request: LanScanRequest, options: LanScanOptions = {}): Promise<LanServer[]> {
+    if (options.signal?.aborted) throw new Error('cancelled');
+    const streamId = `lan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    const onAbort = () => { void invoke('ai_cancel', { streamId }).catch(() => {}); };
+    options.signal?.addEventListener('abort', onAbort);
+    let unlisten: (() => void) | undefined;
+    try {
+      unlisten = await listen<{ id: string; progress: LanProgress }>('ai:lan', event => {
+        if (event.payload.id === streamId && !options.signal?.aborted) options.onProgress?.(event.payload.progress);
+      });
+      if (options.signal?.aborted) throw new Error('cancelled');
+      return await call<LanServer[]>('ai_lan_scan', { request, streamId });
+    } finally { options.signal?.removeEventListener('abort', onAbort); unlisten?.(); }
   }
 
   async aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string, opts?: AiChatOptions): Promise<string> {

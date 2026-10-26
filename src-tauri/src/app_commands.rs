@@ -5,6 +5,8 @@
 #[allow(dead_code)]
 pub const APP_COMMANDS: &[&str] = &[
   "ai_list_models",
+  "ai_lan_networks",
+  "ai_lan_scan",
   "ai_chat",
   "ai_cancel",
   "ai_settings_get",

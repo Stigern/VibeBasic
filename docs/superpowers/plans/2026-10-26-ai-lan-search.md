@@ -1,0 +1,11 @@
+# AI server LAN discovery
+
+Adapt VisualVibe's explicit Search LAN flow to VibeBasic's existing Win98 AI options and Rust backend.
+
+1. Add a native scanner (`src-tauri/src/ai_lan.rs`) and shared frontend types. Enumerate active IPv4 interfaces with `if-addrs`; scan localhost and selected private networks, capped to /24 and 1,024 hosts. Allow link-local only when selected. Validate up to 16 ports; default to 11434, 1234, 8000 and 8080. Bound TCP concurrency/timeouts and HTTP response size; do not follow redirects or use HTTP proxies. Identify OpenAI-compatible servers, common server kinds and authentication requirements. Reuse the existing cancellable AI task registry and main-window-only events/permissions.
+2. Add Search LAN beside Test Connection (`src/ai/lanDialog.ts`, `lanTypes.ts`, `lanDialog.css`, `optionsTab.ts`). Show networks and ports before Start, progress/results while searching, Stop and Close cancellation, and Use to populate URL/model. Remember ports and five selected server URLs, with Clear Recent to remove obsolete entries. Never send the configured API key unless the user selects that option. Explain desktop-only availability in the browser.
+3. Prove planning, validation, HTTP identification, cancellation and key opt-in with local/mock servers; prove dialog lifecycle, selection and settings integration in jsdom. Run the full TypeScript/Rust suites and production build, then review the change and update README/changelog. Keep GitHub as the source of truth.
+
+Review focus: cancellation before native registration; no requests when merely opening the dialog; rejected public/foreign networks; no key on redirects or default probes; stale results after Stop/Close; stale model capabilities when changing servers; persistence failures must leave the dialog usable.
+
+Completed: regression tests passed after the expected failures; full suite passed (2,062 TypeScript and 135 Rust tests); frontend production build and native macOS bundle succeeded. Native localhost-only discovery identified the fixture server and model, and Use populated the Options fields. Independent review caught and verified fixes for competing connection tests and cancellation before task registration. LAN dialog code and CSS load only when requested.
