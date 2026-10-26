@@ -71,6 +71,8 @@ On Windows and Linux, build with `npx tauri build --bundles nsis` or `npx tauri 
 
 GitHub is the source of truth: `main` holds the current source, and version tags identify released source. Publish a release by pushing its version tag after the version files and changelog are committed to `main`. GitHub Actions runs the tests and builds every download from that tag; reruns replace all release assets with those builds. Local builds are for development and testing.
 
+To retry a release after a runner or package-mirror failure, run the Release workflow manually with the existing tag. Choose `linux` to rebuild only the Linux downloads, or `all` for every platform. Both the source and release notes are read from that tag; existing downloads for other platforms are kept.
+
 ### Code signing (macOS)
 
 The signing identity is not in the repository. To sign your builds, create a file `.env.local` next to `package.json` (it is git-ignored) with your own identity:

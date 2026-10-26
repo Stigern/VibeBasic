@@ -9,12 +9,24 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build
+        required: true
+        type: string
+      platform:
+        description: Platforms to rebuild
+        type: choice
+        default: all
+        options: [all, linux]
 
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -22,14 +34,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            bundles: nsis
-          # The oldest supported Ubuntu: the .deb and the AppImage need the glibc they were built with or newer.
-          - os: ubuntu-22.04
-            bundles: deb,appimage
-          - os: macos-latest
-            bundles: app
+        # Ubuntu 22.04 keeps the Linux packages compatible with the oldest supported glibc.
+        include: ${{ fromJSON(inputs.platform == 'linux' && '[{"os":"ubuntu-22.04","bundles":"deb,appimage"}]' || '[{"os":"windows-latest","bundles":"nsis"},{"os":"ubuntu-22.04","bundles":"deb,appimage"},{"os":"macos-latest","bundles":"app"}]') }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -39,6 +45,8 @@ jobs:
         run: git config --global core.autocrlf false
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -47,18 +55,24 @@ jobs:
 
       - name: The tag matches package.json
         run: |
-          v="${GITHUB_REF_NAME#v}"
+          v="${RELEASE_TAG#v}"
           p="$(node -p "require('./package.json').version")"
           if [ "$v" != "$p" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $p"
+            echo "::error::Tag $RELEASE_TAG does not match package.json version $p"
             exit 1
           fi
 
       - name: Linux packages for Tauri (WebKitGTK, libsoup)
         if: runner.os == 'Linux'
         run: |
+          # Azure's Ubuntu mirror can stall on the large WebKit packages. Use Ubuntu's primary mirror instead.
+          for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            if [ -f "$source" ]; then
+              sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' "$source"
+            fi
+          done
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
             libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev build-essential file patchelf
 
       - name: Rust (stable)
@@ -86,7 +100,7 @@ jobs:
       - name: Package
         run: |
           set -euo pipefail
-          v="${GITHUB_REF_NAME#v}"
+          v="${RELEASE_TAG#v}"
           b=src-tauri/target/release/bundle
           out=release-files
           mkdir -p "$out"
@@ -125,6 +139,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -137,7 +153,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="$GITHUB_REF_NAME"
+          tag="$RELEASE_TAG"
           v="${tag#v}"
           if ! gh release view "$tag" >/dev/null 2>&1; then
             # the tag's section of CHANGELOG.md, without the heading
