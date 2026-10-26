@@ -2,7 +2,7 @@
 // Request options: structured output in form mode (response_format, or structured_outputs on vLLM, with the fallbacks),
 // fast follow-up rounds, max_tokens.
 import { afterEach, expect, test, vi } from 'vitest';
-import { askAi, formatMetrics, maxTokensFor } from '../../src/ai/askDialog';
+import { askAi, formatMetrics } from '../../src/ai/askDialog';
 import { FORM_RESPONSE_FORMAT, FORM_STRUCTURED_OUTPUTS } from '../../src/ai/formMode';
 import { AI_CUT_OFF } from '../../src/ai/sse';
 import type { Backend } from '../../src/backend/backend';
@@ -64,7 +64,7 @@ test('form request includes response_format (json_schema form_ops) and max_token
     expect(opts(b, 0).responseFormat).toEqual(FORM_RESPONSE_FORMAT);
     expect(opts(b, 0).responseFormat.json_schema.name).toBe('form_ops');
     expect(opts(b, 0).structuredOutputs).toBeUndefined();
-    expect(opts(b, 0).maxTokens).toBe(16384 + 16384);
+    expect(opts(b, 0).maxTokens).toBe(65536);
   }
 });
 
@@ -88,26 +88,17 @@ test('a 400 about structured_outputs on vLLM falls back the same way', async () 
   expect(opts(b, 2).structuredOutputs).toBeUndefined();
 });
 
-test('a structured reply cut off with only whitespace after { is retried without structured output, for the session', async () => {
-  const b = fakeBackend({ model: 'runaway', serverKind: 'vllm' }, async (...a: any[]) => {
-    if (!a[5]?.structuredOutputs) return OPS;
-    a[5].onDelta('content', `{"ops"${' '.repeat(500)}`);
+test('length termination is not retried even for structured whitespace output', async () => {
+  const b = fakeBackend({ model: 'length-whitespace', serverKind: 'vllm' }, async (...a: any[]) => {
+    a[5].onDelta('content', '{"ops"');
+    a[5].onResponse({ finishReason: 'length', httpStatus: 200, requestId: 'chatcmpl-length' });
     throw new Error(AI_CUT_OFF);
   });
-  await askForm(b);
-  expect(b.aiChat).toHaveBeenCalledTimes(2);
-  expect(opts(b, 1).structuredOutputs).toBeUndefined();
-  await askForm(b);
-  expect(b.aiChat).toHaveBeenCalledTimes(3);
-  expect(opts(b, 2).structuredOutputs).toBeUndefined();
-  // a real cut-off (text, not whitespace) is not retried
-  const c = fakeBackend({ model: 'cut', serverKind: 'vllm' }, async (...a: any[]) => { a[5].onDelta('content', '{"ops":[{"op":"set","name":"Command1"'); throw new Error(AI_CUT_OFF); });
-  const p = askAi(ide('designer'), c, { codeWindowFor: () => null });
+  const p = askAi(ide('designer'), b, { codeWindowFor: () => null });
   await enterPrompt('x');
-  await vi.waitFor(() => expect(text()).toContain('cut off'));
-  click('OK');
-  await p;
-  expect(c.aiChat).toHaveBeenCalledTimes(1);
+  await vi.waitFor(() => expect(text()).toContain('Output token limit reached'));
+  click('OK'); await p;
+  expect(b.aiChat).toHaveBeenCalledTimes(1);
 });
 
 test('a 400 about response_format is retried at once without it, and later requests skip it', async () => {
@@ -148,18 +139,16 @@ test('a whitespace runaway is stopped as soon as it streams in (not at max_token
   expect(opts(b, 1).responseFormat).toBeUndefined();
 });
 
-test('a server that rejects max_tokens gets the request again at once without it, and later requests skip it', async () => {
-  const b = fakeBackend({ model: 'no-max-tokens' }, async (...a: any[]) => {
-    if (a[5]?.maxTokens !== undefined) throw new Error('The AI server answered 400: max_tokens is too large: 24576. This model supports at most 16384 completion tokens.');
-    return OPS;
+test('a server rejecting max_tokens stops instead of retrying without a limit', async () => {
+  const b = fakeBackend({ model: 'no-max-tokens', maxTokens: 65536 }, async () => {
+    throw new Error('The AI server answered 400: max_tokens is too large: 65536.');
   });
-  await askForm(b);
-  expect(b.aiChat).toHaveBeenCalledTimes(2);
-  expect(opts(b, 0).maxTokens).toBe(32768);
-  expect(opts(b, 1).maxTokens).toBeUndefined();
-  await askForm(b);
-  expect(b.aiChat).toHaveBeenCalledTimes(3);
-  expect(opts(b, 2).maxTokens).toBeUndefined();
+  const p = askAi(ide('designer'), b, { codeWindowFor: () => null });
+  await enterPrompt('x');
+  await vi.waitFor(() => expect(text()).toContain('max_tokens is too large'));
+  click('OK'); await p;
+  expect(b.aiChat).toHaveBeenCalledTimes(1);
+  expect(opts(b, 0).maxTokens).toBe(65536);
 });
 
 /** The thinking levels sent: first answer, its check-and-fix retry, then a Change... round. */
@@ -179,18 +168,32 @@ async function levels(settings: Record<string, unknown>) {
 }
 
 test('follow-up rounds think low only with Fast follow-up rounds on and a thinking level set', async () => {
-  expect(await levels({ thinking: 'high' })).toEqual({ levels: ['high', 'low', 'low'], maxTokens: [32768, 20480, 20480] });
+  expect(await levels({ thinking: 'high', fastFollowUp: true })).toEqual({ levels: ['high', 'low', 'low'], maxTokens: [65536, 65536, 65536] });
   expect((await levels({ thinking: 'medium', fastFollowUp: false })).levels).toEqual(['medium', 'medium', 'medium']);
   expect((await levels({ thinking: 'server' })).levels).toEqual([undefined, undefined, undefined]);
 });
 
-test('max_tokens is lowered to fit a known context, or left out when it cannot', () => {
-  expect(maxTokensFor('low', undefined, 1000)).toBe(20480);
-  expect(maxTokensFor('low', 262144, 30000)).toBe(36864);
-  expect(maxTokensFor('low', 32768, 90000)).toBe(32768 - 30000 - 256);
-  expect(maxTokensFor('high', 8192, 30000)).toBeUndefined();
-});
-
 test('without prompt_tokens_details the metrics line still shows the tokens, and nothing else', () => {
   expect(formatMetrics({ promptTokens: 3210, completionTokens: 41 }, 41000)).toBe('3,210 prompt tokens · 41 s');
+});
+
+test('uses the configured reasoning plus answer budget without dropping the cap on a server error', async () => {
+  const b = fakeBackend({ model: 'explicit-budget', thinking: 'xhigh', maxTokens: 98304, contextTokens: 262144 }, async () => OPS);
+  await askForm(b);
+  expect(b.aiChat.mock.calls[0][4]).toBe('xhigh');
+  expect(opts(b, 0).maxTokens).toBe(98304);
+  expect(opts(b, 0).requestId).toMatch(/^vb-/);
+});
+
+test('an observed length finish wins over a later timeout and never retries', async () => {
+  const b = fakeBackend({ model: 'length-before-timeout' }, async (...a: any[]) => {
+    a[5].onDelta('reasoning', 'Partial private reasoning');
+    a[5].onResponse({ finishReason: 'length', requestId: 'server-length', httpStatus: 200 });
+    throw new Error('The AI server stopped sending for 90 seconds.');
+  });
+  const p = askAi(ide('designer'), b, { codeWindowFor: () => null });
+  await enterPrompt('x');
+  await vi.waitFor(() => expect(text()).toContain('Output token limit reached'));
+  click('OK'); await p;
+  expect(b.aiChat).toHaveBeenCalledTimes(1);
 });

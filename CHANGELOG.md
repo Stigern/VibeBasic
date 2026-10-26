@@ -4,6 +4,18 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-10-26
+
+### Changed
+- AI reasoning effort defaults to Medium, adds an explicit XHigh choice, and has an adjustable output budget (initially 65536 tokens shared by reasoning and final answer). Fast follow-up effort reduction is opt-in. The server's reported context size is preserved.
+- AI Log now contains metadata only: request IDs, model, effort, output cap, usage, HTTP status, finish reason and outcome. Prompts, images, reasoning, answers, tool arguments and raw server errors are excluded.
+
+### Fixed
+- Reasoning-only, empty, interrupted and tool-call responses cannot be shown or applied as successful final answers. Reasoning and text remain separate, including servers that return JSON instead of SSE.
+- Length termination explicitly identifies the output limit and never retries automatically, even if a timeout or stream error follows. Budget errors never trigger an uncapped retry; other recovery paths have a shared four-attempt ceiling.
+- HTTP errors, timeouts, cancellation, incomplete streams and refused connections remain distinct. Removed misleading Ollama advice from generic connection failures.
+- Added native/browser parity tests for text, reasoning, tools, structured JSON, metadata, usage, completion status and privacy.
+
 ## [0.11.1] - 2026-10-26
 
 ### Added

@@ -101,7 +101,7 @@ test('the browser backend reports the 400 alike, so the same retry works there (
   } finally { globalThis.fetch = real; }
 });
 
-test('Test Connection shows the levels, says how High is sent, and picks Low for a new user on Server default', async () => {
+test('Test Connection shows the levels, says how High is sent, and picks Medium for a user on Server default', async () => {
   const store = new Map<string, unknown>();
   const b = {
     loadSettings: async <T,>(k: string) => (store.get(k) as T) ?? null,
@@ -115,12 +115,13 @@ test('Test Connection shows the levels, says how High is sent, and picks Low for
   const tab = buildAiTab(b, document);
   await new Promise(r => setTimeout(r, 0));
   tab.controls.model.setValue('q');
+  tab.controls.thinking.setValue('Server default');
   const p = tab.controls.testConnection();
   await vi.waitFor(() => expect(document.body.textContent).toContain('Thinking levels it accepts: xhigh (default), medium, low. High is sent as medium.'));
-  expect(document.body.textContent).toContain('Thinking is now set to Low (fast)');
+  expect(document.body.textContent).toContain('Thinking is now set to Medium');
   [...document.querySelectorAll('button')].find(x => x.textContent === 'OK')!.click();
   await p;
-  expect(tab.controls.thinking.getValue()).toBe('Low (fast)');
+  expect(tab.controls.thinking.getValue()).toBe('Medium');
   // the probe is one tiny request at a level no server has
   const probe = b.aiChat.mock.calls.find(c => c[4]);
   expect(probe?.[5]).toMatchObject({ maxTokens: 1 });
@@ -130,7 +131,7 @@ test('Test Connection shows the levels, says how High is sent, and picks Low for
 // ---------------------------------------------------------------------------------------------------------------
 // 6. A reply that is only thinking
 
-test('a reply that is only thinking: code mode takes no code from it, a question shows it', async () => {
+test('reasoning-only output fails in code mode and for questions', async () => {
   const thinking = '<think>Maybe:\n```vb\nPrivate Sub Command1_Click()\n    End\nEnd Sub\n```</think>';
   expect(thinkingOnly(thinking)).toMatch(/^Maybe:/);
   expect(thinkingOnly('<think>a</think>answer')).toBeNull();
@@ -139,15 +140,16 @@ test('a reply that is only thinking: code mode takes no code from it, a question
   const b = fakeBackend([thinking]);
   const done = runCodeConversation({ ide: s, backend: b, settings: { baseUrl: 'http://x/v1', model: 'm', apiKey: '', thinking: 'server' }, doc: document },
     { first: [{ role: 'user', content: 'x' }], itemId: s.project.forms[0].id, codeWin: w as any });
-  await vi.waitFor(() => expect(text()).toContain('could not be understood'));
+  await vi.waitFor(() => expect(text()).toContain('reasoning without a final answer'));
   click('OK');
   expect(await done).toBe(false);
   expect(w.applyChange).not.toHaveBeenCalled();
   const q = runCodeConversation({ ide: s, backend: fakeBackend(['<think>It shows a message.</think>']), settings: { baseUrl: 'http://x/v1', model: 'm', apiKey: '', thinking: 'server' }, doc: document },
     { first: [{ role: 'user', content: 'x' }], itemId: s.project.forms[0].id, codeWin: w as any, question: true });
-  await vi.waitFor(() => expect(document.querySelector('.ai-answer-box')?.textContent).toBe('It shows a message.'));
+  await vi.waitFor(() => expect(text()).toContain('reasoning without a final answer'));
+  expect(document.querySelector('.ai-answer-box')).toBeNull();
   click('OK');
-  await q;
+  expect(await q).toBe(false);
 });
 
 // ---------------------------------------------------------------------------------------------------------------

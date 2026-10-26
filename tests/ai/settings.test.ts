@@ -17,7 +17,7 @@ const fakeBackend = (listModels: (b: string, k: string) => Promise<AiModel[]> = 
 const flush = () => new Promise(r => setTimeout(r, 0));
 const okButton = () => [...document.querySelectorAll('button')].find(b => b.textContent === 'OK')!;
 
-test('defaults', async () => expect(await loadAiSettings(fakeBackend())).toEqual({ baseUrl: 'http://localhost:11434/v1', model: '', apiKey: '', thinking: 'server' }));
+test('defaults', async () => expect(await loadAiSettings(fakeBackend())).toEqual({ baseUrl: 'http://localhost:11434/v1', model: '', apiKey: '', thinking: 'medium', maxTokens: 65536, fastFollowUp: false }));
 
 test('Search LAN fills the chosen server and model without keeping the previous server capabilities', async () => {
   const base = fakeBackend();
@@ -62,7 +62,7 @@ test('connection testing and LAN search cannot overwrite each other while either
 });
 test('roundtrip', async () => {
   const b = fakeBackend();
-  const s = { baseUrl: 'http://10.0.0.5:11434/v1', model: 'qwen2.5-coder:14b', apiKey: 'k', thinking: 'low' as const };
+  const s = { baseUrl: 'http://10.0.0.5:11434/v1', model: 'qwen2.5-coder:14b', apiKey: 'k', thinking: 'xhigh' as const, maxTokens: 12345, fastFollowUp: true };
   await saveAiSettings(b, s);
   expect(b.store.get('ai')).toEqual(s);
   expect(await loadAiSettings(b)).toEqual(s);
@@ -80,7 +80,7 @@ test('tab loads saved values; key is a password field; apply saves', async () =>
   tab.controls.thinking.setValue('High (thorough)');
   tab.apply();
   await flush();
-  expect(b.store.get('ai')).toEqual({ baseUrl: 'http://x/v1', model: 'm2', apiKey: 'secret', thinking: 'high' });
+  expect(b.store.get('ai')).toEqual({ baseUrl: 'http://x/v1', model: 'm2', apiKey: 'secret', thinking: 'high', maxTokens: 65536, fastFollowUp: false });
   expect(tab.content.textContent).toContain('For Ollama on another PC use http://<its IP>:11434/v1');
   expect(tab.content.textContent).toContain('Thinking:');
   expect(tab.content.textContent).toContain('Use Server default for other servers.');
@@ -136,7 +136,7 @@ test('apply before the load finished still saves the stored values', async () =>
   const tab = buildAiTab(b, document);
   tab.apply();
   await flush();
-  expect(b.store.get('ai')).toEqual({ baseUrl: 'http://x/v1', model: 'm1', apiKey: 'k', thinking: 'server' });
+  expect(b.store.get('ai')).toEqual({ baseUrl: 'http://x/v1', model: 'm1', apiKey: 'k', thinking: 'server', maxTokens: 65536, fastFollowUp: false });
 });
 test('test connection error shown', async () => {
   const b = fakeBackend(async () => { throw 'Could not connect to http://x/v1'; });
@@ -155,12 +155,12 @@ test('a failed save is reported', async () => {
   await vi.waitFor(() => expect(document.querySelector('.dlg98')?.textContent).toContain('Could not save the AI settings: disk full'));
   okButton().click();
 });
-test('old settings without thinking load as server default', async () => {
+test('old settings without thinking load as medium', async () => {
   const b = fakeBackend();
   b.store.set('ai', { baseUrl: 'http://x/v1', model: 'm', apiKey: '' });
-  expect((await loadAiSettings(b)).thinking).toBe('server');
+  expect((await loadAiSettings(b)).thinking).toBe('medium');
   b.store.set('ai', { baseUrl: 'http://x/v1', model: 'm', apiKey: '', thinking: 'bogus' });
-  expect((await loadAiSettings(b)).thinking).toBe('server');
+  expect((await loadAiSettings(b)).thinking).toBe('medium');
 });
 test('test connection stores the context size; old settings without it load as undefined', async () => {
   const b = fakeBackend(async () => [{ id: 'q', contextTokens: 262144 }, { id: 'r' }]);
@@ -175,19 +175,19 @@ test('test connection stores the context size; old settings without it load as u
   expect((await loadAiSettings(b)).contextTokens).toBe(262144);
 });
 
-test('Fast follow-up rounds: on for old settings, saved only when turned off', async () => {
+test('Fast follow-up rounds: disabled by default and explicit opt-in persists', async () => {
   const b = fakeBackend();
   b.store.set('ai', { baseUrl: 'http://x/v1', model: 'm', apiKey: '', thinking: 'low' });
-  expect((await loadAiSettings(b)).fastFollowUp).toBeUndefined();
+  expect((await loadAiSettings(b)).fastFollowUp).toBe(false);
   const tab = buildAiTab(b, document);
   await flush();
-  expect(tab.controls.fast.checked).toBe(true);
+  expect(tab.controls.fast.checked).toBe(false);
   expect(tab.content.textContent).toContain('Fast follow-up rounds');
-  tab.controls.fast.checked = false;
+  tab.controls.fast.checked = true;
   tab.controls.fast.dispatchEvent(new Event('change'));
   tab.apply();
   await flush();
-  expect((await loadAiSettings(b)).fastFollowUp).toBe(false);
+  expect((await loadAiSettings(b)).fastFollowUp).toBe(true);
 });
 
 test('test connection records the server kind: owned_by "vllm" is vllm, anything else openai; old settings have none', async () => {
@@ -220,4 +220,57 @@ test('test connection probes vision with one tiny picture and stores it; Send fo
   const old = fakeBackend(); old.store.set('ai', { baseUrl: 'http://x/v1', model: 'm', apiKey: '', thinking: 'low' });
   const s = await loadAiSettings(old);
   expect(s.vision).toBeUndefined(); expect(s.formPicture).toBeUndefined();
+});
+
+
+test('output budget sanitizes missing and invalid settings while retaining valid integer caps', async () => {
+  const b = fakeBackend();
+  for (const maxTokens of [undefined, null, '12', 0, -1, 1.5, Infinity, NaN, 1048577, Number.MAX_SAFE_INTEGER + 1]) {
+    b.store.set('ai', { maxTokens });
+    expect((await loadAiSettings(b)).maxTokens).toBe(65536);
+  }
+  for (const maxTokens of [1, 65536, 262144, 1048576]) {
+    b.store.set('ai', { maxTokens });
+    expect((await loadAiSettings(b)).maxTokens).toBe(maxTokens);
+  }
+});
+
+test('output budget UI loads, validates, and persists the reasoning plus answer cap', async () => {
+  const b = fakeBackend();
+  b.store.set('ai', { maxTokens: 12345, thinking: 'xhigh' });
+  const tab = buildAiTab(b, document);
+  await flush();
+  expect(tab.controls.maxTokens.value).toBe('12345');
+  expect(tab.controls.thinking.getValue()).toBe('Extra high (xhigh)');
+  expect(tab.content.textContent).toContain('Output budget (tokens):');
+  expect(tab.content.textContent).toContain('Reasoning and the final answer share this budget');
+  expect(tab.content.textContent).toContain('input and images');
+  for (const invalid of ['', '0', '-1', '1.5', '1048577', 'abc']) {
+    tab.controls.maxTokens.value = invalid;
+    expect(tab.validate()).toContain('whole number');
+  }
+  tab.controls.maxTokens.value = '0';
+  const previous = b.store.get('ai');
+  const p = tab.apply();
+  await vi.waitFor(() => expect(document.querySelector('.dlg98')?.textContent).toContain('Output budget'));
+  expect(b.store.get('ai')).toBe(previous);
+  okButton().click(); await p;
+  tab.controls.maxTokens.value = '50000';
+  expect(tab.validate()).toBeNull();
+  await tab.apply();
+  expect((await loadAiSettings(b)).maxTokens).toBe(50000);
+});
+
+test('retesting the same server and model retains capability metadata omitted by discovery', async () => {
+  const b = fakeBackend(async () => [{ id: 'q' }]);
+  b.store.set('ai', { baseUrl: 'http://x/v1', model: 'q', contextTokens: 262144, vision: true, serverKind: 'vllm' });
+  const tab = buildAiTab(b, document);
+  await flush();
+  const p = tab.controls.testConnection();
+  await flush(); okButton().click(); await p;
+  await tab.apply();
+  expect(await loadAiSettings(b)).toMatchObject({ contextTokens: 262144, vision: true, serverKind: 'vllm' });
+  tab.controls.baseUrl.value = 'http://other/v1';
+  await tab.apply();
+  expect(await loadAiSettings(b)).not.toHaveProperty('contextTokens');
 });

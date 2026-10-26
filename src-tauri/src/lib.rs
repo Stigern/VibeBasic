@@ -222,6 +222,6 @@ mod acl_tests {
         targeted += 1;
       }
     }
-    assert_eq!(targeted, 5);   // ai:delta, ai:usage, ai:lan, vb:socket, vb:comm
+    assert_eq!(targeted, 7);   // ai:delta, ai:usage, ai:response, ai:tool_call, ai:lan, vb:socket, vb:comm
   }
 }

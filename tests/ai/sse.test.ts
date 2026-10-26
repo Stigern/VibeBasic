@@ -37,7 +37,7 @@ const sseResponse = (chunks: string[]) => new Response(new ReadableStream({
 const d = (o: object) => `data: ${JSON.stringify(o)}\n\n`;
 
 test('BrowserBackend streams deltas and returns the accumulated answer', async () => {
-  const body = d({ choices: [{ delta: { reasoning: 'think' } }] }) + d({ choices: [{ delta: { content: 'Hello' } }] }) + 'data: [DONE]\n\n';
+  const body = d({ choices: [{ delta: { reasoning: 'think' } }] }) + d({ choices: [{ delta: { content: 'Hello' }, finish_reason: 'stop' }] }) + 'data: [DONE]\n\n';
   const f = vi.fn(async () => sseResponse([body.slice(0, 20), body.slice(20, 75), body.slice(75)]));
   vi.stubGlobal('fetch', f);
   const got: [string, string][] = [];
@@ -55,12 +55,12 @@ test('BrowserBackend: abort rejects with "cancelled"; JSON reply still works', a
   const p = new BrowserBackend().aiChat('http://h/v1', '', 'x', [], undefined, { onDelta: () => {}, signal: ctrl.signal });
   ctrl.abort();
   await expect(p).rejects.toThrow('cancelled');
-  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: 'plain' } }] }), { status: 200, headers: { 'content-type': 'application/json' } })));
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: 'plain' }, finish_reason: 'stop' }] }), { status: 200, headers: { 'content-type': 'application/json' } })));
   expect(await new BrowserBackend().aiChat('http://h/v1', '', 'x', [], undefined, { onDelta: () => {} })).toBe('plain');
 });
 
 test('BrowserBackend: asks for usage and reports it, with cachedTokens when the server sends them', async () => {
-  const body = d({ choices: [{ delta: { content: 'Hi' } }] })
+  const body = d({ choices: [{ delta: { content: 'Hi' }, finish_reason: 'stop' }] })
     + d({ choices: [], usage: { prompt_tokens: 3210, completion_tokens: 41, prompt_tokens_details: { cached_tokens: 2900 } } }) + 'data: [DONE]\n\n';
   const f = vi.fn(async () => sseResponse([body]));
   vi.stubGlobal('fetch', f);

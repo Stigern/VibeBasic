@@ -114,24 +114,24 @@ test('the AI log records an ok and an error exchange with tokens, and shows them
   await p;
   const p2 = ask(b);
   await enterPrompt('show hi again');
-  await vi.waitFor(() => expect(text()).toContain('cut off'));
+  await vi.waitFor(() => expect(text()).toContain('Output token limit reached'));
   click('OK');
   await p2;
 
   const [err, ok] = aiLogEntries();
   expect(aiLogRow(ok).slice(1)).toEqual(['code', 'm', '1,234', '56', expect.any(String), 'ok']);
   expect(aiLogRow(err).slice(1)).toEqual(['code', 'm', '1,234', '56', expect.any(String), 'error']);
-  expect(err.error).toBe(AI_CUT_OFF);
-  expect(ok.sent).toContain('--- user ---');
-  expect(ok.sent).toContain('show hi');
-  expect(ok.reply).toBe(GOOD);
+  expect(err.errorKind).toBe('output_limit');
+  expect(ok.sent).not.toContain('show hi');
+  expect(ok.reply).toBe('');
+  expect(ok.reasoning).toBe('');
 
   const shown = showAiLog(document, () => {});
   await vi.waitFor(() => expect(document.querySelectorAll('.ai-log-row').length).toBe(2));
   document.querySelectorAll<HTMLElement>('.ai-log-row')[1].dispatchEvent(new MouseEvent('mousedown'));
-  expect(document.querySelector('.ai-log-reply .ai-thinking')!.textContent).toContain('thinking hard');
-  expect(document.querySelector('.ai-log-reply .ai-answer')!.textContent).toBe(GOOD);
-  expect(document.querySelector('.ai-log-sent')!.textContent).toContain('show hi');
+  expect(document.querySelector('.ai-log-sent')!.textContent).toContain('max_tokens: 65536');
+  expect(document.querySelector('.dlg98')!.textContent).not.toContain('thinking hard');
+  expect(document.querySelector('.dlg98')!.textContent).not.toContain('show hi');
   click('Close');
   await shown;
 });

@@ -73,7 +73,8 @@ test('a loop is stopped at once, logged and tried once more with the nudge and a
   expect(calls[1].opts).not.toHaveProperty('frequencyPenalty');
   expect(calls[1].opts.structuredOutputs).toBeUndefined();
   expect(aiLogEntries()[1].status).toBe('loop');
-  expect(aiLogEntries()[1].reply).toContain(OBSERVED);
+  expect(aiLogEntries()[1].reply).toBe('');
+  expect(JSON.stringify(aiLogEntries())).not.toContain(OBSERVED);
   calls[1].resolve(OPS);
   await vi.waitFor(() => expect(text()).toContain('AI Suggestion'));
   expect(aiLogEntries()[0]).toMatchObject({ status: 'ok', mode: 'retry' });

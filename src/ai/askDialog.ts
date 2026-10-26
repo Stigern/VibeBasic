@@ -17,12 +17,13 @@ import { effortFor, retryEffort } from './effort';
 import { renderFormImage } from './formImage';
 import { layoutProblems } from './layoutCheck';
 import { LoopWatch } from './loopDetect';
-import { addAiLogEntry, describeRequest, finishAiLogEntry, type AiLogEntry, type AiLogMode } from './aiLog';
+import { addAiLogEntry, newAiRequestId, describeRequest, finishAiLogEntry, type AiLogEntry, type AiLogMode } from './aiLog';
 import { isProse, questionMode, showAnswer } from './answerDialog';
 import { FORM_RESPONSE_FORMAT, FORM_STRUCTURED_OUTPUTS, NOT_UNDERSTOOD, applyFormOpsToClone, describeOps, formOpsToCommand, growForOverflow, parseFormOps } from './formMode';
 import { type PreviewResult, showCodePreview, showFormPreview } from './previewDialogs';
-import { type AiSettings, type Thinking, loadAiSettings } from './settings';
-import { AI_CUT_OFF, type AiChatOptions, type AiUsage } from './sse';
+import { type AiSettings, loadAiSettings } from './settings';
+import { AI_CUT_OFF, AI_EMPTY_ANSWER, type AiChatOptions, type AiUsage, type AiResponseMetadata } from './sse';
+import { classifyAiError } from './errors';
 import { StreamLog } from './streamLog';
 import { type ChatMessage, type ContentPart, contentChars, contentText } from './types';
 import { autoFixEventNames, isSyntaxProblem, validateCode } from './validate';
@@ -276,8 +277,8 @@ const hasPictures = (messages: ChatMessage[]) => messages.some(m => typeof m.con
 /** Without a known context size, the conversation (not counting the system prompt) is trimmed above about this many characters. */
 export const MAX_CONVERSATION_CHARS = 24000;
 /** The trim budget: with a known context size, what is left after the answer and thinking (2 characters per token, on the safe side). */
-export const conversationBudget = (contextTokens: number | undefined): number =>
-  contextTokens ? Math.max(MAX_CONVERSATION_CHARS, (contextTokens - ANSWER_TOKENS - THINKING_TOKENS.high) * 2) : MAX_CONVERSATION_CHARS;
+export const conversationBudget = (contextTokens: number | undefined, maxTokens = 65536): number =>
+  contextTokens ? Math.max(MAX_CONVERSATION_CHARS, (contextTokens - maxTokens) * 2) : MAX_CONVERSATION_CHARS;
 
 /** A wish of a dropped request in one short line (the check rounds' complaints are left out). */
 const wishOf = (m: ChatMessage): string | null => {
@@ -301,30 +302,6 @@ export function trimConversation(messages: ChatMessage[], max = MAX_CONVERSATION
   if (dropped.length && typeof last.content === 'string') out[out.length - 1] = { ...last, content: `${last.content}\n(Earlier wishes in this conversation: ${dropped.join('; ')}.)` };
   return out;
 }
-
-/**
- * max_tokens for a request. On vLLM the thinking counts as well, so the cap is room for the answer plus room for the
- * thinking at the level sent: Low 4,096, Medium 8,192, High 16,384, and 16,384 for Server default (the level is unknown).
- * The answer room is 16,384, or 32,768 when the server reports a large context (a whole form with its code, as pretty-
- * printed JSON, needs more than 8k). With a known context size it is lowered so that prompt + answer fit (vLLM rejects
- * more); when not even 1,024 tokens are left over, no cap is sent and the server decides.
- */
-export const ANSWER_TOKENS = 16384;
-const LARGE_CONTEXT = 65536, LARGE_ANSWER_TOKENS = 32768;
-const THINKING_TOKENS: Record<Thinking, number> = { server: 16384, low: 4096, medium: 8192, high: 16384 };
-export function maxTokensFor(thinking: Thinking, contextTokens: number | undefined, promptChars: number): number | undefined {
-  const answer = contextTokens && contextTokens >= LARGE_CONTEXT ? LARGE_ANSWER_TOKENS : ANSWER_TOKENS;
-  const cap = answer + THINKING_TOKENS[thinking];
-  if (!contextTokens) return cap;
-  const room = contextTokens - Math.ceil(promptChars / 3) - 256;   // about 3 characters per token errs on the safe side
-  return room < 1024 ? undefined : Math.min(cap, room);
-}
-
-/** "baseUrl|model" of servers that rejected max_tokens in this session: their later requests go without it. */
-const noMaxTokens = new Set<string>();
-/** An HTTP 400/422 about max_tokens (too large, unknown field, or prompt + max_tokens over the context length). */
-export const rejectsMaxTokens = (message: string): boolean =>
-  /\b(400|422)\b/.test(message) && /max_tokens|max_completion_tokens|context length|context_length|maximum context/i.test(message);
 
 /** "baseUrl|model" of servers whose structured output failed in this session: their later requests go without it. */
 const noStructuredOutput = new Set<string>();
@@ -419,7 +396,10 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
 
   /** One request to the server, logged. `partial` gets the answer text that streamed in, also when the request fails. */
   const attempt = async (messages: ChatMessage[], level: string | undefined, x: AiChatOptions, mode: AiLogMode, partial: { content: string }): Promise<string> => {
+    const requestId = newAiRequestId();
+    let response: AiResponseMetadata = {};
     const entry = addAiLogEntry({
+      requestId, reasoningEffort: level ?? 'server', maxTokens: x.maxTokens,
       mode, model: settings.model, seconds: 0, status: 'ok', reply: '', reasoning: '',
       sent: describeRequest(settings.baseUrl, settings.model, messages, {
         reasoning_effort: level, max_tokens: x.maxTokens,
@@ -438,8 +418,9 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     if (x.signal?.aborted) inner.abort(); else x.signal?.addEventListener('abort', relay, { once: true });
     try {
       const text = await backend.aiChat(settings.baseUrl, settings.apiKey, settings.model, messages, level, {
-        ...x,
+        ...x, requestId,
         signal: inner.signal,
+        onResponse: m => { const length = response.finishReason === 'length'; response = { ...response, ...Object.fromEntries(Object.entries(m).filter(([, v]) => v !== undefined)) }; if (length) response.finishReason = 'length'; x.onResponse?.(m); },
         onDelta: (k, t) => {
           if (k === 'content') partial.content += t; else reasoning += t;
           x.onDelta?.(k, t);
@@ -448,26 +429,32 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
         onUsage: u => { usage = u; x.onUsage?.(u); },
       });
       if (watch.looped) throw new Error(AI_LOOPED);
-      finishAiLogEntry(entry, { status: 'ok', reply: text, reasoning, usage, ms: Date.now() - t0 }, secret);
+      if (response.finishReason === 'length') throw new Error(AI_CUT_OFF);
+      if (!text.trim() || thinkingOnly(text) !== null) throw new Error(AI_EMPTY_ANSWER);
+      finishAiLogEntry(entry, { status: 'ok', reply: text, reasoning, usage, ms: Date.now() - t0, ...response, serverRequestId: response.requestId }, secret);
       return text;
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      const looped = watch.looped !== null && !x.signal?.aborted;
+      const limited = !x.signal?.aborted && response.finishReason === 'length';
+      const message = limited ? AI_CUT_OFF : e instanceof Error ? e.message : String(e);
+      const looped = !limited && watch.looped !== null && !x.signal?.aborted;
       const cancelled = !looped && (x.signal?.aborted || message === 'cancelled');
       finishAiLogEntry(entry, {
+        ...response, serverRequestId: response.requestId,
         status: looped ? 'loop' : cancelled ? 'cancelled' : 'error', reply: partial.content, reasoning, usage, ms: Date.now() - t0,
         error: looped ? `The ${watch.looped === 'reasoning' ? 'thinking' : 'answer'} kept repeating the same text; stopped.` : cancelled ? undefined : message,
       }, secret);
-      throw looped ? new Error(AI_LOOPED) : e;
+      throw limited ? new Error(AI_CUT_OFF) : looped ? new Error(AI_LOOPED) : e;
     } finally { x.signal?.removeEventListener('abort', relay); }
   };
 
   /** Follow-up rounds (the check-and-fix retry, Change...) think 'low' with "Fast follow-up rounds"; Server default stays unsent. */
   const send = (all: ChatMessage[], followUp: boolean, mode: AiLogMode): Start => async (o, ui) => {
-    const level = effort && followUp && settings.fastFollowUp !== false ? 'low' : effort;
+    const level = effort && followUp && settings.fastFollowUp === true ? 'low' : effort;
     const partial = { content: '' };
     /** The request; after a loop, with the nudge appended. */
     let current = all;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 4;
     /** The penalty of the retry after a loop (none otherwise). */
     let penalties: Pick<AiChatOptions, 'presencePenalty'> = {};
     /**
@@ -477,22 +464,20 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     let afterLoop = false;
     const prepared = () => limitPictures(current, !afterLoop && picturesOn(settings) ? pictureLimit.get(server) ?? MAX_PICTURES : 0);
     /**
-     * One request with the max_tokens cap; a server that rejects the cap gets it again at once without, and no cap for the rest
-     * of the session. The same for the penalties.
+     * Every attempt keeps the user's output cap. A budget rejection stops for review; it is never retried without a limit.
      */
     const capped = async (messages: ChatMessage[], x: AiChatOptions, m: AiLogMode): Promise<string> => {
-      const maxTokens = noMaxTokens.has(server) ? undefined : maxTokensFor(level ?? 'server', settings.contextTokens, messages.reduce((n, y) => n + contentChars(y.content), 0));
+      if (++attempts > MAX_ATTEMPTS) throw new Error('The AI request stopped after four attempts. Review the AI settings before trying again.');
+      const maxTokens = settings.maxTokens ?? 65536;
       // a level the server does not take goes as the nearest one it does (learnt from its 400, kept for the session)
       const sent = effortFor(settings.baseUrl, level);
       try { return await attempt(messages, sent, { ...x, ...penalties, maxTokens }, m, partial); }
       catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        if (o.signal?.aborted) throw e;
+        if (o.signal?.aborted || classifyAiError(message) === 'output_limit') throw e;
         if (retryEffort(settings.baseUrl, sent, message)) return capped(messages, x, 'retry');
         if (penalties.presencePenalty !== undefined && rejectsPenalties(message)) { noPenalties.add(server); penalties = {}; return capped(messages, x, 'retry'); }
-        if (maxTokens === undefined || !rejectsMaxTokens(message)) throw e;
-        noMaxTokens.add(server);
-        return attempt(messages, sent, { ...x, ...penalties, maxTokens: undefined }, 'retry', partial);
+        throw e;
       }
     };
     const plain = async (messages: ChatMessage[], m: AiLogMode): Promise<string> => {
@@ -512,7 +497,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
       catch (e) {
         // Structured output failed (rejected, or the whitespace runaway): once more at once without it, and never again for this server and model.
         const message = e instanceof Error ? e.message : String(e);
-        if (o.signal?.aborted || !(runaway || rejectsStructuredOutput(message) || (message === AI_CUT_OFF && isWhitespaceRunaway(partial.content)))) throw e;
+        if (o.signal?.aborted || message === AI_CUT_OFF || !(runaway || rejectsStructuredOutput(message))) throw e;
         noStructuredOutput.add(server);
         return capped(messages, o, 'retry');
       }
@@ -524,7 +509,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
       try { return await plain(messages, m); }
       catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        if (o.signal?.aborted || !hasPictures(messages) || !refusesPicture(message)) throw e;
+        if (o.signal?.aborted || classifyAiError(message) === 'output_limit' || !hasPictures(messages) || !refusesPicture(message)) throw e;
         const limit = /at most (\d+) image/i.exec(message);
         if (limit && Number(limit[1]) > 0) pictureLimit.set(server, Number(limit[1]));
         else noVision.add(server);
@@ -562,7 +547,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
     // A question is answered in words: no checks, no retry. A reply that is only thinking (no answer text) is shown as the
     // answer here, and only here: code mode never takes code from the thinking.
     if (co.answers && question && (question !== 'unless-code' || !analyse(reply).result)) {
-      const said = thinkingOnly(reply) ?? reply;
+      const said = reply;
       return { kind: 'done', result: null, reply: said, metrics, messages: [...messages, { role: 'assistant', content: said }], answer: true };
     }
     let convo: ChatMessage[] = [...messages, { role: 'assistant', content: reply }];
@@ -597,7 +582,7 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
   };
 
   const copy = (text: string) => backend.clipboardSetText(text);
-  const budget = conversationBudget(settings.contextTokens);
+  const budget = conversationBudget(settings.contextTokens, settings.maxTokens);
   /** The proposal on screen in the preview (null until there is one). */
   let shown: Done<A> | null = null;
   let next: Round<A> = await round(first, false, co.mode, co.question);

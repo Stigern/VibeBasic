@@ -2,20 +2,19 @@ import type { Backend, MakeAppOptions, CommEvent, CommLines, SysInfoData, DbExec
 import { guessPlatform, type Platform } from '../platform';
 import type { AiModel, ChatMessage } from '../ai/types';
 import type { LanNetwork, LanServer, LanScanRequest, LanScanOptions } from '../ai/lanTypes';
-import { AI_CUT_OFF, readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
+import { AI_CUT_OFF, AI_EMPTY_ANSWER, AI_TOOL_CALLS, AI_INTERRUPTED, readToolCalls, readSseEvent, parseSseChunk, readUsage, type AiChatOptions } from '../ai/sse';
 import { redactUrl } from '../ai/aiLog';
 import { MemoryFs } from '../lang/fileio/memoryFs';
 import type { FileAccess, FileMode, FileStat } from '../lang/fileio/fsApi';
 
 const AI_CONNECT_ERROR = (baseUrl: string) =>
-  `Could not connect to ${redactUrl(baseUrl)}. Check that the AI server is running and can be reached from this computer. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0.`;
+  `Could not connect to ${redactUrl(baseUrl)}. Check the network, server address and browser CORS permissions. The browser cannot distinguish these connection failures.`;
 const AI_UNREADABLE = 'The AI server sent an answer VibeBasic could not read.';
 
 function aiEndpoint(baseUrl: string, path: string): string {
   return baseUrl.trim().replace(/\/+$/, '') + '/' + path.replace(/^\/+/, '');
 }
 
-/** Same error texts as src-tauri/src/ai.rs. Browser fetch needs OLLAMA_ORIGINS=* on the server (development only). */
 /** `error.message` (OpenAI / Ollama) or a plain string `error` from a JSON error body. */
 function errorMessage(body: string): string | null {
   try {
@@ -25,7 +24,7 @@ function errorMessage(body: string): string | null {
   } catch { return null; }
 }
 
-async function aiRequest(baseUrl: string, apiKey: string, path: string, init: RequestInit, timeoutSecs: number): Promise<unknown> {
+async function aiRequest(baseUrl: string, apiKey: string, path: string, init: RequestInit, timeoutSecs: number, opts?: AiChatOptions): Promise<unknown> {
   const url = aiEndpoint(baseUrl, path);
   const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) };
   if (apiKey.trim()) headers['Authorization'] = 'Bearer ' + apiKey.trim();
@@ -35,6 +34,7 @@ async function aiRequest(baseUrl: string, apiKey: string, path: string, init: Re
   let res: Response;
   try {
     res = await fetch(url, { ...init, headers, signal: ctrl.signal });
+    opts?.onResponse?.({ httpStatus: res.status, ...(res.headers.get('x-request-id') ? { requestId: res.headers.get('x-request-id')! } : {}) });
     text = await res.text();
   } catch (e) {
     if (ctrl.signal.aborted) throw new Error(`The AI server did not answer within ${timeoutSecs} seconds.`);
@@ -58,16 +58,30 @@ function httpError(res: Response, text: string, url: string): Error {
 const STREAM_IDLE_SECS = 90;
 const STREAM_TOTAL_SECS = 20 * 60;
 
-/**
- * The answer text from the parts of a reply: content, else the thinking marked as such (`<think>...</think>`, which every
- * extractor drops, so code or JSON drafted while thinking is never taken for the answer), else the "unreadable" error.
- * Cut off at max_tokens: the error. Same as reply_text in src-tauri/src/ai.rs.
- */
-function answerText(content: string, reasoning: string, finish: string | undefined): string {
+/** A successful text response requires an explicit stop and a final answer. */
+function answerText(content: string, reasoning: string, finish: string | undefined, tools = false): string {
   if (finish === 'length') throw new Error(AI_CUT_OFF);
+  if (finish === 'tool_calls' || finish === 'function_call' || tools) throw new Error(AI_TOOL_CALLS);
+  if (finish !== 'stop') throw new Error(AI_INTERRUPTED);
   if (content.trim()) return content.trim();
-  if (reasoning.trim()) return `<think>${reasoning.trim()}</think>`;
-  throw new Error(`${AI_UNREADABLE} (Details: the reply had no text; finish_reason = ${finish ?? 'none'}.)`);
+  if (reasoning.trim()) throw new Error(AI_EMPTY_ANSWER);
+  throw new Error('The AI server returned no final answer.');
+}
+
+function jsonAnswer(v: any, opts?: AiChatOptions): string {
+  const choice = v?.choices?.[0], m = choice?.message;
+  const finish = typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined;
+  opts?.onResponse?.({ ...(typeof v?.id === 'string' ? { requestId: v.id } : {}), ...(finish ? { finishReason: finish } : {}) });
+  if (v?.error != null) throw new ServerError(finish === 'length' ? AI_CUT_OFF : errorMessage(JSON.stringify(v)) ?? AI_UNREADABLE);
+  const reasoning = [m?.reasoning, m?.reasoning_content].find(t => typeof t === 'string' && t) ?? '';
+  const content = typeof m?.content === 'string' ? m.content : '';
+  if (reasoning) opts?.onDelta?.('reasoning', reasoning);
+  if (content) opts?.onDelta?.('content', content);
+  const calls = readToolCalls(m?.tool_calls);
+  for (const call of calls) opts?.onToolCall?.(call);
+  const usage = readUsage(v);
+  if (usage) opts?.onUsage?.(usage);
+  return answerText(content, reasoning, finish, calls.length > 0);
 }
 
 /** An error the server sent inside the stream: passed on as it is (as src-tauri/src/ai.rs does), never taken for a lost connection. */
@@ -76,13 +90,15 @@ class ServerError extends Error {}
 /** Streaming chat request (SSE). Idle timeout instead of a total one, plus a 20 minute safety cap. */
 async function aiStream(baseUrl: string, apiKey: string, body: string, opts: AiChatOptions): Promise<string> {
   const url = aiEndpoint(baseUrl, 'chat/completions');
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-Client-Request-Id': opts.requestId ?? `ai-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` };
   if (apiKey.trim()) headers['Authorization'] = 'Bearer ' + apiKey.trim();
   const ctrl = new AbortController();
   let reason: 'cancel' | 'idle' | 'total' | null = null;
+  let outputLimit = false;
   const stop = (r: 'cancel' | 'idle' | 'total') => { reason = reason ?? r; ctrl.abort(); };
   if (opts.signal?.aborted) throw new Error('cancelled');
-  opts.signal?.addEventListener('abort', () => stop('cancel'));
+  const onAbort = () => stop('cancel');
+  opts.signal?.addEventListener('abort', onAbort);
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   const touch = () => { clearTimeout(idleTimer); idleTimer = setTimeout(() => stop('idle'), STREAM_IDLE_SECS * 1000); };
   const totalTimer = setTimeout(() => stop('total'), STREAM_TOTAL_SECS * 1000);
@@ -90,33 +106,34 @@ async function aiStream(baseUrl: string, apiKey: string, body: string, opts: AiC
     touch();
     const res = await fetch(url, { method: 'POST', headers, body, signal: ctrl.signal });
     touch();
+    opts.onResponse?.({ httpStatus: res.status, ...(res.headers.get('x-request-id') ? { requestId: res.headers.get('x-request-id')! } : {}) });
     if (!res.ok) throw httpError(res, await res.text(), url);
     if (/json/i.test(res.headers.get('content-type') ?? '')) {
       let v: any;
       try { v = JSON.parse(await res.text()); } catch { throw new Error(AI_UNREADABLE); }
-      const m = v?.choices?.[0]?.message;
-      const u = readUsage(v);
-      if (u) opts.onUsage?.(u);
-      return answerText(typeof m?.content === 'string' ? m.content : '', [m?.reasoning, m?.reasoning_content].find(t => typeof t === 'string') ?? '', v?.choices?.[0]?.finish_reason);
+      return jsonAnswer(v, opts);
     }
     if (!res.body) throw new Error(AI_UNREADABLE);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = '', content = '', reasoning = '', finish: string | undefined;
-    let done = false;
+    let done = false, tools = false;
     const handle = (payload: string) => {
       const ev = readSseEvent(payload);
-      if (ev.error) throw new ServerError(ev.error);
+      if (ev.finish === 'length') outputLimit = true;
+      if (ev.requestId || ev.finish) opts.onResponse?.({ ...(ev.requestId ? { requestId: ev.requestId } : {}), ...(ev.finish ? { finishReason: ev.finish } : {}) });
       if (ev.done) { done = true; return; }
-      if (ev.finish) finish = ev.finish;
+      if (ev.finish && finish !== 'length') finish = ev.finish;
+      for (const call of ev.toolCalls ?? []) { tools = true; opts.onToolCall?.(call); }
       if (ev.usage) opts.onUsage?.(ev.usage);
+      if (ev.error) throw new ServerError(ev.finish === 'length' ? AI_CUT_OFF : ev.error);
       for (const d of ev.deltas) {
         if (d.kind === 'reasoning') reasoning += d.text; else content += d.text;
         opts.onDelta?.(d.kind, d.text);
       }
     };
     while (!done) {
-      const { value, done: eof } = await reader.read();
+      const { value, done: eof } = await reader.read().catch(() => { throw new Error(finish === 'length' ? AI_CUT_OFF : AI_INTERRUPTED); });
       touch();
       if (eof) break;
       const parsed = parseSseChunk(buf + decoder.decode(value, { stream: true }));
@@ -125,14 +142,17 @@ async function aiStream(baseUrl: string, apiKey: string, body: string, opts: AiC
     }
     if (!done) for (const p of parseSseChunk(buf + '\n\n').events) handle(p);
     else void reader.cancel().catch(() => {});
-    return answerText(content, reasoning, finish);
+    return answerText(content, reasoning, finish, tools);
   } catch (e) {
     if (reason === 'cancel') throw new Error('cancelled');
+    if (outputLimit) throw new Error(AI_CUT_OFF);
     if (reason === 'idle') throw new Error(`The AI server stopped sending for ${STREAM_IDLE_SECS} seconds.`);
     if (reason === 'total') throw new Error(`The AI server did not finish within ${STREAM_TOTAL_SECS / 60} minutes.`);
-    if (e instanceof ServerError || (e instanceof Error && (e.message.startsWith('The AI server') || e.message === AI_CUT_OFF))) throw e;
+    if (e instanceof TypeError && !reason) throw new Error(AI_CONNECT_ERROR(baseUrl));
+    if (e instanceof ServerError || (e instanceof Error && (e.message.startsWith('The AI server') || e.message === AI_CUT_OFF || e.message === AI_INTERRUPTED))) throw e;
     throw new Error(AI_CONNECT_ERROR(baseUrl));
   } finally {
+    opts.signal?.removeEventListener('abort', onAbort);
     clearTimeout(idleTimer);
     clearTimeout(totalTimer);
   }
@@ -375,21 +395,19 @@ export class BrowserBackend implements Backend {
 
   async aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string, opts?: AiChatOptions): Promise<string> {
     const effort = reasoningEffort?.trim();
-    const streaming = !!opts?.onDelta;
+    const streaming = !!(opts?.onDelta || opts?.signal || opts?.onUsage || opts?.onResponse || opts?.onToolCall || opts?.requestId);
     const body = JSON.stringify({
       model, messages, temperature: 0.2, stream: streaming, ...(streaming ? { stream_options: { include_usage: true } } : {}),
       ...(effort ? { chat_template_kwargs: { reasoning_effort: effort } } : {}),
       ...(opts?.maxTokens ? { max_tokens: opts.maxTokens } : {}), ...(opts?.responseFormat !== undefined ? { response_format: opts.responseFormat } : {}),
       ...(opts?.structuredOutputs !== undefined ? { structured_outputs: opts.structuredOutputs } : {}),
       ...(opts?.presencePenalty !== undefined ? { presence_penalty: opts.presencePenalty } : {}),
+      ...(opts?.tools !== undefined ? { tools: opts.tools } : {}),
+      ...(opts?.toolChoice !== undefined ? { tool_choice: opts.toolChoice } : {}),
     });
     if (streaming) return aiStream(baseUrl, apiKey, body, opts!);
-    const v = (await aiRequest(baseUrl, apiKey, 'chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, 600)) as
-      { choices?: { message?: { content?: unknown }; finish_reason?: unknown }[] } | null;
-    if (v?.choices?.[0]?.finish_reason === 'length') throw new Error(AI_CUT_OFF);
-    const content = v?.choices?.[0]?.message?.content;
-    if (typeof content !== 'string') throw new Error(AI_UNREADABLE);
-    return content;
+    const v = await aiRequest(baseUrl, apiKey, 'chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Client-Request-Id': `ai-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` }, body }, 600, opts);
+    return jsonAnswer(v, opts);
   }
 
   onQuitRequested(_handler: () => void): void {

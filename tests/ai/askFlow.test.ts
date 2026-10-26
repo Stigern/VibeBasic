@@ -273,7 +273,8 @@ test('the trim budget leaves out the system prompt and follows a known context; 
   const short = [m('system', sys), m('user', 'q'), m('assistant', 'a1'), m('user', 'c1'), m('assistant', 'a2'), m('user', 'c2')];
   expect(trimConversation(short)).toEqual(short);
   expect(conversationBudget(undefined)).toBe(24000);
-  expect(conversationBudget(262144)).toBeGreaterThan(400000);
+  expect(conversationBudget(262144)).toBe(393216);
+  expect(conversationBudget(262144, 98304)).toBe(327680);
   const big = 'x'.repeat(13000);
   const long = [m('system', sys), m('user', 'q'), m('assistant', big), m('user', 'Change your last answer: make it red\nAnswer with the complete result again.'),
     m('assistant', big), m('user', 'Your answer has these problems:\n- x'), m('assistant', big), m('user', 'c3')];

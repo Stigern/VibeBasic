@@ -40,7 +40,7 @@ fn unreadable() -> String {
 
 /// The server stopped at max_tokens (finish_reason "length"). Same text as AI_CUT_OFF in src/ai/sse.ts.
 fn cut_off() -> String {
-  "The AI answer was cut off before it was finished (finish_reason = length). Choose a lower Thinking level in Tools > Options > AI, or ask for less at a time.".to_string()
+  "Output token limit reached (finish_reason = length). The output budget includes reasoning and the final answer; this does not mean the full context window is exhausted. Increase Output budget (tokens), choose a lower Thinking level, or ask for less at a time. VibeBasic will not retry automatically.".to_string()
 }
 
 /// Optional request fields the frontend may add: `response_format` (OpenAI structured output), `structured_outputs`
@@ -52,6 +52,8 @@ pub struct ChatExtra {
   pub structured_outputs: Option<Value>,
   pub max_tokens: Option<u64>,
   pub presence_penalty: Option<f64>,
+  pub tools: Option<Value>,
+  pub tool_choice: Option<Value>,
 }
 
 /// The chat/completions body. vLLM/Qwen servers honour chat_template_kwargs.reasoning_effort; other servers get nothing extra.
@@ -75,26 +77,26 @@ fn chat_body(model: &str, messages: &[ChatMessage], reasoning_effort: &Option<St
   if let Some(v) = extra.presence_penalty {
     body["presence_penalty"] = json!(v);
   }
+  if let Some(v) = extra.tools.as_ref().filter(|v| !v.is_null()) {
+    body["tools"] = v.clone();
+  }
+  if let Some(v) = extra.tool_choice.as_ref().filter(|v| !v.is_null()) {
+    body["tool_choice"] = v.clone();
+  }
   body
 }
 
-/// The innermost cause of a request error (e.g. "No route to host (os error 65)"), for the error text.
-/// Never the reqwest error's own text when it has no cause: that text can carry the request URL.
-fn root_cause(e: &reqwest::Error) -> String {
-  let mut cur: &dyn std::error::Error = e;
-  let mut deeper = false;
-  while let Some(next) = cur.source() {
-    cur = next;
-    deeper = true;
-  }
-  if deeper {
-    cur.to_string()
-  } else if e.is_timeout() {
-    "timed out".to_string()
-  } else if e.is_connect() {
-    "connection failed".to_string()
-  } else {
-    "request failed".to_string()
+/// Inspect typed causes rather than parsing platform-specific error text.
+fn connection_refused(e: &reqwest::Error) -> bool {
+  let mut cause: &(dyn std::error::Error + 'static) = e;
+  loop {
+    if cause.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::ConnectionRefused) {
+      return true;
+    }
+    match cause.source() {
+      Some(next) => cause = next,
+      None => return false,
+    }
   }
 }
 
@@ -128,11 +130,20 @@ fn too_large() -> String {
 /// Reads a response body in chunks, at most `cap` bytes. The bool is true when the body was longer (then the
 /// text is only its start).
 async fn read_limited(resp: &mut reqwest::Response, cap: usize, base_url: &str, timeout_secs: u64) -> Result<(String, bool), String> {
+  read_limited_with_idle(resp, cap, base_url, timeout_secs, None).await
+}
+
+async fn read_limited_with_idle(resp: &mut reqwest::Response, cap: usize, base_url: &str, timeout_secs: u64, idle: Option<Duration>) -> Result<(String, bool), String> {
   if resp.content_length().is_some_and(|n| n > cap as u64) {
     return Ok((String::new(), true));
   }
   let mut buf = Vec::<u8>::new();
-  while let Some(chunk) = resp.chunk().await.map_err(|e| map_send_error(&e, base_url, timeout_secs))? {
+  loop {
+    let next = match idle {
+      Some(limit) => tokio::time::timeout(limit, resp.chunk()).await.map_err(|_| idle_error(limit))?,
+      None => resp.chunk().await,
+    };
+    let Some(chunk) = next.map_err(|e| map_send_error(&e, base_url, timeout_secs))? else { break };
     if buf.len() + chunk.len() > cap {
       buf.extend_from_slice(&chunk[..cap - buf.len()]);
       return Ok((String::from_utf8_lossy(&buf).into_owned(), true));
@@ -143,25 +154,20 @@ async fn read_limited(resp: &mut reqwest::Response, cap: usize, base_url: &str, 
 }
 
 fn map_send_error(e: &reqwest::Error, base_url: &str, timeout_secs: u64) -> String {
-  eprintln!("ai request failed: {}", root_cause(e));
   let base_url = redact_url(base_url);
   let base_url = base_url.as_str();
-  if e.is_connect() {
-    format!(
-      "Could not connect to {base_url}. Check that the AI server is running and can be reached from this computer. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0. (Details: {})",
-      root_cause(e)
-    )
-  } else if e.is_timeout() {
-    format!("The AI server did not answer within {timeout_secs} seconds.")
+  if e.is_timeout() {
+    format!("The AI server did not answer within {timeout_secs} seconds (timeout).")
+  } else if e.is_connect() && connection_refused(e) {
+    format!("The AI connection was refused at {base_url}. Check that the server is running and listening on this address and port.")
+  } else if e.is_connect() {
+    format!("Could not connect to {base_url}. Check the server address and that it can be reached from this computer.")
   } else if e.is_builder() {
     format!("The base URL \"{base_url}\" is not valid. It should look like http://192.168.1.10:11434/v1")
   } else if e.is_decode() || e.is_body() {
-    unreadable()
+    "The AI response was interrupted before it was complete.".to_string()
   } else {
-    format!(
-      "Could not connect to {base_url}. Check that the AI server is running and can be reached from this computer. For Ollama on another PC, start Ollama with OLLAMA_HOST=0.0.0.0. (Details: {})",
-      root_cause(e)
-    )
+    format!("Could not connect to {base_url}. Check the server address and that it can be reached from this computer.")
   }
 }
 
@@ -327,6 +333,7 @@ pub struct Usage {
   pub prompt_tokens: u64,
   pub completion_tokens: u64,
   pub cached_tokens: Option<u64>,
+  pub reasoning_tokens: Option<u64>,
 }
 
 /// The `usage` object of a chunk, if it has one with a prompt token count.
@@ -337,11 +344,13 @@ fn read_usage(v: &Value) -> Option<Usage> {
     prompt_tokens: n("/prompt_tokens")?,
     completion_tokens: n("/completion_tokens").unwrap_or(0),
     cached_tokens: n("/prompt_tokens_details/cached_tokens"),
+    reasoning_tokens: n("/completion_tokens_details/reasoning_tokens"),
   })
 }
 
 /// Like `chat`, but asks for `"stream": true` and calls `on_delta(kind, text)` ("reasoning" | "content") for every
 /// piece as it arrives. Returns the same text as `chat`. A server that answers with plain JSON is read as usual.
+#[allow(dead_code)] // Compatibility wrapper for callers without response/tool observers.
 pub async fn chat_stream(
   base_url: &str,
   api_key: &Option<String>,
@@ -361,7 +370,7 @@ fn idle_error(idle: Duration) -> String {
   format!("The AI server stopped sending for {} seconds.", idle.as_secs())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(dead_code, clippy::too_many_arguments)]
 async fn chat_stream_with(
   base_url: &str,
   api_key: &Option<String>,
@@ -374,6 +383,27 @@ async fn chat_stream_with(
   idle: Duration,
   total: Duration,
 ) -> Result<String, String> {
+  chat_stream_observed(base_url, api_key, model, messages, reasoning_effort, extra, on_delta, on_usage,
+    None, &|_| {}, &|_| {}, idle, total).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn chat_stream_observed(
+  base_url: &str,
+  api_key: &Option<String>,
+  model: &str,
+  messages: &[ChatMessage],
+  reasoning_effort: &Option<String>,
+  extra: &ChatExtra,
+  on_delta: &(dyn Fn(&str, &str) + Send + Sync),
+  on_usage: &(dyn Fn(Usage) + Send + Sync),
+  client_request_id: Option<&str>,
+  on_response: &(dyn Fn(Value) + Send + Sync),
+  on_tool_call: &(dyn Fn(Value) + Send + Sync),
+  idle: Duration,
+  total: Duration,
+) -> Result<String, String> {
+  let deadline = tokio::time::Instant::now() + total;
   let url = endpoint(base_url, "chat/completions");
   // No client-wide timeout: a long answer may legitimately stream for minutes. Instead: connect timeout, an idle
   // timeout (nothing received for `idle`) on every wait, and a safety cap on the whole answer.
@@ -383,16 +413,47 @@ async fn chat_stream_with(
     .map_err(|e| format!("Could not start the AI request: {e}"))?;
   let body = chat_body(model, messages, reasoning_effort, extra, true);
   let mut req = c.post(&url).json(&body);
+  if let Some(id) = client_request_id { req = req.header("X-Client-Request-Id", id); }
   if let Some(k) = api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
     req = req.bearer_auth(k);
   }
-  let mut resp = tokio::time::timeout(idle, req.send())
+  let mut resp = tokio::time::timeout(idle.min(total), req.send())
     .await
     .map_err(|_| idle_error(idle))?
     .map_err(|e| map_send_error(&e, base_url, CHAT_TIMEOUT_SECS))?;
   let status = resp.status();
+  let request_id = ["x-request-id", "request-id", "openai-request-id"].iter()
+    .find_map(|name| resp.headers().get(*name).and_then(|v| v.to_str().ok())).map(str::to_string);
+  on_response(json!({"http_status":status.as_u16(), "request_id":request_id}));
+  let observe_metadata = |v: &Value| {
+    if let Some(id) = request_id.as_deref().or_else(|| v.get("id").and_then(Value::as_str)) {
+      on_response(json!({"request_id":id}));
+    }
+    if let Some(u) = read_usage(v) { on_usage(u); }
+    if let Some(f) = v.pointer("/choices/0/finish_reason").and_then(Value::as_str) {
+      on_response(json!({"finish_reason":f}));
+    }
+  };
+  let observe_json = |v: &Value| {
+    observe_metadata(v);
+    let msg = v.pointer("/choices/0/message");
+    let field = |name: &str| msg.and_then(|m| m.get(name)).and_then(Value::as_str).filter(|s| !s.is_empty());
+    if let Some(t) = field("reasoning").or_else(|| field("reasoning_content")) {
+      on_delta("reasoning", t);
+    }
+    if let Some(t) = field("content") { on_delta("content", t); }
+    if let Some(calls) = v.pointer("/choices/0/message/tool_calls").and_then(Value::as_array) {
+      for (index, call) in calls.iter().enumerate() {
+        let mut call = call.clone();
+        call["index"] = json!(index);
+        on_tool_call(call);
+      }
+    }
+  };
   if !status.is_success() {
-    let (text, _) = read_limited(&mut resp, MAX_BODY_BYTES, base_url, CHAT_TIMEOUT_SECS).await?;
+    let (text, _) = tokio::time::timeout_at(deadline,
+      read_limited_with_idle(&mut resp, MAX_BODY_BYTES, base_url, CHAT_TIMEOUT_SECS, Some(idle)))
+      .await.map_err(|_| format!("The AI server did not finish within {} minutes (timeout).", total.as_secs() / 60))??;
     return Err(status_error(status, &url, &text));
   }
   let is_json = resp
@@ -401,11 +462,14 @@ async fn chat_stream_with(
     .and_then(|v| v.to_str().ok())
     .is_some_and(|t| t.to_ascii_lowercase().contains("json"));
   if is_json {
-    let (text, truncated) = read_limited(&mut resp, MAX_BODY_BYTES, base_url, CHAT_TIMEOUT_SECS).await?;
+    let (text, truncated) = tokio::time::timeout_at(deadline,
+      read_limited_with_idle(&mut resp, MAX_BODY_BYTES, base_url, CHAT_TIMEOUT_SECS, Some(idle)))
+      .await.map_err(|_| format!("The AI server did not finish within {} minutes (timeout).", total.as_secs() / 60))??;
     if truncated {
       return Err(too_large());
     }
     let v = serde_json::from_str::<Value>(&text).map_err(|_| unreadable())?;
+    observe_json(&v);
     return reply_text(&v);
   }
 
@@ -413,6 +477,7 @@ async fn chat_stream_with(
   let (mut content, mut reasoning) = (String::new(), String::new());
   let mut finish: Option<String> = None;
   let mut done = false;
+  let mut tool_calls = Vec::new();
   let mut total_bytes = 0usize;
   // A server that ignores `stream` and answers with plain JSON but no JSON content-type: sniffed below.
   let (mut raw, mut seen_event) = (Vec::<u8>::new(), false);
@@ -421,18 +486,22 @@ async fn chat_stream_with(
     if payload == "[DONE]" {
       return Ok(true);
     }
-    let Ok(v) = serde_json::from_str::<Value>(payload) else { return Ok(false) };
-    // `"error": null` (some proxies send it with every chunk) is no error
+    let v = serde_json::from_str::<Value>(payload).map_err(|_| unreadable())?;
+    observe_metadata(&v);
+    if let Some(f) = v.pointer("/choices/0/finish_reason").and_then(Value::as_str) {
+      if finish.as_deref() != Some("length") { finish = Some(f.to_string()); }
+    }
+    // Provider errors may carry final usage and termination metadata too.
     if v.get("error").is_some_and(|e| !e.is_null()) {
       return Err(body_message(payload).unwrap_or_else(unreadable));
     }
-    if let Some(u) = read_usage(&v) {
-      on_usage(u);
-    }
-    if let Some(f) = v.pointer("/choices/0/finish_reason").and_then(Value::as_str) {
-      finish = Some(f.to_string());
-    }
     let delta = v.pointer("/choices/0/delta");
+    if let Some(calls) = delta.and_then(|d| d.get("tool_calls")).and_then(Value::as_array) {
+      for call in calls {
+        tool_calls.push(call.clone());
+        on_tool_call(call.clone());
+      }
+    }
     let get = |name: &str| delta.and_then(|d| d.get(name)).and_then(Value::as_str).filter(|s| !s.is_empty());
     if let Some(t) = get("reasoning").or_else(|| get("reasoning_content")) {
       reasoning.push_str(t);
@@ -479,35 +548,49 @@ async fn chat_stream_with(
     }
     Ok::<(), String>(())
   };
-  tokio::time::timeout(total, read)
+  let read_result = tokio::time::timeout_at(deadline, read)
     .await
-    .map_err(|_| format!("The AI server did not finish within {} minutes.", total.as_secs() / 60))??;
+    .map_err(|_| format!("The AI server did not finish within {} minutes.", total.as_secs() / 60))
+    .and_then(|result| result);
+  // Once the server reports the output limit, a later dropped connection cannot make it retryable.
+  if finish.as_deref() == Some("length") { return Err(cut_off()); }
+  read_result?;
   if !seen_event && content.is_empty() && reasoning.is_empty() {
     if let Ok(v) = serde_json::from_slice::<Value>(&raw) {
+      observe_json(&v);
       return reply_text(&v);
     }
   }
-  reply_text(&json!({ "choices": [{ "message": { "content": content, "reasoning": reasoning }, "finish_reason": finish }] }))
+  reply_text(&json!({ "choices": [{ "message": { "content": content, "reasoning": reasoning, "tool_calls": tool_calls }, "finish_reason": finish }] }))
 }
 
-/// The answer text of a chat reply. A reply with only `reasoning`/`reasoning_content` (no `content`: the model never
-/// finished thinking, or the reasoning parser took everything) gives that text inside `<think>...</think>`: the code and
-/// JSON extractors drop thinking, so a draft from the thinking is never applied, and a question can still show it.
-/// Same as answerText in src/backend/browserBackend.ts.
+/// Final answer only: reasoning and tool calls never become answer text.
 fn reply_text(v: &Value) -> Result<String, String> {
   let finish = v.pointer("/choices/0/finish_reason").and_then(Value::as_str);
   if finish == Some("length") {
     return Err(cut_off());
   }
+  if v.get("error").is_some_and(|e| !e.is_null()) {
+    return Err(body_message(&v.to_string()).unwrap_or_else(unreadable));
+  }
+  if finish.is_none() {
+    return Err("The AI response was incomplete: no finish_reason was received.".to_string());
+  }
   let msg = v.pointer("/choices/0/message");
+  if matches!(finish, Some("tool_calls" | "function_call")) || msg.and_then(|m| m.get("tool_calls")).and_then(Value::as_array).is_some_and(|v| !v.is_empty()) {
+    return Err("The AI server requested tool calls; no final answer was produced.".to_string());
+  }
+  if finish != Some("stop") {
+    return Err(format!("The AI response ended before completion (finish_reason = {}).", finish.unwrap_or("none")));
+  }
   let field = |name: &str| {
     msg.and_then(|m| m.get(name)).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
   };
   if let Some(c) = field("content") {
     return Ok(c);
   }
-  if let Some(r) = field("reasoning").or_else(|| field("reasoning_content")) {
-    return Ok(format!("<think>{r}</think>"));
+  if field("reasoning").or_else(|| field("reasoning_content")).is_some() {
+    return Err("The AI server returned reasoning without a final answer.".to_string());
   }
   let finish = finish.unwrap_or("none");
   Err(format!("{} (Details: the reply had no text; finish_reason = {finish}.)", unreadable()))
@@ -577,24 +660,39 @@ pub async fn ai_chat(
   structured_outputs: Option<Value>,
   max_tokens: Option<u64>,
   presence_penalty: Option<f64>,
+  tools: Option<Value>,
+  tool_choice: Option<Value>,
   stream_id: Option<String>,
 ) -> Result<String, String> {
-  let extra = ChatExtra { response_format, structured_outputs, max_tokens, presence_penalty };
+  let extra = ChatExtra { response_format, structured_outputs, max_tokens, presence_penalty, tools, tool_choice };
   let Some(id) = stream_id else {
     return chat(&base_url, &api_key, &model, &messages, &reasoning_effort, &extra).await;
   };
   let emit_id = id.clone();
   let id_for_usage = id.clone();
   let app2 = app.clone();
+  let app_response = app.clone();
+  let app_tools = app.clone();
+  let response_id = id.clone();
+  let tool_id = id.clone();
+  let client_id = id.clone();
   let task = tokio::spawn(async move {
     let on_delta = move |kind: &str, text: &str| {
       let _ = app.emit_to("main", "ai:delta", json!({ "id": emit_id, "kind": kind, "text": text }));
     };
     let emit_id = id_for_usage;
     let on_usage = move |u: Usage| {
-      let _ = app2.emit_to("main", "ai:usage", json!({ "id": emit_id, "prompt_tokens": u.prompt_tokens, "completion_tokens": u.completion_tokens, "cached_tokens": u.cached_tokens }));
+      let _ = app2.emit_to("main", "ai:usage", json!({ "id": emit_id, "prompt_tokens": u.prompt_tokens, "completion_tokens": u.completion_tokens, "cached_tokens": u.cached_tokens, "reasoning_tokens":u.reasoning_tokens }));
     };
-    chat_stream(&base_url, &api_key, &model, &messages, &reasoning_effort, &extra, &on_delta, &on_usage).await
+    let on_response = move |mut v: Value| {
+      v["id"] = json!(response_id);
+      let _ = app_response.emit_to("main", "ai:response", v);
+    };
+    let on_tool_call = move |v: Value| {
+      let _ = app_tools.emit_to("main", "ai:tool_call", json!({"id":tool_id,"tool_call":v}));
+    };
+    chat_stream_observed(&base_url, &api_key, &model, &messages, &reasoning_effort, &extra, &on_delta, &on_usage,
+      Some(&client_id), &on_response, &on_tool_call, Duration::from_secs(STREAM_IDLE_SECS), Duration::from_secs(STREAM_TOTAL_SECS)).await
   });
   streams.register(&id, task.abort_handle());
   let res = task.await;
@@ -617,7 +715,7 @@ mod tests {
   use super::*;
   use httpmock::prelude::*;
 
-  const NONE: ChatExtra = ChatExtra { response_format: None, structured_outputs: None, max_tokens: None, presence_penalty: None };
+  const NONE: ChatExtra = ChatExtra { response_format: None, structured_outputs: None, max_tokens: None, presence_penalty: None, tools: None, tool_choice: None };
 
   fn msgs() -> Vec<ChatMessage> {
     vec![ChatMessage { role: "user".into(), content: "hi".into() }]
@@ -634,7 +732,7 @@ mod tests {
     let server = MockServer::start();
     let m = server.mock(|when, then| {
       when.method(POST).path("/v1/chat/completions").json_body_partial(r#"{"model":"qwen","stream":false}"#);
-      then.status(200).json_body(json!({"choices":[{"message":{"content":"hei"}}]}));
+      then.status(200).json_body(json!({"choices":[{"message":{"content":"hei"},"finish_reason":"stop"}]}));
     });
     let r = chat(&server.url("/v1"), &None, "qwen", &msgs(), &None, &NONE).await;
     assert_eq!(r.unwrap(), "hei");
@@ -646,7 +744,7 @@ mod tests {
     let server = MockServer::start();
     let with = server.mock(|when, then| {
       when.method(POST).path("/v1/chat/completions").json_body_partial(r#"{"chat_template_kwargs":{"reasoning_effort":"low"}}"#);
-      then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"}}]}));
+      then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}));
     });
     assert_eq!(chat(&server.url("/v1"), &None, "m", &msgs(), &Some("low".into()), &NONE).await.unwrap(), "ok");
     with.assert();
@@ -654,11 +752,11 @@ mod tests {
     let server2 = MockServer::start();
     let without = server2.mock(|when, then| {
       when.method(POST).path("/v1/chat/completions").body_contains("chat_template_kwargs");
-      then.status(200).json_body(json!({"choices":[{"message":{"content":"x"}}]}));
+      then.status(200).json_body(json!({"choices":[{"message":{"content":"x"},"finish_reason":"stop"}]}));
     });
     let any = server2.mock(|when, then| {
       when.method(POST).path("/v1/chat/completions");
-      then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"}}]}));
+      then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}));
     });
     assert_eq!(chat(&server2.url("/v1"), &None, "m", &msgs(), &None, &NONE).await.unwrap(), "ok");
     assert_eq!(chat(&server2.url("/v1"), &None, "m", &msgs(), &Some("  ".into()), &NONE).await.unwrap(), "ok");
@@ -667,14 +765,15 @@ mod tests {
   }
 
   #[test]
-  fn reply_text_marks_a_reasoning_only_reply_as_thinking() {
-    let v = json!({"choices":[{"message":{"content":null,"reasoning":"think...\n```vb\nPrivate Sub A()\nEnd Sub\n```"},"finish_reason":"stop"}]});
-    let t = reply_text(&v).unwrap();
-    assert!(t.starts_with("<think>think...") && t.ends_with("```</think>"), "{t}");
-    let v = json!({"choices":[{"message":{"content":"","reasoning_content":"r"}}]});
-    assert_eq!(reply_text(&v).unwrap(), "<think>r</think>");
-    let v = json!({"choices":[{"message":{"content":"  hei "}}]});
-    assert_eq!(reply_text(&v).unwrap(), "hei");
+  fn reply_text_rejects_reasoning_only_tools_and_missing_finish() {
+    for field in ["reasoning", "reasoning_content"] {
+      let v = json!({"choices":[{"message":{"content":null,field:"private thoughts"},"finish_reason":"stop"}]});
+      assert_eq!(reply_text(&v).unwrap_err(), "The AI server returned reasoning without a final answer.");
+    }
+    let v = json!({"choices":[{"message":{"content":null,"tool_calls":[{"id":"call1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}]});
+    assert_eq!(reply_text(&v).unwrap_err(), "The AI server requested tool calls; no final answer was produced.");
+    let v = json!({"choices":[{"message":{"content":"partial"}}]});
+    assert!(reply_text(&v).unwrap_err().contains("incomplete"));
   }
 
   #[test]
@@ -686,7 +785,7 @@ mod tests {
     // cut off at max_tokens, even with some text: the cut-off message
     let v = json!({"choices":[{"message":{"content":"{\"ops\":["},"finish_reason":"length"}]});
     let e = reply_text(&v).unwrap_err();
-    assert!(e.starts_with("The AI answer was cut off") && e.contains("lower Thinking level"), "{e}");
+    assert!(e.starts_with("Output token limit reached") && e.contains("output budget"), "{e}");
   }
 
   #[tokio::test]
@@ -697,11 +796,11 @@ mod tests {
     let server = MockServer::start();
     let plain = server.mock(|when, then| {
       when.method(POST).path("/v1/chat/completions").json_body_partial(want.clone()).json_body_partial(r#"{"stream":false}"#);
-      then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"}}]}));
+      then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}));
     });
     let streamed = server.mock(|when, then| {
       when.method(POST).path("/v1/chat/completions").json_body_partial(want.clone()).json_body_partial(r#"{"stream":true}"#);
-      then.status(200).header("content-type", "text/event-stream").body(sse(&[&delta("content", "ok"), "data: [DONE]\n\n"]));
+      then.status(200).header("content-type", "text/event-stream").body(sse(&[&delta("content", "ok"), &stop(), "data: [DONE]\n\n"]));
     });
     assert_eq!(chat(&server.url("/v1"), &None, "m", &msgs(), &None, &extra).await.unwrap(), "ok");
     let (_, cb) = collect();
@@ -731,7 +830,7 @@ mod tests {
     let server = MockServer::start();
     let with = server.mock(|when, then| {
       when.method(POST).path("/v1/chat/completions").header("authorization", "Bearer k");
-      then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"}}]}));
+      then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}));
     });
     assert_eq!(chat(&server.url("/v1"), &Some("k".into()), "m", &msgs(), &None, &NONE).await.unwrap(), "ok");
     with.assert();
@@ -739,7 +838,7 @@ mod tests {
     let server2 = MockServer::start();
     let any = server2.mock(|when, then| {
       when.method(POST).path("/v1/chat/completions");
-      then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"}}]}));
+      then.status(200).json_body(json!({"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}));
     });
     let auth = server2.mock(|when, then| {
       when.header_exists("authorization");
@@ -827,7 +926,23 @@ mod tests {
   async fn connection_refused_message() {
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let e = chat(&format!("http://127.0.0.1:{port}/v1"), &None, "m", &msgs(), &None, &NONE).await.unwrap_err();
+    assert!(e.starts_with("The AI connection was refused at"), "{e}");
+    assert!(e.contains("address and port"), "{e}");
+    assert!(!e.contains("Ollama") && !e.contains("context") && !e.contains("Details:"), "{e}");
+  }
+
+  #[tokio::test]
+  async fn other_connection_failures_do_not_claim_refusal_or_specific_server() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let fixture = tokio::spawn(async move {
+      let (socket, _) = listener.accept().await.unwrap();
+      drop(socket); // Connection accepted, but TLS negotiation cannot complete.
+    });
+    let e = chat(&format!("https://{addr}/v1"), &None, "m", &msgs(), &None, &NONE).await.unwrap_err();
+    fixture.await.unwrap();
     assert!(e.starts_with("Could not connect to"), "{e}");
+    assert!(!e.contains("refused") && !e.contains("Ollama") && !e.contains("context") && !e.contains("Details:"), "{e}");
   }
 
   #[tokio::test]
@@ -869,6 +984,8 @@ mod tests {
 
   fn no_usage(_: Usage) {}
 
+  fn stop() -> String { format!("data: {}\n\n", json!({"choices":[{"delta":{},"finish_reason":"stop"}]})) }
+
   fn delta(field: &str, text: &str) -> String {
     format!("data: {}\n\n", json!({"choices":[{"delta":{ field: text }}]}))
   }
@@ -903,14 +1020,14 @@ mod tests {
   async fn stream_requests_and_reads_usage() {
     let usage = json!({"choices":[],"usage":{"prompt_tokens":3210,"completion_tokens":41,"prompt_tokens_details":{"cached_tokens":2900}}});
     let usage2 = json!({"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":1}});
-    assert_eq!(read_usage(&usage), Some(Usage { prompt_tokens: 3210, completion_tokens: 41, cached_tokens: Some(2900) }));
-    assert_eq!(read_usage(&usage2), Some(Usage { prompt_tokens: 5, completion_tokens: 1, cached_tokens: None }));
+    assert_eq!(read_usage(&usage), Some(Usage { prompt_tokens: 3210, completion_tokens: 41, cached_tokens: Some(2900), reasoning_tokens: None }));
+    assert_eq!(read_usage(&usage2), Some(Usage { prompt_tokens: 5, completion_tokens: 1, cached_tokens: None, reasoning_tokens: None }));
     assert_eq!(read_usage(&json!({"choices":[{"delta":{}}],"usage":null})), None);
     let server = MockServer::start();
     let m = server.mock(|when, then| {
       when.method(POST).path("/v1/chat/completions").json_body_partial(r#"{"stream_options":{"include_usage":true}}"#);
       then.status(200).header("content-type", "text/event-stream")
-        .body(sse(&[&delta("content", "ok"), &format!("data: {usage}\n\n"), "data: [DONE]\n\n"]));
+        .body(sse(&[&delta("content", "ok"), &stop(), &format!("data: {usage}\n\n"), "data: [DONE]\n\n"]));
     });
     let (_, cb) = collect();
     let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
@@ -918,7 +1035,7 @@ mod tests {
     let on_usage = move |u: Usage| s2.lock().unwrap().push(u);
     assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &on_usage).await.unwrap(), "ok");
     m.assert();
-    assert_eq!(seen.lock().unwrap().clone(), vec![Usage { prompt_tokens: 3210, completion_tokens: 41, cached_tokens: Some(2900) }]);
+    assert_eq!(seen.lock().unwrap().clone(), vec![Usage { prompt_tokens: 3210, completion_tokens: 41, cached_tokens: Some(2900), reasoning_tokens: None }]);
   }
 
   #[tokio::test]
@@ -929,7 +1046,7 @@ mod tests {
       then.status(200).header("content-type", "text/event-stream").body(sse(&[&delta("reasoning", "only thoughts"), "data: [DONE]\n\n"]));
     });
     let (_, cb) = collect();
-    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap(), "<think>only thoughts</think>");
+    assert!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap_err().contains("incomplete"));
 
     let server2 = MockServer::start();
     server2.mock(|when, then| {
@@ -938,7 +1055,7 @@ mod tests {
         .body(format!("data: {}\n\n", json!({"choices":[{"delta":{},"finish_reason":"length"}]})));
     });
     let e = chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap_err();
-    assert!(e.starts_with("The AI answer was cut off"), "{e}");
+    assert!(e.starts_with("Output token limit reached"), "{e}");
   }
 
   #[tokio::test]
@@ -949,18 +1066,18 @@ mod tests {
       then.status(200).header("content-type", "text/event-stream").body(delta("content", "abc").trim_end());
     });
     let (got, cb) = collect();
-    assert_eq!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap(), "abc");
+    assert!(chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap_err().contains("incomplete"));
     assert_eq!(got.lock().unwrap().len(), 1);
 
     let server2 = MockServer::start();
     let m = server2.mock(|when, then| {
       when.method(POST).path("/v1/chat/completions").json_body_partial(r#"{"stream":true}"#);
-      then.status(200).json_body(json!({"choices":[{"message":{"content":"plain"}}]}));
+      then.status(200).json_body(json!({"choices":[{"message":{"content":"plain"},"finish_reason":"stop"}]}));
     });
     let (got2, cb2) = collect();
     assert_eq!(chat_stream(&server2.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb2, &no_usage).await.unwrap(), "plain");
     m.assert();
-    assert!(got2.lock().unwrap().is_empty());
+    assert_eq!(*got2.lock().unwrap(), vec![("content".into(), "plain".into())]);
   }
 
   #[tokio::test]
@@ -968,7 +1085,7 @@ mod tests {
     let server = MockServer::start();
     server.mock(|when, then| {
       when.method(POST).path("/v1/chat/completions");
-      then.status(200).header("content-type", "text/event-stream").delay(Duration::from_millis(1500)).body(delta("content", "late"));
+      then.status(200).header("content-type", "text/event-stream").delay(Duration::from_millis(1500)).body(sse(&[&delta("content", "late"), &stop()]));
     });
     let (_, cb) = collect();
     let e = chat_stream_with(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage, Duration::from_millis(200), Duration::from_secs(60))
@@ -982,6 +1099,180 @@ mod tests {
     assert_eq!(idle_error(Duration::from_secs(STREAM_IDLE_SECS)), "The AI server stopped sending for 90 seconds.");
     assert_eq!(CHAT_TIMEOUT_SECS, 600);
     assert_eq!(STREAM_TOTAL_SECS, 1200);
+  }
+
+  #[tokio::test]
+  async fn observed_stream_keeps_finish_usage_ids_and_tools_separate() {
+    let server = MockServer::start();
+    let tool = json!({"index":0,"id":"call1","type":"function","function":{"name":"lookup","arguments":"{}"}});
+    let m = server.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions").header("x-client-request-id", "client1")
+        .json_body_partial(r#"{"tools":[{"type":"function"}],"tool_choice":"auto"}"#);
+      then.status(200).header("content-type", "text/event-stream").header("x-request-id", "server1")
+        .body(format!("data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+          json!({"choices":[{"delta":{"tool_calls":[tool]},"finish_reason":"tool_calls"}]}),
+          json!({"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":9,"completion_tokens_details":{"reasoning_tokens":7}}})));
+    });
+    let events = Mutex::new(Vec::new());
+    let tools = Mutex::new(Vec::new());
+    let usage = Mutex::new(Vec::new());
+    let extra = ChatExtra { tools: Some(json!([{"type":"function"}])), tool_choice: Some(json!("auto")), ..Default::default() };
+    let e = chat_stream_observed(&server.url("/v1"), &None, "m", &msgs(), &None, &extra,
+      &|_, _| {}, &|u| usage.lock().unwrap().push(u), Some("client1"),
+      &|v| events.lock().unwrap().push(v), &|v| tools.lock().unwrap().push(v),
+      Duration::from_secs(10), Duration::from_secs(60)).await.unwrap_err();
+    assert!(e.contains("requested tool calls"));
+    m.assert_hits(1);
+    let events = events.lock().unwrap();
+    assert!(events.iter().any(|v| v["http_status"] == 200 && v["request_id"] == "server1"));
+    assert!(events.iter().any(|v| v["finish_reason"] == "tool_calls"));
+    assert_eq!(*tools.lock().unwrap(), vec![tool]);
+    assert_eq!(usage.lock().unwrap()[0].reasoning_tokens, Some(7));
+  }
+
+  #[test]
+  fn native_parity_nonstop_finishes_never_return_answer_text() {
+    for finish in ["content_filter", "function_call", "unexpected"] {
+      let v = json!({"choices":[{"message":{"content":"partial"},"finish_reason":finish}]});
+      assert!(reply_text(&v).is_err(), "finish_reason={finish} must fail");
+    }
+  }
+
+  #[tokio::test]
+  async fn native_parity_body_ids_and_json_channels_are_observed() {
+    for streaming in [false, true] {
+      let server = MockServer::start();
+      server.mock(|when, then| {
+        when.method(POST).path("/v1/chat/completions");
+        if streaming {
+          then.status(200).header("content-type", "text/event-stream").body(format!("data: {}\n\ndata: [DONE]\n\n",
+            json!({"id":"chatcmpl-vllm","choices":[{"delta":{"reasoning":"thought","content":"answer"},"finish_reason":"stop"}]})));
+        } else {
+          then.status(200).json_body(json!({"id":"chatcmpl-vllm","choices":[{"message":{"reasoning":"thought","content":"answer"},"finish_reason":"stop"}]}));
+        }
+      });
+      let events = Mutex::new(Vec::new());
+      let (deltas, cb) = collect();
+      let answer = chat_stream_observed(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE,
+        &cb, &no_usage, None, &|v| events.lock().unwrap().push(v), &|_| {},
+        Duration::from_secs(10), Duration::from_secs(60)).await.unwrap();
+      assert_eq!(answer, "answer");
+      assert!(events.lock().unwrap().iter().any(|v| v["request_id"] == "chatcmpl-vllm"));
+      assert_eq!(*deltas.lock().unwrap(), vec![("reasoning".into(), "thought".into()), ("content".into(), "answer".into())]);
+    }
+  }
+
+  #[tokio::test]
+  async fn native_parity_json_provider_error_keeps_actionable_message() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions");
+      then.status(200).json_body(json!({"error":{"message":"Unsupported reasoning effort. Choose medium."}}));
+    });
+    let result = chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE, &|_, _| {}, &no_usage).await;
+    assert_eq!(result.unwrap_err(), "Unsupported reasoning effort. Choose medium.");
+  }
+
+  #[tokio::test]
+  async fn native_parity_error_chunk_still_reports_usage_finish_and_id() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions");
+      then.status(200).header("content-type", "text/event-stream").body(format!("data: {}\n\n",
+        json!({"id":"failed-vllm","error":{"message":"server stopped"},
+          "choices":[{"delta":{},"finish_reason":"content_filter"}],
+          "usage":{"prompt_tokens":3,"completion_tokens":2}})));
+    });
+    let events = Mutex::new(Vec::new());
+    let usage = Mutex::new(Vec::new());
+    let result = chat_stream_observed(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE,
+      &|_, _| {}, &|u| usage.lock().unwrap().push(u), None,
+      &|v| events.lock().unwrap().push(v), &|_| {}, Duration::from_secs(10), Duration::from_secs(60)).await;
+    assert_eq!(result.unwrap_err(), "server stopped");
+    assert!(events.lock().unwrap().iter().any(|v| v["request_id"] == "failed-vllm"));
+    assert!(events.lock().unwrap().iter().any(|v| v["finish_reason"] == "content_filter"));
+    assert_eq!(usage.lock().unwrap()[0].completion_tokens, 2);
+  }
+
+  #[tokio::test]
+  async fn native_parity_length_survives_dropped_transport() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let fixture = tokio::spawn(async move {
+      let (mut socket, _) = listener.accept().await.unwrap();
+      let mut request = [0; 8192];
+      let _ = socket.read(&mut request).await;
+      socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 10000\r\nConnection: close\r\n\r\n").await.unwrap();
+      let body = format!("data: {}\n\n", json!({"choices":[{"delta":{"content":"partial"},"finish_reason":"length"}]}));
+      socket.write_all(body.as_bytes()).await.unwrap();
+      tokio::time::sleep(Duration::from_millis(50)).await;
+    });
+    let result = chat_stream(&format!("http://{addr}/v1"), &None, "m", &msgs(), &None, &NONE, &|_, _| {}, &no_usage).await;
+    fixture.await.unwrap();
+    assert_eq!(result.unwrap_err(), cut_off());
+  }
+
+  #[tokio::test]
+  async fn json_fallback_body_obeys_stream_timeout() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let fixture = tokio::spawn(async move {
+      let (mut socket, _) = listener.accept().await.unwrap();
+      let mut request = [0; 8192];
+      let _ = socket.read(&mut request).await;
+      let body = r#"{"choices":[{"message":{"content":"late"},"finish_reason":"stop"}]}"#;
+      socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
+      tokio::time::sleep(Duration::from_millis(300)).await;
+      let _ = socket.write_all(body.as_bytes()).await;
+    });
+    let result = chat_stream_with(&format!("http://{addr}/v1"), &None, "m", &msgs(), &None, &NONE,
+      &|_, _| {}, &no_usage, Duration::from_millis(50), Duration::from_secs(1)).await;
+    assert!(result.unwrap_err().contains("stopped sending"));
+    fixture.abort();
+  }
+
+  #[tokio::test]
+  async fn length_keeps_usage_and_is_not_retried() {
+    let server = MockServer::start();
+    let m = server.mock(|when, then| {
+      when.method(POST).path("/v1/chat/completions").json_body_partial(r#"{"max_tokens":8}"#);
+      then.status(200).header("content-type", "text/event-stream").body(format!("data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+        json!({"choices":[{"delta":{"reasoning":"private"},"finish_reason":"length"}]}),
+        json!({"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":8,"completion_tokens_details":{"reasoning_tokens":8}}})));
+    });
+    let usage = Mutex::new(Vec::new());
+    let extra = ChatExtra { max_tokens: Some(8), ..Default::default() };
+    let result = chat_stream(&server.url("/v1"), &None, "m", &msgs(), &None, &extra,
+      &|_, _| {}, &|u| usage.lock().unwrap().push(u)).await;
+    assert!(result.unwrap_err().contains("output budget"));
+    assert_eq!(usage.lock().unwrap()[0].reasoning_tokens, Some(8));
+    m.assert_hits(1);
+  }
+
+  #[tokio::test]
+  async fn observed_json_and_http_error_report_metadata() {
+    for status in [200, 503] {
+      let server = MockServer::start();
+      server.mock(|when, then| {
+        when.method(POST).path("/v1/chat/completions");
+        then.status(status).header("content-type", "application/json").header("x-request-id", "req-json")
+          .json_body(json!({"choices":[{"message":{"content":"answer"},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":1,"completion_tokens":2,"completion_tokens_details":{"reasoning_tokens":1}}}));
+      });
+      let events = Mutex::new(Vec::new());
+      let usage = Mutex::new(Vec::new());
+      let result = chat_stream_observed(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE,
+        &|_, _| {}, &|u| usage.lock().unwrap().push(u), None,
+        &|v| events.lock().unwrap().push(v), &|_| {}, Duration::from_secs(10), Duration::from_secs(60)).await;
+      assert_eq!(result.is_ok(), status == 200);
+      assert!(events.lock().unwrap().iter().any(|v| v["http_status"] == status && v["request_id"] == "req-json"));
+      if status == 200 {
+        assert!(events.lock().unwrap().iter().any(|v| v["finish_reason"] == "stop"));
+        assert_eq!(usage.lock().unwrap()[0].reasoning_tokens, Some(1));
+      }
+    }
   }
 
   #[tokio::test]
@@ -1005,7 +1296,7 @@ mod tests {
     server3.mock(|when, then| {
       when.any_request();
       then.status(200).header("content-type", "text/event-stream")
-        .body("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}],\"error\":null}\n\ndata: [DONE]\n\n");
+        .body("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"},\"finish_reason\":\"stop\"}],\"error\":null}\n\ndata: [DONE]\n\n");
     });
     assert_eq!(chat_stream(&server3.url("/v1"), &None, "m", &msgs(), &None, &NONE, &cb, &no_usage).await.unwrap(), "Hi");
   }
@@ -1026,7 +1317,7 @@ mod tests {
     let e = chat(base, &None, "m", &msgs(), &None, &NONE).await.unwrap_err();
     assert!(!e.contains("sekret"), "{e}");
     assert!(e.contains("127.0.0.1:1"), "{e}");
-    assert!(e.contains("reached from this computer"), "{e}");   // not "this Mac": the text is shown on every system
+    assert!(e.contains("server is running and listening"), "{e}");
     // 404 text echoes the url
     let server = MockServer::start();
     server.mock(|when, then| {

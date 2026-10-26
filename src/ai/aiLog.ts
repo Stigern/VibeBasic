@@ -1,41 +1,27 @@
-// Tools > AI Log...: the last 30 AI exchanges of this app session, in memory only (the troubleshooting tool for the AI).
-// Every entry is scrubbed of the API key; the key is never shown.
+// Content-free diagnostics for the last 30 AI requests, in memory only.
 import { showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
 import type { AiUsage } from './sse';
-import { THINKING_COLOR } from './streamLog';
-import { type ChatMessage, contentText } from './types';
+import type { ChatMessage } from './types';
+import { classifyAiError, type AiErrorKind } from './errors';
 
 export type AiLogMode = 'code' | 'form' | 'fix' | 'change' | 'retry' | 'test';
 export type AiLogStatus = 'ok' | 'cancelled' | 'error' | 'not understood' | 'loop';
-
 export interface AiLogEntry {
-  time: Date; mode: AiLogMode; model: string;
-  promptTokens?: number; completionTokens?: number; seconds: number; status: AiLogStatus;
-  /** What was sent: the request line and the full messages. */
-  sent: string;
-  reply: string; reasoning: string;
-  error?: string;
+  time: Date; mode: AiLogMode; model: string; seconds: number; status: AiLogStatus;
+  requestId?: string; serverRequestId?: string; reasoningEffort?: string; maxTokens?: number;
+  promptTokens?: number; completionTokens?: number; reasoningTokens?: number; cachedTokens?: number;
+  finishReason?: string; httpStatus?: number; errorKind?: AiErrorKind;
+  /** Compatibility fields. Only metadata is retained; reply/reasoning are always empty. */
+  sent: string; reply: string; reasoning: string; error?: string;
 }
-
 export const AI_LOG_SIZE = 30;
 const entries: AiLogEntry[] = [];
-
-/** Newest first. */
 export const aiLogEntries = (): readonly AiLogEntry[] => entries;
 export const clearAiLog = (): void => { entries.length = 0; };
+export const newAiRequestId = (): string => `vb-${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
+const safeId = (id: string | undefined) => id && /^[a-zA-Z0-9_.:-]{1,200}$/.test(id) ? id : undefined;
 
-const MASK = '********';
-/** Replaces the API key (when it is set) everywhere in `text`. */
-const scrub = (text: string, secret: string): string => {
-  const k = secret.trim();
-  return k ? text.split(k).join(MASK) : text;
-};
-
-/**
- * `url` without a user name, password, query or fragment, which may carry a key (as redact_url in src-tauri/src/ai.rs), and
- * without a trailing slash: what the log shows of the base URL.
- */
 export function redactUrl(url: string): string {
   const t = url.trim();
   try {
@@ -49,83 +35,76 @@ export function redactUrl(url: string): string {
   }
 }
 
-/** The request as text: a header line with the options, then every message. */
-export function describeRequest(baseUrl: string, model: string, messages: ChatMessage[], options: Record<string, unknown>): string {
-  const opts = Object.entries(options).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}: ${typeof v === 'string' || typeof v === 'number' ? v : JSON.stringify(v)}`);
-  return [`POST ${redactUrl(baseUrl)}/chat/completions`, `model: ${model}`, ...opts, '',
-    ...messages.map(m => `--- ${m.role} ---\n${contentText(m.content)}`)].join('\n');
+/** A metadata summary, never the prompt, images, tool arguments or endpoint credentials. */
+export function describeRequest(_baseUrl: string, model: string, _messages: ChatMessage[], options: Record<string, unknown>): string {
+  return ['POST /chat/completions', `model: ${model}`, ...['reasoning_effort', 'max_tokens'].filter(k => options[k] !== undefined).map(k => `${k}: ${options[k]}`)].join('\n');
 }
 
-/** Adds an entry (scrubbed of `secret`) and returns it, so the caller can finish or mark it later. */
-export function addAiLogEntry(e: Omit<AiLogEntry, 'time'> & { time?: Date }, secret = ''): AiLogEntry {
-  const entry: AiLogEntry = { ...e, time: e.time ?? new Date() };
-  scrubEntry(entry, secret);
+export function addAiLogEntry(e: Omit<AiLogEntry, 'time'> & { time?: Date }, _secret = ''): AiLogEntry {
+  const entry: AiLogEntry = { time: e.time ?? new Date(), mode: e.mode, model: e.model, seconds: e.seconds, status: e.status,
+    requestId: safeId(e.requestId) ?? newAiRequestId(), reasoningEffort: e.reasoningEffort, maxTokens: e.maxTokens,
+    promptTokens: e.promptTokens, completionTokens: e.completionTokens, reasoningTokens: e.reasoningTokens,
+    finishReason: e.finishReason, httpStatus: e.httpStatus, sent: '', reply: '', reasoning: '' };
+  if (e.error !== undefined) {
+    entry.errorKind = classifyAiError(e.error);
+    entry.httpStatus ??= httpStatusOf(e.error);
+    entry.error = safeFailure(entry.errorKind, entry.httpStatus);
+  }
+  entry.sent = metadata(entry);
   entries.unshift(entry);
   if (entries.length > AI_LOG_SIZE) entries.length = AI_LOG_SIZE;
   return entry;
 }
-
-function scrubEntry(e: AiLogEntry, secret: string): void {
-  e.sent = scrub(e.sent, secret); e.reply = scrub(e.reply, secret); e.reasoning = scrub(e.reasoning, secret);
-  if (e.error !== undefined) e.error = scrub(e.error, secret);
+const httpStatusOf = (message: string): number | undefined => {
+  const code = /(?:answered |request \()(\d{3})\b/.exec(message)?.[1];
+  return code ? Number(code) : undefined;
+};
+const safeFailure = (kind: AiErrorKind, status?: number): string => kind === 'http' ? `HTTP ${status ?? 'error'}` : kind.replaceAll('_', ' ');
+function metadata(e: AiLogEntry): string {
+  return [`Request ID: ${e.requestId}`, `Model: ${e.model}`, `Reasoning effort: ${e.reasoningEffort ?? 'unknown'}`,
+    `max_tokens: ${e.maxTokens ?? 'not supplied'}`, `Server request ID: ${e.serverRequestId ?? 'not reported'}`,
+    `HTTP status: ${e.httpStatus ?? 'not received'}`, `finish_reason: ${e.finishReason ?? 'not reported'}`,
+    `Prompt tokens: ${e.promptTokens ?? 'not reported'}`, `Completion tokens: ${e.completionTokens ?? 'not reported'}`,
+    `Reasoning tokens: ${e.reasoningTokens ?? 'not reported'}`, `Cached tokens: ${e.cachedTokens ?? 'not reported'}`,
+    `Status: ${e.status}`, `Failure: ${e.errorKind ?? 'none'}`].join('\n');
 }
-
-/** Records the outcome of an entry started with status 'ok' and no reply yet. */
-export function finishAiLogEntry(e: AiLogEntry, r: { status: AiLogStatus; reply: string; reasoning: string; usage?: AiUsage; error?: string; ms: number }, secret = ''): void {
-  e.status = r.status; e.reply = r.reply; e.reasoning = r.reasoning; e.seconds = Math.round(r.ms / 100) / 10;
-  if (r.usage) { e.promptTokens = r.usage.promptTokens; e.completionTokens = r.usage.completionTokens; }
-  if (r.error !== undefined) e.error = r.error;
-  scrubEntry(e, secret);
+export function finishAiLogEntry(e: AiLogEntry, r: { status: AiLogStatus; reply: string; reasoning: string; usage?: AiUsage; error?: string; ms: number; finishReason?: string; serverRequestId?: string; httpStatus?: number }, _secret = ''): void {
+  e.status = r.status; e.seconds = Math.round(r.ms / 100) / 10;
+  e.reply = ''; e.reasoning = '';
+  if (r.usage) { e.promptTokens = r.usage.promptTokens; e.completionTokens = r.usage.completionTokens; e.reasoningTokens = r.usage.reasoningTokens; e.cachedTokens = r.usage.cachedTokens; }
+  e.finishReason = r.finishReason; e.serverRequestId = safeId(r.serverRequestId); e.httpStatus = r.httpStatus;
+  if (r.error !== undefined || r.status === 'cancelled') {
+    e.errorKind = r.finishReason === 'length' ? 'output_limit' : classifyAiError(r.status === 'cancelled' ? 'cancelled' : r.error!);
+    e.httpStatus ??= r.error ? httpStatusOf(r.error) : undefined;
+    e.error = safeFailure(e.errorKind, e.httpStatus);
+  }
+  e.sent = metadata(e);
 }
-
 const pad = (n: number) => String(n).padStart(2, '0');
-const timeText = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 const num = (n: number | undefined) => n === undefined ? '' : n.toLocaleString('en-US');
-
-/** The columns of a row: time, mode, model, prompt tokens, completion tokens, seconds, status. */
 export const aiLogRow = (e: AiLogEntry): string[] =>
-  [timeText(e.time), e.mode, e.model, num(e.promptTokens), num(e.completionTokens), e.seconds.toFixed(1), e.status];
+  [`${pad(e.time.getHours())}:${pad(e.time.getMinutes())}:${pad(e.time.getSeconds())}`, e.mode, e.model, num(e.promptTokens), num(e.completionTokens), e.seconds.toFixed(1), e.status];
 
-const INSET = 'background:#fff;box-shadow:inset -1px -1px #fff,inset 1px 1px #808080,inset -2px -2px #dfdfdf,inset 2px 2px #0a0a0a;';
-const TEXT_BOX = `${INSET}box-sizing:border-box;width:640px;height:150px;overflow:auto;padding:2px 4px;font:12px/14px "Courier New",monospace;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;`;
-
-/** The AI Log window: the list on top, the selected exchange (sent / reply, each with Copy) below. */
 export async function showAiLog(doc: Document, copy: (text: string) => Promise<void> | void): Promise<void> {
-  const heads = ['Time', 'Mode', 'Model', 'Prompt', 'Completion', 'Seconds', 'Status'];
-  const cell = 'padding:1px 4px;white-space:nowrap;text-align:left;';
+  const details = h('pre', { class: 'ai-log-sent', style: 'white-space:pre-wrap;user-select:text;height:260px;overflow:auto;background:white;padding:8px' });
   const tbody = h('tbody', {});
-  const table = h('table', { class: 'ai-log-list', style: 'border-collapse:collapse;width:100%;font:12px sans-serif;cursor:default' },
-    h('thead', {}, h('tr', {}, ...heads.map(t => h('th', { style: `${cell}position:sticky;top:0;background:#c0c0c0;font-weight:normal;box-shadow:inset -1px -1px #808080,inset 1px 1px #fff` }, t)))),
-    tbody);
-  const list = h('div', { style: `${INSET}width:640px;height:170px;overflow:auto` }, table);
-  const sent = h('div', { class: 'ai-log-sent', style: TEXT_BOX });
-  const reply = h('div', { class: 'ai-log-reply', style: TEXT_BOX });
-  let current: AiLogEntry | null = null;
-  const replyText = (e: AiLogEntry) => [e.reasoning, e.reply, e.error === undefined ? '' : `Error: ${e.error}`].filter(Boolean).join('\n\n');
-  const copyBtn = (cls: string, get: (e: AiLogEntry) => string) =>
-    h('button', { type: 'button', class: cls, onclick: () => { if (current) void copy(get(current)); } }, 'Copy');
-  const section = (title: string, box: HTMLElement, btn: HTMLElement) =>
-    h('div', { style: 'margin-top:6px' }, h('div', { style: 'display:flex;justify-content:space-between;align-items:end;margin-bottom:2px' }, h('span', {}, title), btn), box);
-
-  const select = (e: AiLogEntry, row: HTMLElement) => {
-    current = e;
-    for (const r of tbody.children) { (r as HTMLElement).style.background = ''; (r as HTMLElement).style.color = ''; }
-    row.style.background = '#000080'; row.style.color = '#fff';
-    sent.textContent = e.sent;
-    reply.replaceChildren(
-      ...(e.reasoning ? [h('span', { class: 'ai-thinking', style: `color:${THINKING_COLOR}` }, e.reasoning + (e.reply || e.error ? '\n\n' : ''))] : []),
-      h('span', { class: 'ai-answer' }, e.reply),
-      ...(e.error === undefined ? [] : [h('span', { class: 'ai-error' }, `${e.reply ? '\n\n' : ''}Error: ${e.error}`)]));
-  };
-  for (const e of entries) {
-    const row = h('tr', { class: 'ai-log-row' }, ...aiLogRow(e).map(t => h('td', { style: cell }, t)));
-    row.addEventListener('mousedown', () => select(e, row));
+  const table = h('table', { style: 'width:100%;font-size:12px;cursor:default' },
+    h('thead', {}, h('tr', {}, ...['Time', 'Mode', 'Model', 'Prompt', 'Completion', 'Seconds', 'Status'].map(t => h('th', {}, t)))), tbody);
+  let selected: AiLogEntry | undefined;
+  for (const entry of entries) {
+    const row = h('tr', { class: 'ai-log-row' }, ...aiLogRow(entry).map(t => h('td', {}, t)));
+    row.addEventListener('mousedown', () => {
+      selected = entry; details.textContent = metadata(entry);
+      for (const r of tbody.children) (r as HTMLElement).style.background = '';
+      row.style.background = '#dfdfdf';
+    });
     tbody.append(row);
   }
-  if (!entries.length) tbody.append(h('tr', {}, h('td', { style: cell, colspan: String(heads.length) }, '(no AI requests yet in this session)')));
-  else select(entries[0], tbody.firstElementChild as HTMLElement);
-
-  const content = h('div', {}, list, section('Sent:', sent, copyBtn('ai-log-copy-sent', e => e.sent)),
-    section('Reply (thinking in grey):', reply, copyBtn('ai-log-copy-reply', replyText)));
+  if (entries[0]) { selected = entries[0]; details.textContent = metadata(selected); }
+  else details.textContent = 'No AI requests yet in this session.';
+  const content = h('div', { style: 'width:min(700px,calc(100vw - 64px))' },
+    h('div', {}, 'Diagnostics contain metadata only. Prompts, images, reasoning, answers and tool arguments are not recorded.'),
+    h('div', { style: 'max-height:170px;overflow:auto' }, table), details,
+    h('button', { type: 'button', onclick: () => { if (selected) void copy(metadata(selected)); } }, 'Copy metadata'));
   await showDialog98(doc, { title: 'AI Log', content, buttons: [{ label: 'Close', value: 'close', default: true, cancel: true }] });
 }

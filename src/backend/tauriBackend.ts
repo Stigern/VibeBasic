@@ -8,7 +8,7 @@ import type { AiModel, ChatMessage } from '../ai/types';
 import type { LanNetwork, LanServer, LanScanRequest, LanScanOptions, LanProgress } from '../ai/lanTypes';
 import { dialogFilters } from './dialogFilters';
 import type { PrinterInfo } from '../run/printing';
-import type { AiChatOptions, AiDeltaKind } from '../ai/sse';
+import type { AiChatOptions, AiDeltaKind, AiToolCallDelta } from '../ai/sse';
 import type { FileAccess, FileMode, FileStat } from '../lang/fileio/fsApi';
 import { AI_SETTINGS_KEY, loadAiSettingsFrom, saveAiSettingsTo, type AiSettingsIo } from './aiSettingsStore';
 import { appTarget } from '../build/appTarget';
@@ -299,24 +299,34 @@ export class TauriBackend implements Backend {
 
   async aiChat(baseUrl: string, apiKey: string, model: string, messages: ChatMessage[], reasoningEffort?: string, opts?: AiChatOptions): Promise<string> {
     const args = { baseUrl, apiKey, model, messages, reasoningEffort: reasoningEffort || null, responseFormat: opts?.responseFormat ?? null, structuredOutputs: opts?.structuredOutputs ?? null, maxTokens: opts?.maxTokens ?? null,
-      presencePenalty: opts?.presencePenalty ?? null };
-    if (!opts?.onDelta && !opts?.signal) return call<string>('ai_chat', args);
+      presencePenalty: opts?.presencePenalty ?? null, tools: opts?.tools ?? null, toolChoice: opts?.toolChoice ?? null };
+    if (!opts?.onDelta && !opts?.signal && !opts?.onUsage && !opts?.onResponse && !opts?.onToolCall && !opts?.requestId) return call<string>('ai_chat', args);
     if (opts.signal?.aborted) throw new Error('cancelled');
-    const streamId = `ai-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    const streamId = opts.requestId ?? `ai-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     // Attach the abort listener first: an abort during the listen() round trips below must still reach Rust
     // (it remembers a cancel that arrives before the request starts).
     const onAbort = () => { void invoke('ai_cancel', { streamId }).catch(() => {}); };
     opts.signal?.addEventListener('abort', onAbort);
     let unlisten: (() => void) | undefined;
     let unlistenUsage: (() => void) | undefined;
+    let unlistenResponse: (() => void) | undefined;
+    let unlistenTools: (() => void) | undefined;
     try {
       unlisten = await listen<{ id: string; kind: AiDeltaKind; text: string }>('ai:delta', e => {
         if (e.payload.id === streamId) opts.onDelta?.(e.payload.kind, e.payload.text);
       });
-      unlistenUsage = await listen<{ id: string; prompt_tokens: number; completion_tokens: number; cached_tokens?: number | null }>('ai:usage', e => {
+      unlistenUsage = await listen<{ id: string; prompt_tokens: number; completion_tokens: number; cached_tokens?: number | null; reasoning_tokens?: number | null }>('ai:usage', e => {
         const p = e.payload;
         if (p.id !== streamId) return;
-        opts.onUsage?.({ promptTokens: p.prompt_tokens, completionTokens: p.completion_tokens, ...(typeof p.cached_tokens === 'number' ? { cachedTokens: p.cached_tokens } : {}) });
+        opts.onUsage?.({ promptTokens: p.prompt_tokens, completionTokens: p.completion_tokens, ...(typeof p.cached_tokens === 'number' ? { cachedTokens: p.cached_tokens } : {}), ...(typeof p.reasoning_tokens === 'number' ? { reasoningTokens: p.reasoning_tokens } : {}) });
+      });
+      unlistenResponse = await listen<{ id: string; request_id?: string; finish_reason?: string; http_status?: number }>('ai:response', e => {
+        const p = e.payload;
+        if (p.id !== streamId) return;
+        opts.onResponse?.({ ...(p.request_id ? { requestId: p.request_id } : {}), ...(p.finish_reason ? { finishReason: p.finish_reason } : {}), ...(typeof p.http_status === 'number' ? { httpStatus: p.http_status } : {}) });
+      });
+      unlistenTools = await listen<{ id: string; tool_call: AiToolCallDelta }>('ai:tool_call', e => {
+        if (e.payload.id === streamId) opts.onToolCall?.(e.payload.tool_call);
       });
       if (opts.signal?.aborted) throw new Error('cancelled');
       return await call<string>('ai_chat', { ...args, streamId });
@@ -324,6 +334,8 @@ export class TauriBackend implements Backend {
       opts.signal?.removeEventListener('abort', onAbort);
       unlisten?.();
       unlistenUsage?.();
+      unlistenResponse?.();
+      unlistenTools?.();
     }
   }
 

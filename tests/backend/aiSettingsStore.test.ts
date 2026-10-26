@@ -71,19 +71,19 @@ describe('AI settings store with the 0.8 fields', () => {
     const io = new FakeStore();
     const ls = storage();
     const b = backendOn(io, ls);
-    const s: AiSettings = { ...old, thinking: 'low', contextTokens: 262144, serverKind: 'vllm', vision: true, fastFollowUp: false, formPicture: 'off' };
+    const s: AiSettings = { ...old, thinking: 'low', maxTokens: 65536, contextTokens: 262144, serverKind: 'vllm', vision: true, fastFollowUp: false, formPicture: 'off' };
     await saveAiSettings(b, s);
     expect(io.value).toEqual(s);
     expect(ls.m.size).toBe(0);
     expect(await loadAiSettings(b)).toEqual(s);
   });
 
-  test('old settings without the new fields load (from localStorage, moved once) with the fields unknown', async () => {
+  test('old settings without the new fields load (from localStorage, moved once) with unknown capabilities and explicit budget defaults', async () => {
     const io = new FakeStore();
     const ls = storage({ [LEGACY_AI_KEY]: JSON.stringify(old) });
     const r = await loadAiSettings(backendOn(io, ls));
-    expect(r).toEqual({ ...old, thinking: 'low' });
-    for (const k of ['contextTokens', 'serverKind', 'vision', 'fastFollowUp', 'formPicture']) expect(k in r).toBe(false);
+    expect(r).toEqual({ ...old, thinking: 'low', maxTokens: 65536, fastFollowUp: false });
+    for (const k of ['contextTokens', 'serverKind', 'vision', 'formPicture']) expect(k in r).toBe(false);
     expect(io.value).toEqual(old);
     expect(ls.m.has(LEGACY_AI_KEY)).toBe(false);
   });
@@ -103,7 +103,7 @@ test('read-merge-write updates of the AI settings run one after the other', asyn
   const vision = updateAiSettings(b, cur => ({ ...cur, vision: true }));
   const none = updateAiSettings(b, () => null);
   await Promise.all([found, options, vision, none]);
-  expect(io.value).toEqual({ ...old, serverKind: 'vllm', apiKey: 'typed in Options', vision: true });
+  expect(io.value).toEqual({ ...old, serverKind: 'vllm', apiKey: 'typed in Options', vision: true, maxTokens: 65536, fastFollowUp: false });
   expect(io.sets).toBe(3);
   // a failed update does not stop the next one
   await expect(updateAiSettings(b, () => { throw new Error('x'); })).rejects.toThrow('x');
