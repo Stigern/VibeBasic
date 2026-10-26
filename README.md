@@ -4,9 +4,9 @@
 
 A Visual Basic 6 clone for macOS, Windows and Linux, with the authentic Windows 98 look and a built-in AI assistant that connects to OpenAI-compatible servers, including your own local model.
 
-![VibeBasic 0.10.2: the AI Wizard with program description, appearance, improvements and live request preview](docs/images/screenshot.png)
+![VibeBasic 0.10.3: the AI Wizard with program description, appearance, improvements and live request preview](docs/images/screenshot.png)
 
-The AI Wizard in 0.10.2: describe a program, choose its appearance and features, and review the request before creating it.
+The AI Wizard in 0.10.3: describe a program, choose its appearance and features, and review the request before creating it.
 
 ## What it does
 
@@ -21,7 +21,7 @@ The AI Wizard in 0.10.2: describe a program, choose its appearance and features,
 - **Run and debug:** F5 runs the program in real windows. Breakpoints (F9), stepping (F8), the Immediate, Locals, Watch and Call Stack windows, data tips and Set Next Statement work as in VB6. Programs can start in `Sub Main` and read `Command$`.
 - **Open VB6 projects:** File > Open Project reads `.vbp` projects with their `.frm`, `.frx`, `.bas` and `.cls` files, and shows a report of anything VibeBasic cannot use.
 - **Make app:** File > Make builds a standalone program from your project, with its icon and the version information from Project Properties > Make. On macOS it is an `.app` that also opens the file types you list. On Windows, Make writes a single `<Name>.exe` (the project's icon and version information in its resources; it runs on Windows 10 and 11, which have the WebView2 runtime). File types are not registered there: Open With passes the file to `Command$`. On Linux it writes the `<Name>` executable with a `<Name>.desktop` launcher and `<Name>.png` icon next to it (it needs WebKitGTK 4.1, as VibeBasic does). Make only replaces a program it made itself.
-- **Controls:** the classic intrinsic controls, plus ActiveX-style components picked under Project > Components (Ctrl+T):
+- **Controls:** 59 control types across the built-in controls and 22 optional component libraries. A new project's toolbox starts with 19 built-in controls and Pointer. Enable the others under **Project > Components (Ctrl+T)**, or right-click the toolbox and choose Components; the selection is saved with each project:
   - Common Controls: TreeView, ListView, Toolbar, StatusBar, ImageList, ImageCombo, CoolBar (bands host other controls), DTPicker, FlatScrollBar, Animation (GIF, APNG, WebP and MP4 instead of AVI) and others, plus the Access-style Calendar (MSCAL).
   - Media and data: MSFlexGrid, MSChart, RichTextBox, MaskedEdit, MMControl and MediaPlayer.
   - Networking: WebBrowser, Inet and Winsock.

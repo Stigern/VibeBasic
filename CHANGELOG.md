@@ -4,6 +4,16 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-10-26
+
+### Fixed
+- About lists macOS, Windows and Linux as supported systems, and shows the system this copy is running on separately.
+- The DoEvents performance test allows for shared CI runners while still checking that timers fire and the loop finishes promptly.
+
+### Changed
+- The README has a current AI Wizard screenshot, explains the New and Recent project chooser, and covers the wizard's setup and creation flow.
+- Includes the wizard and recent-project fixes below; 0.10.2 was superseded before its downloads were published.
+
 ## [0.10.2] - 2026-10-26
 
 ### Fixed

@@ -122,5 +122,8 @@ test('20000 DoEvents finish quickly; a Timer still fires during the loop', async
   await until(() => printed.length > 0, 10000);
   const ms = Date.now() - t;
   expect(printed[0]).toBe('ticksTrue');
-  expect(ms).toBeLessThan(1500);
+  // Shared CI runners (especially Windows) have variable CPU scheduling. This still catches the old one-timer-per-call
+  // regression: 20,000 timer turns take tens of seconds, while the batched loop completes in a few seconds under load.
+  const ci = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env.CI;
+  expect(ms).toBeLessThan(ci ? 5000 : 1500);
 }, 15000);

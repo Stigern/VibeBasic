@@ -4,8 +4,8 @@ import { h } from '../ui98/dom';
 import { showDialog98 } from '../ui98/dialogs';
 import { osName } from '../platform';
 
-/** The About box's text, naming the system it runs on. */
-export const aboutText = (): string => `A Visual Basic 6 style programming environment for ${osName()}.\n\n`
+/** Supported systems and, separately, the system this copy is running on. */
+export const aboutText = (): string => `A Visual Basic 6 style programming environment for macOS, Windows and Linux.\nRunning on ${osName()}.\n\n`
   + "Pixel font 'MS Sans Serif' by lou (FontStruct), CC BY-SA 3.0\nWin98 look based on 98.css (MIT).";
 
 /** Simple markdown subset: headings become bold lines, "- " bullets become "• " lines. */
