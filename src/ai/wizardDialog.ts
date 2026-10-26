@@ -122,7 +122,7 @@ export async function wizardDialog(doc: Document, o: { copy?: (text: string) => 
   const example = h('select', {}, h('option', { value: '' }, '(none)'), ...EXAMPLES.map((e, i) => h('option', { value: String(i) }, e.label)));
   const box = h('textarea', { class: 'ai-prompt aiw-desc', rows: '4', 'data-autofocus': '', placeholder: EXAMPLES[0].text });
   box.value = c.description;
-  example.addEventListener('change', () => { const e = EXAMPLES[Number(example.value)]; if (e) { box.value = e.text; update(); box.focus(); } });
+  example.addEventListener('change', () => { const e = example.value === '' ? undefined : EXAMPLES[Number(example.value)]; if (e) { box.value = e.text; update(); box.focus(); } });
   // Enter inserts a line break (the dialog would otherwise press Create); Ctrl+Enter presses Create
   box.addEventListener('keydown', e => {
     if (e.key !== 'Enter' || e.ctrlKey || e.metaKey) return;

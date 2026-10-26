@@ -116,13 +116,13 @@ export function buildAiTab(backend: AiBackend, doc: Document = document) {
       h('div', {}, 'Fast follow-up rounds: the check-and-fix retry and Change... think Low.'),
       h('div', {}, 'Send form picture: Auto shows form mode a picture of the form when the model can see pictures.')),
     apply() {
-      void loading
+      return loading
         .then(() => {
           const url = baseUrl.value.trim(), m = model.getValue().trim();
           return updateAiSettings(backend, () => ({ baseUrl: url, model: m, apiKey: apiKey.value, thinking: thinkingOf(thinking.getValue()), ...testedFor(url, m), fastFollowUp: fast.input.checked,
             ...(picture.getValue() === PICTURE_LABELS.off ? { formPicture: 'off' as const } : {}) }));
         })
-        .catch(e => messageBox98(doc, { prompt: `Could not save the AI settings: ${e instanceof Error ? e.message : String(e)}`, title: 'VibeBasic', buttons: 48 }));
+        .catch(async e => { await messageBox98(doc, { prompt: `Could not save the AI settings: ${e instanceof Error ? e.message : String(e)}`, title: 'VibeBasic', buttons: 48 }); });
     },
     // exposed for tests
     controls: { baseUrl, model, apiKey, thinking, fast: fast.input, picture, test, testConnection },

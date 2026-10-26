@@ -22,6 +22,21 @@ test('registered action enables item and runs it', () => {
   it.action!();
   expect(start).toHaveBeenCalled();
 });
+
+test('AI Wizard is available from Tools only while the IDE is idle in design mode', () => {
+  const s = new IdeState();
+  const wizard = vi.fn();
+  const item = find('AI Wizard...', 'Tools', { aiWizard: wizard }, s);
+  expect(item).toBeDefined();
+  expect(item.enabled!()).toBe(true);
+  item.action!();
+  expect(wizard).toHaveBeenCalledOnce();
+  s.setBusy(true);
+  expect(item.enabled!()).toBe(false);
+  s.setBusy(false);
+  s.setMode('run');
+  expect(item.enabled!()).toBe(false);
+});
 test('make item and project-properties use project name', () => {
   const s = new IdeState();
   s.project.name = 'Kalk';
@@ -79,6 +94,24 @@ test('startIde builds shell: toolbox, toolbar, designer window, immediate hidden
   expect((root.querySelector('[data-tool="Label"]') as HTMLElement).title).toBe('Label');
   (root.querySelector('[data-tool="Pointer"]') as HTMLElement).click();
   expect(ide.state.currentTool).toBe('Pointer');
+});
+
+test('Tools AI Wizard opens its dialog without AI setup, and Cancel sends no request', async () => {
+  const root = document.createElement('div');
+  document.body.appendChild(root);
+  const backend = new BrowserBackend();
+  vi.spyOn(backend, 'loadSettings').mockResolvedValue(null);
+  const chat = vi.spyOn(backend, 'aiChat');
+  const ide = startIde(backend, root);
+  ide.actions.viewCode();
+  ide.actions.aiWizard();
+  await vi.waitFor(() => expect(document.querySelector('.aiw-desc')).not.toBeNull());
+  expect(ide.state.activeView.kind).toBe('designer');
+  expect(document.querySelector('.dlg98')!.textContent).toContain('AI Wizard');
+  [...document.querySelectorAll<HTMLButtonElement>('.dlg98 button')].find(b => b.textContent === 'Cancel')!.click();
+  await vi.waitFor(() => expect(ide.state.busy).toBe(false));
+  expect(chat).not.toHaveBeenCalled();
+  expect(document.querySelector('.dlg98')).toBeNull();
 });
 
 test('Debug menu items are enabled per mode', () => {

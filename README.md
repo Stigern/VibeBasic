@@ -27,6 +27,7 @@ A Visual Basic 6 clone for macOS, Windows and Linux, with the authentic Windows 
   - Sheridan 3D controls: SSPanel (with the flood bar), SSFrame, SSCommand, SSCheck, SSOption and SSRibbon.
   - Microsoft Agent, with characters of its own.
 - **AI assistant:** connects to any OpenAI-compatible server, such as Ollama or vLLM.
+  - **AI Wizard** under Tools or File > New Project builds a new program from your description. Pick an example, colours, language, form size and improvements, then review the request before creating it. You can explore the wizard before setting up an AI server.
   - Ask AI (Ctrl+I) writes code in the code window, or lays out controls in the form designer.
   - **Ask AI** in the error dialog suggests a fix for the line that failed.
   - Every suggestion is shown as a preview. You can refine it with **Change...**, and it is applied as one undo step.
@@ -64,6 +65,8 @@ npm test               # run the tests
 ```
 
 On Windows and Linux, build with `npx tauri build --bundles nsis` or `npx tauri build --bundles deb,appimage` (tauri.conf.json lists only the macOS bundle). The release files are built by GitHub Actions (`.github/workflows/release.yml`) for each version tag; CI (`ci.yml`) runs the type check and the tests on all three systems.
+
+GitHub is the source of truth: `main` holds the current source, and version tags identify released source. Publish a release by pushing its version tag after the version files and changelog are committed to `main`. GitHub Actions runs the tests and builds every download from that tag; reruns replace all release assets with those builds. Local builds are for development and testing.
 
 ### Code signing (macOS)
 

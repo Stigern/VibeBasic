@@ -21,23 +21,37 @@ export const projectFolder = (path: string): string => { const i = Math.max(path
 export class RecentProjects {
   list: string[] = [];
   private loaded: Promise<void>;
+  private pending: ((list: string[]) => string[])[] = [];
+  private isLoaded = false;
+  private saving = Promise.resolve();
 
   constructor(private store: Store) {
     this.loaded = store.loadSettings<unknown>('recent')
-      .then(v => { if (Array.isArray(v)) this.list = v.filter((x): x is string => typeof x === 'string').slice(0, MAX_RECENT); })
-      .catch(() => {});
+      .catch(() => null)
+      .then(v => {
+        const saved = Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, MAX_RECENT) : [];
+        this.list = this.pending.reduce((list, change) => change(list), saved);
+        this.isLoaded = true;
+        if (this.pending.length) this.persist();
+        this.pending = [];
+      });
   }
 
   /** Resolves once the saved list is in (the Recent tab waits for it). */
   ready(): Promise<void> { return this.loaded; }
 
-  add(path: string): void { this.set(withRecent(this.list, path)); }
+  add(path: string): void { this.change(list => withRecent(list, path)); }
 
   /** A project that could not be opened leaves the list. */
-  remove(path: string): void { this.set(this.list.filter(p => p.toLowerCase() !== path.toLowerCase())); }
+  remove(path: string): void { this.change(list => list.filter(p => p.toLowerCase() !== path.toLowerCase())); }
 
-  private set(list: string[]): void {
-    this.list = list;
-    void this.store.saveSettings('recent', list).catch(() => {});
+  private change(change: (list: string[]) => string[]): void {
+    this.list = change(this.list);
+    if (this.isLoaded) this.persist(); else this.pending.push(change);
+  }
+
+  private persist(): void {
+    const list = this.list;
+    this.saving = this.saving.then(() => this.store.saveSettings('recent', list)).catch(() => {});
   }
 }

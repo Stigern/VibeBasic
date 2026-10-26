@@ -20,7 +20,7 @@ export interface DialogTab {
   /** Returns an error message (shown in a MsgBox; the dialog stays open) or null when the tab is valid. */
   validate?(): string | null;
   /** Called on OK, after every tab validated. */
-  apply?(): void;
+  apply?(): void | Promise<void>;
   /** Project Properties only: undoable commands, executed together as one undo step. */
   commands?(): Command[];
 }
@@ -38,7 +38,7 @@ export async function runTabbedDialog(doc: Document, title: string, tabs: Dialog
     let error: string | null = null;
     tabs.forEach((tab, i) => { if (error === null) { const e = tab.validate?.() ?? null; if (e !== null) { error = e; t.select(i); } } });
     if (error !== null) { await messageBox98(doc, { prompt: error, title: 'VibeBasic', buttons: 48 }); continue; }
-    for (const tab of tabs) tab.apply?.();
+    for (const tab of tabs) await tab.apply?.();
     onOk?.();
     return true;
   }

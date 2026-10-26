@@ -72,7 +72,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   };
   actions.askAi = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc); };
   // the AI Wizard of the New Project dialog: Ask AI on the new Form1 with the wizard's own dialog (description and improvements)
-  actions.aiWizard = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc, { prompt: () => wizardDialog(doc, { copy: t => backend.clipboardSetText(t) }) }); };
+  const runWizard = () => { void askAi(state, backend, { codeWindowFor: id => getCodeWindow(state, id) }, doc, { prompt: () => wizardDialog(doc, { copy: t => backend.clipboardSetText(t) }) }); };
   actions.aiLog = () => { void showAiLog(doc, text => backend.clipboardSetText(text)); };
   const recent = new RecentProjects(backend);
   const fc = new FileController(state, backend, doc, recent);
@@ -86,6 +86,10 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
   // a value typed in the Properties window but not yet entered goes into the project first (false: it was invalid). New, Open,
   // Exit and closing the window do so too, so "Save changes?" asks about it instead of the value being lost.
   const committed = (): boolean => propsWin?.commitPendingEdit() ?? true;
+  actions.aiWizard = async () => {
+    if (state.mode !== 'design' || state.busy || !committed()) return;
+    if (await fc.newProject('aiWizard')) runWizard();
+  };
   /** The New Project dialog: a new project of a type (the AI Wizard then asks the AI), or (at start) an existing or recent one. */
   const chooseProject = async (startup: boolean): Promise<void> => {
     if (startup) await recent.ready();
@@ -96,7 +100,7 @@ export function startIde(backend: Backend, root: HTMLElement = document.getEleme
     }
     const c = r.choice;
     if (!c) return;
-    if (c.kind === 'new') { if ((await fc.newProject(c.template)) && c.template === 'aiWizard') actions.aiWizard?.(); }
+    if (c.kind === 'new') { if ((await fc.newProject(c.template)) && c.template === 'aiWizard') runWizard(); }
     else await fc.open(c.kind === 'recent' ? c.path : undefined);
   };
   actions.newProject = () => { if (state.mode === 'design' && committed()) void chooseProject(false); };

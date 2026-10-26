@@ -164,6 +164,9 @@ async function askAiNow(ide: IdeState, backend: Backend, ui: { codeWindowFor(ite
   const codeWin = view.kind === 'code' && itemId ? ui.codeWindowFor(itemId) : null;
   if (!itemId || !item || (view.kind === 'code' && !codeWin)) { await warn(doc, 'Open a form or a code window first.'); return; }
 
+  // The wizard can be explored (or cancelled) before an AI server is configured.
+  const customPrompt = o.prompt ? await o.prompt() : undefined;
+  if (customPrompt === null) return;
   const stored = await settingsOrSetup(ide, backend, doc);
   if (!stored) return;
   // what the settings do not know yet (server kind, vision) is found while the user types
@@ -171,7 +174,7 @@ async function askAiNow(ide: IdeState, backend: Backend, ui: { codeWindowFor(ite
 
   const project = ide.project;
   const codeMode = view.kind === 'code';
-  const prompt = await (o.prompt ? o.prompt() : promptDialog(doc, `Ask AI - ${item.name} (${codeMode ? 'Code' : 'Form'})`));
+  const prompt = customPrompt ?? await promptDialog(doc, `Ask AI - ${item.name} (${codeMode ? 'Code' : 'Form'})`);
   if (prompt === null) return;
   // a modal dialog from here on, until the conversation's own dialogs take over
   const hold = holdDialog(doc, `Connecting to ${stored.model}...`);
@@ -204,7 +207,8 @@ async function settingsOrSetup(ide: IdeState, backend: Backend, doc: Document): 
   if (settings.model.trim()) return settings;
   await warn(doc, 'Set up the AI server first in Tools > Options > AI.');
   await showOptions(ide, backend, doc, 'AI');
-  return null;
+  const configured = await loadAiSettings(backend);
+  return configured.model.trim() ? configured : null;
 }
 
 /** An error to fix with AI: where it happened and, for a run-time error, the variables of the stopped frame. */

@@ -86,6 +86,44 @@ test('FileController.newProject makes the chosen type (Option Explicit when the 
   expect(ide.project.forms[1].code.startsWith('Option Explicit')).toBe(true);
 });
 
+test('recent projects opened before settings load are merged without resurrecting removed entries', async () => {
+  let resolve!: (value: unknown) => void;
+  let persisted: unknown;
+  const loading = new Promise<unknown>(r => { resolve = r; });
+  const recent = new RecentProjects({
+    loadSettings: async <T>() => await loading as T | null,
+    saveSettings: async (_key, value) => { persisted = value; },
+  } as Pick<Backend, 'loadSettings' | 'saveSettings'>);
+  recent.add('/x/New.vbb');
+  recent.remove('/x/Gone.vbb');
+  resolve(['/x/Gone.vbb', '/x/Old.vbb']);
+  await recent.ready();
+  await flush();
+  expect(recent.list).toEqual(['/x/New.vbb', '/x/Old.vbb']);
+  expect(persisted).toEqual(['/x/New.vbb', '/x/Old.vbb']);
+});
+
+test('recent project writes finish in order even when the settings backend is slow', async () => {
+  let finish!: () => void;
+  let persisted: unknown;
+  let writes = 0;
+  const recent = new RecentProjects({
+    loadSettings: async () => [],
+    saveSettings: async (_key, value) => {
+      if (++writes === 1) await new Promise<void>(r => { finish = r; });
+      persisted = value;
+    },
+  } as Pick<Backend, 'loadSettings' | 'saveSettings'>);
+  await recent.ready();
+  recent.add('/x/First.vbb');
+  await flush();
+  recent.add('/x/Second.vbb');
+  await flush();
+  finish();
+  await flush();
+  expect(persisted).toEqual(['/x/Second.vbb', '/x/First.vbb']);
+});
+
 test('the dialog at start: New picks a type (click, arrows, double click opens), Existing, Recent, and "Don\'t show"', async () => {
   let r = showNewProjectDialog(document, { startup: true, recent: ['C:\\Kalk\\Kalk.vbb', 'D:\\Old\\Old.vbp'] });
   expect([...document.querySelectorAll('.dlg98 .tabs98-tab')].map(t => t.textContent)).toEqual(['New', 'Existing', 'Recent']);

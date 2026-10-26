@@ -60,3 +60,13 @@ test('the dialog: an example fills the description, the request shows as it chan
   press('Cancel');
   expect(await r).toBeNull();
 });
+
+test('choosing no example keeps the description the user typed', async () => {
+  const result = wizardDialog(document);
+  set($<HTMLTextAreaElement>('.aiw-desc'), 'My own program', 'input');
+  set($<HTMLSelectElement>('.aiw-row select'), '');
+  expect($<HTMLTextAreaElement>('.aiw-desc').value).toBe('My own program');
+  expect(preview()).toContain('My own program');
+  press('Cancel');
+  await result;
+});

@@ -1,11 +1,8 @@
 # Release builds for a version tag (v1.2.3): the Windows installer and portable exe, the Linux .deb and AppImage, and an
 # ad hoc signed macOS zip, uploaded to the GitHub release of the tag.
 #
-# It works alongside the local release (`gh release create vX.Y.Z` with the locally signed macOS zip):
-# - a release that already exists keeps its notes; the CI files are uploaded to it with --clobber;
-# - a release that does not exist yet is created, titled "VibeBasic X.Y.Z", with the tag's CHANGELOG section as notes;
-# - the macOS zip has the same name as the local one (VibeBasic-X.Y.Z-macos-arm64.zip). If the release already has it, the
-#   CI one is left out, so the local signed build wins. If CI was first, `gh release upload vX.Y.Z <zip> --clobber` replaces it.
+# GitHub is the source of truth: every download is built and tested from the tagged commit by this workflow.
+# Existing release notes are kept, but all assets are replaced by the files from this run.
 # CI has no signing secrets: the Windows and Linux files are unsigned, the macOS app is signed ad hoc.
 name: Release
 
@@ -73,12 +70,18 @@ jobs:
 
       - run: npm ci
 
+      - name: TypeScript tests
+        run: npm test
+
       # tauri.conf.json lists only the macOS "app" bundle (the local build); --bundles picks this platform's.
       - name: Build
         run: npx tauri build --bundles ${{ matrix.bundles }}
         env:
           # linuxdeploy (the AppImage) runs without FUSE
           APPIMAGE_EXTRACT_AND_RUN: 1
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Package
         run: |
@@ -141,13 +144,8 @@ jobs:
             awk -v v="$v" '/^## \[/ { if (on) exit; on = index($0, "## [" v "]") == 1; next } on' CHANGELOG.md \
               | sed -e '/./,$!d' > notes.md
             [ -s notes.md ] || echo "See [CHANGELOG.md](CHANGELOG.md)." > notes.md
-            # if the local release was made in the meantime, use that one
+            # Another run may have created the release in the meantime.
             gh release create "$tag" --verify-tag --title "VibeBasic $v" --notes-file notes.md || gh release view "$tag" >/dev/null
-          fi
-          mac="VibeBasic-$v-macos-arm64.zip"
-          if gh release view "$tag" --json assets --jq '.assets[].name' | grep -qxF "$mac"; then
-            echo "The release already has $mac (the local signed build): the CI one is left out."
-            rm -f "assets/$mac"
           fi
           ls -l assets
           gh release upload "$tag" assets/* --clobber

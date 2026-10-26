@@ -4,6 +4,16 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-10-26
+
+### Fixed
+- The AI Wizard is available directly under Tools, even when the startup project chooser is disabled. It opens before AI setup; after saving the server settings, creation continues with the request you wrote.
+- Selecting "(none)" in the wizard's examples no longer replaces your description with the tip calculator example.
+- Recent projects opened while settings load are kept, removed entries stay removed, and slow settings writes cannot overwrite newer history. Changes made during startup are saved together.
+
+### Changed
+- GitHub is the source of truth for releases: all downloads come from the tagged source built and tested by GitHub Actions, including macOS. Release builds run both TypeScript and Rust tests before publishing.
+
 ### Added
 - The New Project dialog, as in VB6: when VibeBasic starts it offers New (Standard EXE, MDI Application, Sub Main, Data Project and an AI Wizard that has the AI build the form from your description), Existing (open a .vbb or .vbp) and Recent. File > New Project shows the New tab. "Don't show this dialog in the future" turns it off; Tools > Options > General, Prompt for project at startup, turns it on again.
 - The projects you open or save last: the Recent tab, and the last four at the end of the File menu.
