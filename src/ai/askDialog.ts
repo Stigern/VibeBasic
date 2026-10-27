@@ -154,7 +154,8 @@ async function askAiNow(ide: IdeState, backend: Backend, ui: { codeWindowFor(ite
   const stored = await settingsOrSetup(ide, backend, doc);
   if (!stored) return;
   // what the settings do not know yet (server kind, vision) is found while the user types
-  const detecting = detectServer(backend, stored);
+  const probe = new AbortController();   // stops the picture probe when the request dialog is cancelled
+  const detecting = detectServer(backend, stored, probe.signal);
 
   const project = ide.project;
   const codeMode = view.kind === 'code';
@@ -167,7 +168,7 @@ async function askAiNow(ide: IdeState, backend: Backend, ui: { codeWindowFor(ite
     renderFormPicture: async () => { try { return form ? await formPictures.render(form) : null; } catch { return null; } },
   }) : undefined;
   const prompt = customPrompt ?? request?.prompt;
-  if (!prompt) return;
+  if (!prompt) { probe.abort(); return; }
   // a modal dialog from here on, until the conversation's own dialogs take over
   const hold = holdDialog(doc, `Connecting to ${stored.model}...`);
   try {

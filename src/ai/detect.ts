@@ -2,7 +2,7 @@
 // Test Connection finds both; for settings without them, the first AI request of a session finds them on the side (detectServer).
 import type { Backend } from '../backend/backend';
 import { updateAiSettings, type AiSettings } from './settings';
-import { AI_CUT_OFF } from './sse';
+import { AI_CUT_OFF, AI_EMPTY_ANSWER } from './sse';
 import type { AiModel } from './types';
 
 /** A 32 x 32 grey PNG. */
@@ -13,24 +13,43 @@ export const DETECT_WAIT_MS = 3000;
 /** An error that says the server or model takes no pictures. */
 export const isVisionError = (message: string): boolean => /image|multi-?modal|vision|\bmm\b|limit_mm/i.test(message);
 
+/** The longest the picture probe may take (it runs beside the user's own request). */
+export const PROBE_TIMEOUT_MS = 20000;
+
+/** Errors from a reply the server did give, so it took the picture: cut off, thinking only, or no text at all. */
+const answered = (m: string): boolean =>
+  m === AI_CUT_OFF || m === AI_EMPTY_ANSWER || /reply had no text|returned no final answer/.test(m);
+
 /**
  * Whether `model` accepts a picture: one request with PROBE_PNG and max_tokens 1. True when the server takes it (a cut-off or
- * empty answer included), false when its error is about pictures, undefined for any other error.
+ * empty answer included), false when its error is about pictures, undefined for any other error, after `timeoutMs` or when
+ * `signal` aborts.
  */
-export async function probeVision(backend: Pick<Backend, 'aiChat'>, baseUrl: string, apiKey: string, model: string): Promise<boolean | undefined> {
+export async function probeVision(backend: Pick<Backend, 'aiChat'>, baseUrl: string, apiKey: string, model: string,
+  o: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<boolean | undefined> {
+  if (o.signal?.aborted) return undefined;
+  const ac = new AbortController();
+  const stop = (): void => ac.abort();
+  o.signal?.addEventListener('abort', stop);
+  const timer = setTimeout(stop, o.timeoutMs ?? PROBE_TIMEOUT_MS);
   try {
     await backend.aiChat(baseUrl, apiKey, model,
-      [{ role: 'user', content: [{ type: 'text', text: 'Reply with OK.' }, { type: 'image_url', image_url: { url: PROBE_PNG } }] }], undefined, { maxTokens: 1 });
+      [{ role: 'user', content: [{ type: 'text', text: 'Reply with OK.' }, { type: 'image_url', image_url: { url: PROBE_PNG } }] }], undefined,
+      { maxTokens: 1, signal: ac.signal });
     return true;
   } catch (e) {
+    if (ac.signal.aborted) return undefined;
     const m = e instanceof Error ? e.message : String(e);
-    if (m === AI_CUT_OFF || /could not read/.test(m)) return true;
+    if (answered(m)) return true;
     return isVisionError(m) ? false : undefined;
+  } finally {
+    clearTimeout(timer);
+    o.signal?.removeEventListener('abort', stop);
   }
 }
 
-/** "baseUrl|model" pairs already detected in this session. */
-const detected = new Set<string>();
+/** "baseUrl|model" pairs detected in this session (a definitive answer), and those being detected now. */
+const detected = new Set<string>(), detecting = new Set<string>();
 
 /** What detectServer finds: `listed` (server kind and context size, from GET /models) comes before `done` (that plus vision). */
 export interface Detecting { listed: Promise<Partial<AiSettings>>; done: Promise<Partial<AiSettings>> }
@@ -46,16 +65,19 @@ async function saveFound(backend: Pick<Backend, 'loadSettings' | 'saveSettings'>
 
 /**
  * Finds what `s` does not know yet: the server kind and context size (GET /models) and, unless "Send form picture" is Off, vision
- * (probeVision, only for a model the server lists). Once per server and model per session. The server kind is known (and saved)
- * as soon as the list is in, before the picture probe, which can be slow; the vision result is saved when the probe is done.
+ * (probeVision, only for a model the server lists). Once per server and model per session, unless the list or the probe failed
+ * without an answer (tried again on the next request). The server kind is known (and saved) as soon as the list is in, before
+ * the picture probe, which can be slow; the vision result is saved when the probe is done. `signal` stops the probe.
  */
-export function detectServer(backend: Pick<Backend, 'aiListModels' | 'aiChat' | 'loadSettings' | 'saveSettings'>, s: AiSettings): Detecting {
+export function detectServer(backend: Pick<Backend, 'aiListModels' | 'aiChat' | 'loadSettings' | 'saveSettings'>, s: AiSettings,
+  signal?: AbortSignal): Detecting {
   const key = `${s.baseUrl.trim()}|${s.model.trim()}`;
   const needVision = s.vision === undefined && s.formPicture !== 'off';
-  if (detected.has(key) || (s.serverKind && !needVision)) { const none = Promise.resolve({}); return { listed: none, done: none }; }
-  detected.add(key);
+  if (detected.has(key) || detecting.has(key) || (s.serverKind && !needVision)) { const none = Promise.resolve({}); return { listed: none, done: none }; }
+  detecting.add(key);
+  let definitive = true;
   const listing = (async (): Promise<Partial<AiSettings> | null> => {
-    const list = await Promise.resolve().then(() => backend.aiListModels(s.baseUrl, s.apiKey)).catch((): AiModel[] => []);
+    const list = await Promise.resolve().then(() => backend.aiListModels(s.baseUrl, s.apiKey)).catch((): AiModel[] => { definitive = false; return []; });
     const found = Array.isArray(list) ? list.find(m => m.id.toLowerCase() === s.model.trim().toLowerCase()) : undefined;
     if (!found) return null;
     const out: Partial<AiSettings> = {};
@@ -67,11 +89,11 @@ export function detectServer(backend: Pick<Backend, 'aiListModels' | 'aiChat' | 
   const done = listing.then(async (out): Promise<Partial<AiSettings>> => {
     if (!out) return {};
     if (!needVision) return out;
-    const v = await probeVision(backend, s.baseUrl, s.apiKey, s.model);
-    if (v === undefined) return out;
+    const v = await probeVision(backend, s.baseUrl, s.apiKey, s.model, { signal });
+    if (v === undefined) { definitive = false; return out; }
     await saveFound(backend, s, { vision: v });
     return { ...out, vision: v };
-  });
+  }).finally(() => { detecting.delete(key); if (definitive) detected.add(key); });
   return { listed: listing.then(out => out ?? {}), done };
 }
 
