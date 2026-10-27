@@ -127,6 +127,8 @@ export class FormInstance implements VBObject {
 
   /** Show was asked for (an MDI child then does not show itself when its Load ends: AutoShowChildren). */
   private showAsked = false;
+  /** showsMenuBar's answer while it holds (null: ask again). */
+  private menuBar: boolean | null = null;
 
   /** `key`: the default instance has the form's name; another one (New Form1) a key of its own ("Form1:2"), which is also the
    *  module its code runs in (Program.addFormInstance). */
@@ -141,9 +143,11 @@ export class FormInstance implements VBObject {
   /** The name of the form's own events in its code: Form_Load, MDIForm_Load. */
   private get objName(): string { return formObjectName(this.def); }
 
-  /** The form's window shows a menu bar: a visible top-level menu (an MDI child's menus show on the MDI form's bar). */
+  /** The form's window shows a menu bar: a visible top-level menu (an MDI child's menus show on the MDI form's bar). Cached (every
+   *  graphics op asks for the client size): a menu's Visible, Load / Unload of a menu element and Unload of the form clear it. */
   showsMenuBar(): boolean {
-    return !this.isMdiChild && !!this.st && [...this.st.byId.values()].some(c => c.def.type === 'Menu' && c.def.parentId === null && c.props.Visible !== false);
+    if (this.isMdiChild || !this.st) return false;
+    return this.menuBar ??= [...this.st.byId.values()].some(c => c.def.type === 'Menu' && c.def.parentId === null && c.props.Visible !== false);
   }
 
   /** Runs `<Form|MDIForm>_<event>` of this instance. */
@@ -213,6 +217,7 @@ export class FormInstance implements VBObject {
         const c = new ControlObject(def, this.key, this.s.queue, ctx);
         if (!invisible) c.copyItemData(t);
         this.state().byId.set(def.id, c);
+        if (def.type === 'Menu') this.menuBar = null;
         if (def.type === 'Timer') this.s.syncTimer(this, c);
         if (!invisible) this.s.queue.send(this.key, { t: 'addControl', def: { ...def, props: copyProps(c.props) }, handled: this.handledEvents(def) });
         return c;
@@ -220,6 +225,7 @@ export class FormInstance implements VBObject {
       drop: c => {
         c.dispose();
         this.st?.byId.delete(c.def.id);
+        if (c.def.type === 'Menu') this.menuBar = null;
         if (this.activeId === c.def.id) this.activeId = null;
         if (c.def.type === 'Timer') { c.props.Enabled = false; this.s.syncTimer(this, c); }
         if (!CONTROL_TYPES[c.def.type].invisibleAtRuntime) this.s.queue.send(this.key, { t: 'removeControl', id: c.def.id });
@@ -238,6 +244,7 @@ export class FormInstance implements VBObject {
       }
     }
     this.st = st;
+    this.menuBar = null;
     this.layoutDocks(false);
     return st;
   }
@@ -646,6 +653,7 @@ export class FormInstance implements VBObject {
       }
       return;
     }
+    if (c.def.type === 'Menu' && prop === 'Visible' && changed) this.menuBar = null;
     if (changed && (prop === 'Align' || prop === 'Visible' || prop === 'Width' || prop === 'Height') && c.def.parentId === null
       && (c.def.type === 'PictureBox' || c.def.type === 'Toolbar' || c.def.type === 'StatusBar' || c.def.type === 'CoolBar')) this.layoutDocks(true);
     let ev: string | null = null;

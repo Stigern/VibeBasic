@@ -124,6 +124,29 @@ Debug.Print ScaleWidth = Width \\ 15 - 8`)}Private Sub Form_MouseDown(Button As 
   expect(out).toEqual(['TrueFalse', 'True', ' 30  12 ']);
 });
 
+test('PSet with a user scale does not scan the form\'s controls for a menu bar on every op (cached until a menu changes)', async () => {
+  const many: C[] = Array.from({ length: 300 }, (_, i) => ['Label', `Label${i}`] as C);
+  const s = await run(sub('Form_Click', `Scale (0, 0)-(100, 100)
+For i = 0 To 999: PSet (i Mod 100, i \\ 10): Next
+Debug.Print "done"`), many);
+  const byId = (s as unknown as { forms: Map<string, { st: { byId: Map<string, unknown> } }> }).forms.get('form1')!.st.byId;
+  let scans = 0;
+  const values = byId.values.bind(byId);
+  byId.values = () => { scans++; return values(); };
+  container.querySelector<HTMLElement>('.vb-form-client')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  for (let i = 0; i < 50 && !out.length; i++) await new Promise(r => setTimeout(r, 0));
+  expect(out).toEqual(['done']);
+  expect(scans).toBeLessThan(20);
+});
+
+test('hiding the only top-level menu gives the client area the menu bar\'s height', async () => {
+  await run(sub('Form_Load', `${PIXELS}Debug.Print ScaleHeight
+mnuFile.Visible = False
+Debug.Print ScaleHeight`), [['Menu', 'mnuFile', { Caption: '&File' }]]);
+  const [a, b] = out.map(Number);
+  expect(b).toBeGreaterThan(a);
+});
+
 test('Scale (x1, y1)-(x2, y2) sets a user scale (ScaleMode 0), Scale alone goes back to twips', async () => {
   await run(sub('Form_Load', `Scale (0, 100)-(100, 0)
 Debug.Print ScaleMode; ScaleLeft; ScaleTop; ScaleWidth; ScaleHeight
