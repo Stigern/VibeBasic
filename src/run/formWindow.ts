@@ -142,8 +142,25 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
     walk(null);
   }
   function retab(id: string): void {
+    if (tabsDirty) return;   // retabTabs does them all
     const ie = surface.views.get(id)?.inputEl;
     if (ie && ie.tabIndex >= 0 && tabRank.has(id)) ie.tabIndex = tabRank.get(id)!;
+  }
+  /** A new tab order is due: worked out once for a batch of changes (Load Name(i) in a loop), at the latest in a microtask. */
+  let tabsDirty = false;
+  function tabsChanged(): void {
+    if (tabsDirty) return;
+    tabsDirty = true;
+    queueMicrotask(() => { if (!disposed) tabOrder(); });
+  }
+  /** The tab rank of every control (worked out first when it changed), the inputs' tabIndex set to it. */
+  function tabOrder(): Map<string, number> {
+    if (tabsDirty) {
+      computeTabOrder();
+      tabsDirty = false;
+      for (const k of defs.keys()) retab(k);
+    }
+    return tabRank;
   }
   /** Applies props to the mirror and the DOM (also keeps text typed by the user across rebuilds of the control). The user's own
    *  TextBox selection (`fromUser`) is already in the field: it goes to the mirror only (selecting again would lose its direction). */
@@ -165,7 +182,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
     surface.update(id, props);
     if ('DragIcon' in props) dnd.dragIconChanged(id);
     if (id === 'form') return;
-    if ('TabIndex' in props) { computeTabOrder(); for (const k of defs.keys()) retab(k); } else retab(id);
+    if ('TabIndex' in props) tabsChanged(); else retab(id);
   }
   computeTabOrder();
   for (const id of defs.keys()) retab(id);
@@ -537,7 +554,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   // --- keyboard ---
   /** The next control in tab order that can take the focus (MaskedEdit AutoTab). */
   function focusNext(id: string): void {
-    const order = [...tabRank].sort((a, b) => a[1] - b[1]).map(([i]) => i);
+    const order = [...tabOrder()].sort((a, b) => a[1] - b[1]).map(([i]) => i);
     const at = order.indexOf(id);
     for (let k = 1; k < order.length; k++) {
       const n = order[(at + k) % order.length];
@@ -554,7 +571,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
   function accelerate(e: KeyboardEvent): boolean {
     const letter = keyLetter(e);
     if (!letter) return false;
-    const hits = [...tabRank].sort((a, b) => a[1] - b[1]).map(([id]) => id).filter(id => {
+    const hits = [...tabOrder()].sort((a, b) => a[1] - b[1]).map(([id]) => id).filter(id => {
       const t = defs.get(id)?.type;
       if (!t || !(ACCEL_CLICK.has(t) || ACCEL_FOCUS.has(t)) || !reachable(id)) return false;
       const { text, index } = parseMnemonic(String(propsOf(id).Caption ?? ''));
@@ -669,7 +686,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
 
   /** VB6: a shown form focuses the first control in tab order; without one the form itself gets the keys. */
   function focusInitial(): void {
-    const first = [...tabRank].sort((a, b) => a[1] - b[1]).map(([id]) => id)
+    const first = [...tabOrder()].sort((a, b) => a[1] - b[1]).map(([id]) => id)
       .find(id => usable(id) && (viewOf(id)?.inputEl?.tabIndex ?? -1) >= 0);
     (first ? viewOf(first)!.inputEl! : surface.el).focus();
   }
@@ -715,8 +732,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
           state.set(m.def.id, { ...m.def.props });
           s.handled[m.def.id] = m.handled;
           surface.addControl(m.def);
-          computeTabOrder();
-          for (const k of defs.keys()) retab(k);
+          tabsChanged();
           break;
         case 'removeControl':
           if (!defs.has(m.id)) break;
@@ -725,7 +741,7 @@ export function mountFormWindow(root: HTMLElement, s: FormSnapshot, post: (m: Fr
           surface.removeControl(m.id);
           defs.delete(m.id);
           state.delete(m.id);
-          computeTabOrder();
+          tabsChanged();
           break;
         case 'show': surface.el.style.display = ''; break;
         case 'focusInitial':   // unless code (SetFocus in Form_Activate) has already put the focus in the form

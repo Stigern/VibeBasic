@@ -129,6 +129,8 @@ export class FormInstance implements VBObject {
   private showAsked = false;
   /** showsMenuBar's answer while it holds (null: ask again). */
   private menuBar: boolean | null = null;
+  /** The highest TabIndex of the loaded controls (-1: none) while it holds (null: ask again): Load Name(i) in a loop stays linear. */
+  private maxTab: number | null = null;
 
   /** `key`: the default instance has the form's name; another one (New Form1) a key of its own ("Form1:2"), which is also the
    *  module its code runs in (Program.addFormInstance). */
@@ -148,6 +150,14 @@ export class FormInstance implements VBObject {
   showsMenuBar(): boolean {
     if (this.isMdiChild || !this.st) return false;
     return this.menuBar ??= [...this.st.byId.values()].some(c => c.def.type === 'Menu' && c.def.parentId === null && c.props.Visible !== false);
+  }
+
+  /** The highest TabIndex of the loaded controls, -1 without one (cached in maxTab). */
+  private highestTab(): number {
+    if (this.maxTab !== null) return this.maxTab;
+    let m = -1;
+    for (const o of this.state().byId.values()) m = Math.max(m, Number(o.props.TabIndex ?? -1));
+    return this.maxTab = m;
   }
 
   /** Runs `<Form|MDIForm>_<event>` of this instance. */
@@ -211,7 +221,7 @@ export class FormInstance implements VBObject {
         if (!invisible && t.def.type !== 'Menu') {   // a menu element keeps the lowest one's Visible (the MRU list shows at once)
           props.Visible = false;
           if (t.def.type === 'OptionButton') props.Value = false;   // a new option starts unselected (one selected per group)
-          if ('TabIndex' in props) props.TabIndex = Math.max(-1, ...[...this.state().byId.values()].map(o => Number(o.props.TabIndex ?? -1))) + 1;
+          if ('TabIndex' in props) props.TabIndex = this.maxTab = this.highestTab() + 1;
         }
         const def: ControlDef = { ...t.def, id: `${t.def.id}~${index}`, index, props };
         const c = new ControlObject(def, this.key, this.s.queue, ctx);
@@ -226,6 +236,7 @@ export class FormInstance implements VBObject {
         c.dispose();
         this.st?.byId.delete(c.def.id);
         if (c.def.type === 'Menu') this.menuBar = null;
+        if (Number(c.props.TabIndex ?? -1) === this.maxTab) this.maxTab = null;
         if (this.activeId === c.def.id) this.activeId = null;
         if (c.def.type === 'Timer') { c.props.Enabled = false; this.s.syncTimer(this, c); }
         if (!CONTROL_TYPES[c.def.type].invisibleAtRuntime) this.s.queue.send(this.key, { t: 'removeControl', id: c.def.id });
@@ -244,7 +255,7 @@ export class FormInstance implements VBObject {
       }
     }
     this.st = st;
-    this.menuBar = null;
+    this.menuBar = this.maxTab = null;
     this.layoutDocks(false);
     return st;
   }
@@ -654,6 +665,7 @@ export class FormInstance implements VBObject {
       return;
     }
     if (c.def.type === 'Menu' && prop === 'Visible' && changed) this.menuBar = null;
+    if (prop === 'TabIndex' && changed) this.maxTab = null;
     if (changed && (prop === 'Align' || prop === 'Visible' || prop === 'Width' || prop === 'Height') && c.def.parentId === null
       && (c.def.type === 'PictureBox' || c.def.type === 'Toolbar' || c.def.type === 'StatusBar' || c.def.type === 'CoolBar')) this.layoutDocks(true);
     let ev: string | null = null;

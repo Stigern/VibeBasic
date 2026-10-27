@@ -130,3 +130,39 @@ test('Load of an OptionButton element whose lowest one is selected starts unsele
   }]);
   expect(out).toEqual(['TrueFalse']);
 });
+
+test('Load Name(i) in a loop stays linear: no scan of every control for the TabIndex, no retab of every control per element', async () => {
+  const n = 200;
+  const desc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'tabIndex')!;
+  let tabSets = 0;
+  Object.defineProperty(HTMLElement.prototype, 'tabIndex', { ...desc, set(v: number) { tabSets++; desc.set!.call(this, v); } });
+  let scans = 0;
+  try {
+    const { out, p } = await run([{
+      name: 'Form1',
+      code: [
+        'Private Sub Form_Click()',
+        `  For i = 1 To ${n}: Load Text1(i): Text1(i).Visible = True: Next`,
+        '  Debug.Print Text1(1).TabIndex; Text1(2).TabIndex',
+        'End Sub',
+      ].join('\n'),
+      controls: [['TextBox', 'Text1', {}, 0], ['CommandButton', 'Command1']],
+    }]);
+    tabSets = 0;
+    const byId = (session as unknown as { forms: Map<string, { st: { byId: Map<string, unknown> } }> }).forms.get('form1')!.st.byId;
+    const values = byId.values.bind(byId);
+    byId.values = () => { scans++; return values(); };
+    container.querySelector<HTMLElement>('.vb-form-client')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    for (let i = 0; i < 50 && !out.length; i++) await tick();
+    for (let i = 0; i < 10; i++) await tick();   // the window has the last messages
+    expect(out).toEqual([' 2  3 ']);
+    expect(tabSets).toBeLessThan(10 * n);
+    expect(scans).toBeLessThan(n / 2);
+    const ids = [1, 2, 3].map(i => `${p.forms[0].controls[0].id}~${i}`);
+    const tabs = ids.map(id => container.querySelector<HTMLElement>(`[data-control-id="${id}"] input, [data-control-id="${id}"] textarea`)!.tabIndex);
+    expect(tabs[0]).toBeLessThan(tabs[1]);
+    expect(tabs[1]).toBeLessThan(tabs[2]);
+  } finally {
+    Object.defineProperty(HTMLElement.prototype, 'tabIndex', desc);
+  }
+});
