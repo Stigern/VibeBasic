@@ -404,7 +404,7 @@ test('Format numbers', () => {
   expect(fmt(12345.678, '0.00E-00')).toBe('1.23E04');
   expect(fmt(0, '0.0E+0')).toBe('0.0E+0');
   expect(fmt(5, '')).toBe('5');
-  expect(fmt(5, 'abc')).toBe('abc');
+  expect(fmt(5, 'zip')).toBe('zip');   // (c would be the General Date)
   expect(fmt(1234.5, '0,000.00')).toBe('1,234.50');
   expect(fmt(-1234.567, '#,##0.00')).toBe('-1,234.57');
   expect(fmt(7, '.00')).toBe('7.00');
@@ -453,6 +453,10 @@ test('Format dates', () => {
   expect(fmt(D, 'd\\t\\h')).toBe('22th');
   expect(fmt('2026-10-22', 'dd.mm.yyyy')).toBe('22.10.2026');
   expect(fmt(D, 'mm')).toBe('10');
+  expect(fmt(dateFrom(2003, 1, 2, 3, 4, 5), 'ttttt')).toBe('3:04:05 AM');
+  expect(fmt(dateFrom(2003, 1, 2, 3, 4, 5), 'c')).toBe('1/2/2003 3:04:05 AM');
+  expect(fmt(dateFrom(2003, 1, 2), 'c')).toBe('1/2/2003');
+  expect(fmt(D, '"at" ttttt')).toBe('at 1:05:09 PM');
 });
 
 test('Format named dates', () => {

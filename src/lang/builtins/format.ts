@@ -8,7 +8,7 @@
 // rounding is half away from zero (like VB's Format), on 15 significant digits.
 //
 // Dates: named formats follow the locale (Intl); custom patterns use
-// d dd ddd dddd ddddd m mm mmm mmmm yy yyyy h hh n nn s ss q w ww y ttttt
+// d dd ddd dddd ddddd m mm mmm mmmm yy yyyy h hh n nn s ss q w ww y ttttt c
 // AM/PM am/pm A/P a/p AMPM (the locale's text). `m` right after `h` or right before `s` means minutes.
 
 import { VBRuntimeError } from '../errors';
@@ -283,7 +283,8 @@ type DTok =
   | { t: 'd' | 'm' | 'y' | 'h' | 'n' | 's' | 'w'; n: number }
   | { t: 'q' }
   | { t: 'ampm'; style: 'AM/PM' | 'am/pm' | 'A/P' | 'a/p' | 'AMPM' }
-  | { t: 'time5' };
+  | { t: 'time5' }
+  | { t: 'general' };
 
 function dateTokens(fmt: string): DTok[] {
   const out: DTok[] = [];
@@ -317,6 +318,10 @@ function dateTokens(fmt: string): DTok[] {
     } else if (rest.startsWith('ttttt')) {
       out.push({ t: 'time5' });
       i += 5;
+    } else if (lower === 'c') {
+      // the General Date (date and time, each only when non-zero)
+      out.push({ t: 'general' });
+      i++;
     } else if ('dmyhnsw'.includes(lower)) {
       let j = i;
       while (j < fmt.length && fmt[j].toLowerCase() === lower) j++;
@@ -371,6 +376,7 @@ function formatDate(v: VBValue, fmt: string, locale: string): string {
         break;
       }
       case 'time5': out += longTimeText(p, locale); break;
+      case 'general': out += generalDateText(serial, locale); break;
     }
   }
   return out;
@@ -673,7 +679,7 @@ export function formatValue(v: VBValue, fmt: string, locale: string): string {
   const bare = stripLiterals(fmt);
   const hasDigits = /[0#]/.test(bare);
   if (!hasDigits && /[@&<>!]/.test(bare)) return formatText(toStr(v), fmt);
-  if (!hasDigits && /[dmyhnsqw]|a\/p|am\/pm|ampm/i.test(bare)) return formatDate(v, fmt, locale);
+  if (!hasDigits && /[dmyhnsqwc]|ttttt|a\/p|am\/pm|ampm/i.test(bare)) return formatDate(v, fmt, locale);
   const n = tryNumber(v);
   return n === undefined ? toStr(v) : formatNumber(n, fmt);
 }
