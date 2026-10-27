@@ -14,7 +14,9 @@ import type { ControlDef, ControlType, FontValue, FormDef, PropValue, Project } 
 export type PropKind = 'string' | 'text' | 'int' | 'bool' | 'color' | 'enum' | 'font' | 'picture' | 'list'
   | 'date';   // a date serial (number; Null = null) shown as text in the Properties window
 export interface PropDef { name: string; kind: PropKind; default: PropValue; enumValues?: { value: number; label: string }[];
-  designTime: boolean; runtime: 'rw' | 'ro' | 'none'; min?: number; max?: number }
+  designTime: boolean; runtime: 'rw' | 'ro' | 'none'; min?: number; max?: number;
+  /** An 'int' that takes fractions too (a Single, e.g. a user scale). */
+  fraction?: true }
 export interface EventDef { name: string; params: string }          // e.g. { name: 'KeyPress', params: 'KeyAscii As Integer' }
 export interface MethodDef { name: string; params: string }
 export interface ControlTypeDef { type: ControlType; namePrefix: string; defaultWidth: number; defaultHeight: number;
@@ -40,7 +42,7 @@ const DEFAULT_FONT: FontValue = { name: 'MS Sans Serif', size: 8, bold: false, i
 const enumVals = (...labels: string[]): { value: number; label: string }[] =>
   labels.map((l, i) => ({ value: i, label: `${i} - ${l}` }));
 
-type Opts = Partial<Pick<PropDef, 'designTime' | 'runtime' | 'min' | 'max' | 'enumValues'>>;
+type Opts = Partial<Pick<PropDef, 'designTime' | 'runtime' | 'min' | 'max' | 'enumValues' | 'fraction'>>;
 const p = (name: string, kind: PropKind, def: PropValue, o: Opts = {}): PropDef =>
   ({ name, kind, default: def, designTime: true, runtime: 'rw', ...o });
 const str = (name: string, def = '', o?: Opts) => p(name, 'string', def, o);
@@ -103,7 +105,8 @@ const drawProps = (): PropDef[] => [
   int('DrawWidth', 1, { min: 1, max: 32767 }), color('FillColor', 0), en('FillStyle', 1, FILL_STYLES),
   bool('FontTransparent', true), bool('HasDC', true, { runtime: 'ro' }),
   en('ScaleMode', 1, ['User', 'Twip', 'Point', 'Pixel', 'Character', 'Inch', 'Millimeter', 'Centimeter']),
-  int('ScaleLeft', 0), int('ScaleTop', 0), int('ScaleWidth', 0), int('ScaleHeight', 0),
+  int('ScaleLeft', 0, { fraction: true }), int('ScaleTop', 0, { fraction: true }), int('ScaleWidth', 0, { fraction: true }),
+  int('ScaleHeight', 0, { fraction: true }),
   rt('CurrentX', 'int', 0), rt('CurrentY', 'int', 0), rt('hDC', 'int', 0, 'ro'), rt('Image', 'picture', null, 'ro'),
 ];
 const drawMethods = (): MethodDef[] => [

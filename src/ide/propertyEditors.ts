@@ -45,7 +45,7 @@ export function parsePropertyInput(def: PropDef, text: string): ParseResult {
     case 'list': return { ok: true, value: text === '' ? [] : text.split(/\r?\n/) };
     case 'int': {
       const t = text.trim();
-      if (!/^-?\d+$/.test(t)) return FAIL;
+      if (!(def.fraction ? /^-?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i : /^-?\d+$/).test(t)) return FAIL;
       const n = Number(t);
       if ((def.min !== undefined && n < def.min) || (def.max !== undefined && n > def.max)) return FAIL;
       return { ok: true, value: n };

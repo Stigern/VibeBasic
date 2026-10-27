@@ -49,6 +49,14 @@ test('int parse', () => {
   expect(parsePropertyInput(def('Left', 'int'), '120')).toEqual({ ok: true, value: 120 });
   expect(parsePropertyInput(def('Left', 'int'), 'abc')).toEqual({ ok: false });
 });
+test('a user scale (Single) takes decimals; other ints do not', () => {
+  const scale = getPropDef('Form', 'ScaleWidth')!;
+  expect(parsePropertyInput(scale, '1.5')).toEqual({ ok: true, value: 1.5 });
+  expect(parsePropertyInput(scale, '-.25')).toEqual({ ok: true, value: -0.25 });
+  expect(parsePropertyInput(scale, '2.5E+3')).toEqual({ ok: true, value: 2500 });
+  expect(parsePropertyInput(scale, '1.2.3')).toEqual({ ok: false });
+  expect(parsePropertyInput(def('Left', 'int'), '1.5')).toEqual({ ok: false });
+});
 test('enum parse accepts "2 - Sizable" and "2"', () => {
   const d = getPropDef('Form', 'BorderStyle')!;
   expect(parsePropertyInput(d, '2 - Sizable')).toEqual({ ok: true, value: 2 });
