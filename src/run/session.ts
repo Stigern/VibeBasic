@@ -313,7 +313,7 @@ export class RunSession implements Host, FormSession {
     const old = this.timers.get(t);
     if (old !== undefined) { clearInterval(old); this.timers.delete(t); }
     const interval = Number(t.props.Interval);
-    if (this.ended || !form.loaded || t.props.Enabled !== true || !(interval > 0)) return;
+    if (this.ended || !form.loaded || !form.holds(t) || t.props.Enabled !== true || !(interval > 0)) return;
     this.timers.set(t, setInterval(() => {
       if (this.timerBusy.has(t)) return;   // the previous Timer event is still running: drop this one
       this.timerBusy.add(t);

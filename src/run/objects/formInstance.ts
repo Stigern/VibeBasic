@@ -294,6 +294,9 @@ export class FormInstance implements VBObject {
     if (this.visible) void this.s.formActivated(this);
   }
 
+  /** `c` is a control of the form as it is loaded now (not one kept from before an Unload). */
+  holds(c: ControlObject): boolean { return this.st?.byId.get(c.def.id) === c; }
+
   timers(): ControlObject[] {
     return this.st ? [...this.st.byId.values()].filter(c => c.def.type === 'Timer') : [];
   }

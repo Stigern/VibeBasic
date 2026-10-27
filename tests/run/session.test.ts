@@ -150,6 +150,16 @@ describe('RunSession', () => {
     expect(ended).toBe(1);
   });
 
+  test('a Timer kept from an unloaded form does not fire again', async () => {
+    const s = await start(project([
+      { name: 'Form1', code: 'Private Sub Form_Load()\n    Dim T As Object\n    Set T = Form2.Timer1\n    Unload Form2\n    Form2.Show\n    T.Enabled = True\n    Unload Form2\nEnd Sub\n' },
+      { name: 'Form2', controls: [['Timer', 'Timer1', { Interval: 10, Enabled: false }]],
+        code: 'Private Sub Timer1_Timer()\n    Debug.Print "tick"\nEnd Sub\n' }]));
+    await new Promise(r => setTimeout(r, 80));
+    expect(out).toEqual([]);
+    s.end();
+  });
+
   test('keypress uppercase via handler', async () => {
     const s = await start(project([{ name: 'Form1', controls: [['TextBox', 'Text1', { Text: '' }]],
       code: 'Private Sub Text1_KeyPress(KeyAscii As Integer)\n    KeyAscii = Asc(UCase(Chr(KeyAscii)))\nEnd Sub\n' }]));
