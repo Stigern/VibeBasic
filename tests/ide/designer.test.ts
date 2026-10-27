@@ -171,6 +171,20 @@ test('paste: duplicate name + No gives Command2', async () => {
   expect(form().controls.map(x => [x.name, x.index])).toEqual([['Command1', null], ['Command2', null]]);
 });
 
+test('paste: a renamed ImageList takes the controls pasted with it along; the form\'s own keep theirs', async () => {
+  const il = add('ImageList', 0, 0, 480, 480);
+  const own = add('Toolbar', 0, 0, 3000, 400);
+  own.props.ImageList = il.name;
+  form().controls.find(x => x.id === own.id)!.props.ImageList = il.name;
+  const copied = [structuredClone(il), { ...structuredClone(own), id: 'tb-copy', name: 'Toolbar9' }];
+  box.mockResolvedValue(7);   // No: not a control array
+  await pasteControls(ide, form().id, copied);
+  const byName = (n: string) => form().controls.find(x => x.name === n)!;
+  expect(byName('ImageList2')).toBeTruthy();
+  expect(byName('Toolbar9').props.ImageList).toBe('ImageList2');
+  expect(byName(own.name).props.ImageList).toBe('ImageList1');
+});
+
 test('copy/cut/paste actions keep container children; delete and select all', async () => {
   const fr = add('Frame', 600, 600, 3000, 2000);
   add('CommandButton', 100, 100, 1200, 480, fr.id);

@@ -26,6 +26,8 @@ import type { IdeState } from './ideState';
 import { ctrlLike } from '../platform';
 import type { IdeActions } from './menus';
 import './designer.css';
+import { dataSourceRefs } from './dataSourceEditor';
+import { imageListRefs } from './imageListEditor';
 
 export interface DesignerEnv { mdiHost: HTMLElement; actions?: IdeActions }
 interface Designer { win: MdiWindow; formId: string; placeCentered(tool: ControlType): void; focus(): void }
@@ -618,6 +620,15 @@ export async function pasteControls(ide: IdeState, formId: string, defs: Control
     work.push(nd);
     fresh.push(nd);
   }
+  // a pasted ImageList / Data control that got a new name: the controls pasted with it follow (what still names the old
+  // one is on the form already, or was not pasted)
+  const follow = defs.flatMap((d, i) => {
+    const to = fresh[i].name;
+    if (to === d.name) return [];
+    const refs = d.type === 'ImageList' ? imageListRefs(fresh, d.name) : d.type === 'Data' || d.type === 'Adodc' ? dataSourceRefs(fresh, d.name) : [];
+    return refs.map(([c, p]) => () => { c.props[p] = to; });
+  });
+  follow.forEach(f => f());   // all found first: a rename to a name another pasted one had must not chain
   const add = addControlsCmd(formId, fresh);
   const comps = addComponentsCmd(ide.project, fresh.map(d => d.type));   // controls copied from a project with other components
   const missing = [...new Set(fresh.flatMap(controlAssetIds))].filter(a => !(a in ide.project.assets) && a in assets);

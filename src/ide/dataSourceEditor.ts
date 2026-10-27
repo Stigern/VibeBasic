@@ -1,7 +1,7 @@
 // The DataSource / RowSource row of a bound control (TextBox, DataGrid, DataCombo ...): a drop-down of the form's Data and
 // ADO Data controls; renaming one of those takes the references along.
 import { setPropertyCmd, type Command } from '../model/commands';
-import type { FormDef } from '../model/types';
+import type { ControlDef, FormDef } from '../model/types';
 import { createCombo } from '../ui98/combo';
 import type { CustomEditor, CustomEditorEnv } from './imageListEditor';
 
@@ -20,12 +20,17 @@ export function dataSourceEditor(env: CustomEditorEnv): CustomEditor | null {
 
 /** Renaming a Data control / Adodc: the controls whose DataSource or RowSource names it follow (one undo step). */
 export function dataSourceRenameCmds(form: FormDef, oldName: string, newName: string): Command[] {
-  const old = oldName.toLowerCase();
-  const out: Command[] = [];
-  for (const c of form.controls) {
+  return dataSourceRefs(form.controls, oldName).map(([c, p]) => setPropertyCmd(form.id, c.id, p, newName));
+}
+
+/** The controls of `controls` whose DataSource or RowSource names `name`, and that property. */
+export function dataSourceRefs(controls: ControlDef[], name: string): [ControlDef, string][] {
+  const old = name.toLowerCase();
+  const out: [ControlDef, string][] = [];
+  for (const c of controls) {
     for (const p of DATA_REF_PROPS) {
       const v = c.props[p];
-      if (typeof v === 'string' && v.toLowerCase() === old) out.push(setPropertyCmd(form.id, c.id, p, newName));
+      if (typeof v === 'string' && v.toLowerCase() === old) out.push([c, p]);
     }
   }
   return out;

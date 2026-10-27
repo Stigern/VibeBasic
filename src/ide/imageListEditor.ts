@@ -8,7 +8,7 @@ import type { PropDef } from '../model/controls';
 import { newId } from '../model/controls';
 import { assetUsedElsewhere } from '../model/assetRefs';
 import { listImageLine, parseListImage } from '../model/imageList';
-import type { Asset, ControlType, FormDef, Project, PropValue } from '../model/types';
+import type { Asset, ControlDef, ControlType, FormDef, Project, PropValue } from '../model/types';
 import { createCombo } from '../ui98/combo';
 import { messageBox98, showDialog98 } from '../ui98/dialogs';
 import { h } from '../ui98/dom';
@@ -63,13 +63,18 @@ export function customPropEditor(env: CustomEditorEnv): CustomEditor | null {
 /** Renaming ImageList `oldName` to `newName`: the commands that make the controls naming it (ImageList, Icons,
  *  SmallIcons) follow, for the same undo step as the rename. */
 export function imageListRenameCmds(form: FormDef, oldName: string, newName: string): Command[] {
-  const old = oldName.toLowerCase();
-  const out: Command[] = [];
-  for (const c of form.controls) {
+  return imageListRefs(form.controls, oldName).map(([c, p]) => setPropertyCmd(form.id, c.id, p, newName));
+}
+
+/** The controls of `controls` naming ImageList `name`, and the property that does. */
+export function imageListRefs(controls: ControlDef[], name: string): [ControlDef, string][] {
+  const old = name.toLowerCase();
+  const out: [ControlDef, string][] = [];
+  for (const c of controls) {
     if (!IMAGE_USERS.has(c.type)) continue;
     for (const p of IMAGE_REF_PROPS) {
       const v = c.props[p];
-      if (typeof v === 'string' && v.toLowerCase() === old) out.push(setPropertyCmd(form.id, c.id, p, newName));
+      if (typeof v === 'string' && v.toLowerCase() === old) out.push([c, p]);
     }
   }
   return out;
