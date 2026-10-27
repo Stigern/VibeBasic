@@ -223,3 +223,17 @@ End Sub
     Object.assign(URL, { createObjectURL: undefined, revokeObjectURL: undefined });
   }
 });
+
+test('MMControl: an Open still loading when the program ends starts no status timer', async () => {
+  await run(`
+Private Sub Command1_Click()
+  MMControl1.UpdateInterval = 100
+  MMControl1.FileName = "tada.wav"
+  MMControl1.Command = "Open"
+End Sub
+`, [['MMControl', 'MMControl1'], ['CommandButton', 'Command1']]);
+  container.querySelector<HTMLElement>('.vb-btn')!.click();
+  session!.end();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(vi.getTimerCount()).toBe(0);
+});

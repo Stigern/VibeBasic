@@ -189,6 +189,8 @@ export class MciControl implements RichControl {
   private pending: Pending | null = null;
   private status: ReturnType<typeof setInterval> | null = null;
   private statusBusy = false;
+  /** Bumped by each Open and by dispose: an Open that finishes after either keeps nothing. */
+  private gen = 0;
   private static nextId = 1;
 
   constructor(private h: RichHost) {
@@ -302,13 +304,15 @@ export class MciControl implements RichControl {
     const path = String(p.FileName ?? '');
     if (!path) { this.setError(275); return; }
     const video = mciIsVideo(String(p.DeviceType ?? ''), path);
+    const gen = ++this.gen;
     let r: { media: OpenedMedia; length: number };
     try {
       r = await openMedia(this.h, path, video);
     } catch (e) {
-      this.setError(e instanceof VBRuntimeError ? 275 : 296);
+      if (gen === this.gen) this.setError(e instanceof VBRuntimeError ? 275 : 296);
       return;
     }
+    if (gen !== this.gen) { r.media.release(); return; }
     this.clock.load(r.media.src, r.length, video, fileTitle(path), r.media.release);
     this.view({ Mode: MCI_MODE.stop, CanPlay: true, CanStep: video, CanEject: false, CanRecord: false, Tracks: 1, Track: 1, UsesWindows: video, DeviceID: MciControl.nextId++ });
     this.startStatus();
@@ -355,6 +359,7 @@ export class MciControl implements RichControl {
   private stopStatus(): void { if (this.status) clearInterval(this.status); this.status = null; }
 
   dispose(): void {
+    this.gen++;
     this.stopStatus();
     this.timers.clearAll();
     this.clock.dispose();
