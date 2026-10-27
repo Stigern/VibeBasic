@@ -322,34 +322,70 @@ export function codeBudget(contextTokens: number | undefined): number | undefine
   return contextTokens && contextTokens > 0 ? Math.min(Math.floor(contextTokens * 3.5 * 0.5), MAX_CODE_CHARS) : undefined;
 }
 
+/** Marks where codeForPrompt cut code that did not fit the budget even with the bodies omitted. */
+export const CODE_CUT = "' ... (code cut to fit the context)";
+
 /**
  * The code as the model should see it. Up to `budgetChars` characters (unknown budget: up to 400 lines) it is unchanged.
  * Above that: everything outside procedures (declarations), the whole current procedure, the whole procedures it calls
  * or the request names (case-insensitive), and only the heading (all its lines) plus `' ... (body omitted)` for the rest.
+ * Still too long for the budget (unknown: MAX_CODE_CHARS): the called procedures, then the named ones, lose their bodies
+ * too (largest first); then whole lines are cut (CODE_CUT), keeping the current procedure from its start.
  */
 export function codeForPrompt(code: string, focus: { procName: string | null; mention: string }, budgetChars?: number): string {
   const lines = code.split(LINE_BREAK);
   if (budgetChars === undefined ? lines.length <= DEFAULT_MAX_LINES : code.length <= budgetChars) return code;
+  const budget = budgetChars ?? MAX_CODE_CHARS;
   const procs = listProcedures(code);
   const current = focus.procName ? procs.find(p => p.name.toLowerCase() === focus.procName!.toLowerCase()) : undefined;
   const body = current ? lines.slice(current.line - 1, current.endLine).join('\n') : '';
   const keep = new Set<string>();
-  if (current) keep.add(current.name.toLowerCase());
-  for (const p of procs) if (mentions(focus.mention, p.name) || (current && mentions(body, p.name))) keep.add(p.name.toLowerCase());
-  const out: string[] = [];
-  let next = 1;
-  for (const p of procs) {
-    while (next < p.line) out.push(lines[next++ - 1]);
-    if (keep.has(p.name.toLowerCase())) out.push(...lines.slice(p.line - 1, p.endLine));
-    else {
-      let head = p.line;   // a continued header is shown whole
-      while (head < p.endLine && /\s_\s*$/.test(lines[head - 1])) head++;
-      out.push(...lines.slice(p.line - 1, head), BODY_OMITTED);
+  const named = procs.filter(p => p !== current && mentions(focus.mention, p.name));
+  const called = procs.filter(p => p !== current && !named.includes(p) && current && mentions(body, p.name));
+  for (const p of [current, ...named, ...called]) if (p) keep.add(p.name.toLowerCase());
+  let currentAt = 0;   // the current procedure's first line in `out`
+  const render = (): string[] => {
+    const out: string[] = [];
+    let next = 1;
+    for (const p of procs) {
+      while (next < p.line) out.push(lines[next++ - 1]);
+      if (p === current) currentAt = out.length;
+      if (keep.has(p.name.toLowerCase())) out.push(...lines.slice(p.line - 1, p.endLine));
+      else {
+        let head = p.line;   // a continued header is shown whole
+        while (head < p.endLine && /\s_\s*$/.test(lines[head - 1])) head++;
+        out.push(...lines.slice(p.line - 1, head), BODY_OMITTED);
+      }
+      next = p.endLine + 1;
     }
-    next = p.endLine + 1;
+    while (next <= lines.length) out.push(lines[next++ - 1]);
+    return out;
+  };
+  let out = render();
+  const size = (ls: string[]): number => ls.reduce((n, l) => n + l.length + 1, 0) - 1;
+  const bySize = (ps: typeof procs) => [...ps].sort((a, b) => (b.endLine - b.line) - (a.endLine - a.line));
+  for (const p of [...bySize(called), ...bySize(named)]) {
+    if (size(out) <= budget) break;
+    keep.delete(p.name.toLowerCase());
+    out = render();
   }
-  while (next <= lines.length) out.push(lines[next++ - 1]);
-  return out.join('\n');
+  return size(out) <= budget ? out.join('\n') : cutToFit(out, current ? currentAt : 0, budget);
+}
+
+/** Whole lines of `out` within `budget` characters: from line `from` on, then the lines before it, with CODE_CUT where cut. */
+function cutToFit(out: string[], from: number, budget: number): string {
+  let room = budget - 2 * (CODE_CUT.length + 1);
+  let end = from;
+  while (end < out.length && out[end].length + 1 <= room) room -= out[end++].length + 1;
+  if (end === from && from < out.length) {   // not even its first line fits whole
+    const first = out[from].slice(0, Math.max(0, room - 1));
+    room -= first.length + 1;
+    end++;
+    out = [...out.slice(0, from), first, ...out.slice(end)];
+  }
+  let start = from;
+  if (end >= out.length) while (start > 0 && out[start - 1].length + 1 <= room) room -= out[--start].length + 1;
+  return [...(start > 0 ? [CODE_CUT] : []), ...out.slice(start, end), ...(end < out.length ? [CODE_CUT] : [])].join('\n');
 }
 
 /** What a request may know besides the project: the server's context size and (code mode) the selected text. */

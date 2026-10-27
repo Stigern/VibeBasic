@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { stripThinking } from '../../src/ai/clean';
-import { buildCodeRequest, buildFormRequest, codeBudget, codeForPrompt, describeControlTypes, describeForm, describeProjectForms, describeProjectSymbols } from '../../src/ai/context';
+import { buildCodeRequest, buildFormRequest, CODE_CUT, codeBudget, codeForPrompt, MAX_CODE_CHARS,describeControlTypes, describeForm, describeProjectForms, describeProjectSymbols } from '../../src/ai/context';
 import { LANGUAGE_REFERENCE, buildLanguageReference } from '../../src/ai/langReference';
 import { CODE_SYSTEM_PROMPT, FORM_SYSTEM_PROMPT } from '../../src/ai/prompts';
 import { newForm, newProject } from '../../src/model/controls';
@@ -195,6 +195,25 @@ test('a known context size raises the trim threshold', () => {
   expect(codeBudget(262144)).toBe(120000);
   expect(codeForPrompt(code, { procName: 'Proc3', mention: '' }, codeBudget(262144))).toBe(code);
   expect(codeForPrompt(code, { procName: 'Proc3', mention: '' }, codeBudget(2048))).not.toBe(code);
+});
+
+test('codeForPrompt stays within the budget: kept procedures shrink first, the current one is cut last', () => {
+  const body = (n: number, tag: string) => Array.from({ length: n }, (_, i) => `  x = x + ${i} ' ${tag}`).join('\n');
+  const code = ['Dim x', 'Private Sub Cur()', '  Helper', body(30, 'cur'), 'End Sub',
+    'Private Sub Helper()', body(400, 'helper'), 'End Sub', 'Private Sub Other()', body(400, 'other'), 'End Sub'].join('\n');
+  // room for the current procedure, not for its big callee
+  const out = codeForPrompt(code, { procName: 'Cur', mention: '' }, 2000);
+  expect(out.length).toBeLessThanOrEqual(2000);
+  expect(out).toContain("x = x + 29 ' cur");
+  expect(out).toContain("Private Sub Helper()\n' ... (body omitted)");
+  // room for nothing whole: still within the budget, starting at the current procedure, with a marker
+  const tiny = codeForPrompt(code, { procName: 'Cur', mention: '' }, 300);
+  expect(tiny.length).toBeLessThanOrEqual(300);
+  expect(tiny).toContain('Private Sub Cur()');
+  expect(tiny).toContain(CODE_CUT);
+  // no budget known: capped at MAX_CODE_CHARS
+  const huge = ['Private Sub Cur()', body(20000, 'cur'), 'End Sub'].join('\n');
+  expect(codeForPrompt(huge, { procName: 'Cur', mention: '' }).length).toBeLessThanOrEqual(MAX_CODE_CHARS);
 });
 
 test('the selection goes into the code request', () => {
