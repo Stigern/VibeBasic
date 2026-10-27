@@ -492,6 +492,8 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
         ...outliningKeys,
         // before defaultKeymap: its Mod-i (selectParentSyntax) would swallow Cmd+I (Tools > Ask AI...)
         { key: 'Mod-i', run: () => { envs.get(ide)?.actions?.askAi?.(); return true; } },
+        // historyKeymap redoes with Cmd+Shift+Z on a Mac; Edit > Redo's Ctrl+Y (Cmd+Y) is left to editable targets
+        { key: 'Mod-y', run: redo, preventDefault: true },
         // Ctrl-m (tab focus mode) would clash with the Ctrl+M outlining chords, Mod-l (select line) with View > Call Stack
         ...searchKeymap, ...historyKeymap, ...defaultKeymap.filter(b => b.key !== 'Ctrl-m' && b.key !== 'Mod-l'),
       ]),
