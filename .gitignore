@@ -6,3 +6,6 @@ src-tauri/target/
 .claude/launch.json
 # local build settings (APPLE_SIGNING_IDENTITY, see README)
 .env.local
+
+# Blog drafts (published on stigern.net, kept locally)
+blog/
