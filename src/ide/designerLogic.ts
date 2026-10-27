@@ -33,7 +33,21 @@ export function computeMove(rects: Rect[], dx: number, dy: number, o: SnapOpts):
   return rects.map(r => ({ ...r, left: r.left + ddx, top: r.top + ddy }));
 }
 
-const byId = (form: FormDef): Map<string, ControlDef> => new Map(form.controls.map(c => [c.id, c]));
+// The id index of a pass (a hit test, an overlay redraw): the lookups per control made those O(n²) when each built its own.
+let scoped: { controls: ControlDef[]; map: Map<string, ControlDef> } | null = null;
+const byId = (form: FormDef): Map<string, ControlDef> =>
+  scoped?.controls === form.controls ? scoped.map : new Map(form.controls.map(c => [c.id, c]));
+
+/** Runs `fn` with one id index of `form`'s controls for all lookups inside it; the controls must not change meanwhile. */
+export function withControlIndex<T>(form: FormDef, fn: () => T): T {
+  if (scoped?.controls === form.controls) return fn();
+  const prev = scoped;
+  scoped = { controls: form.controls, map: new Map(form.controls.map(c => [c.id, c])) };
+  try { return fn(); } finally { scoped = prev; }
+}
+
+/** The control `id` of `form` (through the index of the current withControlIndex pass, if any). */
+export const controlById = (form: FormDef, id: string): ControlDef | undefined => byId(form).get(id);
 
 /** Controls without Width/Height (Timer) have a fixed size from the registry. */
 export function sizeOf(def: ControlDef): { width: number; height: number } {
@@ -67,7 +81,7 @@ export function absoluteRect(form: FormDef, id: string): Rect {
 
 /** Distance in twips from a point to a Line's segment (form client coordinates). */
 export function distanceToLine(form: FormDef, id: string, x: number, y: number): number {
-  const c = form.controls.find(k => k.id === id);
+  const c = byId(form).get(id);
   if (!c) return Infinity;
   const r = absoluteRect(form, id);
   const rightward = Number(c.props.X2) >= Number(c.props.X1), downward = Number(c.props.Y2) >= Number(c.props.Y1);
@@ -101,6 +115,9 @@ export function shownInDesign(form: FormDef, id: string): boolean {
 
 /** The topmost control at (x, y) (form client coordinates), descending into containers. */
 export function hitTest(form: FormDef, x: number, y: number): string | null {
+  return withControlIndex(form, () => hitWalk(form, x, y));
+}
+function hitWalk(form: FormDef, x: number, y: number): string | null {
   const walk = (parentId: string | null, depth: number): string | null => {
     if (depth > 64) return null;
     const kids = childrenOf(form, parentId);
@@ -116,11 +133,14 @@ export function hitTest(form: FormDef, x: number, y: number): string | null {
 
 /** Ids of the direct children of `parentId` (null = the form) that touch `r` (form client coordinates). */
 export function controlsInRect(form: FormDef, r: Rect, parentId: string | null): string[] {
-  return childrenOf(form, parentId).filter(c => intersects(absoluteRect(form, c.id), r)).map(c => c.id);
+  return withControlIndex(form, () => childrenOf(form, parentId).filter(c => intersects(absoluteRect(form, c.id), r)).map(c => c.id));
 }
 
 /** The innermost, topmost container (Frame/PictureBox) at the point that is not one of `exclude` or inside one. */
 export function containerAt(form: FormDef, x: number, y: number, exclude: string[]): string | null {
+  return withControlIndex(form, () => containerWalk(form, x, y, exclude));
+}
+function containerWalk(form: FormDef, x: number, y: number, exclude: string[]): string | null {
   const ex = new Set(exclude);
   const walk = (parentId: string | null, depth: number): string | null => {
     if (depth > 64) return null;

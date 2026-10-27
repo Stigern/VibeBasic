@@ -19,7 +19,8 @@ import { h } from '../ui98/dom';
 import { createMdiWindow, type MdiWindow } from '../ui98/mdiWindow';
 import { clipboardHasControls, getClipboard, getClipboardAssets, setClipboard } from './clipboard';
 import {
-  absoluteRect, alignRects, computeMove, snap, computeResize, containerAt, controlsInRect, hasSize, hitTest, shownInDesign, sizeOf,
+  absoluteRect, alignRects, computeMove, snap, computeResize, containerAt, controlById, controlsInRect, hasSize, hitTest, shownInDesign, sizeOf,
+  withControlIndex,
   type AlignHow, type Handle, type Rect, type SnapOpts,
 } from './designerLogic';
 import type { IdeState } from './ideState';
@@ -212,8 +213,9 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
       return;
     }
     const primary = ids[ids.length - 1];
-    for (const id of ids) {
-      const c = form.controls.find(x => x.id === id);
+    // one id index for the whole redraw (each lookup building its own made it O(n²))
+    withControlIndex(form, () => { for (const id of ids) {
+      const c = controlById(form, id);
       if (!c || isMenu(c) || !shownInDesign(form, id)) continue;   // on another SSTab tab; a menu has no box
       const r = absoluteRect(form, id);
       if (isLine(c)) {   // a Line has two end point handles instead of a box and eight resize handles
@@ -239,7 +241,7 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
       for (const hd of HANDLES) {
         handle(hd, hd.includes('w') ? xs.w : hd.includes('e') ? xs.e : xs.c, hd.includes('n') ? ys.n : hd.includes('s') ? ys.s : ys.c, filled, id);
       }
-    }
+    } });
   }
 
   // ---- pointer gestures ---------------------------------------------------------------------------------------
@@ -345,11 +347,12 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
   /** Resizes every selected sized control by what the primary's handle did. */
   function resizedRects(form: FormDef, hd: Handle, primaryId: string, dx: number, dy: number): { id: string; rect: Rect }[] {
     const so = snapOpts(ide);
-    const ids = topLevelOf(form, selectedIds()).filter(i => hasSize(form.controls.find(c => c.id === i)!));
-    const prim = form.controls.find(c => c.id === primaryId)!;
+    const byId = new Map(form.controls.map(c => [c.id, c]));
+    const ids = topLevelOf(form, selectedIds()).filter(i => hasSize(byId.get(i)!));
+    const prim = byId.get(primaryId)!;
     const pr = relRect(prim), nr = computeResize(pr, hd, dx, dy, so);
     return ids.map(id => {
-      const r = relRect(form.controls.find(c => c.id === id)!);
+      const r = relRect(byId.get(id)!);
       if (id === primaryId) return { id, rect: nr };
       return { id, rect: {
         left: r.left + nr.left - pr.left, top: r.top + nr.top - pr.top,
@@ -377,10 +380,10 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     let res: { id: string; rect: Rect }[] = [];
     track(e, (dx, dy) => {
       res = resizedRects(form, hd, id, pxToTwips(dx), pxToTwips(dy));
-      ghosts = res.map(r => {
-        const a = absoluteRect(form, r.id), c = relRect(form.controls.find(x => x.id === r.id)!);
+      ghosts = withControlIndex(form, () => res.map(r => {
+        const a = absoluteRect(form, r.id), c = relRect(controlById(form, r.id)!);
         return { ...r.rect, left: r.rect.left + a.left - c.left, top: r.rect.top + a.top - c.top };
-      });
+      }));
     }, moved => { if (moved && res.length) ide.stack.execute(moveResizeCmd(formId, res.map(r => ({ id: r.id, ...r.rect })))); });
   }
 

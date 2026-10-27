@@ -74,3 +74,16 @@ test('a StatusBar is docked to the bottom of the form, full width (hit test and 
   f.props.Height = 5000;   // moves with the form size
   expect(absoluteRect(f, 's').top + 315).toBe(4605);
 });
+
+test('a hit test indexes the controls once, not once per control (perf: was O(n²))', () => {
+  const cs = Array.from({ length: 200 }, (_, i) => ctl(`c${i}`, 'CommandButton', i % 2 ? 'fr' : null, (i % 2 ? 0 : 20000) + i * 10, 0, 500, 300));
+  let maps = 0;
+  const controls = new Proxy([ctl('fr', 'Frame', null, 0, 0, 9000, 9000), ...cs], {
+    get: (t, k, r) => { if (k === 'map') maps++; return Reflect.get(t, k, r); },
+  });
+  const f = form(controls);
+  expect(hitTest(f, 10, 10)).toBe('c1');
+  expect(containerAt(f, 10, 10, [])).toBe('fr');
+  expect(controlsInRect(f, { left: 0, top: 0, width: 100, height: 100 }, 'fr')).toEqual(['c1', 'c3', 'c5', 'c7', 'c9']);
+  expect(maps).toBeLessThanOrEqual(3);
+});
