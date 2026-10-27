@@ -248,6 +248,12 @@ describe('variables and scope', () => {
     expect(await run(lines('Sub Main()', '  x = 5', '  y$ = x', '  Debug.Print x; y$; z', 'End Sub'))).toEqual([' 5 5']);
   });
 
+  test('the @ suffix declares and types Currency', async () => {
+    expect(await run(lines('Sub Main()', '  Dim total@', '  total = 1.23456', '  x = 1.5@', '  y@ = 2',
+      '  Debug.Print total; 1.23456@; TypeName(total); TypeName(x); TypeName(y@); TypeName(3@)', 'End Sub')))
+      .toEqual([' 1.2346  1.2346 CurrencyCurrencyCurrencyCurrency']);
+  });
+
   test('Dim inside a loop does not reset the variable', async () => {
     expect(await run(lines('Sub Main()', '  Dim i As Integer', '  For i = 1 To 3', '    Dim n As Integer', '    n = n + 1', '  Next', '  Debug.Print n', 'End Sub')))
       .toEqual([' 3 ']);

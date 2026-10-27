@@ -1,5 +1,6 @@
 import { VBSyntaxError } from './errors';
 import { KEYWORDS, type Token, type TokenKind } from './tokens';
+import { toCurrency } from './values';
 
 /*
  * Lexer notes:
@@ -25,7 +26,7 @@ const isIdentStart = (c: string) => /\p{L}/u.test(c);
 const isIdentPart = (c: string) => /[\p{L}\p{N}_]/u.test(c);
 const isHex = (c: string) => /[0-9a-fA-F]/.test(c);
 const isOct = (c: string) => c >= '0' && c <= '7';
-const isSuffix = (c: string): c is Suffix => c === '%' || c === '&' || c === '!' || c === '#' || c === '$';
+const isSuffix = (c: string): c is Suffix => c === '%' || c === '&' || c === '!' || c === '#' || c === '$' || c === '@';
 
 export function tokenize(src: string): Token[] {
   const out: Token[] = [];
@@ -126,9 +127,10 @@ export function tokenize(src: string): Token[] {
         p += 2;
         while (p < n && isDigit(src[p])) p++;
       }
-      const value = Number(src.slice(pos, p));
+      let value = Number(src.slice(pos, p));
       let suffix: Suffix | undefined;
       if (p < n && isSuffix(src[p]) && src[p] !== '$') suffix = src[p++] as Suffix;
+      if (suffix === '@') value = toCurrency(value);   // `1.23456@` is 1.2346
       push('number', src.slice(pos, p), start, suffix ? { value, suffix } : { value });
       pos = p;
       continue;

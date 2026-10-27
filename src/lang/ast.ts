@@ -1,7 +1,7 @@
 // AST for the VibeBasic language core: expressions (Task 2), statements and
 // modules (Task 3).
 
-export type TypeSuffix = '%' | '&' | '!' | '#' | '$';
+export type TypeSuffix = '%' | '&' | '!' | '#' | '$' | '@';
 
 /** `isDouble`: written with a point or an exponent (`2.0`, `1E3`), a Double like `1.5`. */
 export interface NumberLit { kind: 'number'; value: number; suffix?: TypeSuffix; isDouble?: boolean; line: number }

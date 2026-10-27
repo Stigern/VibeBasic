@@ -160,7 +160,7 @@ export function* formMethod(f: Frame, name: string, args: (Expr | MissingArg)[])
   return r;
 }
 
-const SUFFIX_TYPES: Record<TypeSuffix, VBTypeName> = { '%': 'Integer', '&': 'Long', '!': 'Single', '#': 'Double', '$': 'String' };
+const SUFFIX_TYPES: Record<TypeSuffix, VBTypeName> = { '%': 'Integer', '&': 'Long', '!': 'Single', '#': 'Double', '$': 'String', '@': 'Currency' };
 
 /** An undeclared name used as a variable: a new local Variant (or suffix type), or a compile error under Option Explicit. */
 export function implicitVariable(f: Frame, e: NameExpr): Variable {

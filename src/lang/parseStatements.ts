@@ -33,7 +33,7 @@ export const TYPE_KEYWORDS: Record<string, VBTypeName> = {
   integer: 'Integer', long: 'Long', single: 'Single', double: 'Double', currency: 'Currency',
   string: 'String', boolean: 'Boolean', variant: 'Variant', date: 'Date', byte: 'Byte', object: 'Object',
 };
-const SUFFIX_TYPES: Record<TypeSuffix, VBTypeName> = { '%': 'Integer', '&': 'Long', '!': 'Single', '#': 'Double', '$': 'String' };
+const SUFFIX_TYPES: Record<TypeSuffix, VBTypeName> = { '%': 'Integer', '&': 'Long', '!': 'Single', '#': 'Double', '$': 'String', '@': 'Currency' };
 
 /** Unsupported VB6 keywords (see KEYWORDS in tokens.ts), with the name shown in the error. */
 export const UNSUPPORTED_KEYWORDS: Record<string, string> = {

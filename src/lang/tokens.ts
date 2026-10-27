@@ -16,7 +16,7 @@ export interface Token {
   /** 1-based. */
   col: number;
   /** Type-declaration character on an identifier or number literal, if written. */
-  suffix?: '%' | '&' | '!' | '#' | '$';
+  suffix?: '%' | '&' | '!' | '#' | '$' | '@';
 }
 
 /**

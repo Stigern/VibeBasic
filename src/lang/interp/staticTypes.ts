@@ -28,7 +28,7 @@ const NUMERIC = new Set<StaticType>(['Byte', 'Boolean', 'Integer', 'Long', 'Sing
 /** Types TypeName/VarType report from the code rather than from the value. */
 const REPORTED = new Set<StaticType>(['Byte', 'Integer', 'Long', 'Single', 'Double', 'Currency', 'Decimal']);
 
-const SUFFIX: Record<string, VBTypeName> = { '%': 'Integer', '&': 'Long', '!': 'Single', '#': 'Double', '$': 'String' };
+const SUFFIX: Record<string, VBTypeName> = { '%': 'Integer', '&': 'Long', '!': 'Single', '#': 'Double', '$': 'String', '@': 'Currency' };
 
 /** Built-ins with a typed (non-Variant) result; 'arg' is the type of the first argument (Abs, Int, Fix). */
 const BUILTIN_TYPES: Record<string, StaticType | 'arg'> = {
