@@ -4,6 +4,29 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-27
+
+### Added
+- New Project offers runnable Text Editor, Drawing and Serial presets.
+- The `@` (Currency) type suffix on names and number literals.
+
+### Changed
+- Running programs draw faster on forms with many controls (the menu bar is no longer looked up per graphics operation), and loading many control-array elements in a loop no longer slows down quadratically.
+- The designer finds, selects and outlines controls without scanning the whole form per control; commands no longer clone every control, re-render the Project Explorer or re-read every code window.
+- Winsock and MSComm data reach the program at the pace the window can take; Inet answers travel as raw bytes, without a base64 copy.
+- The Ask AI stream log appends only new text, and the AI request id is reported once per request instead of once per streamed chunk.
+
+### Fixed
+- Saving no longer marks edits made while the file was being written as saved, and overlapping saves of one project no longer share a temp file (each is synced to disk before it replaces the file).
+- `Open ... For Output` refused with "Too many files" no longer empties the file first.
+- A Timer kept in a variable no longer keeps firing after its form is unloaded; an MMControl Open still loading when the form unloads or the program ends no longer leaks a timer and its media.
+- An MDI child is shown again by AutoShowChildren when it is loaded again after Unload. A newly loaded OptionButton array element starts unselected.
+- Closing a Winsock listener closes connections nobody accepted (after a short grace period, so `Close: Accept requestID` still works), and a listener keeps listening through transient accept errors. `PortOpen = False` stops an Output stuck on the device, so the port can be reopened at once.
+- Double arithmetic past its range raises Overflow (6) where it happens. Singles of 1E+07 or more print in 7-digit E notation. `Format` uses the Null section and understands `ttttt` and `c`. `Val("&HFFFF&")` is 65535.
+- Ask AI finds the JSON in a reply despite brackets in the surrounding prose, lowers the output budget to fit a smaller server context, keeps the code it sends within the context, and bounds and retries the picture-support probe.
+- Pasted controls follow a pasted ImageList or Data control that gets a new name. Decimal user-scale values can be typed in the Properties window. A case-only rename of a control-array member keeps its index. Cmd+Y redoes in the code window on a Mac.
+- Very large batches of drawing operations no longer overflow the stack. Disposing an Agent no longer silences other Agents.
+
 ## [0.12.0] - 2026-10-26
 
 ### Added
