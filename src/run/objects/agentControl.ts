@@ -418,6 +418,7 @@ export class AgentControl implements RichControl {
       await Promise.race([voice.done, r.wait(ms * 3 + 2000)]);
       if (!r.stopped) await r.wait(200);
     } else await r.wait(ms);
+    if (this.disposed) return;   // cut short by dispose: no balloon timer after clearAll
     c.speaking = false;
     this.draw();
     // the balloon stays a moment after the last word, then goes (the next Speak keeps it)
@@ -452,12 +453,12 @@ export class AgentControl implements RichControl {
   dispose(): void {
     this.disposed = true;
     for (const c of this.chars.values()) { c.current?.stop(); for (const r of c.queue) this.complete(r); c.queue = []; }
-    this.timers.clearAll();
-    try { globalThis.speechSynthesis?.cancel(); } catch { /* no speech here */ }
+    this.timers.clearAll();   // a Speak in progress stopped its own voice (stop above); others' speech goes on
   }
 }
 
-/** Says `text` with the WebView's speech synthesis; null when there is none. */
+/** Says `text` with the WebView's speech synthesis; null when there is none. `cancel` stops it while it is not over (the Web Speech
+ *  API has only the global cancel(), so that also drops what another Agent has queued; once this one ended it touches nothing). */
 function speech(text: string): { done: Promise<void>; cancel: () => void } | null {
   const synth = globalThis.speechSynthesis;
   const Utterance = globalThis.SpeechSynthesisUtterance;
@@ -465,9 +466,10 @@ function speech(text: string): { done: Promise<void>; cancel: () => void } | nul
   try {
     const u = new Utterance(text);
     u.rate = 1.05; u.pitch = 1.1;
-    const done = new Promise<void>(res => { u.onend = () => res(); u.onerror = () => res(); });
+    let over = false;
+    const done = new Promise<void>(res => { u.onend = u.onerror = () => { over = true; res(); }; });
     synth.speak(u);
-    return { done, cancel: () => { try { synth.cancel(); } catch { /* gone */ } } };
+    return { done, cancel: () => { if (over) return; over = true; try { synth.cancel(); } catch { /* gone */ } } };
   } catch {
     return null;
   }

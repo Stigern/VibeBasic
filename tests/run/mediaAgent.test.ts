@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { newControl, newForm, newProject } from '../../src/model/controls';
 import type { ControlType, PropValue } from '../../src/model/types';
 import { InlineFormHost } from '../../src/run/inlineFormHost';
+import { AgentControl } from '../../src/run/objects/agentControl';
 import { MEDIA_TOKEN, mediaElementUrl, mediaRef, setMediaLoader, type OpenedMedia } from '../../src/run/mediaSource';
 import type { FormSnapshot, ToWindow } from '../../src/run/protocol';
 import { RunSession } from '../../src/run/session';
@@ -236,4 +237,33 @@ End Sub
   session!.end();
   await vi.advanceTimersByTimeAsync(1000);
   expect(vi.getTimerCount()).toBe(0);
+});
+
+test('Agent: dispose does not silence the speech of other Agents, and a Speak cut short by it arms no balloon timer', async () => {
+  const cancel = vi.fn();
+  const g = globalThis as unknown as Record<string, unknown>;
+  const saved = { synth: g.speechSynthesis, utterance: g.SpeechSynthesisUtterance };
+  g.speechSynthesis = { speak: () => {}, cancel };   // an utterance that never ends
+  g.SpeechSynthesisUtterance = class { rate = 1; pitch = 1; onend: (() => void) | null = null; onerror: (() => void) | null = null; constructor(readonly text: string) {} };
+  try {
+    const raised: string[] = [];
+    const host = () => ({ props: {}, name: 'Agent1', raise: async (e: string) => { raised.push(e); }, send: () => {}, openMedia: () => Promise.reject(new Error('no')) });
+    const quiet = new AgentControl(host()), talker = new AgentControl(host());
+    quiet.load(['Robby']);
+    quiet.dispose();
+    expect(cancel).not.toHaveBeenCalled();   // it was not speaking
+    talker.load(['Robby']);
+    talker.character('Robby').obj.callMethod('Show', [true]);
+    talker.character('Robby').obj.callMethod('Speak', ['Hello there']);
+    await vi.advanceTimersByTimeAsync(10);
+    talker.dispose();
+    expect(cancel).toHaveBeenCalledTimes(1);   // its own speech stops
+    raised.length = 0;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(raised).not.toContain('BalloonHide');
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    g.speechSynthesis = saved.synth;
+    g.SpeechSynthesisUtterance = saved.utterance;
+  }
 });
