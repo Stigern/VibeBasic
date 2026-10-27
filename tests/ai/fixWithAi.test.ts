@@ -166,7 +166,8 @@ test('an event whose arguments cannot be bound (no statement ran) -> Ask AI: the
     loadSettings: async () => ({ baseUrl: 'http://x/v1', model: 'm', apiKey: '' }),
     saveSettings: async () => {},
     aiChat: vi.fn(async () => '```vb\nPrivate Sub Form_Load()\n    Caption = "hi"\nEnd Sub\n```'),
-  } as unknown as Backend & { aiChat: ReturnType<typeof vi.fn> };
+    focusMainWindow: vi.fn(async () => {}),
+  } as unknown as Backend & { aiChat: ReturnType<typeof vi.fn>; focusMainWindow: ReturnType<typeof vi.fn> };
   const wins = new Map<string, CodeWindow>();
   const openCode = (id: string) => { const w = wins.get(id) ?? openCodeWindow(ide, id, { mdiHost: mdi }); wins.set(id, w); return w; };
   let flow: Promise<void> | undefined;
@@ -179,6 +180,7 @@ test('an event whose arguments cannot be bound (no statement ran) -> Ask AI: the
   const btn = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('.dlg98 button')].find(b => b.textContent === label);
   await vi.waitFor(() => expect(btn('OK')).toBeTruthy());
   expect(ide.mode).toBe('design');
+  expect(backend.focusMainWindow).toHaveBeenCalled();   // the IDE comes forward, above the program's windows
   const user = (backend.aiChat.mock.calls[0][3] as { content: string }[])[1].content;
   expect(user).toContain('Compile error: Argument not optional');
   expect(user).toContain('Line 1 in Form_Load');

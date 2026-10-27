@@ -226,14 +226,19 @@ export function askAiAboutError(ide: IdeState, backend: Backend, fix: ErrorToFix
 
 async function askAboutErrorNow(ide: IdeState, backend: Backend, fix: ErrorToFix, ui: { openCode(itemId: string): CodeWindow; end(): Promise<void> }, doc: Document): Promise<void> {
   if (!ide.project.forms.some(f => f.id === fix.itemId) && !ide.project.modules.some(m => m.id === fix.itemId)) return;
+  // the IDE comes forward at once (the program's form windows would hide its dialogs), with a dialog until the waiting one is up
+  await backend.focusMainWindow?.().catch(() => {});
   const settings = await settingsOrSetup(ide, backend, doc);
   if (!settings) return;
-  const win = ui.openCode(fix.itemId);
-  win.gotoLine(fix.error.line);   // the cursor marks the failing procedure for the merge
-  const first = (() => { try { return buildFixRequest(ide.project, fix.itemId, fix.error, fix.error.compile ? [] : fix.vars, { contextTokens: settings.contextTokens, lineValues: fix.lineValues }); } catch { return null; } })();
-  if (!first) { await warn(doc, 'Could not build the request.'); return; }
-  const applied = await runCodeConversation({ ide, backend, settings, doc }, { first, itemId: fix.itemId, codeWin: win, beforeApply: ui.end, mode: 'fix' });
-  if (applied) ui.openCode(fix.itemId).gotoLine(fix.error.line);
+  const hold = holdDialog(doc, `Asking ${settings.model} about the error...`);
+  try {
+    const win = ui.openCode(fix.itemId);
+    win.gotoLine(fix.error.line);   // the cursor marks the failing procedure for the merge
+    const first = (() => { try { return buildFixRequest(ide.project, fix.itemId, fix.error, fix.error.compile ? [] : fix.vars, { contextTokens: settings.contextTokens, lineValues: fix.lineValues }); } catch { return null; } })();
+    if (!first) { hold.close(); await warn(doc, 'Could not build the request.'); return; }
+    const applied = await runCodeConversation({ ide, backend, settings, doc, hold }, { first, itemId: fix.itemId, codeWin: win, beforeApply: ui.end, mode: 'fix' });
+    if (applied) ui.openCode(fix.itemId).gotoLine(fix.error.line);
+  } finally { hold.close(); }
 }
 
 /** `hold`: the dialog that covers the time until the first waiting dialog is up (it closes it). */

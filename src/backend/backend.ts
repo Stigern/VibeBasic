@@ -137,6 +137,8 @@ export interface Backend extends NetApi, FileSystemApi, DatabaseApi, SerialApi, 
   /** The operating system (the desktop app asks the Rust side; the browser guesses from the user agent). */
   platform(): Promise<Platform>;
   showMainWindow(): Promise<void>;
+  /** The IDE window to the front, above the program's form windows (Ask AI on an error). */
+  focusMainWindow?(): Promise<void>;
   /** Open dialog filtered to *.vbb and VB6 *.vbp. Null when cancelled. */
   openProjectDialog(): Promise<string | null>;
   saveProjectDialog(defaultFileName: string): Promise<string | null>;

@@ -79,6 +79,12 @@ export class TauriBackend implements Backend {
     await splash?.close().catch(() => {});
   }
 
+  async focusMainWindow(): Promise<void> {
+    const w = getCurrentWindow();
+    await w.unminimize();
+    await w.setFocus();
+  }
+
   openProjectDialog(): Promise<string | null> {
     return this.openFileDialog([{ name: 'Visual Basic Project', extensions: ['vbb', 'vbp'] }]);
   }
