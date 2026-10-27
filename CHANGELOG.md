@@ -4,6 +4,12 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-27
+
+### Fixed
+- Ask AI on an error raised before any statement of an event ran (an event procedure whose parameters do not match the event: "Argument not optional") no longer just ends the program: it ends, then asks the AI about the procedure.
+- Ask AI on an error brings the IDE window in front of the program's form windows and shows a dialog at once, so the request is never running unseen.
+
 ## [0.13.0] - 2026-10-27
 
 ### Added
