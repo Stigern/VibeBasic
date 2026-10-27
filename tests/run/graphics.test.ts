@@ -2,11 +2,14 @@
 // 0.9 B1: the drawing statements and methods of Form and PictureBox (Print, PSet, Line, Circle, Scale, Point, Image ...).
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import type { Backend } from '../../src/backend/backend';
+import { GfxRenderer, type GfxOp } from '../../src/gfx/raster';
 import { MemoryFs } from '../../src/lang/fileio/memoryFs';
 import { newControl, newForm, newProject } from '../../src/model/controls';
 import type { ControlType, Project, PropValue } from '../../src/model/types';
 import type { FormWindow } from '../../src/run/formHost';
+import { DrawSurface } from '../../src/run/objects/drawSurface';
 import { InlineFormHost } from '../../src/run/inlineFormHost';
+import { PatchQueue } from '../../src/run/patchQueue';
 import type { FormSnapshot, ToWindow } from '../../src/run/protocol';
 import { RunSession } from '../../src/run/session';
 
@@ -209,4 +212,21 @@ Debug.Print "saved"`), [['PictureBox', 'Picture1']], fs);
   expect(bmp.slice(0, 2)).toBe('BM');
   expect(bmp.length).toBe(54 + ((77 * 3 + 3) & ~3) * 77);   // 1215 twips = 81 px, less the 2 px border on each side
   expect(png.slice(1, 4)).toBe('PNG');
+});
+
+test('a very large batch of ops held back behind a loading picture neither overflows the stack nor gets lost', () => {
+  const many: GfxOp[] = Array.from({ length: 500_000 }, (_, i) => ({ o: 'pset', x: i % 100, y: 0, c: 0, w: 1, mode: 13 }) as unknown as GfxOp);
+  const r = new GfxRenderer({ get: () => undefined, load: () => new Promise(() => {}) });
+  r.push([{ o: 'pic', src: 'slow.png', x: 0, y: 0, rop: 0xcc0020 } as GfxOp]);
+  r.push(many);
+  expect(r.pending).toHaveLength(500_001);
+  const s = new DrawSurface({ props: { ScaleMode: 3 }, clientPx: () => ({ w: 100, h: 100 }), emit: () => {}, resolveAsset: () => null });
+  Object.defineProperty(s.mirror, 'pending', { get: () => many });   // its own picture still loading
+  expect(s.snapshot()).toHaveLength(2 + 500_000);
+  const sent: ToWindow[] = [];
+  const q = new PatchQueue((_, m) => sent.push(m));
+  q.set('Form1', 'form', { GfxOps: ['a'] });
+  q.set('Form1', 'form', { GfxOps: many.map(() => 'b') });
+  q.flush();
+  expect((sent[0] as unknown as { props: { GfxOps: string[] } }).props.GfxOps).toHaveLength(500_001);
 });

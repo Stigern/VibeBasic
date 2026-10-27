@@ -28,7 +28,7 @@ export class PatchQueue {
     }
     for (const [k, v] of Object.entries(props)) {
       const was = cur[k];
-      if (APPEND_PROPS.has(k) && Array.isArray(was) && Array.isArray(v)) (was as string[]).push(...(v as string[]));
+      if (APPEND_PROPS.has(k) && Array.isArray(was) && Array.isArray(v)) for (const x of v as string[]) (was as string[]).push(x);   // no push(...v): 100k+
       else cur[k] = own(k, v);
     }
   }

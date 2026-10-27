@@ -331,8 +331,7 @@ export class DrawSurface {
     const ops: GfxOp[] = [{ o: 'size', w: r.w, h: r.h }, { o: 'back', c: r.back }];
     const bits = r.bitsOp();
     if (bits) ops.push(bits);
-    ops.push(...this.mirror.pending);
-    return ops.map(op => JSON.stringify(op));
+    return ops.concat(this.mirror.pending).map(op => JSON.stringify(op));   // concat: the pending ops can be 100k+
   }
 
   graphics(call: GraphicsCall): void {

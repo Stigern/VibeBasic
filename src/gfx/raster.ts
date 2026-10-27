@@ -498,7 +498,10 @@ export class GfxRenderer {
   }
 
   push(ops: GfxOp[]): void {
-    if (this.waiting) { this.queue.push(...ops); return; }
+    if (this.waiting) {   // a loop, not push(...ops): a batch of 100k+ ops would overflow the stack
+      for (const op of ops) this.queue.push(op);
+      return;
+    }
     for (let i = 0; i < ops.length; i++) {
       const op = ops[i];
       if (op.o === 'pic' && this.images.get(op.src) === undefined) {
