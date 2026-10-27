@@ -18,6 +18,17 @@ const mouse = (el: Element, type: string) => el.dispatchEvent(new MouseEvent(typ
 
 beforeEach(() => { document.body.replaceChildren(); });
 
+test.each([
+  ['textEditor', 'Text Editor'], ['drawing', 'Drawing App'], ['serial', 'Serial Terminal'],
+])('New Project opens the %s preset', async (id, label) => {
+  const result = showNewProjectDialog(document, { startup: false, recent: [] });
+  const item = [...document.querySelectorAll('.np-item')].find(el => el.textContent === label)!;
+  expect(item.querySelector('svg')).not.toBeNull();
+  mouse(item, 'mousedown');
+  mouse(item, 'dblclick');
+  expect((await result).choice).toEqual({ kind: 'new', template: id });
+});
+
 test('every project type makes a project that is valid VB', () => {
   for (const t of TEMPLATES) {
     const p = projectFromTemplate(t.id, 'Option Explicit\n');
