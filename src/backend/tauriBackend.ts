@@ -158,7 +158,9 @@ export class TauriBackend implements Backend {
   onSocketEvent(handler: (e: SocketEvent) => void): Promise<() => void> {
     return listen<RawSocketEvent>('vb:socket', e => {
       const p = e.payload;
-      handler(p.kind === 'data' ? { ...p, data: fromBase64(p.data) } : p);
+      if (p.kind !== 'data') return handler(p);
+      // the socket's reader sends only a few Data events ahead: the ack lets it read on
+      try { handler({ ...p, data: fromBase64(p.data) }); } finally { void call<void>('sock_ack', { id: p.id }).catch(() => {}); }
     });
   }
 
@@ -215,7 +217,9 @@ export class TauriBackend implements Backend {
   onCommEvent(handler: (e: CommEvent) => void): Promise<() => void> {
     return listen<RawCommEvent>('vb:comm', e => {
       const p = e.payload;
-      handler(p.kind === 'data' ? { ...p, data: fromBase64(p.data) } : p);
+      if (p.kind !== 'data') return handler(p);
+      // the port's reader sends only a few Data events ahead: the ack lets it read on
+      try { handler({ ...p, data: fromBase64(p.data) }); } finally { void call<void>('comm_ack', { id: p.id }).catch(() => {}); }
     });
   }
   sysInfo(): Promise<SysInfoData> { return call('sys_info', {}); }

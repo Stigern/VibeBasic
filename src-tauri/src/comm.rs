@@ -18,6 +18,9 @@ const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STA
 /// How long one read waits; the thread checks the stop flag and the modem lines in between.
 const READ_TIMEOUT: Duration = Duration::from_millis(20);
 const LINES_EVERY: Duration = Duration::from_millis(100);
+/// At most this many Data events of one port are on their way to the window, not yet acknowledged (comm_ack); the reader
+/// stops reading until an ack comes, so a fast device cannot flood the webview.
+const DATA_WINDOW: usize = 8;
 
 /// The modem status lines (CTSHolding, DSRHolding, CDHolding; RI raises comEvRing).
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Default)]
@@ -212,6 +215,33 @@ struct Port {
   /// The reader thread: close waits for it, because its clone shares the port's exclusive lock (an open of the same device
   /// right after a close would fail with 8005 until the clone is gone).
   reader: Mutex<Option<std::thread::JoinHandle<()>>>,
+  window: Arc<Window>,
+}
+
+/// The Data events of a port sent to the window and not yet acknowledged (comm_ack).
+#[derive(Default)]
+struct Window {
+  sent: Mutex<usize>,
+  acked: std::sync::Condvar,
+}
+
+impl Window {
+  /// Waits at most `t` for room for one more Data event.
+  fn room(&self, t: Duration) -> bool {
+    let g = self.sent.lock().unwrap();
+    let (g, _) = self.acked.wait_timeout_while(g, t, |n| *n >= DATA_WINDOW).unwrap();
+    *g < DATA_WINDOW
+  }
+
+  fn sent(&self) {
+    *self.sent.lock().unwrap() += 1;
+  }
+
+  fn ack(&self) {
+    let mut g = self.sent.lock().unwrap();
+    *g = g.saturating_sub(1);
+    self.acked.notify_one();
+  }
 }
 
 impl Port {
@@ -255,9 +285,16 @@ impl Ports {
       let _ = port.write_request_to_send(rts);
     }
     let lines = read_lines(port.as_mut());
+    self.start(id, port, lines, emit)?;
+    Ok(lines)
+  }
+
+  /// Keeps the open `port` as `id` and starts its reader thread.
+  fn start(&self, id: u32, port: Box<dyn SerialPort>, lines: Lines, emit: Emit) -> Result<(), String> {
     let mut reader = port.try_clone().map_err(port_err)?;
     let stop = Arc::new(AtomicBool::new(false));
-    let entry = Arc::new(Port { port: Mutex::new(port), stop: stop.clone(), reader: Mutex::new(None) });
+    let window = Arc::new(Window::default());
+    let entry = Arc::new(Port { port: Mutex::new(port), stop: stop.clone(), reader: Mutex::new(None), window: window.clone() });
     self.0.lock().unwrap().insert(id, entry.clone());
     let me = self.clone();
     let reader_thread = std::thread::spawn(move || {
@@ -265,16 +302,22 @@ impl Ports {
       let mut last = lines;
       let mut checked = Instant::now();
       while !stop.load(Ordering::Relaxed) {
-        match reader.read(&mut buf) {
-          Ok(0) => {}
-          Ok(n) => emit(CommEvent::Data { id, data: B64.encode(&buf[..n]) }),
-          Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::Interrupted => {}
-          Err(e) => {
-            if !stop.load(Ordering::Relaxed) {
-              me.0.lock().unwrap().remove(&id);
-              emit(CommEvent::Error { id, number: 8020, description: format!("Error reading comm device: {e}") });
+        // a full window: nothing is read (the driver buffers, or flow control holds the device) until the frontend acks
+        if window.room(READ_TIMEOUT) {
+          match reader.read(&mut buf) {
+            Ok(0) => {}
+            Ok(n) => {
+              window.sent();
+              emit(CommEvent::Data { id, data: B64.encode(&buf[..n]) });
             }
-            break;
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => {
+              if !stop.load(Ordering::Relaxed) {
+                me.0.lock().unwrap().remove(&id);
+                emit(CommEvent::Error { id, number: 8020, description: format!("Error reading comm device: {e}") });
+              }
+              break;
+            }
           }
         }
         if checked.elapsed() >= LINES_EVERY {
@@ -288,7 +331,7 @@ impl Ports {
       }
     });
     *entry.reader.lock().unwrap() = Some(reader_thread);
-    Ok(lines)
+    Ok(())
   }
 
   /// Settings or Handshaking changed while the port is open.
@@ -339,6 +382,13 @@ impl Ports {
       None => {}
     }
     Ok(())
+  }
+
+  /// The frontend has handled one Data event of port `id`.
+  pub fn ack(&self, id: u32) {
+    if let Ok(p) = self.get(id) {
+      p.window.ack();
+    }
   }
 
   /// PortOpen = False: the reader thread stops (within one read timeout) and the port closes; it can be opened again at once.
@@ -399,6 +449,12 @@ pub async fn comm_write(ports: State<'_, Ports>, id: u32, data: String) -> Resul
 pub async fn comm_set_lines(ports: State<'_, Ports>, id: u32, dtr: Option<bool>, rts: Option<bool>, brk: Option<bool>) -> Result<(), String> {
   let ports = ports.inner().clone();
   blocking(move || ports.set_lines(id, dtr, rts, brk)).await
+}
+
+/// The window has handled a Data event of port `id` (the reader may send one more).
+#[tauri::command]
+pub fn comm_ack(ports: State<'_, Ports>, id: u32) {
+  ports.ack(id);
 }
 
 /// Waits (off the async runtime's threads) until the port is closed.
@@ -496,10 +552,56 @@ mod tests {
         d2.store(true, Ordering::Relaxed);
       });
       let p = Ports::default();
-      p.0.lock().unwrap().insert(1, Arc::new(Port { port: Mutex::new(Box::new(master)), stop, reader: Mutex::new(Some(reader)) }));
+      p.0.lock().unwrap().insert(1, Arc::new(Port { port: Mutex::new(Box::new(master)), stop, reader: Mutex::new(Some(reader)), window: Default::default() }));
       if all { p.close_all() } else { p.close(1) }
       assert!(done.load(Ordering::Relaxed), "close_all {all}");
       assert!(p.get(1).is_err());
     }
+  }
+
+  /// A device that sends fast does not flood the window: at most DATA_WINDOW Data events wait for the frontend's ack.
+  /// (A pty pair stands in for the device: macOS cannot set a pty's baud rate, so it is started directly, not opened.)
+  #[cfg(unix)]
+  #[test]
+  fn data_events_wait_for_the_frontends_ack() {
+    let (mut master, mut slave) = serialport::TTYPort::pair().expect("pty");
+    slave.set_timeout(READ_TIMEOUT).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let emit: Emit = Arc::new(move |e| {
+      let _ = tx.send(e);
+    });
+    let p = Ports::default();
+    p.start(1, Box::new(slave), Lines::default(), emit).unwrap();
+    let total = 256 * 1024;
+    let writer = std::thread::spawn(move || {
+      let chunk = [5u8; 1024];
+      let mut sent = 0;
+      while sent < total {
+        match master.write(&chunk) {
+          Ok(n) => sent += n,
+          Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
+          Err(_) => break,
+        }
+      }
+      master
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    let (mut got, mut events) = (0usize, 0usize);
+    while let Ok(e) = rx.try_recv() {
+      if let CommEvent::Data { data, .. } = e {
+        got += B64.decode(data).unwrap().len();
+        events += 1;
+      }
+    }
+    assert!(events <= DATA_WINDOW, "{events} unacknowledged Data events");
+    while got < total {
+      p.ack(1);
+      if let CommEvent::Data { data, .. } = rx.recv_timeout(Duration::from_secs(5)).expect("no data") {
+        got += B64.decode(data).unwrap().len();
+      }
+    }
+    assert_eq!(got, total);
+    drop(writer.join().unwrap());
+    p.close_all();
   }
 }

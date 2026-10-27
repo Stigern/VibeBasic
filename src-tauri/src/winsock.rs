@@ -24,6 +24,9 @@ const MAX_PENDING: usize = 64;
 const ORPHAN_GRACE: Duration = if cfg!(test) { Duration::from_millis(200) } else { Duration::from_secs(10) };
 /// SendData fails with 10060 when the peer takes none of the data for this long (it stopped reading).
 const SEND_STALL: Duration = Duration::from_secs(60);
+/// At most this many Data events of one socket are on their way to the window, not yet acknowledged (sock_ack); the reader
+/// waits for an ack before it reads more, so a fast peer is slowed down by TCP instead of flooding the webview.
+const DATA_WINDOW: usize = 8;
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -96,10 +99,26 @@ async fn resolve(host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
 /// Set to true (or dropped) when the socket closes: a SendData still writing gives up and drops the write half.
 type Closed = tokio::sync::watch::Sender<bool>;
 
+/// The reader takes one permit per Data event; sock_ack gives it back.
+type Credits = Arc<tokio::sync::Semaphore>;
+
+/// None until the socket is registered (then DATA_WINDOW): an ack can only come for a socket sock_ack finds.
+fn credits() -> Credits {
+  Arc::new(tokio::sync::Semaphore::new(0))
+}
+
+/// Waits for room in the window, then sends the Data event.
+async fn emit_data(emit: &Emit, credits: &Credits, e: SockEvent) {
+  if let Ok(p) = credits.acquire().await {
+    p.forget();
+  }
+  emit(e);
+}
+
 enum Sock {
-  Tcp { writer: Arc<tokio::sync::Mutex<OwnedWriteHalf>>, reader: AbortHandle, closed: Closed },
+  Tcp { writer: Arc<tokio::sync::Mutex<OwnedWriteHalf>>, reader: AbortHandle, closed: Closed, credits: Credits },
   Listener { task: AbortHandle },
-  Udp { sock: Arc<UdpSocket>, reader: AbortHandle },
+  Udp { sock: Arc<UdpSocket>, reader: AbortHandle, credits: Credits },
 }
 
 impl Sock {
@@ -181,6 +200,8 @@ impl Sockets {
     };
     let (rip, rport) = (info.remote_ip.clone(), info.remote_port);
     let (mut rd, wr) = stream.into_split();
+    let cr = credits();
+    let rcr = cr.clone();
     let task = tokio::spawn(async move {
       let mut buf = vec![0u8; 64 * 1024];
       loop {
@@ -189,7 +210,7 @@ impl Sockets {
             emit(SockEvent::Close { id });
             break;
           }
-          Ok(n) => emit(SockEvent::Data { id, data: B64.encode(&buf[..n]), remote_ip: rip.clone(), remote_port: rport }),
+          Ok(n) => emit_data(&emit, &rcr, SockEvent::Data { id, data: B64.encode(&buf[..n]), remote_ip: rip.clone(), remote_port: rport }).await,
           Err(e) => {
             let (number, description) = code(&e);
             emit(SockEvent::Error { id, number, description });
@@ -200,7 +221,8 @@ impl Sockets {
     });
     // the reader task is aborted (and the write half dropped) when the socket was closed meanwhile: the connection closes
     let (closed, _) = tokio::sync::watch::channel(false);
-    self.put(id, ticket, Sock::Tcp { writer: Arc::new(tokio::sync::Mutex::new(wr)), reader: task.abort_handle(), closed })?;
+    self.put(id, ticket, Sock::Tcp { writer: Arc::new(tokio::sync::Mutex::new(wr)), reader: task.abort_handle(), closed, credits: cr.clone() })?;
+    cr.add_permits(DATA_WINDOW);
     Ok(info)
   }
 
@@ -300,11 +322,16 @@ impl Sockets {
       }
     };
     let rs = s.clone();
+    let cr = credits();
+    let rcr = cr.clone();
     let task = tokio::spawn(async move {
       let mut buf = vec![0u8; 65536];
       loop {
         match rs.recv_from(&mut buf).await {
-          Ok((n, from)) => emit(SockEvent::Data { id, data: B64.encode(&buf[..n]), remote_ip: from.ip().to_string(), remote_port: from.port() }),
+          // while the window is full the kernel buffer takes the datagrams (and drops them when full, as UDP may)
+          Ok((n, from)) => {
+            emit_data(&emit, &rcr, SockEvent::Data { id, data: B64.encode(&buf[..n]), remote_ip: from.ip().to_string(), remote_port: from.port() }).await
+          }
           // e.g. ICMP port unreachable for an earlier datagram: not fatal for UDP
           Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset || e.kind() == std::io::ErrorKind::ConnectionRefused => continue,
           Err(e) => {
@@ -315,7 +342,8 @@ impl Sockets {
         }
       }
     });
-    self.put(id, ticket, Sock::Udp { sock: s, reader: task.abort_handle() })?;
+    self.put(id, ticket, Sock::Udp { sock: s, reader: task.abort_handle(), credits: cr.clone() })?;
+    cr.add_permits(DATA_WINDOW);
     Ok(SocketInfo { local_ip: local.ip().to_string(), local_port: local.port(), remote_ip: String::new(), remote_port: 0 })
   }
 
@@ -361,6 +389,15 @@ impl Sockets {
         let addrs = resolve(host, port).await?;
         let addr = addrs.iter().find(|a| a.is_ipv4()).unwrap_or(&addrs[0]);
         s.send_to(data, addr).await.map(|_| ()).map_err(io_err)
+      }
+    }
+  }
+
+  /// The frontend has handled one Data event of socket `id`: room for one more (never more than the window).
+  pub fn ack(&self, id: u32) {
+    if let Some(Sock::Tcp { credits, .. } | Sock::Udp { credits, .. }) = self.0.lock().unwrap().socks.get(&id) {
+      if credits.available_permits() < DATA_WINDOW {
+        credits.add_permits(1);
       }
     }
   }
@@ -433,6 +470,12 @@ pub async fn sock_bind(app: tauri::AppHandle, socks: State<'_, Sockets>, id: u32
 pub async fn sock_send(socks: State<'_, Sockets>, id: u32, data: String, host: String, port: u16) -> Result<(), String> {
   let bytes = B64.decode(data.as_bytes()).map_err(|_| "13|Type mismatch".to_string())?;
   socks.inner().clone().send(id, &bytes, &host, port).await
+}
+
+/// The window has handled a Data event of socket `id` (the reader may send one more).
+#[tauri::command]
+pub fn sock_ack(socks: State<'_, Sockets>, id: u32) {
+  socks.ack(id);
 }
 
 #[tauri::command]
@@ -565,6 +608,49 @@ mod tests {
     let n = tokio::time::timeout(ORPHAN_GRACE * 10, waiting.read(&mut buf)).await.expect("still half-open").unwrap();
     assert_eq!(n, 0);
     assert!(s.0.lock().unwrap().pending.is_empty());
+    s.close_all();
+  }
+
+  /// A fast peer does not flood the window: at most DATA_WINDOW Data events wait for the frontend's ack, the rest stays
+  /// in the kernel buffers (and TCP slows the peer down) until the frontend acks.
+  #[tokio::test(flavor = "multi_thread")]
+  async fn data_events_wait_for_the_frontends_ack() {
+    let s = Sockets::default();
+    let (emit, mut rx) = collector();
+    let server = s.listen(1, 0, "127.0.0.1", emit.clone()).await.unwrap();
+    let mut peer = TcpStream::connect(("127.0.0.1", server.local_port)).await.unwrap();
+    let SockEvent::ConnectionRequest { request_id, .. } = next(&mut rx).await else { panic!("no ConnectionRequest") };
+    s.accept(2, request_id, emit.clone()).await.unwrap();
+    let total = 8 * 1024 * 1024;
+    let writer = tokio::spawn(async move {
+      let chunk = vec![1u8; 4096];
+      let mut sent = 0;
+      while sent < total {
+        if peer.write_all(&chunk).await.is_err() {
+          break;
+        }
+        sent += chunk.len();
+      }
+      peer
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let (mut got, mut events) = (0usize, 0usize);
+    while let Ok(e) = rx.try_recv() {
+      if let SockEvent::Data { data, .. } = e {
+        got += B64.decode(data).unwrap().len();
+        events += 1;
+      }
+    }
+    assert!(events <= DATA_WINDOW, "{events} unacknowledged Data events");
+    // acking lets the rest through
+    while got < total {
+      s.ack(2);
+      if let SockEvent::Data { data, .. } = next(&mut rx).await {
+        got += B64.decode(data).unwrap().len();
+      }
+    }
+    assert_eq!(got, total);
+    drop(writer.await.unwrap());
     s.close_all();
   }
 
