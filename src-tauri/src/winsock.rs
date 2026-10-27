@@ -19,6 +19,9 @@ const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STA
 const CONNECT_TIMEOUT_SECS: u64 = 30;
 /// Incoming connections nobody accepted are kept at most this many (the oldest are dropped).
 const MAX_PENDING: usize = 64;
+/// How long the waiting connections of a closed listener can still be accepted (`Close: Accept requestID` in
+/// ConnectionRequest is the usual VB6 server); after that they are closed, not left half-open.
+const ORPHAN_GRACE: Duration = if cfg!(test) { Duration::from_millis(200) } else { Duration::from_secs(10) };
 /// SendData fails with 10060 when the peer takes none of the data for this long (it stopped reading).
 const SEND_STALL: Duration = Duration::from_secs(60);
 
@@ -115,8 +118,8 @@ impl Sock {
 #[derive(Default)]
 struct Inner {
   socks: HashMap<u32, Sock>,
-  /// Accepted by a listener, waiting for Accept: request id -> stream (oldest first).
-  pending: Vec<(u32, TcpStream)>,
+  /// Accepted by a listener, waiting for Accept: (request id, listener id, stream), oldest first.
+  pending: Vec<(u32, u32, TcpStream)>,
   next_request: u32,
   /// Sockets still opening (Connect, Listen, Bind, Accept): id -> ticket. Close and close_all take the entry away, so a socket that
   /// finishes opening after them is dropped instead of living on with nobody to close it.
@@ -249,7 +252,7 @@ impl Sockets {
               if g.pending.len() >= MAX_PENDING {
                 g.pending.remove(0);
               }
-              g.pending.push((rid, s));
+              g.pending.push((rid, id, s));
               rid
             };
             emit(SockEvent::ConnectionRequest { id, request_id, remote_ip: peer.ip().to_string(), remote_port: peer.port() });
@@ -271,8 +274,8 @@ impl Sockets {
     let ticket = self.begin(id);
     let stream = {
       let mut g = self.0.lock().unwrap();
-      match g.pending.iter().position(|(r, _)| *r == request_id) {
-        Some(i) => g.pending.remove(i).1,
+      match g.pending.iter().position(|(r, _, _)| *r == request_id) {
+        Some(i) => g.pending.remove(i).2,
         None => {
           drop(g);
           self.abandon(id, ticket);
@@ -368,6 +371,14 @@ impl Sockets {
     g.opening.remove(&id);
     if let Some(s) = g.socks.remove(&id) {
       s.stop();
+    }
+    let orphans: Vec<u32> = g.pending.iter().filter(|(_, l, _)| *l == id).map(|(r, _, _)| *r).collect();
+    if !orphans.is_empty() {
+      let me = self.clone();
+      tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(ORPHAN_GRACE).await;
+        me.0.lock().unwrap().pending.retain(|(r, _, _)| !orphans.contains(r));
+      });
     }
   }
 
@@ -534,6 +545,26 @@ mod tests {
     // a real connect after Close of an earlier one on another id still works
     let l = s.listen(5, 0, "127.0.0.1", emit.clone()).await.unwrap();
     assert!(s.connect(6, "127.0.0.1", l.local_port, emit).await.is_ok());
+    s.close_all();
+  }
+
+  /// Close of a listener: its waiting connections can still be accepted for a moment (Close: Accept requestID), then they close.
+  #[tokio::test(flavor = "multi_thread")]
+  async fn closing_a_listener_closes_its_unaccepted_connections() {
+    let s = Sockets::default();
+    let (emit, mut rx) = collector();
+    let server = s.listen(1, 0, "127.0.0.1", emit.clone()).await.unwrap();
+    let _accepted = TcpStream::connect(("127.0.0.1", server.local_port)).await.unwrap();
+    let SockEvent::ConnectionRequest { request_id: kept, .. } = next(&mut rx).await else { panic!("no ConnectionRequest") };
+    let mut waiting = TcpStream::connect(("127.0.0.1", server.local_port)).await.unwrap();
+    let SockEvent::ConnectionRequest { .. } = next(&mut rx).await else { panic!("no ConnectionRequest") };
+    s.close(1);
+    s.accept(1, kept, emit.clone()).await.unwrap();   // the VB6 idiom still works
+    // the one nobody accepted is closed after the grace period: its client reads the end of the stream
+    let mut buf = [0u8; 1];
+    let n = tokio::time::timeout(ORPHAN_GRACE * 10, waiting.read(&mut buf)).await.expect("still half-open").unwrap();
+    assert_eq!(n, 0);
+    assert!(s.0.lock().unwrap().pending.is_empty());
     s.close_all();
   }
 
