@@ -188,14 +188,16 @@ export class MSCommControl implements RichControl {
     if (this.isOpen && this.buf.length) void this.received();
   }
 
-  /** PortOpen = False (8012 when it is not open), or the form unloads (`explicit` false). Output handed over before is still sent. */
+  /** PortOpen = False (8012 when it is not open), or the form unloads (`explicit` false). Like VB6 it clears the transmit
+   *  buffer: the close goes out at once and stops a write still waiting on the device (Output not yet started fails with 8018). */
   private closePort(explicit: boolean): void {
     if (!this.isOpen && explicit) throw commErr(8012);
     const id = this.id, comm = this.session;
     this.gen++;
     if (id >= 0 && comm) {
       comm.release(id);
-      this.chain = this.chain.then(() => comm.api.commClose(id)).catch(() => {});
+      // a re-open waits for both: the device is free once the close has finished and no write holds it
+      this.chain = Promise.all([this.chain.catch(() => {}), comm.api.commClose(id).catch(() => {})]).then(() => {});
     }
     this.closed();
   }

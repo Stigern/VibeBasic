@@ -171,6 +171,33 @@ End Sub`, [['MSComm', 'MSComm1']], new Early());
   expect(out).toEqual(['got hi']);
 });
 
+test('MSComm: PortOpen = False does not wait for Output stuck on the device (the close stops it; True opens after both)', async () => {
+  class StuckWrite extends FakeSystem {
+    private release: (() => void) | null = null;
+    private closedIds = new Set<number>();
+    override async commWrite(id: number): Promise<void> {
+      this.calls.push(`write ${id}`);
+      if (this.closedIds.has(id)) throw new Error('8018|Operation valid only when the port is open');
+      await new Promise<void>(r => { this.release = r; });   // the device takes nothing: only a close ends it
+      throw new Error('8015|Could not write to the comm device: the port was closed');
+    }
+    override async commClose(id: number): Promise<void> { this.calls.push(`close ${id}`); this.closedIds.add(id); this.release?.(); }
+  }
+  const sys = new StuckWrite();
+  const { out } = await run(`
+Private Sub Form_Load()
+  MSComm1.PortName = "/dev/cu.usbmodem1101"
+  MSComm1.PortOpen = True
+  MSComm1.Output = "stuck"
+  DoEvents
+  MSComm1.PortOpen = False
+  MSComm1.PortOpen = True
+  Debug.Print MSComm1.PortOpen & " " & MSComm1.OutBufferCount
+End Sub`, [['MSComm', 'MSComm1']], sys);
+  expect(out).toEqual(['True 0']);
+  expect(sys.calls.filter(c => /^(open|close|write)/.test(c)).map(c => c.split(' ')[0])).toEqual(['open', 'write', 'close', 'open']);
+});
+
 test('MSComm: PortOpen = False then True opens once the close has finished (review 08 runtime 14)', async () => {
   class SlowClose extends FakeSystem {
     override async commClose(id: number): Promise<void> { await new Promise(r => setTimeout(r, 20)); this.calls.push(`close ${id}`); }

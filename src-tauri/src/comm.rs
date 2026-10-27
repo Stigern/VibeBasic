@@ -4,7 +4,7 @@
 //! 8002 Invalid port number, 8005 Port already open, 8018 Operation valid only when the port is open ...).
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -21,6 +21,10 @@ const LINES_EVERY: Duration = Duration::from_millis(100);
 /// At most this many Data events of one port are on their way to the window, not yet acknowledged (comm_ack); the reader
 /// stops reading until an ack comes, so a fast device cannot flood the webview.
 const DATA_WINDOW: usize = 8;
+/// Output fails (8015) when the device has taken no byte for this long.
+const WRITE_STALL: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(10) };
+/// Output goes to the device in pieces of at most this many bytes (see Ports::write).
+const WRITE_PIECE: usize = 256;
 
 /// The modem status lines (CTSHolding, DSRHolding, CDHolding; RI raises comEvRing).
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Default)]
@@ -209,8 +213,9 @@ fn read_lines(p: &mut dyn SerialPort) -> Lines {
 }
 
 struct Port {
-  /// Writes, line changes and settings go through this handle; the reader thread has its own clone.
-  port: Mutex<Box<dyn SerialPort>>,
+  /// Writes, line changes and settings go through this handle; the reader thread has its own clone. Close takes it out
+  /// (the device closes then, not whenever the last command using the port lets go of it).
+  port: Mutex<Option<Box<dyn SerialPort>>>,
   stop: Arc<AtomicBool>,
   /// The reader thread: close waits for it, because its clone shares the port's exclusive lock (an open of the same device
   /// right after a close would fail with 8005 until the clone is gone).
@@ -245,13 +250,37 @@ impl Window {
 }
 
 impl Port {
-  /// Stops the reader thread and waits for it (at most one read timeout).
+  /// Stops the reader thread and a write under way, waits for both (about one read timeout), and closes the port.
   fn stop_and_join(&self) {
     self.stop.store(true, Ordering::Relaxed);
+    // a write sees the stop flag after its current piece; one stuck in the final flush (a device holding CTS low) closes
+    // the port itself when it returns (with_port)
+    let until = Instant::now() + Duration::from_secs(1);
+    let mut port = loop {
+      if let Ok(g) = self.port.try_lock() {
+        break Some(g);
+      }
+      if Instant::now() >= until {
+        break None;
+      }
+      std::thread::sleep(Duration::from_millis(5));
+    };
+    if let Some(g) = port.as_mut() {
+      discard(g);
+    }
+    drop(port);
     let h = self.reader.lock().unwrap().take();
     if let Some(h) = h.filter(|h| h.thread().id() != std::thread::current().id()) {
       let _ = h.join();
     }
+  }
+}
+
+/// Closes the port's handle. VB6 clears both buffers on close; output left queued would also make the last close of the
+/// device (maybe the reader's clone) wait until the device took it.
+fn discard(port: &mut Option<Box<dyn SerialPort>>) {
+  if let Some(p) = port.take() {
+    let _ = p.clear(serialport::ClearBuffer::All);
   }
 }
 
@@ -294,7 +323,7 @@ impl Ports {
     let mut reader = port.try_clone().map_err(port_err)?;
     let stop = Arc::new(AtomicBool::new(false));
     let window = Arc::new(Window::default());
-    let entry = Arc::new(Port { port: Mutex::new(port), stop: stop.clone(), reader: Mutex::new(None), window: window.clone() });
+    let entry = Arc::new(Port { port: Mutex::new(Some(port)), stop: stop.clone(), reader: Mutex::new(None), window: window.clone() });
     self.0.lock().unwrap().insert(id, entry.clone());
     let me = self.clone();
     let reader_thread = std::thread::spawn(move || {
@@ -334,54 +363,74 @@ impl Ports {
     Ok(())
   }
 
+  /// Runs `f` with the open port `id` (8018 when it is not open, or was closed meanwhile).
+  fn with_port<T>(&self, id: u32, f: impl FnOnce(&Port, &mut dyn SerialPort) -> Result<T, String>) -> Result<T, String> {
+    let p = self.get(id)?;
+    let mut g = p.port.lock().unwrap();
+    let port = g.as_mut().ok_or_else(not_open)?;
+    let r = f(&p, port.as_mut());
+    if p.stop.load(Ordering::Relaxed) {
+      discard(&mut g);   // closed while `f` ran: the device closes now
+    }
+    r
+  }
+
   /// Settings or Handshaking changed while the port is open.
   pub fn configure(&self, id: u32, settings: &str, handshaking: u8) -> Result<(), String> {
     let s = parse_settings(settings)?;
-    let p = self.get(id)?;
-    let mut port = p.port.lock().unwrap();
-    port.set_baud_rate(s.baud).map_err(port_err)?;
-    port.set_parity(s.parity).map_err(port_err)?;
-    port.set_data_bits(s.data_bits).map_err(port_err)?;
-    port.set_stop_bits(s.stop_bits).map_err(port_err)?;
-    port.set_flow_control(flow(handshaking)).map_err(port_err)?;
-    Ok(())
+    self.with_port(id, |_, port| {
+      port.set_baud_rate(s.baud).map_err(port_err)?;
+      port.set_parity(s.parity).map_err(port_err)?;
+      port.set_data_bits(s.data_bits).map_err(port_err)?;
+      port.set_stop_bits(s.stop_bits).map_err(port_err)?;
+      port.set_flow_control(flow(handshaking)).map_err(port_err)?;
+      Ok(())
+    })
   }
 
-  /// Output: the whole buffer, written and flushed.
+  /// Output: the whole buffer, written and flushed. PortOpen = False stops it (VB6 clears the transmit buffer); it fails
+  /// with 8015 when the device has taken nothing for WRITE_STALL.
   pub fn write(&self, id: u32, data: &[u8]) -> Result<(), String> {
-    let p = self.get(id)?;
-    let mut port = p.port.lock().unwrap();
-    // a write may time out part-way (the device is not reading): keep going while it makes progress
-    let mut rest = data;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !rest.is_empty() {
-      match port.write(rest) {
-        Ok(0) => return Err("8015|Could not write to the comm device".to_string()),
-        Ok(n) => rest = &rest[n..],
-        Err(e) if (e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::Interrupted) && Instant::now() < deadline => {}
-        Err(e) => return Err(format!("8015|Could not write to the comm device: {e}")),
+    self.with_port(id, |p, port| {
+      let mut rest = data;
+      let mut progress = Instant::now();
+      while !rest.is_empty() {
+        if p.stop.load(Ordering::Relaxed) {
+          return Err("8015|Could not write to the comm device: the port was closed".to_string());
+        }
+        // small pieces: a tty write blocks until all of it is queued, and the stop flag is only seen in between
+        match port.write(&rest[..rest.len().min(WRITE_PIECE)]) {
+          Ok(0) => return Err("8015|Could not write to the comm device".to_string()),
+          Ok(n) => {
+            rest = &rest[n..];
+            progress = Instant::now();
+          }
+          // timed out (the device is not reading): keep going until it has taken nothing for WRITE_STALL
+          Err(e) if (e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::Interrupted) && progress.elapsed() < WRITE_STALL => {}
+          Err(e) => return Err(format!("8015|Could not write to the comm device: {e}")),
+        }
       }
-    }
-    let _ = port.flush();
-    Ok(())
+      let _ = port.flush();
+      Ok(())
+    })
   }
 
   /// DTREnable, RTSEnable, Break (None: unchanged).
   pub fn set_lines(&self, id: u32, dtr: Option<bool>, rts: Option<bool>, brk: Option<bool>) -> Result<(), String> {
-    let p = self.get(id)?;
-    let mut port = p.port.lock().unwrap();
-    if let Some(v) = dtr {
-      port.write_data_terminal_ready(v).map_err(port_err)?;
-    }
-    if let Some(v) = rts {
-      port.write_request_to_send(v).map_err(port_err)?;
-    }
-    match brk {
-      Some(true) => port.set_break().map_err(port_err)?,
-      Some(false) => port.clear_break().map_err(port_err)?,
-      None => {}
-    }
-    Ok(())
+    self.with_port(id, |_, port| {
+      if let Some(v) = dtr {
+        port.write_data_terminal_ready(v).map_err(port_err)?;
+      }
+      if let Some(v) = rts {
+        port.write_request_to_send(v).map_err(port_err)?;
+      }
+      match brk {
+        Some(true) => port.set_break().map_err(port_err)?,
+        Some(false) => port.clear_break().map_err(port_err)?,
+        None => {}
+      }
+      Ok(())
+    })
   }
 
   /// The frontend has handled one Data event of port `id`.
@@ -391,7 +440,8 @@ impl Ports {
     }
   }
 
-  /// PortOpen = False: the reader thread stops (within one read timeout) and the port closes; it can be opened again at once.
+  /// PortOpen = False: a write under way and the reader thread stop (within about one read timeout) and the port closes;
+  /// it can be opened again at once.
   pub fn close(&self, id: u32) {
     let p = self.0.lock().unwrap().remove(&id);   // not locked while waiting: the reader takes the lock when the device fails
     if let Some(p) = p {
@@ -482,6 +532,7 @@ pub async fn comm_reset(ports: State<'_, Ports>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::io::Write;
 
   #[test]
   fn settings_strings_parse_as_in_vb6() {
@@ -552,7 +603,7 @@ mod tests {
         d2.store(true, Ordering::Relaxed);
       });
       let p = Ports::default();
-      p.0.lock().unwrap().insert(1, Arc::new(Port { port: Mutex::new(Box::new(master)), stop, reader: Mutex::new(Some(reader)), window: Default::default() }));
+      p.0.lock().unwrap().insert(1, Arc::new(Port { port: Mutex::new(Some(Box::new(master))), stop, reader: Mutex::new(Some(reader)), window: Default::default() }));
       if all { p.close_all() } else { p.close(1) }
       assert!(done.load(Ordering::Relaxed), "close_all {all}");
       assert!(p.get(1).is_err());
@@ -602,6 +653,63 @@ mod tests {
     }
     assert_eq!(got, total);
     drop(writer.join().unwrap());
+    p.close_all();
+  }
+
+  /// Runs `f` on a thread; the receiver gets its result.
+  fn spawn<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> std::sync::mpsc::Receiver<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+      let _ = tx.send(f());
+    });
+    rx
+  }
+
+  /// PortOpen = False while an Output waits on a device that does not read: the write ends at once and close returns
+  /// only when the port is really closed (so PortOpen = True right after works).
+  #[cfg(unix)]
+  #[test]
+  fn close_interrupts_a_blocked_write() {
+    let (_master, mut slave) = serialport::TTYPort::pair().expect("pty");
+    slave.set_timeout(READ_TIMEOUT).unwrap();
+    let p = Ports::default();
+    p.start(1, Box::new(slave), Lines::default(), Arc::new(|_| {})).unwrap();
+    let w = p.clone();
+    let write = spawn(move || w.write(1, &vec![1u8; 1024 * 1024]));
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(write.try_recv().is_err(), "the write should wait on the full pty");
+    let started = Instant::now();
+    p.close(1);
+    let r = write.recv_timeout(Duration::from_millis(100)).expect("close did not end the write");
+    assert!(r.unwrap_err().starts_with("8015|"));
+    assert!(started.elapsed() < WRITE_STALL, "close took {:?}", started.elapsed());
+  }
+
+  /// The write timeout is a stall timeout: a slow device that keeps taking bytes gets all of them, however long it takes.
+  #[cfg(unix)]
+  #[test]
+  fn a_slow_write_that_progresses_does_not_time_out() {
+    let (mut master, mut slave) = serialport::TTYPort::pair().expect("pty");
+    slave.set_timeout(READ_TIMEOUT).unwrap();
+    master.set_timeout(READ_TIMEOUT).unwrap();
+    let p = Ports::default();
+    p.start(1, Box::new(slave), Lines::default(), Arc::new(|_| {})).unwrap();
+    let total = 32 * 1024;
+    let reader = spawn(move || {
+      let mut buf = [0u8; 1024];
+      let mut got = 0;
+      while got < total {
+        if let Ok(n) = master.read(&mut buf) {
+          got += n;
+        }
+        std::thread::sleep(Duration::from_millis(40));
+      }
+      got
+    });
+    let started = Instant::now();
+    p.write(1, &vec![2u8; total]).unwrap();
+    assert!(started.elapsed() > WRITE_STALL, "the write was too fast to test the stall timeout ({:?})", started.elapsed());
+    assert_eq!(reader.recv_timeout(Duration::from_secs(10)).unwrap(), total);
     p.close_all();
   }
 }
