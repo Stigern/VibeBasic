@@ -27,6 +27,8 @@ const SEND_STALL: Duration = Duration::from_secs(60);
 /// At most this many Data events of one socket are on their way to the window, not yet acknowledged (sock_ack); the reader
 /// waits for an ack before it reads more, so a fast peer is slowed down by TCP instead of flooding the webview.
 const DATA_WINDOW: usize = 8;
+/// The first pause after a passing accept error (it doubles up to a second while the errors go on).
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(10);
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -68,6 +70,20 @@ fn code(e: &std::io::Error) -> (i32, String) {
     _ => return (10050, format!("Network error: {e}")),
   };
   (n, d.to_string())
+}
+
+/// An accept error that does not end the listener: a connection that went away before it was taken, or out of file
+/// descriptors or memory for a moment. Anything else (the socket itself is broken) is fatal.
+fn accept_is_transient(e: &std::io::Error) -> bool {
+  use std::io::ErrorKind as K;
+  if matches!(e.kind(), K::ConnectionAborted | K::ConnectionReset | K::Interrupted | K::WouldBlock | K::TimedOut | K::OutOfMemory) {
+    return true;
+  }
+  #[cfg(unix)]
+  const CODES: &[i32] = &[libc::EMFILE, libc::ENFILE, libc::ENOBUFS, libc::ENOMEM, libc::EPROTO];
+  #[cfg(windows)]
+  const CODES: &[i32] = &[10024, 10055];   // WSAEMFILE, WSAENOBUFS
+  e.raw_os_error().is_some_and(|c| CODES.contains(&c))
 }
 
 fn io_err(e: std::io::Error) -> String {
@@ -264,9 +280,11 @@ impl Sockets {
     };
     let me = self.clone();
     let task = tokio::spawn(async move {
+      let mut backoff = ACCEPT_BACKOFF;
       loop {
         match l.accept().await {
           Ok((s, peer)) => {
+            backoff = ACCEPT_BACKOFF;
             let request_id = {
               let mut g = me.0.lock().unwrap();
               g.next_request = g.next_request.wrapping_add(1).max(1);
@@ -278,6 +296,11 @@ impl Sockets {
               rid
             };
             emit(SockEvent::ConnectionRequest { id, request_id, remote_ip: peer.ip().to_string(), remote_port: peer.port() });
+          }
+          // keep listening; the pause lets descriptors free up instead of spinning on EMFILE
+          Err(e) if accept_is_transient(&e) => {
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(Duration::from_secs(1));
           }
           Err(e) => {
             let (number, description) = code(&e);
@@ -652,6 +675,24 @@ mod tests {
     assert_eq!(got, total);
     drop(writer.await.unwrap());
     s.close_all();
+  }
+
+  /// A listener keeps listening through errors that pass (an aborted handshake, out of descriptors for a moment).
+  #[test]
+  fn transient_accept_errors_do_not_end_the_listener() {
+    use std::io::{Error, ErrorKind as K};
+    for k in [K::ConnectionAborted, K::ConnectionReset, K::Interrupted, K::WouldBlock] {
+      assert!(accept_is_transient(&Error::from(k)), "{k:?}");
+    }
+    #[cfg(unix)]
+    for c in [libc::EMFILE, libc::ENFILE, libc::ENOBUFS, libc::ENOMEM] {
+      assert!(accept_is_transient(&Error::from_raw_os_error(c)), "{c}");
+    }
+    #[cfg(unix)]
+    for c in [libc::EBADF, libc::EINVAL, libc::ENOTSOCK] {
+      assert!(!accept_is_transient(&Error::from_raw_os_error(c)), "{c}");
+    }
+    assert!(!accept_is_transient(&Error::from(K::InvalidInput)));
   }
 
   #[tokio::test(flavor = "multi_thread")]
