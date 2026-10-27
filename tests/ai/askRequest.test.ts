@@ -185,6 +185,15 @@ test('uses the configured reasoning plus answer budget without dropping the cap 
   expect(opts(b, 0).requestId).toMatch(/^vb-/);
 });
 
+test('an output budget larger than the server context is lowered to fit after the prompt', async () => {
+  const b = fakeBackend({ model: 'small-context', maxTokens: 65536, contextTokens: 32768 }, async () => OPS);
+  await askForm(b);
+  const sent = opts(b, 0).maxTokens;
+  const prompt = b.aiChat.mock.calls[0][3].reduce((n: number, m: any) => n + (typeof m.content === 'string' ? m.content.length : 0), 0);
+  expect(sent).toBeLessThan(32768 - prompt / 4);
+  expect(sent).toBeGreaterThan(1024);
+});
+
 test('an observed length finish wins over a later timeout and never retries', async () => {
   const b = fakeBackend({ model: 'length-before-timeout' }, async (...a: any[]) => {
     a[5].onDelta('reasoning', 'Partial private reasoning');

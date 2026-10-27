@@ -279,9 +279,20 @@ const hasPictures = (messages: ChatMessage[]) => messages.some(m => typeof m.con
 
 /** Without a known context size, the conversation (not counting the system prompt) is trimmed above about this many characters. */
 export const MAX_CONVERSATION_CHARS = 24000;
-/** The trim budget: with a known context size, what is left after the answer and thinking (2 characters per token, on the safe side). */
+/**
+ * The trim budget: with a known context size, what is left after the answer and thinking (2 characters per token, on the
+ * safe side). An output budget of more than half the context leaves the prompt half (`outputCap` then lowers the budget).
+ */
 export const conversationBudget = (contextTokens: number | undefined, maxTokens = 65536): number =>
-  contextTokens ? Math.max(MAX_CONVERSATION_CHARS, (contextTokens - maxTokens) * 2) : MAX_CONVERSATION_CHARS;
+  contextTokens ? Math.max(MAX_CONVERSATION_CHARS, (contextTokens - Math.min(maxTokens, contextTokens / 2)) * 2) : MAX_CONVERSATION_CHARS;
+
+/**
+ * The max_tokens sent: the user's output budget, lowered to what the server's context leaves after the prompt (estimated at
+ * 2 characters per token, on the safe side), so a budget larger than a 32k or 40k context is not refused outright. Never
+ * below 1024, and never removed.
+ */
+export const outputCap = (maxTokens: number, contextTokens: number | undefined, promptChars: number): number =>
+  contextTokens ? Math.max(1024, Math.min(maxTokens, Math.floor(contextTokens - promptChars / 2 - 256))) : maxTokens;
 
 /** A wish of a dropped request in one short line (the check rounds' complaints are left out). */
 const wishOf = (m: ChatMessage): string | null => {
@@ -496,11 +507,11 @@ async function converse<A extends { notes: string[]; problems: string[] }>(
       return messages;
     };
     /**
-     * Every attempt keeps the user's output cap. A budget rejection stops for review; it is never retried without a limit.
+     * Every attempt keeps the user's output cap (lowered to fit the context). A budget rejection stops for review; it is never retried without a limit.
      */
     const capped = async (messages: ChatMessage[], x: AiChatOptions, m: AiLogMode): Promise<string> => {
       if (++attempts > MAX_ATTEMPTS) throw new Error('The AI request stopped after four attempts. Review the AI settings before trying again.');
-      const maxTokens = settings.maxTokens ?? 65536;
+      const maxTokens = outputCap(settings.maxTokens ?? 65536, settings.contextTokens, messages.reduce((n, y) => n + contentChars(y.content), 0));
       // a level the server does not take goes as the nearest one it does (learnt from its 400, kept for the session)
       const sent = effortFor(settings.baseUrl, level);
       try { return await attempt(messages, sent, { ...x, ...penalties, maxTokens }, m, partial); }
