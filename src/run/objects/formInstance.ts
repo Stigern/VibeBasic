@@ -206,6 +206,7 @@ export class FormInstance implements VBObject {
         const props = copyProps(invisible ? t.def.props : t.props);
         if (!invisible && t.def.type !== 'Menu') {   // a menu element keeps the lowest one's Visible (the MRU list shows at once)
           props.Visible = false;
+          if (t.def.type === 'OptionButton') props.Value = false;   // a new option starts unselected (one selected per group)
           if ('TabIndex' in props) props.TabIndex = Math.max(-1, ...[...this.state().byId.values()].map(o => Number(o.props.TabIndex ?? -1))) + 1;
         }
         const def: ControlDef = { ...t.def, id: `${t.def.id}~${index}`, index, props };

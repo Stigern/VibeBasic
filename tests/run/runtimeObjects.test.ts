@@ -114,3 +114,19 @@ test('Load and Unload of visible control array elements; errors 360, 343 and 362
   for (let i = 0; i < 10; i++) await tick();
   expect(out.at(-1)).toBe('click 1 ');
 });
+
+test('Load of an OptionButton element whose lowest one is selected starts unselected (one selected option per group)', async () => {
+  const { out } = await run([{
+    name: 'Form1',
+    code: [
+      'Private Sub Form_Load()',
+      '  Option1(0).Value = True',
+      '  Load Option1(1)',
+      '  Option1(1).Visible = True',
+      '  Debug.Print Option1(0).Value; Option1(1).Value',
+      'End Sub',
+    ].join('\n'),
+    controls: [['OptionButton', 'Option1', {}, 0]],
+  }]);
+  expect(out).toEqual(['TrueFalse']);
+});
