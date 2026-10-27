@@ -425,9 +425,15 @@ async fn chat_stream_observed(
   let request_id = ["x-request-id", "request-id", "openai-request-id"].iter()
     .find_map(|name| resp.headers().get(*name).and_then(|v| v.to_str().ok())).map(str::to_string);
   on_response(json!({"http_status":status.as_u16(), "request_id":request_id}));
+  // the id the window last heard: vLLM repeats `id` in every chunk, so only a new one is an event
+  let reported = Mutex::new(request_id.clone());
   let observe_metadata = |v: &Value| {
     if let Some(id) = request_id.as_deref().or_else(|| v.get("id").and_then(Value::as_str)) {
-      on_response(json!({"request_id":id}));
+      let mut last = reported.lock().unwrap();
+      if last.as_deref() != Some(id) {
+        *last = Some(id.to_string());
+        on_response(json!({"request_id":id}));
+      }
     }
     if let Some(u) = read_usage(v) { on_usage(u); }
     if let Some(f) = v.pointer("/choices/0/finish_reason").and_then(Value::as_str) {
@@ -1159,6 +1165,29 @@ mod tests {
       assert_eq!(answer, "answer");
       assert!(events.lock().unwrap().iter().any(|v| v["request_id"] == "chatcmpl-vllm"));
       assert_eq!(*deltas.lock().unwrap(), vec![("reasoning".into(), "thought".into()), ("content".into(), "answer".into())]);
+    }
+  }
+
+  /// vLLM puts the same `id` in every chunk: the request id is reported once (and again only if it changes), not per chunk.
+  #[tokio::test]
+  async fn the_request_id_is_reported_once_per_request() {
+    for header in [false, true] {
+      let server = MockServer::start();
+      server.mock(|when, then| {
+        when.method(POST).path("/v1/chat/completions");
+        let chunk = |t: &str| json!({"id":"chatcmpl-1","choices":[{"delta":{"content":t},"finish_reason":null}]});
+        let t = then.status(200).header("content-type", "text/event-stream");
+        let t = if header { t.header("x-request-id", "chatcmpl-1") } else { t };
+        t.body(format!("data: {}\n\ndata: {}\n\ndata: {}\n\ndata: {}\n\ndata: [DONE]\n\n", chunk("a"), chunk("b"), chunk("c"),
+          json!({"id":"chatcmpl-1","choices":[{"delta":{},"finish_reason":"stop"}]})));
+      });
+      let events = Mutex::new(Vec::new());
+      let answer = chat_stream_observed(&server.url("/v1"), &None, "m", &msgs(), &None, &NONE,
+        &|_, _| {}, &no_usage, None, &|v| events.lock().unwrap().push(v), &|_| {},
+        Duration::from_secs(10), Duration::from_secs(60)).await.unwrap();
+      assert_eq!(answer, "abc");
+      let ids = events.lock().unwrap().iter().filter(|v| v["request_id"] == "chatcmpl-1").count();
+      assert_eq!(ids, 1, "header {header}");
     }
   }
 
