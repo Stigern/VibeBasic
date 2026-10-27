@@ -11,7 +11,7 @@ use tauri::State;
 use tokio::task::AbortHandle;
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
-/// A bigger answer is refused (35756) rather than read into memory whole: the body travels to the window as base64.
+/// A bigger answer is refused (35756) rather than read into memory whole.
 pub const MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Serialize, Debug)]
@@ -24,8 +24,20 @@ pub struct InetResponse {
   /// "HTTP/1.1"
   pub version: String,
   pub headers: Vec<(String, String)>,
-  /// The body, base64.
-  pub body: String,
+  /// The body (not in the JSON head: see `pack`).
+  #[serde(skip)]
+  pub body: Vec<u8>,
+}
+
+/// The answer as one raw IPC response (an ArrayBuffer in the window, no base64 or JSON string for the body): the length of
+/// the JSON head (status, headers ...) as 4 bytes big-endian, the head, then the body.
+fn pack(r: &InetResponse) -> Vec<u8> {
+  let head = serde_json::to_vec(r).unwrap_or_default();
+  let mut out = Vec::with_capacity(4 + head.len() + r.body.len());
+  out.extend_from_slice(&(head.len() as u32).to_be_bytes());
+  out.extend_from_slice(&head);
+  out.extend_from_slice(&r.body);
+  out
 }
 
 pub struct InetRequest {
@@ -107,7 +119,7 @@ async fn request_limited(r: &InetRequest, max_body: usize) -> Result<InetRespons
     status_text: status.canonical_reason().unwrap_or("").to_string(),
     version,
     headers,
-    body: B64.encode(&body),
+    body,
   })
 }
 
@@ -135,7 +147,7 @@ pub async fn inet_request(
   timeout_secs: u64,
   user_name: String,
   password: String,
-) -> Result<InetResponse, String> {
+) -> Result<tauri::ipc::Response, String> {
   let body = B64.decode(body.as_bytes()).map_err(|_| fail(13, "Type mismatch"))?;
   let r = InetRequest { url, method, headers, body, timeout_secs, user_name, password };
   let task = tokio::spawn(async move { request(&r).await });
@@ -143,7 +155,7 @@ pub async fn inet_request(
   let res = task.await;
   tasks.0.lock().unwrap().remove(&id);
   match res {
-    Ok(r) => r,
+    Ok(r) => r.map(|r| tauri::ipc::Response::new(pack(&r))),
     Err(e) if e.is_cancelled() => Err(fail(35764, "Operation cancelled")),
     Err(_) => Err(fail(35756, "Request to remote computer failed")),
   }
@@ -180,7 +192,7 @@ mod tests {
     assert_eq!(resp.status, 200);
     assert_eq!(resp.status_text, "OK");
     assert!(resp.headers.iter().any(|(k, v)| k == "x-test" && v == "yes"));
-    assert_eq!(B64.decode(resp.body).unwrap(), "hei på deg".as_bytes());
+    assert_eq!(resp.body, "hei på deg".as_bytes());
   }
 
   #[tokio::test]
@@ -195,13 +207,27 @@ mod tests {
     let resp = request(&r).await.unwrap();
     m.assert();
     assert_eq!(resp.status, 404);
-    assert_eq!(B64.decode(resp.body).unwrap(), b"nope");
+    assert_eq!(resp.body, b"nope");
   }
 
   #[tokio::test]
   async fn bad_urls_and_schemes_are_inet_errors() {
     assert!(request(&req("not a url".into(), "GET")).await.unwrap_err().starts_with("35752|"));
     assert!(request(&req("ftp://example.com/x".into(), "GET")).await.unwrap_err().starts_with("35753|"));
+  }
+
+  /// The window gets the body as raw bytes after a small JSON head (no base64 or JSON string for the body).
+  #[test]
+  fn the_answer_travels_as_head_length_head_and_raw_body() {
+    let resp = InetResponse {
+      status: 200, status_text: "OK".into(), version: "HTTP/1.1".into(),
+      headers: vec![("x-a".into(), "1".into())], body: vec![0, 255, b'x'],
+    };
+    let out = pack(&resp);
+    let n = u32::from_be_bytes(out[..4].try_into().unwrap()) as usize;
+    let head: serde_json::Value = serde_json::from_slice(&out[4..4 + n]).unwrap();
+    assert_eq!(head, serde_json::json!({"status":200,"statusText":"OK","version":"HTTP/1.1","headers":[["x-a","1"]]}));
+    assert_eq!(&out[4 + n..], &[0, 255, b'x']);
   }
 
   /// M2: an answer over the cap is 35756, not read into memory whole.
@@ -214,6 +240,6 @@ mod tests {
     });
     let r = req(server.url("/big"), "GET");
     assert!(request_limited(&r, 4096).await.unwrap_err().starts_with("35756|"));
-    assert_eq!(B64.decode(request_limited(&r, 5000).await.unwrap().body).unwrap().len(), 5000);
+    assert_eq!(request_limited(&r, 5000).await.unwrap().body.len(), 5000);
   }
 }

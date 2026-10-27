@@ -139,12 +139,15 @@ export class TauriBackend implements Backend {
 
   // -- Inet and Winsock (inet.rs, winsock.rs) --
 
+  /** The answer is raw bytes (inet.rs `pack`): the JSON head's length (4 bytes big-endian), the head, then the body. */
   async inetRequest(r: InetRequest): Promise<InetResponse> {
-    const res = await call<Omit<InetResponse, 'body'> & { body: string }>('inet_request', {
+    const raw = bytesOf(await call<ArrayBuffer>('inet_request', {
       id: r.id, url: r.url, method: r.method, headers: r.headers, body: toBase64(r.body),
       timeoutSecs: Math.max(0, Math.round(r.timeoutSecs)), userName: r.userName, password: r.password,
-    });
-    return { ...res, body: fromBase64(res.body) };
+    }));
+    const n = new DataView(raw.buffer, raw.byteOffset, raw.byteLength).getUint32(0);
+    const head = JSON.parse(new TextDecoder().decode(raw.subarray(4, 4 + n))) as Omit<InetResponse, 'body'>;
+    return { ...head, body: raw.subarray(4 + n) };
   }
   async inetCancel(id: string): Promise<void> { await call<void>('inet_cancel', { id }); }
   sockConnect(id: number, host: string, port: number): Promise<SocketInfo> { return call<SocketInfo>('sock_connect', { id, host, port }); }

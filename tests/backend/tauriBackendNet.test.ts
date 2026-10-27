@@ -21,6 +21,20 @@ test('socket and comm data events are acked once handled', async () => {
   expect(invoke.mock.calls).toEqual([['sock_ack', { id: 4 }], ['comm_ack', { id: 7 }]]);
 });
 
+// inet.rs answers with raw bytes: a 4-byte big-endian head length, the JSON head, then the body as is
+test('an Inet answer is decoded from its raw head and body', async () => {
+  const head = new TextEncoder().encode(JSON.stringify({ status: 404, statusText: 'Not Found', version: 'HTTP/1.1', headers: [['x-a', '1']] }));
+  const raw = new Uint8Array(4 + head.length + 3);
+  new DataView(raw.buffer).setUint32(0, head.length);
+  raw.set(head, 4);
+  raw.set([0, 255, 120], 4 + head.length);
+  invoke.mockResolvedValue(raw.buffer);
+  const res = await new TauriBackend().inetRequest({ id: 'inet-1', url: 'http://h/', method: 'GET', headers: '', body: new Uint8Array([1]), timeoutSecs: 5, userName: '', password: '' });
+  expect(res).toEqual({ status: 404, statusText: 'Not Found', version: 'HTTP/1.1', headers: [['x-a', '1']], body: new Uint8Array([0, 255, 120]) });
+  expect(invoke.mock.calls[0][0]).toBe('inet_request');
+  expect(invoke.mock.calls[0][1]).toMatchObject({ id: 'inet-1', body: 'AQ==', timeoutSecs: 5 });
+});
+
 test('a handler that throws still acks', async () => {
   invoke.mockResolvedValue(undefined);
   await new TauriBackend().onSocketEvent(() => { throw new Error('boom'); });
