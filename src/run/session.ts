@@ -31,6 +31,8 @@ export interface SessionCallbacks {
   /** IDE: yellow line and wait. App: never called. `askAi`: the error dialog's Ask AI was pressed (break mode, then the AI flow). */
   onBreak(info: BreakInfo & { askAi?: boolean }): Promise<'continue' | 'end'>;
   onEnded(): void;
+  /** IDE: Ask AI was pressed on an error with no statement to break into (an event's arguments could not be bound); called once the program has ended. */
+  onAskAiAfterEnd?(error: { number: number; description: string; compile: boolean }, at: CodeLocation): void;
   readFile(path: string): Promise<Uint8Array>;            // LoadPicture, MMControl and MediaPlayer files
   appPath: string;
   /** App.EXEName; defaults to the project name (the IDE). Made apps pass the bundle name. */
@@ -112,7 +114,8 @@ export class RunSession implements Host, FormSession {
   private timers = new Map<ControlObject, ReturnType<typeof setInterval>>();
   private timerBusy = new Set<ControlObject>();
   private lastYield = -Infinity;   // performance.now() of the last real DoEvents yield
-  private askAiOnBreak = false;    // the error dialog answered 'ai': the next onBreak (on that error) starts the AI flow
+  /** The error dialog answered 'ai': the next onBreak (on that error) starts the AI flow, or the end does when no break follows. */
+  private askAiFor: { err: VBRuntimeError; at: CodeLocation } | null = null;
   private netSession: NetSession | null = null;
   private dbSession: DbSession | null = null;
   private commSession: CommSession | null = null;
@@ -584,10 +587,10 @@ export class RunSession implements Host, FormSession {
   }
 
   /** 'ai' (Ask AI) is 'debug' for the program; the break that follows tells the IDE to start the AI flow. */
-  async onRuntimeError(err: VBRuntimeError, _at: CodeLocation): Promise<'end' | 'debug'> {
+  async onRuntimeError(err: VBRuntimeError, at: CodeLocation): Promise<'end' | 'debug'> {
     this.queue.flush();
     const r = await this.formHost.runtimeErrorBox({ number: err.number, description: err.description, compile: err.compile, mode: this.mode, title: this.title });
-    this.askAiOnBreak = r === 'ai' && this.mode === 'ide';
+    this.askAiFor = r === 'ai' && this.mode === 'ide' ? { err, at } : null;
     return r === 'end' ? 'end' : 'debug';
   }
 
@@ -599,8 +602,8 @@ export class RunSession implements Host, FormSession {
     if (this.mode === 'app') return 'end';
     this._state = 'break';
     this.updateBlocked();
-    const askAi = this.askAiOnBreak && info.reason === 'error';
-    this.askAiOnBreak = false;
+    const askAi = !!this.askAiFor && info.reason === 'error';
+    this.askAiFor = null;
     try {
       return await this.cb.onBreak(askAi ? { ...info, askAi } : info);
     } finally {
@@ -626,6 +629,9 @@ export class RunSession implements Host, FormSession {
     this.dbSession?.shutdown();    // every database connection closed
     this.commSession?.shutdown();  // every serial port closed
     if (this.audio) { this.audio.close().catch(() => { /* already closed */ }); this.audio = undefined; }
+    const ask = this.askAiFor;
+    this.askAiFor = null;
     this.cb.onEnded();
+    if (ask) this.cb.onAskAiAfterEnd?.({ number: ask.err.number, description: ask.err.description, compile: ask.err.compile }, ask.at);
   }
 }

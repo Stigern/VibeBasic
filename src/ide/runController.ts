@@ -169,6 +169,10 @@ export class RunController {
         debugPrint: (t, nl) => this.opts.immediate?.print(t, nl),
         onBreak: info => this.onBreak(info),
         onEnded: () => this.ended(session),
+        onAskAiAfterEnd: (error, at) => {
+          const id = this.itemId(at.moduleName);
+          if (id) this.opts.onAskAi?.({ itemId: id, error: { ...error, line: at.line, procName: at.procName || null }, vars: [] });
+        },
         readFile: this.opts.readFile ?? (async () => { throw new Error('ENOENT'); }),
         appPath: this.appPath(),
       }, 'ide');

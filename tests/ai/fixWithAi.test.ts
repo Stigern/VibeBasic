@@ -154,3 +154,35 @@ test('lineOperands: names and member chains, not calls, strings or the comment',
   expect(lineOperands('If total / count > 2 Then MsgBox "x"')).toEqual(['If', 'total', 'count', 'Then', 'MsgBox']);
   expect(lineOperands('Rem nothing')).toEqual([]);
 });
+
+test('an event whose arguments cannot be bound (no statement ran) -> Ask AI: the program ends, then the fix request starts at the procedure', async () => {
+  const p = newProject();
+  p.forms = [newForm('Form1', 'Private Sub Form_Load(Index As Integer)\n    Caption = "hi"\nEnd Sub')];
+  p.startupForm = 'Form1';
+  const ide = new IdeState(p);
+  const mdi = document.body.appendChild(document.createElement('div'));
+  const layer = document.body.appendChild(document.createElement('div'));
+  const backend = {
+    loadSettings: async () => ({ baseUrl: 'http://x/v1', model: 'm', apiKey: '' }),
+    saveSettings: async () => {},
+    aiChat: vi.fn(async () => '```vb\nPrivate Sub Form_Load()\n    Caption = "hi"\nEnd Sub\n```'),
+  } as unknown as Backend & { aiChat: ReturnType<typeof vi.fn> };
+  const wins = new Map<string, CodeWindow>();
+  const openCode = (id: string) => { const w = wins.get(id) ?? openCodeWindow(ide, id, { mdiHost: mdi }); wins.set(id, w); return w; };
+  let flow: Promise<void> | undefined;
+  const rc: RunController = new RunController(ide, () => {
+    const h = new InlineFormHost(layer);
+    h.runtimeErrorBox = async () => 'ai';
+    return h;
+  }, openCode, { doc: document, onAskAi: fix => { flow = askAiAboutError(ide, backend, fix, { openCode, end: () => rc.endAndWait() }, document); } });
+  void rc.start(false);
+  const btn = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('.dlg98 button')].find(b => b.textContent === label);
+  await vi.waitFor(() => expect(btn('OK')).toBeTruthy());
+  expect(ide.mode).toBe('design');
+  const user = (backend.aiChat.mock.calls[0][3] as { content: string }[])[1].content;
+  expect(user).toContain('Compile error: Argument not optional');
+  expect(user).toContain('Line 1 in Form_Load');
+  btn('OK')!.click();
+  await flow;
+  expect(p.forms[0].code).toBe('Private Sub Form_Load()\n    Caption = "hi"\nEnd Sub');
+});
