@@ -117,6 +117,19 @@ test('duplicate name asks for control array; No keeps the name, Yes makes an arr
   expect([a.index, form().controls[0].index, form().controls[1].name]).toEqual([null, null, 'Command2']);
 });
 
+test('a case-only rename of an array member keeps its index and recases the whole array (one undo)', async () => {
+  const mk = (i: number) => ({ ...newControl(form(), 'CommandButton', { left: 500 * i, top: 0 }, null), name: 'Command1', index: i });
+  ide.stack.execute(addControlsCmd(form().id, [mk(0), mk(1), mk(5)]));
+  const m5 = form().controls.find(c => c.index === 5)!;
+  ide.setSelection({ formId: form().id, ids: [m5.id] });
+  edit('(Name)', 'COMMAND1');
+  await flush();
+  expect(box).not.toHaveBeenCalled();
+  expect(form().controls.map(c => [c.name, c.index])).toEqual([['COMMAND1', 0], ['COMMAND1', 1], ['COMMAND1', 5]]);
+  ide.stack.undo();
+  expect(form().controls.map(c => [c.name, c.index])).toEqual([['Command1', 0], ['Command1', 1], ['Command1', 5]]);
+});
+
 test('form name edit renames the form; duplicate form is invalid', async () => {
   ide.setSelection({ formId: form().id, ids: [] });
   edit('(Name)', 'frmMain');

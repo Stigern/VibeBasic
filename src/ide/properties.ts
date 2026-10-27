@@ -132,6 +132,11 @@ export function createPropertiesWindow(host: HTMLElement, ide: IdeState, opts: {
       return;
     }
     if (others[0].type !== t.type) return invalid();
+    // a case-only rename of an array member recases the whole array (members share one name), indexes kept
+    if (t.index !== null && name.toLowerCase() === t.name.toLowerCase()) {
+      ide.stack.execute(compositeCmd('Rename', [t, ...others].map(c => renameCmd(form.id, c.id, name, c.index))));
+      return;
+    }
     // Joining an existing control array is silent (as in Task 7's paste and VB6); only a new array asks.
     const cmds: Command[] = [];
     if (others.every(o => o.index === null)) {
