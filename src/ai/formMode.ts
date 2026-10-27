@@ -152,20 +152,48 @@ export function isTruncatedJson(text: string, from = 0): boolean {
   return depth > 0 || inString;
 }
 
-/** The JSON in a reply (fences, thinking and loose syntax tolerated), or why there is none. */
+/** Index of the bracket that closes the one at `from` (outside strings and // comments); -1 when it is never closed. */
+function jsonEnd(text: string, from: number): number {
+  let depth = 0;
+  for (let i = from; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === '\\') i++;
+      if (i >= text.length) return -1;
+    } else if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+    } else if (c === '{' || c === '[') depth++;
+    else if (c === '}' || c === ']') { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+
+/** An object, or a bare top-level array of ops (objects): `[cmdOK]` or `[1]` in the prose before the JSON is not it. */
+const looksLikeAnswer = (v: unknown): boolean => isObj(v) || (Array.isArray(v) && v.length > 0 && v.every(isObj));
+
+/**
+ * The JSON in a reply (fences, thinking and loose syntax tolerated), or why there is none. Each bracketed span is tried in
+ * turn, up to where its brackets close, so brackets in the prose before or after the JSON do not spoil it.
+ */
 function parseJsonLoose(reply: string): { value: unknown } | { reason: string } {
   const text = stripThinking(reply);
-  const o = text.indexOf('{'), q = text.indexOf('[');
-  // a bare top-level array of ops is accepted too
-  const [open, close] = q >= 0 && (o < 0 || q < o) ? ['[', ']'] : ['{', '}'];
-  const a = text.indexOf(open), b = text.lastIndexOf(close);
-  if (a >= 0 && isTruncatedJson(text, a)) return { reason: 'the JSON stops before it is complete (cut off); answer with the whole JSON object' };
-  if (a < 0 || b <= a) return { reason: 'no JSON object found' };
-  try { return { value: JSON.parse(sanitizeJson(text.slice(a, b + 1))) }; }
-  catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return { reason: msg.length > 100 ? `${msg.slice(0, 97)}...` : msg };
+  let firstError: string | undefined;
+  for (let a = text.search(/[{[]/), tries = 0; a >= 0 && tries < 50; tries++) {
+    const b = jsonEnd(text, a);
+    // everything after an unclosed `{` is inside it: an inner object that happens to parse is not the answer (an unclosed
+    // `[` may be prose, or a cut-off bare array whose first op then shows it)
+    if (b < 0 && text[a] === '{') return { reason: 'the JSON stops before it is complete (cut off); answer with the whole JSON object' };
+    if (b >= 0) try {
+      const value: unknown = JSON.parse(sanitizeJson(text.slice(a, b + 1)));
+      if (looksLikeAnswer(value)) return { value };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      firstError ??= msg.length > 100 ? `${msg.slice(0, 97)}...` : msg;
+    }
+    const next = text.slice(a + 1).search(/[{[]/);
+    a = next < 0 ? -1 : a + 1 + next;
   }
+  return { reason: firstError ?? 'no JSON object found' };
 }
 
 /** Op names small models use instead of add / set / delete / form. */
