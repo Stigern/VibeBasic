@@ -165,3 +165,26 @@ test('Add File adds a .frm as one undoable step; a name the project has already 
   ide.stack.undo();
   expect(ide.project.forms.map(f => f.name)).toEqual(['Form1']);
 });
+
+test('edits made while the save is writing stay dirty', async () => {
+  let finish!: () => void;
+  backend.writeTextFile.mockImplementation(() => new Promise<void>(r => { finish = r; }));
+  ide.filePath = '/x/Project1.vbb';
+  makeDirty();
+  const p = fc.save(); await flush();
+  ide.stack.execute(setProjectFieldCmd('title', 'later'));
+  finish(); await p;
+  expect(backend.writeTextFile.mock.calls[0][1]).not.toContain('later');
+  expect(ide.stack.isDirty).toBe(true);
+});
+
+test('a code edit made while the save is writing stays dirty', async () => {
+  let finish!: () => void;
+  backend.writeTextFile.mockImplementation(() => new Promise<void>(r => { finish = r; }));
+  ide.filePath = '/x/Project1.vbb';
+  ide.stack.markDirtyExternal();
+  const p = fc.save(); await flush();
+  ide.stack.markDirtyExternal();
+  finish(); await p;
+  expect(ide.stack.isDirty).toBe(true);
+});

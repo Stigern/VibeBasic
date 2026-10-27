@@ -9,6 +9,7 @@ import { ssTabCount } from './ssTab';
 import type { Asset, ControlDef, FormDef, ModuleDef, Project, PropValue } from './types';
 
 export interface Command { label: string; do(p: Project): void; undo(p: Project): void }
+export interface SavePoint { pos: number; edits: number }
 
 export class CommandStack {
   private done: Command[] = [];
@@ -16,6 +17,8 @@ export class CommandStack {
   /** Length of `done` at the last save; -1 when that state can no longer be reached. */
   private savedPos = 0;
   private externalDirty = false;
+  /** Counts code edits, so a save can tell whether one happened while it was writing. */
+  private externalEdits = 0;
 
   constructor(private getProject: () => Project, private onChange: () => void) {}
 
@@ -49,9 +52,17 @@ export class CommandStack {
     this.onChange();
     return true;
   }
-  markSaved(): void { this.savedPos = this.done.length; this.externalDirty = false; this.onChange(); }
+  /** The state a save is about to write; pass it to `markSaved` once the write is done. */
+  savePoint(): SavePoint { return { pos: this.done.length, edits: this.externalEdits }; }
+  /** Without a point: the current state. With one: only what the save wrote, so edits made meanwhile stay dirty. */
+  markSaved(at: SavePoint = this.savePoint()): void {
+    this.savedPos = at.pos;
+    if (at.edits === this.externalEdits) this.externalDirty = false;
+    this.onChange();
+  }
   /** Code edits have their own undo in CodeMirror; they just mark the project as modified. */
   markDirtyExternal(): void {
+    this.externalEdits++;
     if (this.externalDirty) return;   // already dirty: nothing to refresh
     this.externalDirty = true;
     this.onChange();

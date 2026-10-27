@@ -127,6 +127,7 @@ export class FileController {
   }
 
   private async writeTo(path: string): Promise<boolean> {
+    const at = this.ide.stack.savePoint();   // edits made while the file is being written are not in it
     try {
       await this.backend.writeTextFile(path, serializeProject(this.ide.project));
     } catch (e) {
@@ -135,7 +136,7 @@ export class FileController {
     }
     this.ide.filePath = path;
     this.recent?.add(path);
-    this.ide.stack.markSaved();
+    this.ide.stack.markSaved(at);
     this.updateTitle();
     return true;
   }
