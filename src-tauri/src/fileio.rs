@@ -93,6 +93,10 @@ impl OpenFiles {
     if p.is_dir() {
       return Err(vb(75));
     }
+    // before opening: Output truncates the file, and a refused Open must leave it as it was
+    if self.0.lock().unwrap().files.len() >= MAX_OPEN {
+      return Err(vb(67));
+    }
     let mut o = OpenOptions::new();
     match (mode, access) {
       ("input", _) | (_, "read") => o.read(true),
@@ -577,6 +581,24 @@ mod tests {
     let o = files.open(&path, "output", "").unwrap();
     files.close(o.id);
     assert_eq!(std::fs::read(&path).unwrap().len(), 0);
+  }
+
+  #[test]
+  fn too_many_files_leaves_an_output_file_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = s(&dir.path().join("keep.txt"));
+    std::fs::write(&path, b"data").unwrap();
+    let files = OpenFiles::default();
+    let held = files.open(&s(&dir.path().join("held.txt")), "output", "").unwrap();
+    let f = files.get(held.id).unwrap();
+    {
+      let mut g = files.0.lock().unwrap();
+      for i in 0..MAX_OPEN as u32 {
+        g.files.insert(1000 + i, f.clone());
+      }
+    }
+    assert_eq!(files.open(&path, "output", "").unwrap_err(), "67|Too many files");
+    assert_eq!(std::fs::read(&path).unwrap(), b"data");
   }
 
   #[test]
