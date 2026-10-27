@@ -126,6 +126,10 @@ test('StrComp', () => {
 test('Val', () => {
   expect(call('Val', '  &H1F ')).toBe(31);
   expect(call('Val', '&O17')).toBe(15);
+  expect(call('Val', '&HFFFF&')).toBe(65535);   // a trailing & makes it a Long
+  expect(call('Val', '&HFFFF')).toBe(-1);
+  expect(call('Val', '&O177777&')).toBe(65535);
+  expect(call('Val', '&HFFFFFFFF&')).toBe(-1);
   expect(call('Val', '1e3')).toBe(1000);
   expect(call('Val', '.5')).toBe(0.5);
   expect(call('Val', 'abc')).toBe(0);

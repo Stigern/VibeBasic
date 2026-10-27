@@ -24,7 +24,8 @@ export function val(text: string): number {
     const digits = (hex ? /^[0-9a-fA-F]*/ : /^[0-7]*/).exec(radix[2])![0];
     if (digits === '') return 0;
     const v = parseInt(digits, hex ? 16 : 8);
-    const small = hex ? digits.length <= 4 : v <= 0xffff;
+    // `&HFFFF&`: a trailing & makes it a Long (65535)
+    const small = s[2 + digits.length] !== '&' && (hex ? digits.length <= 4 : v <= 0xffff);
     if (small) return v >= 0x8000 ? v - 0x10000 : v;
     const w = v % 0x100000000;
     return w >= 0x80000000 ? w - 0x100000000 : w;
