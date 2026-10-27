@@ -385,6 +385,12 @@ describe('statements', () => {
     ))).toEqual(['True', 'NullxNull', 'no']);
   });
 
+  test('Double arithmetic past its range is Overflow where it happens', async () => {
+    expect(await run(lines('Sub Main()', '  If 2 ^ 2000 > 0 Then Debug.Print "yes"', 'End Sub'))).toEqual(['[Error 6 at Module1:2] Overflow']);
+    expect(await run(lines('Sub Main()', '  On Error Resume Next', '  Dim r', '  r = 1E+308 * 10', '  Debug.Print Err.Number', 'End Sub'))).toEqual([' 6 ']);
+    expect(await run(lines('Sub Main()', '  Debug.Print 1E+308 + 1', 'End Sub'))).toEqual([' 1E+308 ']);
+  });
+
   test('integer division and Mod by zero, 0/0 overflow, Like with special characters', async () => {
     expect(await run(lines('Sub Main()', '  Debug.Print 5 \\ 0', 'End Sub'))).toEqual(['[Error 11 at Module1:2] Division by zero']);
     expect(await run(lines('Sub Main()', '  Debug.Print 0 / 0', 'End Sub'))).toEqual(['[Error 6 at Module1:2] Overflow']);

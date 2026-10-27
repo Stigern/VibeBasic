@@ -182,7 +182,10 @@ export function binaryOp(op: BinaryOp, a: VBValue, b: VBValue): VBValue {
       return logic(op, a, b);
   }
   if (a instanceof NullT || b instanceof NullT) return Null;
-  return arith(op, a, b);
+  const r = arith(op, a, b);
+  // a Double past its range is Overflow (6) where it happens, not an Infinity that fails later or never
+  if (typeof r === 'number' ? !Number.isFinite(r) : isDate(r) && !Number.isFinite(r.serial)) throw new VBRuntimeError(6);
+  return r;
 }
 
 export function unaryOp(op: UnaryOp, v: VBValue): VBValue {
