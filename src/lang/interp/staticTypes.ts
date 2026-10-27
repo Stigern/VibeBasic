@@ -14,7 +14,7 @@
 // check its results need, `chk`: see eval.ts `binaryResult`).
 
 import type { BinaryExpr, BinaryOp, CallOrIndex, Expr, MissingArg, UnaryExpr, VBTypeName } from '../ast';
-import { VBArray, maybeSingle, single7, type VBValue } from '../values';
+import { VBArray, maybeSingle, single7, singleToStr, type VBValue } from '../values';
 import { lookup } from './eval';
 import { BuiltinRef, Frame, ProcRef, ValueRef, Variable, lc } from './scope';
 
@@ -221,6 +221,16 @@ export function noteSubtype(f: Frame, v: Variable, src: Expr): void {
  */
 export function shown(f: Frame, e: Expr | MissingArg, v: VBValue): VBValue {
   return maybeSingle(v) && staticType(f, e) === 'Single' ? single7(v) : v;
+}
+
+/**
+ * The text of `v` when `e` is a Single (by its code type, or a Variant holding one) of 1E+07 or more, which VB6 writes in
+ * E notation (`1.234568E+07`; a Double shows 12345678), else undefined. For where a Single becomes text (Print, `&`,
+ * CStr, a String variable).
+ */
+export function bigSingleText(f: Frame, e: Expr | MissingArg, v: VBValue): string | undefined {
+  if (typeof v !== 'number' || !(v >= 1e7 || v <= -1e7) || Math.fround(v) !== v || reportedType(f, e) !== 'Single') return undefined;
+  return singleToStr(v);
 }
 
 /** Numeric declared types: a Single stored there keeps its exact value (`d = s`, `a(i) = s`). */

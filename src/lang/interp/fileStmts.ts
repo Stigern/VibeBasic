@@ -9,7 +9,7 @@ import { VBArray, VBRecord, bankers, isDate, toNumber, toStr, vbTypeName, type V
 import type { Gen } from './driver';
 import { assign, classPlain, evalExpr, lookup } from './eval';
 import { Frame, Variable, lc } from './scope';
-import { shown } from './staticTypes';
+import { bigSingleText, shown } from './staticTypes';
 
 /** What print items are written to: a text line (Debug.Print, Print #) or the pieces of a Print on an object. */
 export type PrintSink = Pick<PrintLine, 'addItem' | 'addSemicolon' | 'addComma' | 'addSpc' | 'addTab'>;
@@ -17,7 +17,11 @@ export type PrintSink = Pick<PrintLine, 'addItem' | 'addSemicolon' | 'addComma' 
 /** Evaluates print items into `line`; true when the statement ends the line (no trailing `;` or `,`). */
 export function* printItems(f: Frame, items: PrintItem[], line: PrintSink): Gen<boolean> {
   for (const it of items) {
-    if (it.expr) line.addItem(shown(f, it.expr, yield* classPlain(f, yield* evalExpr(f, it.expr))));
+    if (it.expr) {
+      const v = yield* classPlain(f, yield* evalExpr(f, it.expr));
+      const big = bigSingleText(f, it.expr, v);   // padded like a number: ` 1.234568E+07 `
+      line.addItem(big !== undefined ? (big[0] === '-' ? '' : ' ') + big + ' ' : shown(f, it.expr, v));
+    }
     else if (it.fn) {
       const n = it.fn.arg ? bankers(toNumber(yield* evalExpr(f, it.fn.arg))) : undefined;
       if (it.fn.kind === 'spc') line.addSpc(n ?? 0);

@@ -541,15 +541,16 @@ export function toNumber(v: VBValue): number {
 }
 
 /** CStr of a Double: up to 15 significant digits, no leading space, VB-style exponent. */
-function numberToStr(n: number): string {
+/** Text of a number with `prec` significant digits (15 for a Double, 7 for a Single), in E notation from 10^prec. */
+function numberToStr(n: number, prec = 15): string {
   if (!Number.isFinite(n)) throw new VBRuntimeError(6);
   if (n === 0) return '0';
   const neg = n < 0;
-  const [mant, expStr] = Math.abs(n).toExponential(14).split('e');
+  const [mant, expStr] = Math.abs(n).toExponential(prec - 1).split('e');
   const e = Number(expStr);
   const digits = mant.replace('.', '').replace(/0+$/, '') || '0';
   let out: string;
-  if (e >= -4 && e < 15) {
+  if (e >= -4 && e < prec) {
     if (e >= 0) {
       const padded = digits.padEnd(e + 1, '0');
       const frac = padded.slice(e + 1);
@@ -563,6 +564,9 @@ function numberToStr(n: number): string {
   }
   return neg ? '-' + out : out;
 }
+
+/** Text of a Single as VB6 writes it: 7 significant digits, E notation from 1E+07 (`1.234568E+07`). */
+export const singleToStr = (n: number): string => numberToStr(n, 7);
 
 export function toStr(v: VBValue): string {
   v = resolve(v);

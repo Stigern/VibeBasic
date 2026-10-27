@@ -254,6 +254,13 @@ describe('variables and scope', () => {
       .toEqual([' 1.2346  1.2346 CurrencyCurrencyCurrencyCurrency']);
   });
 
+  test('a Single of 1E+07 or more shows in E notation with 7 digits', async () => {
+    expect(await run(lines('Sub Main()', '  Dim s As Single, t As String, v, l As Long, d As Double', '  s = 1E+20', '  Debug.Print s',
+      '  s = 12345678', '  t = s', '  v = s', '  Debug.Print s; -s; "[" & s & "]"; CStr(s); t; v',
+      '  s = 1234567: l = 12345678: d = 12345678', '  Debug.Print s; l; d', 'End Sub')))
+      .toEqual([' 1E+20 ', ' 1.234568E+07 -1.234568E+07 [1.234568E+07]1.234568E+071.234568E+07 1.234568E+07 ', ' 1234567  12345678  12345678 ']);
+  });
+
   test('Dim inside a loop does not reset the variable', async () => {
     expect(await run(lines('Sub Main()', '  Dim i As Integer', '  For i = 1 To 3', '    Dim n As Integer', '    n = n + 1', '  Next', '  Debug.Print n', 'End Sub')))
       .toEqual([' 3 ']);

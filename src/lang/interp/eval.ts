@@ -18,7 +18,7 @@ import {
   ProcRef, PropRef, Run, ValueRef, Variable, classesInUse, escape, getField, lc, setClassCaller, setField, storeValue, type Binding,
 } from './scope';
 import { binaryOp, compareResult, likeMatch, plain, unaryOp } from './operators';
-import { isNumericType, noteSubtype, operatorType, reportedType, shown, staticType, type StaticType } from './staticTypes';
+import { bigSingleText, isNumericType, noteSubtype, operatorType, reportedType, shown, staticType, type StaticType } from './staticTypes';
 import { invokeProc, type BoundArg, MISSING } from './exec';
 import type { Runtime } from './program';
 import type { OutSlot, VBObject } from '../host';
@@ -240,7 +240,7 @@ function slowBinary(f: Frame, e: BinaryExpr, a: VBValue, b: VBValue): VBValue {
   if (e.text) return textBinary(e.op, a, b);
   if (e.chk !== 3) learn(f, e);
   if (e.chk !== 3) return binaryResult(f, e, a, b);
-  if (e.op === '&') return binaryOp('&', shown(f, e.left, a), shown(f, e.right, b));
+  if (e.op === '&') return binaryOp('&', bigSingleText(f, e.left, a) ?? shown(f, e.left, a), bigSingleText(f, e.right, b) ?? shown(f, e.right, b));
   return rounded(e, binaryOp(e.op, a, b));
 }
 
@@ -893,6 +893,7 @@ function builtinCall(f: Frame, b: BuiltinRef, args: (Expr | MissingArg)[], argv:
       if (i < minArgs) throw new VBRuntimeError(448);
       argv[i] = undefined as unknown as VBValue;
     } else if (!num && isSingleFrac(v)) argv[i] = shown(f, args[i], v);   // CStr(s), Left(s, 3), MsgBox s: 7 digits
+    else if (!num && b.name === 'cstr') argv[i] = bigSingleText(f, args[i], v) ?? v;   // CStr(s): 1.234568E+07
   }
   if (vars) return fn(argv, f.rt.builtinCtx, args.map(a => declaredType(f, a)));
   return types
@@ -1088,7 +1089,8 @@ export function* assign(f: Frame, target: Expr, value: VBValue, isSet: boolean, 
       let b = bindingOf(f, target);
       if (b === undefined) b = implicitVariable(f, target);
       if (b instanceof Variable && !b.opts.isConst) {
-        assignVariable(b, src === undefined || !isSingleFrac(value) ? value : into(f, src, value, b.type), isSet);
+        const text = src !== undefined && b.type === 'String' ? bigSingleText(f, src, value) : undefined;   // `t = s`: 1.234568E+07
+        assignVariable(b, text ?? (src === undefined || !isSingleFrac(value) ? value : into(f, src, value, b.type)), isSet);
         // `v = CDbl(5)`: the Variant remembers the number's type for TypeName/VarType
         // (an operator node of Variant type tells nothing: skipped; a stale `sub` no longer matches the value)
         if (src !== undefined && b.type === 'Variant' && typeof value === 'number' && !((src.kind === 'binary' || src.kind === 'unary') && src.st === 'Variant')) {
