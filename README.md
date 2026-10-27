@@ -4,9 +4,9 @@
 
 A Visual Basic 6 clone for macOS, Windows and Linux, with the authentic Windows 98 look and a built-in AI assistant that connects to OpenAI-compatible servers, including your own local model.
 
-![VibeBasic: the AI Wizard with program description, appearance, improvements and live request preview](docs/images/screenshot.png)
+![VibeBasic: the Drawing App preset in the form designer, with its code window, toolbox, Project Explorer and Properties window](docs/images/ide.jpg)
 
-Describe a program, choose its appearance and features, and review the request before creating it.
+Design forms, write VB6 code and run it, in the Windows 98 look you remember.
 
 ## What it does
 
@@ -37,7 +37,15 @@ Describe a program, choose its appearance and features, and review the request b
   - Every suggestion is shown as a preview. You can refine it with **Change...**, and it is applied as one undo step.
   - With a vision model, the AI sees a picture of your form. A layout check catches overlapping controls and cut-off captions, and the AI places controls relative to each other ("below Text1", "arrange as a row").
   - Generated code is checked before you see it: syntax, event signatures, missing procedures and wrong properties. Problems go back to the model once.
-  - Questions get plain answers. Tools > AI Log shows every request, answer, token count and timing.
+  - Questions get plain answers. Tools > AI Log shows each request's model, token counts, timing and outcome.
+
+![The AI Wizard: a program description, look and improvements, and the request the AI gets](docs/images/ai-wizard.jpg)
+
+The **AI Wizard** turns a description into a new program; the request it will send updates as you choose.
+
+![Ask AI in a code window: the request, what to work on, images, instructions and the context to send](docs/images/ask-ai.jpg)
+
+**Ask AI** changes the code or form you are working on, and shows exactly what it will send.
 
 ## Download
 

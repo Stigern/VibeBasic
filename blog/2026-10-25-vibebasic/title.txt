@@ -1,1 +1,0 @@
-VibeBasic – a curious little Visual Basic 6 clone
