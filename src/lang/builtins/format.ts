@@ -680,7 +680,11 @@ export function formatValue(v: VBValue, fmt: string, locale: string): string {
 
 def('Format', 1, 4, (a, ctx) => {
   const v = plain(a[0]);
-  if (v instanceof NullT) return Null;
+  if (v instanceof NullT) {
+    // a fourth section is the text for Null (`"0;0;0;\N"` gives N); without one the result is Null
+    const sec = a[1] === undefined ? undefined : splitSections(toStr(a[1]))[3];
+    return sec === undefined ? Null : sec.replace(/"([^"]*)"?|\\(.)/g, (_, q?: string, c?: string) => q ?? c ?? '');
+  }
   return a[1] === undefined ? toStr(v) : formatValue(v, toStr(a[1]), ctx.locale);
 });
 

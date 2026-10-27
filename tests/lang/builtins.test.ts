@@ -477,6 +477,8 @@ test('Format built-in', () => {
   expect(call('Format', 5)).toBe('5');
   expect(call('Format', 1234.5, '#,##0.00')).toBe('1,234.50');
   expect(call('Format', Null, '0')).toBe(Null);
+  expect(call('Format', Null, '0;0;0;\\N')).toBe('N');
+  expect(call('Format', Null, '0;(0);"zero";"none"')).toBe('none');
   expect(call('Format', 0.5, '0%')).toBe('50%');
   expect(call('Format', D, 'yyyy')).toBe('2026');
 });
