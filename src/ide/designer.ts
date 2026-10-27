@@ -144,13 +144,14 @@ export function openDesigner(ide: IdeState, formId: string, env: DesignerEnv): M
     const cur = new Set(form.controls.map(c => c.id));
     for (const id of [...last.keys()]) if (!cur.has(id)) { surface.removeControl(id); last.delete(id); }
     form.controls.forEach((c, i) => {
-      const prev = last.get(c.id);
+      const prev = last.get(c.id), json = snapshot(c);
       if (!prev) { surface.addControl(structuredClone(c), i); }
       else {
-        if (prev.name !== c.name) surface.rename(c.id, c.name);   // a Toolbar finds its ImageList by name
-        if (prev.json !== snapshot(c)) { const d = diff(c.type, prev.props, c.props); if (Object.keys(d).length) surface.update(c.id, d); }
+        if (prev.name !== c.name) { surface.rename(c.id, c.name); prev.name = c.name; }   // a Toolbar finds its ImageList by name
+        if (prev.json === json) return;   // unchanged: keep the snapshot (no clone per control per command)
+        const d = diff(c.type, prev.props, c.props); if (Object.keys(d).length) surface.update(c.id, d);
       }
-      last.set(c.id, { json: snapshot(c), props: structuredClone(c.props), name: c.name });
+      last.set(c.id, { json, props: structuredClone(c.props), name: c.name });
     });
     const struct = structOf(form.controls);
     if (struct !== lastStruct) { surface.reorder(structuredClone(form.controls)); lastStruct = struct; }

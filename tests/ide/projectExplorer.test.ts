@@ -25,6 +25,19 @@ beforeEach(() => {
   document.body.replaceChildren(host);
 });
 
+test('a command that changes nothing the tree shows keeps its rows (perf); a rename re-renders', () => {
+  createProjectExplorer(host, ide);
+  const row = () => host.querySelector('.pe98-form');
+  const before = row();
+  ide.project.forms[0].props.Caption = 'x';
+  ide.emit('project');
+  expect(row()).toBe(before);
+  ide.project.forms[0].name = 'frmMain';
+  ide.emit('project');
+  expect(row()).not.toBe(before);
+  expect(labels()).toContain('frmMain (frmMain)');
+});
+
 test('add form names Form2', () => {
   addForm(ide);
   expect(ide.project.forms[1].name).toBe('Form2');

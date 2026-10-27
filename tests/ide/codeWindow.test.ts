@@ -35,6 +35,23 @@ beforeEach(() => {
   open();
 });
 
+test('a command that leaves the code alone neither re-reads nor re-parses the whole doc (perf)', async () => {
+  const { Text } = await import('@codemirror/state');
+  const { setPropertyCmd } = await import('../../src/model/commands');
+  set('Private Sub Command1_Click()\nEnd Sub', 3);
+  const caption = (v: string) => ide.stack.execute(setPropertyCmd(form().id, form().controls[0].id, 'Caption', v));
+  caption('A');
+  const read = vi.spyOn(Text.prototype, 'toString');
+  caption('B');
+  expect(read).not.toHaveBeenCalled();
+  read.mockRestore();
+  // a change of the model's code still reaches the editor
+  ide.stack.undo(); ide.stack.undo();
+  form().code = 'Dim x\n';
+  ide.emit('project');
+  expect(cw.getSource()).toBe('Dim x\n');
+});
+
 test('title and window reuse', () => {
   expect(cw.win.el.textContent).toContain('Project1 - Form1 (Code)');
   expect(openCodeWindow(ide, form().id)).toBe(cw);

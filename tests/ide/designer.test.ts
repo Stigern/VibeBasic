@@ -5,7 +5,7 @@ import { openDesigner, pasteControls, registerDesignerActions } from '../../src/
 import { IdeState } from '../../src/ide/ideState';
 import type { IdeActions } from '../../src/ide/menus';
 import { newControl } from '../../src/model/controls';
-import { addControlsCmd, addFormCmd } from '../../src/model/commands';
+import { addControlsCmd, addFormCmd, setPropertyCmd } from '../../src/model/commands';
 import type { ControlDef } from '../../src/model/types';
 import { messageBox98 } from '../../src/ui98/dialogs';
 
@@ -370,4 +370,14 @@ test('TabIndex stays unique: delete renumbers, new and pasted controls come last
   expect(tabs()).toEqual(['Command2:0', 'Command3:1', 'Command1:2', 'Command4:3']);
   ide.stack.undo(); ide.stack.undo(); ide.stack.undo();   // undo of the delete restores the old numbers
   expect(tabs()).toEqual(['Command1:0', 'Command2:1', 'Command3:2']);
+});
+
+test('a command clones only the props of the controls it changed (perf: no clone per control per command)', () => {
+  const defs = Array.from({ length: 30 }, (_, i) => newControl(form(), 'CommandButton', { left: i * 100, top: 0 }, null));
+  ide.stack.execute(addControlsCmd(form().id, defs));
+  const clone = vi.spyOn(globalThis, 'structuredClone');
+  ide.stack.execute(setPropertyCmd(form().id, defs[3].id, 'Caption', 'Hi'));
+  expect(clone.mock.calls.length).toBeLessThan(10);
+  clone.mockRestore();
+  expect(client.querySelectorAll('.vb-ctl')[3].textContent).toContain('Hi');
 });

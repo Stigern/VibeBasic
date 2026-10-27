@@ -133,7 +133,12 @@ export function createProjectExplorer(host: HTMLElement, ide: IdeState, env?: De
     return r;
   }
 
+  // what the tree shows: a command that changes none of it (most of them) keeps the rows
+  const shownKey = () => JSON.stringify([fileLabel(), flat, ide.project.forms.map(f => [f.id, f.name]),
+    ide.project.modules.map(m => [m.id, m.name, m.kind])]);
+  let lastKey = '';
   function render(): void {
+    lastKey = shownKey();
     const p = ide.project;
     const rows: HTMLElement[] = [row(fileLabel(), 0, 'project')];
     const forms = p.forms.map(f => row(`${f.name} (${f.name})`, flat ? 1 : 2, 'form', f.id));
@@ -153,7 +158,7 @@ export function createProjectExplorer(host: HTMLElement, ide: IdeState, env?: De
   };
   ide.on('project', () => {
     if (ide.explorerItemId && !ide.project.forms.some(f => f.id === ide.explorerItemId) && !ide.project.modules.some(m => m.id === ide.explorerItemId)) ide.explorerItemId = null;
-    render();
+    if (shownKey() === lastKey) markSelected(); else render();
   });
   ide.on('selection', markSelected);
   ide.on('activeView', () => {

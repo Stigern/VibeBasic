@@ -311,7 +311,7 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   /** The module's WithEvents variables (forms and classes), with the events their class declares. */
   const eventVars = (): ObjInfo[] => {
     if (!form() && !isClass()) return [];
-    return withEventsVars(src()).map(v => {
+    return withEventsOfDoc().map(v => {
       const cls = ide.project.modules.find(m => m.kind === 'class' && m.name.toLowerCase() === v.cls.toLowerCase());
       const events = cls ? classEvents(cls.code) : [];
       return { name: v.name, events, defaultEvent: events[0]?.name ?? '', isArray: false };
@@ -367,7 +367,17 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     } else api.gotoProcedure(curObj, p);
   } });
   const src = () => view.state.doc.toString();
-  function fillProcs(procs = listProcedures(src())): void {
+  let synced: string | null = null;   // it.code as of the editor's last write / load (the doc holds norm(synced))
+  // parsed once per doc version: the combos are synced on every IDE command
+  const perDoc = <T>(parse: (text: string) => T): (() => T) => {
+    let doc: EditorState['doc'] | null = null, out: T;
+    return () => {
+      if (view.state.doc !== doc) { doc = view.state.doc; out = parse(doc.toString()); }
+      return out;
+    };
+  };
+  const procsOfDoc = perDoc(listProcedures), withEventsOfDoc = perDoc(withEventsVars);
+  function fillProcs(procs = procsOfDoc()): void {
     if (curObj === GENERAL) procCombo.setItems([DECLS, ...procs.filter(p => p.property || !resolveProc(p.name)).map(procLabel)], () => false);
     else {
       const t = objInfo(curObj);
@@ -378,7 +388,7 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
   function syncCombos(): void {
     objCombo.setItems(objectNames());
     const line = view.state.doc.lineAt(view.state.selection.main.head).number;
-    const procs = listProcedures(src());
+    const procs = procsOfDoc();
     const p = procs.find(x => line >= x.line && line <= x.endLine);
     const r = p && !p.property ? resolveProc(p.name) : null;
     curObj = r ? r.obj : GENERAL;
@@ -436,7 +446,7 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     if (tr.effects.some(e => e.is(bpEffect)) || tr.startState.field(bpField).length !== tr.state.field(bpField).length) notifyBreakpoints(ide);
     if (tr.docChanged && !tr.annotation(EXTERNAL)) {
       const it = item();
-      if (it) { it.code = src(); ide.stack.markDirtyExternal(); }
+      if (it) { it.code = synced = src(); ide.stack.markDirtyExternal(); }
     }
     if (!tr.docChanged && !tr.selection && !tr.annotation(EXTERNAL)) return;
     syncSelection(v);
@@ -532,7 +542,10 @@ export function openCodeWindow(ide: IdeState, itemId: string, env?: CodeEnv): Co
     const it = item();
     if (!it) { win.close(); return; }
     win.setTitle(title());
-    const code = norm(it.code), cur = src();
+    // the model's code is still the text the editor last wrote or loaded: no full-text compare per command
+    const changed = it.code !== synced;
+    synced = it.code;
+    const code = changed ? norm(it.code) : '', cur = changed ? src() : '';
     if (code !== cur) {
       let s = 0;
       while (s < code.length && s < cur.length && code[s] === cur[s]) s++;
