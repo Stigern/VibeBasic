@@ -3,8 +3,9 @@
 //! The commands are `async` and do their work on the blocking pool (`off_main`), so a slow disk, a FIFO or a network
 //! volume does not freeze the main thread. Only regular files are read, at most MAX_FILE_BYTES of them.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::io_util::{off_main, open_read};
 
@@ -53,8 +54,13 @@ pub fn write_text(path: &str, text: &str) -> Result<(), String> {
     .ok_or_else(|| format!("{}: not a file path", path))?
     .to_string_lossy()
     .to_string();
-  let tmp: PathBuf = target.with_file_name(format!(".{}.{}.tmp", file_name, std::process::id()));
-  let result = std::fs::write(&tmp, text.as_bytes()).and_then(|_| std::fs::rename(&tmp, target));
+  // a temp file of its own for each write: two saves of one file at once must not share one
+  static SEQ: AtomicU64 = AtomicU64::new(0);
+  let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+  let tmp: PathBuf = target.with_file_name(format!(".{}.{}.{}.tmp", file_name, std::process::id(), seq));
+  let result = std::fs::File::create(&tmp)
+    .and_then(|mut f| f.write_all(text.as_bytes()).and_then(|_| f.sync_all()))   // on disk before it replaces the file
+    .and_then(|_| std::fs::rename(&tmp, target));
   if let Err(e) = result {
     let _ = std::fs::remove_file(&tmp);
     return Err(err(path, e));
@@ -241,6 +247,26 @@ mod tests {
     let dir = std::env::temp_dir().join(format!("vibebasic-test-{}-{}-{}", tag, std::process::id(), nanos));
     std::fs::create_dir_all(&dir).unwrap();
     dir
+  }
+
+  #[test]
+  fn overlapping_saves_of_one_file_each_write_whole() {
+    let dir = unique_dir("race");
+    let path = dir.join("p.vbb").to_string_lossy().to_string();
+    let texts: Vec<String> = (0..8).map(|i| i.to_string().repeat(200_000)).collect();
+    let handles: Vec<_> = texts
+      .iter()
+      .cloned()
+      .map(|t| {
+        let path = path.clone();
+        std::thread::spawn(move || (0..20).map(|_| write_text(&path, &t)).collect::<Result<Vec<_>, _>>())
+      })
+      .collect();
+    for h in handles {
+      h.join().unwrap().unwrap();
+    }
+    assert!(texts.contains(&read_text(&path).unwrap()));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);   // no temp file left behind
   }
 
   #[test]
