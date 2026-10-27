@@ -445,6 +445,7 @@ export class FormInstance implements VBObject {
     const timers = this.timers();
     this.loaded = false;
     this.visible = false;
+    this.showAsked = false;   // a later Load is a fresh start: AutoShowChildren applies again
     this.blocked = false;
     this.loadDone = null;
     this.activeId = null;

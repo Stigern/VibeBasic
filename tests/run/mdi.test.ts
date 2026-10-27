@@ -158,3 +158,15 @@ test('inside an MDI child: drawing, Screen.MousePointer, Validate, drag and drop
   expect(await run('Form2.PrintForm')).toBe('');
   expect(document.querySelector('.vb-print-overlay')).not.toBeNull();
 });
+
+test('an MDI child shown before is shown again by AutoShowChildren when it is loaded again after Unload', async () => {
+  await start(project(''));
+  await run('Load Form2');
+  expect(kids()).toHaveLength(1);
+  await run('Unload Form2');
+  expect(kids()).toHaveLength(0);
+  await run('Load Form2');
+  expect(kids()).toHaveLength(1);
+  await run('Debug.Print Form2.Visible');
+  expect(out.at(-1)).toBe('True');
+});
