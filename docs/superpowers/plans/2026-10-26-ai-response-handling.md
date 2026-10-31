@@ -30,7 +30,7 @@
 ## Verification evidence
 - Full TypeScript suite: 2097 passed. Native suite: 148 passed. TypeScript/frontend build passed.
 - Independent review found parity/length-priority defects; all fixed with regressions and re-reviewed clear.
-- Read-only Tailscale discovery found the server at 100.106.183.31:8000; GET /models reports paiton-flashnext-vision, context262144. LAN URL timed out.
+- Read-only Tailscale discovery found the server on port 8000; GET /models reports paiton-flashnext-vision, context262144. LAN URL timed out.
 - Three small live requests (medium, max_tokens1024): text stop (18 input/31 output/27 reasoning), strict JSON stop (19/37/30, valid JSON), tool call (270/41/23, one call and no final text). No tool was executed. No server configuration changed.
 
 - Packaged macOS app0.11.2 verified in a separate app instance: Medium, 65536-token budget, opt-in fast follow-up and selectable XHigh. Existing running calculator project and saved AI settings were not changed.
