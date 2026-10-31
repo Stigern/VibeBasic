@@ -113,7 +113,7 @@ You can open and explore the wizard before configuring AI. If setup is needed wh
 
 ## Status
 
-VibeBasic is a hobby project and a work in progress. See [CHANGELOG.md](CHANGELOG.md) for what is new in each version.
+VibeBasic is a hobby project and a work in progress by [Stig Moen](https://stigern.net/). See [CHANGELOG.md](CHANGELOG.md) for what is new in each version.
 
 Not supported yet: `Declare` (calling DLLs and system APIs), UserControls, Property Pages and other ActiveX designers, the OLE container, DDE, and some rarely used members of the bigger controls. VibeBasic runs VB6-style code in its own interpreter; it does not run VB6 `.exe` files or real ActiveX `.ocx` files.
 
