@@ -3,8 +3,8 @@ name = "app"
 version = "0.13.1"
 description = "VibeBasic"
 authors = ["VibeBasic"]
-license = ""
-repository = ""
+license = "MIT"
+repository = "https://github.com/Stigern/VibeBasic"
 edition = "2024"
 rust-version = "1.90"
 

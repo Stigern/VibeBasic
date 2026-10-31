@@ -118,3 +118,7 @@ VibeBasic is a hobby project and a work in progress by [Stig Moen](https://stige
 Not supported yet: `Declare` (calling DLLs and system APIs), UserControls, Property Pages and other ActiveX designers, the OLE container, DDE, and some rarely used members of the bigger controls. VibeBasic runs VB6-style code in its own interpreter; it does not run VB6 `.exe` files or real ActiveX `.ocx` files.
 
 The look is inspired by Visual Basic 6 and Windows 98. The UI uses [98.css](https://github.com/jdan/98.css). All icons and Agent characters are original artwork.
+
+## License
+
+VibeBasic is released under the [MIT License](LICENSE). The bundled 98.css and fonts in `src/ui98/vendor/` keep their own licenses, which are next to them in that folder.
