@@ -14,9 +14,9 @@
 import { VBRuntimeError } from '../errors';
 import { plain } from '../interp/operators';
 import {
-  Null, NullT, coerce, dateParts, pivotYear, toBool, toNumber, toStr, validDate, type DateTextParser, type VBDate, type VBValue,
+  Null, NullT, coerce, dateFrom, dateParts, pivotYear, toBool, toNumber, toStr, validDate, type DateTextParser, type VBDate, type VBValue,
 } from '../values';
-import { def } from './util';
+import { def, optInt } from './util';
 
 type Parts = ReturnType<typeof dateParts>;
 
@@ -63,6 +63,40 @@ export function weekdayNameOf(dow: number, long: boolean, locale: string): strin
 }
 
 const dayOfWeek = (p: Parts): number => utcDate(p).getUTCDay();
+
+/** Weekday of a serial, 1 = Sunday (1899-12-30 was a Saturday). */
+export const weekdayOf = (serial: number): number => ((((Math.floor(serial) + 6) % 7) + 7) % 7) + 1;
+
+/** A firstdayofweek argument, 1 = Sunday; vbUseSystem (0) and omitted are Sunday. */
+export const firstDay = (v: VBValue | undefined): number => {
+  const f = optInt(v, 1);
+  if (f < 0 || f > 7) throw new VBRuntimeError(5);
+  return f === 0 ? 1 : f;
+};
+
+/** A firstweekofyear argument; vbUseSystem (0) and omitted are vbFirstJan1. */
+export const firstWeek = (v: VBValue | undefined): number => {
+  const f = optInt(v, 1);
+  if (f < 0 || f > 3) throw new VBRuntimeError(5);
+  return f === 0 ? 1 : f;
+};
+
+/** The first day (serial) of week 1 of a year. */
+function weekOneStart(y: number, first: number, rule: number): number {
+  const jan1 = Math.floor(dateFrom(y, 1, 1).serial);
+  const before = (weekdayOf(jan1) - first + 7) % 7; // days of January 1's week that are in the year before
+  const later = rule === 3 ? before > 0 : rule === 2 && 7 - before < 4;
+  return jan1 - before + (later ? 7 : 0);
+}
+
+/** Week number of a serial (DatePart and Format "ww"). Days before week 1 belong to the last week of the year before. */
+export function weekOfYear(serial: number, first: number, rule: number): number {
+  const day = Math.floor(serial);
+  const { y } = dateParts(serial);
+  const start = weekOneStart(y, first, rule);
+  return Math.floor((day - (day < start ? weekOneStart(y - 1, first, rule) : start)) / 7) + 1;
+}
+
 function isLeap(y: number): boolean { return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; }
 
 function dayOfYearOf(p: Parts): number {
@@ -338,7 +372,7 @@ function dateTokens(fmt: string): DTok[] {
   return out;
 }
 
-function formatDate(v: VBValue, fmt: string, locale: string): string {
+function formatDate(v: VBValue, fmt: string, locale: string, first: number, rule: number): string {
   const serial = (coerce(v, 'Date') as VBDate).serial;
   const p = dateParts(serial);
   const toks = dateTokens(fmt);
@@ -366,8 +400,7 @@ function formatDate(v: VBValue, fmt: string, locale: string): string {
       case 's': out += t.n === 1 ? p.s : pad(p.s); break;
       case 'q': out += Math.ceil(p.m / 3); break;
       case 'w':
-        if (t.n === 1) out += dayOfWeek(p) + 1;
-        else out += Math.floor((dayOfYearOf(p) - 1 + dayOfWeek({ ...p, m: 1, d: 1 })) / 7) + 1;
+        out += t.n === 1 ? ((weekdayOf(serial) - first + 7) % 7) + 1 : weekOfYear(serial, first, rule);
         break;
       case 'ampm': {
         const pm = p.h >= 12;
@@ -669,8 +702,8 @@ function stripLiterals(fmt: string): string {
   return fmt.replace(/"[^"]*"?|\\./g, '');
 }
 
-/** VB `Format(v, fmt)`. `v` must not be Null (the Format built-in handles that). */
-export function formatValue(v: VBValue, fmt: string, locale: string): string {
+/** VB `Format(v, fmt, first, rule)`. `v` must not be Null (the Format built-in handles that). */
+export function formatValue(v: VBValue, fmt: string, locale: string, first = 1, rule = 1): string {
   v = plain(v);
   if (v instanceof NullT) return '';
   if (fmt === '') return toStr(v);
@@ -679,19 +712,21 @@ export function formatValue(v: VBValue, fmt: string, locale: string): string {
   const bare = stripLiterals(fmt);
   const hasDigits = /[0#]/.test(bare);
   if (!hasDigits && /[@&<>!]/.test(bare)) return formatText(toStr(v), fmt);
-  if (!hasDigits && /[dmyhnsqwc]|ttttt|a\/p|am\/pm|ampm/i.test(bare)) return formatDate(v, fmt, locale);
+  if (!hasDigits && /[dmyhnsqwc]|ttttt|a\/p|am\/pm|ampm/i.test(bare)) return formatDate(v, fmt, locale, first, rule);
   const n = tryNumber(v);
   return n === undefined ? toStr(v) : formatNumber(n, fmt);
 }
 
 def('Format', 1, 4, (a, ctx) => {
   const v = plain(a[0]);
+  const first = firstDay(a[2]);
+  const rule = firstWeek(a[3]);
   if (v instanceof NullT) {
     // a fourth section is the text for Null (`"0;0;0;\N"` gives N); without one the result is Null
     const sec = a[1] === undefined ? undefined : splitSections(toStr(a[1]))[3];
     return sec === undefined ? Null : sec.replace(/"([^"]*)"?|\\(.)/g, (_, q?: string, c?: string) => q ?? c ?? '');
   }
-  return a[1] === undefined ? toStr(v) : formatValue(v, toStr(a[1]), ctx.locale);
+  return a[1] === undefined ? toStr(v) : formatValue(v, toStr(a[1]), ctx.locale, first, rule);
 });
 
 /** A Tristate argument (vbTrue -1, vbFalse 0, vbUseDefault -2 or omitted). */

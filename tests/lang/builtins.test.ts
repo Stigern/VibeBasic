@@ -100,6 +100,9 @@ test('Chr/Asc/ChrW/AscW', () => {
   expect(() => call('Asc', '')).toThrow(err(5));
   expect(call('ChrW', 8364)).toBe('€');
   expect(call('AscW', '€')).toBe(8364);
+  expect(call('AscW', '\uffff')).toBe(-1); // a signed Integer
+  expect(call('AscW', '\u8000')).toBe(-32768);
+  expect(call('AscW', '\u7fff')).toBe(32767);
 });
 
 test('Split/Join', () => {
@@ -347,6 +350,17 @@ test('DateDiff / DatePart', () => {
   expect(call('DatePart', 'y', D)).toBe(295);
   expect(call('DatePart', 'w', D)).toBe(5);
   expect(call('DatePart', 'ww', D)).toBe(43);
+  expect(call('DatePart', 'ww', dateFrom(2026, 1, 1), 2, 3)).toBe(52); // vbMonday, vbFirstFullWeek: still the last week of 2025
+  expect(call('DatePart', 'ww', dateFrom(2026, 1, 5), 2, 3)).toBe(1);
+  expect(call('DatePart', 'ww', dateFrom(2027, 1, 1), 2, 2)).toBe(53); // vbMonday, vbFirstFourDays
+  expect(call('DatePart', 'ww', dateFrom(2026, 1, 1), 2, 2)).toBe(1); // January 1 is a Thursday: four days of week 1
+  expect(call('DatePart', 'ww', dateFrom(2026, 1, 4), 2)).toBe(1); // vbFirstJan1: Sunday ends the week with January 1
+  expect(call('DatePart', 'ww', dateFrom(2026, 1, 5), 2)).toBe(2);
+  expect(call('DatePart', 'ww', dateFrom(2026, 1, 5), 2, 0)).toBe(2); // vbUseSystem
+  expect(call('DatePart', 'ww', dateFrom(2026, 1, 3), 0, 3)).toBe(52); // vbUseSystem: Sunday
+  expect(call('DatePart', 'ww', dateFrom(2026, 1, 4), 0, 3)).toBe(1);
+  expect(() => call('DatePart', 'ww', D, 1, 4)).toThrow(err(5));
+  expect(() => call('DatePart', 'ww', D, 1, -1)).toThrow(err(5));
   expect(call('DatePart', 'h', D)).toBe(13);
 });
 
@@ -453,6 +467,14 @@ test('Format dates', () => {
   expect(fmt(D, 'y')).toBe('295');
   expect(fmt(D, 'w')).toBe('5');
   expect(fmt(D, 'ww')).toBe('43');
+  expect(call('Format', dateFrom(2026, 1, 1), 'ww', 2, 3)).toBe('52');
+  expect(call('Format', dateFrom(2026, 1, 5), 'ww', 2, 3)).toBe('1');
+  expect(call('Format', dateFrom(2027, 1, 1), 'ww', 2, 2)).toBe('53');
+  expect(call('Format', D, 'w', 2)).toBe('4'); // Thursday, Monday first
+  expect(call('Format', D, 'w ww')).toBe('5 43');
+  expect(call('Format', dateFrom(2026, 1, 4), 'ww', 0, 3)).toBe('1');
+  expect(() => call('Format', D, 'ww', 8)).toThrow(err(5));
+  expect(() => call('Format', D, 'ww', 1, 4)).toThrow(err(5));
   expect(fmt(D, 'dd "of" mmmm')).toBe('22 of October');
   expect(fmt(D, 'd\\t\\h')).toBe('22th');
   expect(fmt('2026-10-22', 'dd.mm.yyyy')).toBe('22.10.2026');
