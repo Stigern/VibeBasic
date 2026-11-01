@@ -122,7 +122,8 @@ def('Asc', 1, 1, a => {
 def('AscW', 1, 1, a => {
   const s = toStr(a[0]);
   if (s === '') throw new VBRuntimeError(5);
-  return s.charCodeAt(0);
+  const c = s.charCodeAt(0);
+  return c > 32767 ? c - 65536 : c; // a signed Integer, like VB6
 });
 
 // ---- searching ----

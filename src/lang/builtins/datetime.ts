@@ -6,8 +6,8 @@
 import { VBRuntimeError } from '../errors';
 import { plain } from '../interp/operators';
 import { Null, coerce, dateFrom, dateParts, toSingle, toStr, type VBDate, type VBValue } from '../values';
-import { monthName, weekdayNameOf } from './format';
-import { def, intArg, isNullV, optInt } from './util';
+import { firstDay, firstWeek, monthName, weekOfYear, weekdayNameOf, weekdayOf } from './format';
+import { def, intArg, isNullV } from './util';
 
 const date = (serial: number): VBDate => ({ kind: 'date', serial });
 const serialOf = (v: VBValue): number => (coerce(plain(v), 'Date') as VBDate).serial;
@@ -41,15 +41,6 @@ part('Day', p => p.d);
 part('Hour', p => p.h);
 part('Minute', p => p.n);
 part('Second', p => p.s);
-
-/** Weekday of a serial, 1 = Sunday (1899-12-30 was a Saturday). */
-const weekdayOf = (serial: number): number => ((((Math.floor(serial) + 6) % 7) + 7) % 7) + 1;
-
-const firstDay = (v: VBValue | undefined): number => {
-  const f = optInt(v, 1);
-  if (f < 0 || f > 7) throw new VBRuntimeError(5);
-  return f === 0 ? 1 : f;
-};
 
 def('Weekday', 1, 2, a => {
   if (isNullV(plain(a[0]))) return Null;
@@ -144,6 +135,7 @@ def('DatePart', 2, 4, a => {
   const s = serialOf(a[1]);
   const p = dateParts(s);
   const first = firstDay(a[2]);
+  const rule = firstWeek(a[3]);
   const jan1 = Math.floor(dateFrom(p.y, 1, 1).serial);
   const doy = Math.floor(s) - jan1 + 1;
   switch (iv) {
@@ -153,7 +145,7 @@ def('DatePart', 2, 4, a => {
     case 'y': return doy;
     case 'd': return p.d;
     case 'w': return ((weekdayOf(s) - first + 7) % 7) + 1;
-    case 'ww': return Math.floor((doy - 1 + ((weekdayOf(jan1) - first + 7) % 7)) / 7) + 1;
+    case 'ww': return weekOfYear(s, first, rule);
     case 'h': return p.h;
     case 'n': return p.n;
     case 's': return p.s;

@@ -413,3 +413,8 @@ test('final #10 vbUseDefault and the FirstWeekOfYear constants', async () => {
   expect(await run(`Option Explicit\nSub Main()\n  Debug.Print FormatNumber(0.5, 2, vbUseDefault); " "; FormatNumber(0.5, 2, -2)\n  Debug.Print vbUseSystem; vbFirstJan1; vbFirstFourDays; vbFirstFullWeek\nEnd Sub`))
     .toEqual(['0.50 0.50', ' 0  1  2  3 ']);
 });
+
+test('calendar week options of DatePart and Format, and the signed AscW', async () => {
+  expect(await run(`Sub Main()\n  Debug.Print DatePart("ww", #1/1/2026#, vbMonday, vbFirstFullWeek)\n  Debug.Print Format(#1/1/2027#, "ww", vbMonday, vbFirstFourDays)\n  Debug.Print Format(#1/4/2026#, "ww", , vbFirstFullWeek)\n  Debug.Print DatePart("ww", #1/5/2026#, FirstWeekOfYear:=vbFirstFullWeek, FirstDayOfWeek:=vbMonday)\n  Debug.Print AscW(ChrW(65535)); AscW(ChrW(32767))\nEnd Sub`))
+    .toEqual([' 52 ', '53', '1', ' 1 ', '-1  32767 ']);
+});

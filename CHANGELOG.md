@@ -4,6 +4,10 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- `DatePart` and `Format` honour `firstdayofweek` and `firstweekofyear` in week numbers (`vbFirstFourDays`, `vbFirstFullWeek`; days before week 1 count as the last week of the year before), and `Format` honours `firstdayofweek` for `w`.
+- `AscW` returns a signed Integer, like VB6 (`AscW(ChrW(65535))` is -1).
+
 ## [0.13.1] - 2026-10-27
 
 ### Fixed
