@@ -8,7 +8,7 @@ import { VBRuntimeError } from '../errors';
 import { BUILTINS, CONSTANTS } from '../builtins';
 import { BUILTIN_CLASSES } from '../builtins/collection';
 import {
-  Empty, Missing, Null, Nothing, NothingT, RefContainer, VBArray, VBRecord, VBRef, isObject, parseDate, single7, toCurrency, toNumber,
+  Empty, Missing, Null, Nothing, NothingT, RefContainer, VBArray, VBRecord, VBRef, dateParts, isObject, parseDate, single7, toCurrency, toNumber,
   toSingle, type VBValue,
 } from '../values';
 import { localeDateParser } from '../builtins/format';
@@ -432,6 +432,13 @@ export function* ready(f: Frame, inst: ClassInstance): Gen<void> {
   if (init) yield new SubCall(invokeProc(f.run, init, [], inst));
 }
 
+/** `Time$` (`hh:mm:ss`) and `Date$` (`mm-dd-yyyy`): fixed-format strings, not the Date the plain names give. */
+function clockText(name: 'time' | 'date', v: VBValue): string {
+  const p = dateParts((v as { serial: number }).serial);
+  const two = (n: number) => String(n).padStart(2, '0');
+  return name === 'time' ? `${two(p.h)}:${two(p.n)}:${two(p.s)}` : `${two(p.m)}-${two(p.d)}-${p.y}`;
+}
+
 /** The value of a name's binding (calls a parameterless Function or built-in). */
 function* bindingValue(f: Frame, b: Binding | undefined, e: NameExpr): Gen<VBValue> {
   if (b instanceof Variable) {
@@ -446,7 +453,10 @@ function* bindingValue(f: Frame, b: Binding | undefined, e: NameExpr): Gen<VBVal
     return yield* callProc(f, b, []);
   }
   if (b instanceof PropRef) return yield* propGet(f, b, []);
-  if (b instanceof BuiltinRef) return yield* callBuiltin(f, b, []);
+  if (b instanceof BuiltinRef) {
+    const v = yield* callBuiltin(f, b, []);
+    return e.suffix === '$' && (b.name === 'time' || b.name === 'date') ? clockText(b.name, v) : v;
+  }
   if (b instanceof ObjectRef) return b.obj;
   if (b instanceof MemberRef) return yield* memberGet(f, b.obj, b.name, null);
   throw compileError(b instanceof EnumRef ? 'Expected: expression' : 'Expected variable or procedure, not module');
