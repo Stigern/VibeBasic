@@ -4,9 +4,22 @@ All notable changes to VibeBasic. Format follows Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-02
+
+### Added
+- A real Decimal type: `CDec` gives a Variant of subtype Decimal (14), a 96-bit integer with a scale of 0-28 as in VB6, instead of a Double that lost digits past about 15. Arithmetic with a Decimal stays Decimal, and comparison, `Int`/`Fix`/`Abs`/`Sgn`/`Round`, `Str`/`CStr`/`Print`, `Format`, `FormatNumber`, `Write #`, binary `Put`/`Get` and Dictionary keys keep all its digits.
+
+### Changed
+- VibeBasic is released under the MIT License.
+
 ### Fixed
 - `DatePart` and `Format` honour `firstdayofweek` and `firstweekofyear` in week numbers (`vbFirstFourDays`, `vbFirstFullWeek`; days before week 1 count as the last week of the year before), and `Format` honours `firstdayofweek` for `w`.
 - `AscW` returns a signed Integer, like VB6 (`AscW(ChrW(65535))` is -1).
+- `Time$` and `Date$` return VB6's fixed-format strings (`hh:mm:ss` and `mm-dd-yyyy`) instead of a Date.
+- `CDate("3 PM")` and `IsDate("3pm")` accept a time with AM/PM and no minutes. `DateValue(Null)` and `TimeValue(Null)` return Null instead of raising error 94.
+- `Format` uses the positive section when the negative or zero section is empty (`Format(-5, "0;;zero")` is "-5"), and keeps the sign of a negative number that rounds to zero (`Format(-0.4, "0")` is "-0").
+- A database's `RecordsAffected` is 0 after SQL that changes no rows, instead of the count of the last INSERT, UPDATE or DELETE.
+- Made macOS apps whose names have no Latin spelling get distinct bundle identifiers, so `App.PrevInstance` no longer mistakes one such app for another. A Make target ending in `.APP` no longer becomes `Name.APP.app`.
 
 ## [0.13.1] - 2026-10-27
 
