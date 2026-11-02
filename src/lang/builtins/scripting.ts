@@ -13,7 +13,7 @@ import { winIsRoot } from '../fileio/winPath';
 import type { VBObject } from '../host';
 import { wildcardMatcher, type FileIO } from '../fileio/fileIO';
 import type { FileStat } from '../fileio/fsApi';
-import { Empty, EmptyT, NullT, RefContainer, VBArray, VBRecord, dateFrom, isDate, isObject, toBool, toNumber, toStr, type VBValue } from '../values';
+import { Empty, EmptyT, NullT, RefContainer, VBArray, VBDecimal, VBRecord, dateFrom, isDate, isObject, toBool, toNumber, toStr, type VBValue } from '../values';
 import { PROG_IDS, defClass } from './collection';
 import { BUILTINS, def, type BuiltinCtx } from './util';
 
@@ -54,6 +54,7 @@ export class VBDictionary extends RefContainer implements VBObject {
     k = plain(k);
     if (typeof k === 'string') return 's' + (this.mode ? k.toLowerCase() : k);
     if (typeof k === 'number') return 'n' + k;
+    if (k instanceof VBDecimal) return 'n' + k.toString();   // the same key as an equal Double, while that one is exact
     if (typeof k === 'boolean') return 'b' + k;
     if (isDate(k)) return 'd' + k.serial;
     if (k instanceof EmptyT) return 'e';

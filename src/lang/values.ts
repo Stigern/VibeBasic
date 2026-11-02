@@ -4,6 +4,9 @@
 import type { VBTypeName } from './ast';
 import type { VBObject } from './host';
 import { VBRuntimeError } from './errors';
+import { VBDecimal, decCmp, decFromNumber, decFromText, decText, decToNumber } from './decimal';
+
+export { VBDecimal };
 
 // ---------------------------------------------------------------------------
 // Singletons and compound values
@@ -31,7 +34,7 @@ export const Missing = new VBErrorValue(448);
 export interface VBDate { kind: 'date'; serial: number }
 
 export type VBValue =
-  | number | string | boolean | VBDate | VBArray | VBRecord | VBObject | EmptyT | NullT | NothingT | VBErrorValue;
+  | number | string | boolean | VBDate | VBDecimal | VBArray | VBRecord | VBObject | EmptyT | NullT | NothingT | VBErrorValue;
 
 /** A by-reference slot (ByRef arguments, event arguments). */
 export class VBRef {
@@ -420,10 +423,10 @@ export function isDate(v: VBValue): v is VBDate {
     && typeof (v as VBDate).serial === 'number';
 }
 
-/** A host object (`VBObject`): any object value that is not Empty, Null, Nothing, an array, a record, a date or an Error value. */
+/** A host object (`VBObject`): any object value that is not Empty, Null, Nothing, an array, a record, a date, a Decimal or an Error value. */
 export function isObject(v: VBValue): v is VBObject {
   return typeof v === 'object' && !(v instanceof EmptyT) && !(v instanceof NullT) && !(v instanceof NothingT)
-    && !(v instanceof VBArray) && !(v instanceof VBRecord) && !isDate(v) && !(v instanceof VBErrorValue);
+    && !(v instanceof VBArray) && !(v instanceof VBRecord) && !isDate(v) && !(v instanceof VBDecimal) && !(v instanceof VBErrorValue);
 }
 
 // ---------------------------------------------------------------------------
@@ -537,7 +540,19 @@ export function toNumber(v: VBValue): number {
   if (v instanceof EmptyT) return 0;
   if (v instanceof NullT) throw new VBRuntimeError(94);
   if (isDate(v)) return v.serial;
+  if (v instanceof VBDecimal) return decToNumber(v);
   throw new VBRuntimeError(13);
+}
+
+/** CDec, and the other operand of arithmetic with a Decimal: error 13 for text that is not a number, 94 for Null. */
+export function toDecimal(v: VBValue): VBDecimal {
+  v = resolve(v);
+  if (v instanceof VBDecimal) return v;
+  if (typeof v === 'string') {
+    const d = parseNumber(v) === undefined ? undefined : decFromText(v);
+    return d ?? decFromNumber(toNumber(v));   // &HFF, 1,000, $5 ...: through the number
+  }
+  return decFromNumber(toNumber(v));
 }
 
 /** CStr of a Double: up to 15 significant digits, no leading space, VB-style exponent. */
@@ -572,6 +587,7 @@ export function toStr(v: VBValue): string {
   v = resolve(v);
   if (typeof v === 'string') return v;
   if (typeof v === 'number') return numberToStr(v);
+  if (v instanceof VBDecimal) return decText(v);
   if (typeof v === 'boolean') return v ? 'True' : 'False';
   if (v instanceof EmptyT) return '';
   if (v instanceof NullT) throw new VBRuntimeError(94);
@@ -800,6 +816,7 @@ export function vbTypeName(v: VBValue): string {
   }
   if (v instanceof VBRecord) return v.typeName;
   if (isDate(v)) return 'Date';
+  if (v instanceof VBDecimal) return 'Decimal';
   if (v instanceof VBErrorValue) return 'Error';
   return v.vbTypeName;
 }
@@ -836,5 +853,6 @@ export function compare(a: VBValue, b: VBValue, textMode = false): -1 | 0 | 1 {
     const n = parseNumberText(b as string);
     return n === undefined ? -1 : cmp(toNumber(a), n);
   }
+  if (a instanceof VBDecimal || b instanceof VBDecimal) return decCmp(toDecimal(a), toDecimal(b));
   return cmp(toNumber(a), toNumber(b));
 }

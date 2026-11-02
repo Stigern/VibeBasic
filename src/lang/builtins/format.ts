@@ -17,6 +17,11 @@ import {
   Null, NullT, coerce, dateFrom, dateParts, pivotYear, toBool, toNumber, toStr, validDate, type DateTextParser, type VBDate, type VBValue,
 } from '../values';
 import { def, optInt } from './util';
+import { VBDecimal, decAbs, decDiv, decFromNumber, decMul, decSign, decText, decToNumber } from '../decimal';
+
+/** A number to format: a Decimal keeps all its digits (up to 29), not just a Double's 15. */
+type Num = number | VBDecimal;
+const numSign = (n: Num): number => (n instanceof VBDecimal ? decSign(n) : Math.sign(n));
 
 type Parts = ReturnType<typeof dateParts>;
 
@@ -491,19 +496,25 @@ function increment(digits: string): string {
 }
 
 /** `abs` as decimal digits rounded half up at `nFrac` decimals; `int` has no leading zeros. */
-function decimalDigits(abs: number, nFrac: number): { int: string; frac: string } {
-  if (abs === 0) return { int: '', frac: '0'.repeat(nFrac) };
-  const [mant, expStr] = abs.toExponential(14).split('e');
-  const digits = mant.replace('.', '');
-  const e = Number(expStr);
+function decimalDigits(abs: Num, nFrac: number): { int: string; frac: string } {
+  if (numSign(abs) === 0) return { int: '', frac: '0'.repeat(nFrac) };
   let intPart: string;
   let fracPart: string;
-  if (e >= 0) {
-    intPart = digits.slice(0, e + 1).padEnd(e + 1, '0');
-    fracPart = digits.slice(e + 1);
+  if (abs instanceof VBDecimal) {
+    const [i, f = ''] = decText(abs).split('.');
+    intPart = i === '0' ? '' : i;
+    fracPart = f;
   } else {
-    intPart = '';
-    fracPart = '0'.repeat(-e - 1) + digits;
+    const [mant, expStr] = abs.toExponential(14).split('e');
+    const digits = mant.replace('.', '');
+    const e = Number(expStr);
+    if (e >= 0) {
+      intPart = digits.slice(0, e + 1).padEnd(e + 1, '0');
+      fracPart = digits.slice(e + 1);
+    } else {
+      intPart = '';
+      fracPart = '0'.repeat(-e - 1) + digits;
+    }
   }
   if (fracPart.length > nFrac) {
     const up = fracPart[nFrac] >= '5';
@@ -518,7 +529,7 @@ function decimalDigits(abs: number, nFrac: number): { int: string; frac: string 
 }
 
 /** Renders `abs` with the digit placeholders and literals of `items` (no exponent). */
-function renderMain(items: NItem[], abs: number, thousands: boolean): string {
+function renderMain(items: NItem[], abs: Num, thousands: boolean): string {
   const ptIdx = items.findIndex(x => x.k === 'pt');
   const intItems = ptIdx < 0 ? items : items.slice(0, ptIdx);
   const fracItems = ptIdx < 0 ? [] : items.slice(ptIdx + 1);
@@ -563,7 +574,7 @@ function renderMain(items: NItem[], abs: number, thousands: boolean): string {
   return text;
 }
 
-function formatNumberSection(n: number, sec: string, negateSign: boolean): string {
+function formatNumberSection(n: Num, sec: string, negateSign: boolean): string {
   const items = numberItems(sec);
   // scaling commas and thousands separators
   let thousands = false;
@@ -578,9 +589,16 @@ function formatNumberSection(n: number, sec: string, negateSign: boolean): strin
     if (before && (nextK === undefined || nextK === 'pt' || nextK === 'exp')) scale *= 1000;
     else if (before && items.slice(j).some(x => x.k === 'd')) thousands = true;
   });
-  let value = Math.abs(n);
-  for (const it of kept) if (it.k === 'pct') value *= 100;
-  value = Number(value.toPrecision(15)) / scale;
+  let value: Num;
+  if (n instanceof VBDecimal) {
+    value = decAbs(n);
+    for (const it of kept) if (it.k === 'pct') value = decMul(value, decFromNumber(100));
+    if (scale !== 1) value = decDiv(value, decFromNumber(scale));
+  } else {
+    value = Math.abs(n);
+    for (const it of kept) if (it.k === 'pct') value *= 100;
+    value = Number(value.toPrecision(15)) / scale;
+  }
   const body = kept.map(it => (it.k === 'pct' ? { k: 'lit', s: '%' } as NItem : it));
 
   const expIdx = body.findIndex(x => x.k === 'exp');
@@ -589,6 +607,7 @@ function formatNumberSection(n: number, sec: string, negateSign: boolean): strin
     text = renderMain(body, value, thousands);
   } else {
     const exp = body[expIdx] as Extract<NItem, { k: 'exp' }>;
+    if (value instanceof VBDecimal) value = decToNumber(value);   // E notation shows 15 digits at most
     const main = body.slice(0, expIdx);
     const tail = body.slice(expIdx + 1).map(x => (x.k === 'lit' ? x.s : '')).join('');
     const ptIdx = main.findIndex(x => x.k === 'pt');
@@ -604,11 +623,12 @@ function formatNumberSection(n: number, sec: string, negateSign: boolean): strin
   return negateSign ? '-' + text : text;
 }
 
-function formatNumber(n: number, fmt: string): string {
+function formatNumber(n: Num, fmt: string): string {
   const sections = splitSections(fmt);
-  if (n > 0 || (n === 0 && sections.length < 3)) return formatNumberSection(n, sections[0], false);
+  const sign = numSign(n);
+  if (sign > 0 || (sign === 0 && sections.length < 3)) return formatNumberSection(n, sections[0], false);
   // an empty section (`0;;zero`) uses the positive one
-  if (n < 0) return sections.length >= 2 && sections[1] !== '' ? formatNumberSection(n, sections[1], false) : formatNumberSection(n, sections[0], true);
+  if (sign < 0) return sections.length >= 2 && sections[1] !== '' ? formatNumberSection(n, sections[1], false) : formatNumberSection(n, sections[0], true);
   return formatNumberSection(0, sections[2] === '' ? sections[0] : sections[2], false);
 }
 
@@ -670,7 +690,8 @@ function formatText(s: string, fmt: string): string {
 // formatValue
 // ---------------------------------------------------------------------------
 
-function tryNumber(v: VBValue): number | undefined {
+function tryNumber(v: VBValue): Num | undefined {
+  if (v instanceof VBDecimal) return v;
   try { return toNumber(v); } catch (e) {
     if (e instanceof VBRuntimeError && e.number === 13) return undefined;
     throw e;
@@ -748,8 +769,10 @@ function tristate(v: VBValue | undefined, dflt: boolean): boolean {
  * numbers in parentheses or with a minus, thousands separators; `$` before (Currency) or `%` after (Percent, times 100).
  */
 function formatFixed(a: VBValue[], kind: 'number' | 'currency' | 'percent'): string {
-  let n = toNumber(plain(a[0]));
-  if (kind === 'percent') n *= 100;
+  const v = plain(a[0]);
+  let n: Num = v instanceof VBDecimal ? v : toNumber(v);
+  if (kind === 'percent') n = n instanceof VBDecimal ? decMul(n, decFromNumber(100)) : n * 100;
+  const abs = n instanceof VBDecimal ? decAbs(n) : Math.abs(n);
   const d = a[1] === undefined ? -1 : toNumber(a[1]);
   if (!Number.isInteger(d) || d < -1 || d > 99) throw new VBRuntimeError(5);
   const digits = d === -1 ? 2 : d;
@@ -757,12 +780,12 @@ function formatFixed(a: VBValue[], kind: 'number' | 'currency' | 'percent'): str
   const parens = tristate(a[3], kind === 'currency');
   const group = tristate(a[4], true);
   const frac = digits > 0 ? '.' + '0'.repeat(digits) : '';
-  const rounded = Number(formatNumber(Math.abs(n), '0' + frac));
+  const rounded = Number(formatNumber(abs, '0' + frac));
   const intPart = !lead && rounded < 1 && rounded > 0 ? (group ? '#,###' : '#') : group ? '#,##0' : '0';
-  let text = formatNumber(Math.abs(n), intPart + frac);
+  let text = formatNumber(abs, intPart + frac);
   if (kind === 'currency') text = '$' + text;
   if (kind === 'percent') text += '%';
-  if (n < 0 && /[1-9]/.test(text)) text = parens ? `(${text})` : '-' + text;
+  if (numSign(n) < 0 && /[1-9]/.test(text)) text = parens ? `(${text})` : '-' + text;
   return text;
 }
 

@@ -3,9 +3,10 @@
 import type { BinaryOp, UnaryOp } from '../ast';
 import { VBRuntimeError } from '../errors';
 import {
-  EmptyT, Null, NullT, NothingT, coerce, compare, isDate, isObject, toBool, toNumber, toStr,
+  EmptyT, Null, NullT, NothingT, VBDecimal, coerce, compare, isDate, isObject, toBool, toDecimal, toNumber, toStr,
   type VBDate, type VBValue,
 } from '../values';
+import { decAdd, decDiv, decMul, decNeg, decSub } from '../decimal';
 
 /** A plain value: objects give their default member (no default member: 438); Nothing is error 91. */
 export function plain(v: VBValue): VBValue {
@@ -31,7 +32,21 @@ function toLong(v: VBValue): number {
 
 const date = (serial: number): VBDate => ({ kind: 'date', serial });
 
+/** + - * / with a Decimal operand (and no Date): a Decimal, the widest numeric type in VB6. */
+function decimalArith(op: BinaryOp, a: VBValue, b: VBValue): VBValue | undefined {
+  if (!(a instanceof VBDecimal || b instanceof VBDecimal) || isDate(a) || isDate(b)) return undefined;
+  switch (op) {
+    case '+': return decAdd(toDecimal(a), toDecimal(b));
+    case '-': return decSub(toDecimal(a), toDecimal(b));
+    case '*': return decMul(toDecimal(a), toDecimal(b));
+    case '/': return decDiv(toDecimal(a), toDecimal(b));
+  }
+  return undefined;
+}
+
 function arith(op: BinaryOp, a: VBValue, b: VBValue): VBValue {
+  const d = decimalArith(op, a, b);
+  if (d !== undefined) return d;
   switch (op) {
     case '+': {
       if (typeof a === 'string' && typeof b === 'string') return a + b;
@@ -197,5 +212,6 @@ export function unaryOp(op: UnaryOp, v: VBValue): VBValue {
   }
   if (v instanceof EmptyT) return 0;
   if (isDate(v)) return date(-v.serial);
+  if (v instanceof VBDecimal) return decNeg(v);
   return 0 - toNumber(v);
 }

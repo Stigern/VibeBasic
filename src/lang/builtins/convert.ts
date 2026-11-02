@@ -6,14 +6,17 @@ import { VBRuntimeError } from '../errors';
 import { plain } from '../interp/operators';
 import { printNumber } from '../printFormat';
 import {
-  EmptyT, Missing, NothingT, NullT, VBArray, VBErrorValue, VBRecord, coerce, isDate, isObject, toNumber, toStr, vbTypeName,
+  EmptyT, Missing, NothingT, NullT, VBArray, VBDecimal, VBErrorValue, VBRecord, coerce, isDate, isObject, toDecimal, toNumber, toStr, vbTypeName,
   type VBValue,
 } from '../values';
 import { def, intArg } from './util';
 
 // ---- Str / Val ----
 
-def('Str', 1, 1, a => printNumber(toNumber(a[0])));
+def('Str', 1, 1, a => {
+  const v = plain(a[0]);
+  return printNumber(v instanceof VBDecimal ? v : toNumber(v));
+});
 
 /** `Val`: the leading number in `text`, ignoring spaces; `&H`/`&O` prefixes; 0 if there is none. */
 export function val(text: string): number {
@@ -52,8 +55,8 @@ conv('CBool', 'Boolean');
 conv('CDate', 'Date');
 conv('CStr', 'String');
 def('CVar', 1, 1, a => plain(a[0]));
-/** CDec: VibeBasic has no Decimal type; the value is a Double (TypeName reports Decimal for the call itself). */
-def('CDec', 1, 1, a => coerce(plain(a[0]), 'Double'));
+/** CDec: a Decimal (Variant subtype 14), exact to 28 decimals; see decimal.ts. */
+def('CDec', 1, 1, a => toDecimal(plain(a[0])));
 /** CVErr(n): a Variant of subtype Error. */
 def('CVErr', 1, 1, a => {
   const n = intArg(a[0]);
@@ -74,7 +77,7 @@ def('IsError', 1, 1, a => a[0] instanceof VBErrorValue, raw);
 
 def('IsNumeric', 1, 1, a => {
   const v = plain(a[0]);
-  if (typeof v === 'number' || typeof v === 'boolean' || v instanceof EmptyT) return true;
+  if (typeof v === 'number' || typeof v === 'boolean' || v instanceof EmptyT || v instanceof VBDecimal) return true;
   if (typeof v !== 'string') return false;
   try { toNumber(v); return true; } catch { return false; }
 }, raw);
@@ -114,6 +117,7 @@ export function varType(v: VBValue): number {
   }
   if (v instanceof VBRecord) return 36;
   if (isDate(v)) return 7;
+  if (v instanceof VBDecimal) return 14;
   if (v instanceof VBErrorValue) return 10;
   return 9;
 }

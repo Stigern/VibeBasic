@@ -6,16 +6,16 @@
 // - `;` adds nothing; `,` moves to the next 14-character print zone.
 
 import { VBRuntimeError } from './errors';
-import { NullT, isObject, toStr, type VBValue } from './values';
+import { NullT, VBDecimal, isObject, toStr, type VBValue } from './values';
 
 export const PRINT_ZONE = 14;
 
 /** `Str`/Print text of a number: leading space if not negative, no zero before the decimal point. */
-export function printNumber(n: number): string {
+export function printNumber(n: number | VBDecimal): string {
   let s = toStr(n);
   if (s.startsWith('0.')) s = s.slice(1);
   else if (s.startsWith('-0.')) s = '-' + s.slice(2);
-  return n < 0 ? s : ' ' + s;
+  return s.startsWith('-') ? s : ' ' + s;
 }
 
 /** Text of one Print item. */
@@ -24,7 +24,7 @@ export function printItemText(v: VBValue): string {
     if (v.defaultMember === undefined) throw new VBRuntimeError(438);
     return printItemText(v.getMember(v.defaultMember, []));
   }
-  if (typeof v === 'number') return printNumber(v) + ' ';
+  if (typeof v === 'number' || v instanceof VBDecimal) return printNumber(v) + ' ';
   if (v instanceof NullT) return 'Null';
   return toStr(v); // strings, booleans, Empty, dates; arrays/records/Nothing raise errors
 }

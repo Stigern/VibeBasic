@@ -4,7 +4,7 @@
 import { asc1252, chr1252 } from '../builtins/strings';
 import { VBRuntimeError } from '../errors';
 import { printItemText, printNumber } from '../printFormat';
-import { Empty, EmptyT, Null, NullT, VBErrorValue, dateFrom, dateParts, isDate, isObject, type VBValue } from '../values';
+import { Empty, EmptyT, Null, NullT, VBDecimal, VBErrorValue, dateFrom, dateParts, isDate, isObject, type VBValue } from '../values';
 
 // ---- codec ----
 
@@ -62,7 +62,7 @@ export function writeItemText(v: VBValue): string {
     if (v.defaultMember === undefined) throw new VBRuntimeError(438);
     return writeItemText(v.getMember(v.defaultMember, []));
   }
-  if (typeof v === 'number') return printNumber(v).trim();
+  if (typeof v === 'number' || v instanceof VBDecimal) return printNumber(v).trim();
   if (typeof v === 'string') return `"${v}"`;
   if (typeof v === 'boolean') return v ? '#TRUE#' : '#FALSE#';
   if (v instanceof NullT) return '#NULL#';

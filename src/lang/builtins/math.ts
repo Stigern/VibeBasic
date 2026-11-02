@@ -2,7 +2,8 @@
 
 import { VBRuntimeError } from '../errors';
 import { plain } from '../interp/operators';
-import { Null, bankers, isDate, toNumber, toSingle, type VBValue } from '../values';
+import { Null, VBDecimal, bankers, isDate, toNumber, toSingle, type VBValue } from '../values';
+import { decAbs, decRound, decSign, decWhole } from '../decimal';
 import { def, intArg, isNullV, newRndState, type BuiltinCtx, type RndState } from './util';
 
 const finite = (n: number): number => {
@@ -10,19 +11,21 @@ const finite = (n: number): number => {
   return n === 0 ? 0 : n; // no -0
 };
 
-/** A one-argument numeric function that gives Null for Null. */
-function num1(name: string, fn: (n: number) => number): void {
-  def(name, 1, 1, a => (isNullV(plain(a[0])) ? Null : finite(fn(toNumber(a[0])))));
-}
-
-num1('Abs', Math.abs);
-num1('Sgn', Math.sign);
+def('Abs', 1, 1, a => {
+  const v = plain(a[0]);
+  return isNullV(v) ? Null : v instanceof VBDecimal ? decAbs(v) : finite(Math.abs(toNumber(v)));
+});
+def('Sgn', 1, 1, a => {
+  const v = plain(a[0]);
+  return isNullV(v) ? Null : v instanceof VBDecimal ? decSign(v) : finite(Math.sign(toNumber(v)));
+});
 
 /** Int/Fix keep a Date a Date. */
 function intLike(name: string, fn: (n: number) => number): void {
   def(name, 1, 1, a => {
     const v = plain(a[0]);
     if (isNullV(v)) return Null;
+    if (v instanceof VBDecimal) return decWhole(v, fn === Math.floor);
     const r = finite(fn(toNumber(v)));
     return isDate(v) ? { kind: 'date', serial: r } : r;
   });
@@ -48,8 +51,13 @@ def('Atn', 1, 1, a => finite(Math.atan(toNumber(a[0]))));
 
 /** Round half to even at `digits` decimals (VB6 `Round`). */
 def('Round', 1, 2, a => {
-  const n = toNumber(a[0]);
+  const v = plain(a[0]);
   const d = a[1] === undefined ? 0 : intArg(a[1]);
+  if (v instanceof VBDecimal) {
+    if (d < 0 || d > 28) throw new VBRuntimeError(5);
+    return decRound(v, d);
+  }
+  const n = toNumber(v);
   if (d < 0 || d > 15) throw new VBRuntimeError(5);
   const scale = 10 ** d;
   const scaled = Number((n * scale).toPrecision(15)); // 1.005 * 100 = 100.49999999999999 -> 100.5

@@ -9,9 +9,10 @@ import type { VBTypeName } from '../ast';
 import { VBRuntimeError } from '../errors';
 import type { TypeInfo } from '../interp/scope';
 import {
-  Empty, EmptyT, Null, NullT, VBArray, VBRecord, bankers, isDate, toBool, toNumber, toStr, vbTypeName, type VBValue,
+  Empty, EmptyT, Null, NullT, VBArray, VBDecimal, VBRecord, bankers, isDate, toBool, toNumber, toStr, vbTypeName, type VBValue,
 } from '../values';
 import { decode1252, encode1252 } from './textFormat';
+import { make } from '../decimal';
 
 /** What a layout needs from the interpreter: user types and fresh values. */
 export interface TypeSource {
@@ -110,7 +111,7 @@ function eachIndex(bounds: [number, number][], fn: (idx: number[]) => void): voi
 // ---- Put ----
 
 /** VarType numbers of a Variant's tag. */
-const VT = { empty: 0, null: 1, integer: 2, long: 3, single: 4, double: 5, currency: 6, date: 7, string: 8, boolean: 11, byte: 17 };
+const VT = { empty: 0, null: 1, integer: 2, long: 3, single: 4, double: 5, currency: 6, date: 7, string: 8, boolean: 11, decimal: 14, byte: 17 };
 
 function putString(w: ByteWriter, s: string, withLength: boolean): void {
   if (withLength) {
@@ -126,6 +127,12 @@ function putVariant(w: ByteWriter, v: VBValue): void {
   if (typeof v === 'string') { w.i16(VT.string); putString(w, v, true); return; }
   if (typeof v === 'boolean') { w.i16(VT.boolean); w.i16(v ? -1 : 0); return; }
   if (isDate(v)) { w.i16(VT.date); w.f64(v.serial); return; }
+  if (v instanceof VBDecimal) {   // the DECIMAL after its type: scale, sign, the high 32 and low 64 bits of the 96-bit value
+    const m = v.m < 0n ? -v.m : v.m;
+    w.i16(VT.decimal); w.u8(v.s); w.u8(v.m < 0n ? 0x80 : 0);
+    w.i32(Number(BigInt.asIntN(32, m >> 64n))); w.i64(BigInt.asIntN(64, m));
+    return;
+  }
   if (typeof v === 'number') {
     const t = vbTypeName(v);
     if (t === 'Integer') { w.i16(VT.integer); w.i16(v); } else if (t === 'Long') { w.i16(VT.long); w.i32(v); } else { w.i16(VT.double); w.f64(v); }
@@ -198,6 +205,12 @@ function getVariant(r: ByteReader): VBValue {
     case VT.date: return { kind: 'date', serial: r.f64() };
     case VT.string: return getString(r, r.i16() & 0xffff);
     case VT.boolean: return r.i16() !== 0;
+    case VT.decimal: {
+      const s = r.u8();
+      const neg = (r.u8() & 0x80) !== 0;
+      const m = (BigInt(r.i32() >>> 0) << 64n) | BigInt.asUintN(64, r.i64());
+      return make(neg ? -m : m, s);
+    }
     case VT.byte: return r.u8();
   }
   if (r.short) return Empty;
