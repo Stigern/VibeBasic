@@ -641,3 +641,9 @@ test('General Date text uses the locale (CStr/Print)', () => {
   expect(generalDateText(D.serial, 'en-US')).toBe('10/22/2026 1:05:09 PM');
   expect(generalDateText(D.serial, 'nb-NO')).toBe('22.10.2026 13:05:09');
 });
+
+test('Format: an empty section uses the positive one', () => {
+  expect(fmt(-5, '0;;zero')).toBe('-5');
+  expect(fmt(0, '0.0;(0.0);')).toBe('0.0');
+  expect(fmt(-5, '0;(0);zero')).toBe('(5)');
+});

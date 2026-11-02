@@ -609,8 +609,9 @@ function formatNumberSection(n: number, sec: string, negateSign: boolean): strin
 function formatNumber(n: number, fmt: string): string {
   const sections = splitSections(fmt);
   if (n > 0 || (n === 0 && sections.length < 3)) return formatNumberSection(n, sections[0], false);
-  if (n < 0) return sections.length >= 2 ? formatNumberSection(n, sections[1], false) : formatNumberSection(n, sections[0], true);
-  return formatNumberSection(0, sections[2], false);
+  // an empty section (`0;;zero`) uses the positive one
+  if (n < 0) return sections.length >= 2 && sections[1] !== '' ? formatNumberSection(n, sections[1], false) : formatNumberSection(n, sections[0], true);
+  return formatNumberSection(0, sections[2] === '' ? sections[0] : sections[2], false);
 }
 
 // ---------------------------------------------------------------------------
