@@ -58,8 +58,9 @@ function fullYear(y: number): number {
 
 def('DateSerial', 3, 3, a => dateFrom(fullYear(intArg(a[0])), intArg(a[1]), intArg(a[2])));
 def('TimeSerial', 3, 3, a => date(dateFrom(1899, 12, 30, intArg(a[0]), intArg(a[1]), intArg(a[2])).serial));
-def('DateValue', 1, 1, a => date(Math.floor(serialOf(a[0]))));
+def('DateValue', 1, 1, a => (isNullV(plain(a[0])) ? Null : date(Math.floor(serialOf(a[0])))));
 def('TimeValue', 1, 1, a => {
+  if (isNullV(plain(a[0]))) return Null;
   const s = serialOf(a[0]);
   return date(s - Math.floor(s));
 });

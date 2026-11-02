@@ -275,3 +275,18 @@ End Sub
   await prog.runEvent('Module1', 'Main');
   expect(host.lines()).toEqual([' 0  7 ', ' 101 ', ' 0  .1 ', ' 101 ']);
 });
+
+test('Time$ and Date$ are VB6 strings: hh:mm:ss and mm-dd-yyyy', async () => {
+  const [t, d, ty] = await run(`Debug.Print Time$
+Debug.Print Date$
+Debug.Print TypeName(Time$)`);
+  expect(t).toMatch(/^\d\d:\d\d:\d\d$/);
+  expect(d).toMatch(/^\d\d-\d\d-\d{4}$/);
+  expect(ty).toBe('String');
+});
+
+test('a time with AM/PM and no minutes; DateValue/TimeValue of Null', async () => {
+  expect(await run(`Debug.Print CDate("3 PM"), IsDate("3pm"), CDate("11/2/2026 9 AM")
+Debug.Print TimeValue("3 PM"), IsNull(DateValue(Null)), IsNull(TimeValue(Null))`))
+    .toEqual(['3:00:00 PM    True          11/2/2026 9:00:00 AM', '3:00:00 PM    True          True']);
+});

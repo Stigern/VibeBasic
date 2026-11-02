@@ -242,12 +242,18 @@ function lenientDateParser(
     return i < 0 ? undefined : i + 1;
   };
   const timeRe = /(?:^|\s+)(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?\s*([^\d\s:]+)?$/;
+  // an hour with AM/PM and no minutes (`3 PM`)
+  const hourRe = /(?:^|\s+)(\d{1,2})()()\s*([^\d\s:]+)$/;
   return text => {
     let s = text;
     let h = 0, n = 0, sec = 0;
-    const t = timeRe.exec(s);
+    let t = timeRe.exec(s);
+    if (!t) {
+      t = hourRe.exec(s);
+      if (t && !amKeys.has(lower(t[4])) && !pmKeys.has(lower(t[4]))) t = null;
+    }
     if (t) {
-      h = +t[1]; n = +t[2]; sec = t[3] === undefined ? 0 : +t[3];
+      h = +t[1]; n = +(t[2] || 0); sec = t[3] ? +t[3] : 0;
       if (t[4] !== undefined) {
         const p = lower(t[4]);
         const pm = pmKeys.has(p);
@@ -258,6 +264,7 @@ function lenientDateParser(
       s = s.slice(0, t.index);
     }
     const words = s.split(/[\s,./-]+/).filter(Boolean);
+    if (t && words.length === 0) return validDate(1899, 12, 30, h, n, sec);   // a time alone
     let month: number | undefined;
     const nums: string[] = [];
     for (const w of words) {
