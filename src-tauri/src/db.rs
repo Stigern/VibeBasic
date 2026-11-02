@@ -239,6 +239,9 @@ impl Databases {
   /// One statement with `params`; without params the SQL may hold several statements (rowsAffected is the last one's).
   pub fn execute(&self, id: u32, sql: &str, params: &[Value]) -> Result<ExecResult, String> {
     self.with(id, |c| {
+      // sqlite3_changes keeps the last INSERT/UPDATE/DELETE's count through statements that change no rows
+      // (CREATE, DROP, SELECT): only a moved total_changes means this SQL changed rows
+      let before = c.total_changes();
       let rows_affected = if params.is_empty() {
         c.execute_batch(sql).map_err(|e| sql_err(&e))?;
         c.changes()
@@ -246,6 +249,7 @@ impl Databases {
         let args: Vec<SqlValue> = params.iter().map(to_sql).collect();
         c.execute(sql, rusqlite::params_from_iter(args.iter())).map_err(|e| sql_err(&e))? as u64
       };
+      let rows_affected = if c.total_changes() == before { 0 } else { rows_affected };
       Ok(ExecResult { rows_affected, last_insert_rowid: c.last_insert_rowid() })
     })
   }
@@ -323,6 +327,20 @@ pub async fn db_reset(dbs: State<'_, Databases>) -> Result<(), String> {
 mod tests {
   use super::*;
   use serde_json::json;
+
+  #[test]
+  fn rows_affected_is_zero_for_statements_that_change_no_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db").to_string_lossy().to_string();
+    let dbs = Databases::default();
+    let id = dbs.open(&path).unwrap();
+    dbs.execute(id, "CREATE TABLE T (x)", &[]).unwrap();
+    assert_eq!(dbs.execute(id, "INSERT INTO T VALUES (1), (2), (3)", &[]).unwrap().rows_affected, 3);
+    assert_eq!(dbs.execute(id, "CREATE TABLE U (y)", &[]).unwrap().rows_affected, 0);
+    assert_eq!(dbs.execute(id, "DROP TABLE U", &[]).unwrap().rows_affected, 0);
+    assert_eq!(dbs.execute(id, "INSERT INTO T VALUES (?)", &[json!(4)]).unwrap().rows_affected, 1);
+    assert_eq!(dbs.execute(id, "CREATE TABLE V (z DEFAULT ?)", &[json!(1)]).map(|r| r.rows_affected).unwrap_or(0), 0);
+  }
 
   #[test]
   fn create_insert_query_update_delete() {
