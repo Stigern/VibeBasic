@@ -412,7 +412,9 @@ test('Format numbers', () => {
   expect(fmt(1.005, '0.00')).toBe('1.01');
   expect(fmt(0.999, '0.00')).toBe('1.00');
   expect(fmt(99.5, '0')).toBe('100');
-  expect(fmt(-0.001, '0.00')).toBe('0.00');
+  expect(fmt(-0.001, '0.00')).toBe('-0.00');   // VB6 keeps the sign of a negative number that rounds to 0
+  expect(fmt(-0.4, '0')).toBe('-0');
+  expect(fmt(-0.4, '0;(0)')).toBe('(0)');
   expect(fmt(0.256, '0.0%')).toBe('25.6%');
   expect(fmt('5', '0.00')).toBe('5.00');
   expect(fmt('abc', '0.00')).toBe('abc');

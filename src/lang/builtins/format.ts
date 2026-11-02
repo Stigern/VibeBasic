@@ -518,7 +518,7 @@ function decimalDigits(abs: number, nFrac: number): { int: string; frac: string 
 }
 
 /** Renders `abs` with the digit placeholders and literals of `items` (no exponent). */
-function renderMain(items: NItem[], abs: number, thousands: boolean): { text: string; nonZero: boolean } {
+function renderMain(items: NItem[], abs: number, thousands: boolean): string {
   const ptIdx = items.findIndex(x => x.k === 'pt');
   const intItems = ptIdx < 0 ? items : items.slice(0, ptIdx);
   const fracItems = ptIdx < 0 ? [] : items.slice(ptIdx + 1);
@@ -560,7 +560,7 @@ function renderMain(items: NItem[], abs: number, thousands: boolean): { text: st
       else if (it.k === 'd') { if (k <= lastKeep) text += frac[k]; k++; }
     }
   }
-  return { text, nonZero: /[1-9]/.test(int + frac) };
+  return text;
 }
 
 function formatNumberSection(n: number, sec: string, negateSign: boolean): string {
@@ -585,9 +585,8 @@ function formatNumberSection(n: number, sec: string, negateSign: boolean): strin
 
   const expIdx = body.findIndex(x => x.k === 'exp');
   let text: string;
-  let nonZero: boolean;
   if (expIdx < 0) {
-    ({ text, nonZero } = renderMain(body, value, thousands));
+    text = renderMain(body, value, thousands);
   } else {
     const exp = body[expIdx] as Extract<NItem, { k: 'exp' }>;
     const main = body.slice(0, expIdx);
@@ -600,10 +599,9 @@ function formatNumberSection(n: number, sec: string, negateSign: boolean): strin
     if (decimalDigits(mant, nFrac).int.length > nInt) { e++; mant = Number(`${value.toPrecision(15)}e${-e}`); }
     const r = renderMain(main, mant, false);
     const sign = e < 0 ? '-' : exp.plus ? '+' : '';
-    text = `${r.text}${exp.e}${sign}${pad(Math.abs(e), exp.digits)}${tail}`;
-    nonZero = r.nonZero;
+    text = `${r}${exp.e}${sign}${pad(Math.abs(e), exp.digits)}${tail}`;
   }
-  return negateSign && nonZero ? '-' + text : text;
+  return negateSign ? '-' + text : text;
 }
 
 function formatNumber(n: number, fmt: string): string {
