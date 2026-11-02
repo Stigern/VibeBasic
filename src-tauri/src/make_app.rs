@@ -77,8 +77,17 @@ pub fn ascii_slug(name: &str) -> String {
   if out.is_empty() { "App".to_string() } else { out }
 }
 
+/// `no.vibebasic.app.<slug>`; when letters with no ASCII spelling were dropped (計算機, Привет), 8 hex digits of a
+/// hash of the name follow, so that such apps do not share one identifier (App.PrevInstance, LaunchServices).
 pub fn bundle_id_for(name: &str) -> String {
-  format!("no.vibebasic.app.{}", ascii_slug(name).to_lowercase())
+  let slug = ascii_slug(name).to_lowercase();
+  let lossy = name.chars().any(|c| !c.is_ascii() && transliterate(c).is_empty());
+  if !lossy {
+    return format!("no.vibebasic.app.{slug}");
+  }
+  // FNV-1a: stable across builds and platforms
+  let hash = name.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193));
+  format!("no.vibebasic.app.{slug}{hash:08x}")
 }
 
 
@@ -404,7 +413,7 @@ pub fn normalize_target(raw: &str) -> Result<PathBuf, MakeError> {
     .ok_or_else(|| MakeError::Io("invalid target path".to_string()))?
     .to_string_lossy()
     .into_owned();
-  let base = file.strip_suffix(".app").unwrap_or(&file);
+  let base = if file.to_ascii_lowercase().ends_with(".app") { &file[..file.len() - 4] } else { &file };
   let parent = path.parent().ok_or_else(|| MakeError::Io("invalid target path".to_string()))?;
   Ok(parent.join(format!("{}.app", sanitize_app_file_name(base))))
 }
@@ -485,6 +494,11 @@ mod tests {
   #[test]
   fn bundle_id() {
     assert_eq!(bundle_id_for("Mitt Program"), "no.vibebasic.app.mittprogram");
+    // letters with no ASCII spelling: a hash of the name keeps different apps apart
+    let (a, b) = (bundle_id_for("計算機"), bundle_id_for("メモ"));
+    assert_ne!(a, b);
+    assert!(a.starts_with("no.vibebasic.app.app") && a.len() == "no.vibebasic.app.app".len() + 8, "{a}");
+    assert_ne!(bundle_id_for("Kalk"), bundle_id_for("Kalkメ"));
   }
 
   struct FakeSigner(RefCell<Vec<PathBuf>>);
@@ -781,6 +795,7 @@ mod tests {
   #[test]
   fn normalize_target_rules() {
     assert_eq!(normalize_target("/Apps/My: App/").unwrap(), PathBuf::from("/Apps/My App.app"));
+    assert_eq!(normalize_target("/Apps/Kalk.APP").unwrap(), PathBuf::from("/Apps/Kalk.app"));
     assert_eq!(normalize_target("/Apps/X.app").unwrap(), PathBuf::from("/Apps/X.app"));
     assert_eq!(normalize_target("/Apps/..").unwrap_err().message().contains("Could not make the app"), true);
     assert!(normalize_target("rel/X.app").is_err());
